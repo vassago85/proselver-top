@@ -41,11 +41,16 @@ COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 
 WORKDIR /var/www/html
 
+COPY composer.json composer.lock ./
+RUN COMPOSER_MEMORY_LIMIT=-1 composer install --no-dev --optimize-autoloader --no-interaction --no-scripts
+
+COPY package.json package-lock.json ./
+RUN npm ci
+
 COPY . .
 
-RUN composer install --no-dev --optimize-autoloader --no-interaction
-
-RUN npm ci && npm run build && rm -rf node_modules
+RUN composer run-script post-autoload-dump 2>/dev/null || true
+RUN npm run build && rm -rf node_modules
 
 RUN chown -R www-data:www-data /var/www/html \
     && chmod -R 775 /var/www/html/storage \
