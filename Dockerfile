@@ -49,6 +49,12 @@ RUN npm ci
 
 COPY . .
 
+RUN mkdir -p storage/framework/cache/data \
+    storage/framework/sessions \
+    storage/framework/views \
+    storage/logs \
+    bootstrap/cache
+
 RUN composer run-script post-autoload-dump 2>/dev/null || true
 RUN npm run build && rm -rf node_modules
 
