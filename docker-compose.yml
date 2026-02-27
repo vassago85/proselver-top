@@ -1,0 +1,149 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.dev
+    container_name: proselver-app
+    restart: unless-stopped
+    environment:
+      APP_NAME: "Proselver TOP"
+      APP_ENV: local
+      APP_DEBUG: "true"
+      APP_URL: http://localhost:8090
+      APP_KEY: base64:z1VxCp+P9XYd4gTPMK1VuZp6vBXeRnFuQH7xtpbkj5Q=
+      DB_CONNECTION: pgsql
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_DATABASE: proselver
+      DB_USERNAME: proselver
+      DB_PASSWORD: proselver
+      REDIS_CLIENT: phpredis
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      CACHE_STORE: redis
+      SESSION_DRIVER: redis
+      QUEUE_CONNECTION: redis
+      FILESYSTEM_DISK: local
+      MAIL_MAILER: log
+      LIVEWIRE_TEMPORARY_FILE_UPLOAD_DISK: public
+    volumes:
+      - .:/var/www/html
+      - vendor-data:/var/www/html/vendor
+      - node-modules:/var/www/html/node_modules
+    ports:
+      - "8090:80"
+      - "5173:5173"
+    networks:
+      - proselver-network
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  db:
+    image: postgres:16-alpine
+    container_name: proselver-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: proselver
+      POSTGRES_USER: proselver
+      POSTGRES_PASSWORD: proselver
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+    networks:
+      - proselver-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U proselver"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:alpine
+    container_name: proselver-redis
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+    ports:
+      - "6380:6379"
+    networks:
+      - proselver-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  queue:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.dev
+    container_name: proselver-queue
+    restart: unless-stopped
+    entrypoint: ["sh", "-c", "sleep 15 && php artisan queue:work redis --sleep=3 --tries=3 --timeout=90"]
+    environment:
+      APP_ENV: local
+      APP_DEBUG: "true"
+      APP_KEY: base64:z1VxCp+P9XYd4gTPMK1VuZp6vBXeRnFuQH7xtpbkj5Q=
+      DB_CONNECTION: pgsql
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_DATABASE: proselver
+      DB_USERNAME: proselver
+      DB_PASSWORD: proselver
+      REDIS_CLIENT: phpredis
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      QUEUE_CONNECTION: redis
+      MAIL_MAILER: log
+    volumes:
+      - .:/var/www/html
+      - vendor-data:/var/www/html/vendor
+      - node-modules:/var/www/html/node_modules
+    networks:
+      - proselver-network
+    depends_on:
+      - app
+
+  scheduler:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.dev
+    container_name: proselver-scheduler
+    restart: unless-stopped
+    entrypoint: ["sh", "-c", "sleep 15 && while true; do php artisan schedule:run --verbose --no-interaction; sleep 60; done"]
+    environment:
+      APP_ENV: local
+      APP_DEBUG: "true"
+      APP_KEY: base64:z1VxCp+P9XYd4gTPMK1VuZp6vBXeRnFuQH7xtpbkj5Q=
+      DB_CONNECTION: pgsql
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_DATABASE: proselver
+      DB_USERNAME: proselver
+      DB_PASSWORD: proselver
+      REDIS_CLIENT: phpredis
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      QUEUE_CONNECTION: redis
+    volumes:
+      - .:/var/www/html
+      - vendor-data:/var/www/html/vendor
+      - node-modules:/var/www/html/node_modules
+    networks:
+      - proselver-network
+    depends_on:
+      - app
+
+networks:
+  proselver-network:
+    driver: bridge
+
+volumes:
+  db-data:
+  redis-data:
+  vendor-data:
+  node-modules:
