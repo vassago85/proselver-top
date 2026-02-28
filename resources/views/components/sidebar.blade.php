@@ -53,6 +53,15 @@
                             Reports
                         </x-sidebar-link>
 
+                        <x-sidebar-link :href="route('admin.change-requests.index')" :active="request()->routeIs('admin.change-requests.*')">
+                            <x-slot:icon><svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182" /></svg></x-slot:icon>
+                            Change Requests
+                            @php $pendingCount = \App\Models\BookingChangeRequest::where('status', 'pending')->count(); @endphp
+                            @if($pendingCount > 0)
+                                <span class="ml-auto inline-flex items-center rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">{{ $pendingCount }}</span>
+                            @endif
+                        </x-sidebar-link>
+
                         <x-sidebar-link :href="route('admin.audit-log')" :active="request()->routeIs('admin.audit-log')">
                             <x-slot:icon><svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" /></svg></x-slot:icon>
                             Audit Log
@@ -100,12 +109,22 @@
                         </x-sidebar-link>
                         @endif
 
+                        <x-sidebar-link :href="route('dealer.locations.index')" :active="request()->routeIs('dealer.locations.*')">
+                            <x-slot:icon><svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M15 10.5a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" /><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1 1 15 0Z" /></svg></x-slot:icon>
+                            Locations
+                        </x-sidebar-link>
+
                         @if($user->hasPermission('view_performance'))
                         <x-sidebar-link :href="route('dealer.performance')" :active="request()->routeIs('dealer.performance')">
                             <x-slot:icon><svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 0 1 3 19.875v-6.75Z" /></svg></x-slot:icon>
                             Performance
                         </x-sidebar-link>
                         @endif
+
+                        <x-sidebar-link :href="route('dealer.help')" :active="request()->routeIs('dealer.help')">
+                            <x-slot:icon><svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 5.25h.008v.008H12v-.008Z" /></svg></x-slot:icon>
+                            Help
+                        </x-sidebar-link>
                     @endif
 
                     @if($isOem)
@@ -141,6 +160,16 @@
                             Team
                         </x-sidebar-link>
                         @endif
+
+                        <x-sidebar-link :href="route('oem.locations.index')" :active="request()->routeIs('oem.locations.*')">
+                            <x-slot:icon><svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M15 10.5a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" /><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1 1 15 0Z" /></svg></x-slot:icon>
+                            Locations
+                        </x-sidebar-link>
+
+                        <x-sidebar-link :href="route('oem.help')" :active="request()->routeIs('oem.help')">
+                            <x-slot:icon><svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 5.25h.008v.008H12v-.008Z" /></svg></x-slot:icon>
+                            Help
+                        </x-sidebar-link>
                     @endif
 
                     @if($isDriver)

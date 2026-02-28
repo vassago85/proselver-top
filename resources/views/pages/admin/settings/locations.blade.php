@@ -1,6 +1,8 @@
 <?php
 use App\Models\Location;
 use App\Models\Company;
+use App\Models\Zone;
+use App\Services\GeocodingService;
 use Livewire\Volt\Component;
 use Livewire\Attributes\Layout;
 use Livewire\WithPagination;
@@ -20,11 +22,12 @@ new #[Layout('components.layouts.app')] class extends Component {
     public string $addAddress = '';
     public string $addCity = '';
     public string $addProvince = '';
+    public string $addLat = '';
+    public string $addLng = '';
+    public string $addZoneId = '';
     public string $addCustomerName = '';
-    public string $addCustomerContact = '';
     public string $addCustomerPhone = '';
     public string $addCustomerEmail = '';
-    public bool $addIsPrivate = false;
 
     // Edit form
     public string $editCompanyId = '';
@@ -32,11 +35,12 @@ new #[Layout('components.layouts.app')] class extends Component {
     public string $editAddress = '';
     public string $editCity = '';
     public string $editProvince = '';
+    public string $editLat = '';
+    public string $editLng = '';
+    public string $editZoneId = '';
     public string $editCustomerName = '';
-    public string $editCustomerContact = '';
     public string $editCustomerPhone = '';
     public string $editCustomerEmail = '';
-    public bool $editIsPrivate = false;
 
     public function updatingSearch(): void
     {
@@ -57,27 +61,51 @@ new #[Layout('components.layouts.app')] class extends Component {
             'addCity'         => 'required|string|max:100',
             'addProvince'     => 'required|string|max:100',
             'addCustomerName' => 'nullable|string|max:255',
-            'addCustomerContact' => 'nullable|string|max:255',
             'addCustomerPhone'   => 'nullable|string|max:50',
             'addCustomerEmail'   => 'nullable|email|max:255',
         ]);
 
         Location::create([
             'company_id'       => $this->addCompanyId ?: null,
+            'zone_id'          => $this->addZoneId ?: null,
             'company_name'     => $this->addCompanyName,
             'address'          => $this->addAddress,
             'city'             => $this->addCity,
             'province'         => $this->addProvince,
+            'latitude'         => $this->addLat ?: null,
+            'longitude'        => $this->addLng ?: null,
             'customer_name'    => $this->addCustomerName ?: null,
-            'customer_contact' => $this->addCustomerContact ?: null,
             'customer_phone'   => $this->addCustomerPhone ?: null,
             'customer_email'   => $this->addCustomerEmail ?: null,
-            'is_private'       => $this->addIsPrivate,
             'is_active'        => true,
         ]);
 
         $this->resetAddForm();
         $this->showAddForm = false;
+    }
+
+    public function lookupAddAddress(): void
+    {
+        if (!$this->addAddress) return;
+        $result = GeocodingService::geocodeDetailed($this->addAddress);
+        if ($result) {
+            $this->addCity = $result['city'] ?? $this->addCity;
+            $this->addProvince = $result['province'] ?? $this->addProvince;
+            $this->addLat = (string) ($result['lat'] ?? '');
+            $this->addLng = (string) ($result['lng'] ?? '');
+        }
+    }
+
+    public function lookupEditAddress(): void
+    {
+        if (!$this->editAddress) return;
+        $result = GeocodingService::geocodeDetailed($this->editAddress);
+        if ($result) {
+            $this->editCity = $result['city'] ?? $this->editCity;
+            $this->editProvince = $result['province'] ?? $this->editProvince;
+            $this->editLat = (string) ($result['lat'] ?? '');
+            $this->editLng = (string) ($result['lng'] ?? '');
+        }
     }
 
     public function startEdit(int $id): void
@@ -89,11 +117,12 @@ new #[Layout('components.layouts.app')] class extends Component {
         $this->editAddress      = $loc->address;
         $this->editCity         = $loc->city;
         $this->editProvince     = $loc->province;
+        $this->editLat          = (string) ($loc->latitude ?? '');
+        $this->editLng          = (string) ($loc->longitude ?? '');
+        $this->editZoneId       = (string) ($loc->zone_id ?? '');
         $this->editCustomerName    = $loc->customer_name ?? '';
-        $this->editCustomerContact = $loc->customer_contact ?? '';
         $this->editCustomerPhone   = $loc->customer_phone ?? '';
         $this->editCustomerEmail   = $loc->customer_email ?? '';
-        $this->editIsPrivate       = (bool) $loc->is_private;
     }
 
     public function update(): void
@@ -105,22 +134,22 @@ new #[Layout('components.layouts.app')] class extends Component {
             'editCity'         => 'required|string|max:100',
             'editProvince'     => 'required|string|max:100',
             'editCustomerName' => 'nullable|string|max:255',
-            'editCustomerContact' => 'nullable|string|max:255',
             'editCustomerPhone'   => 'nullable|string|max:50',
             'editCustomerEmail'   => 'nullable|email|max:255',
         ]);
 
         Location::findOrFail($this->editingId)->update([
             'company_id'       => $this->editCompanyId ?: null,
+            'zone_id'          => $this->editZoneId ?: null,
             'company_name'     => $this->editCompanyName,
             'address'          => $this->editAddress,
             'city'             => $this->editCity,
             'province'         => $this->editProvince,
+            'latitude'         => $this->editLat ?: null,
+            'longitude'        => $this->editLng ?: null,
             'customer_name'    => $this->editCustomerName ?: null,
-            'customer_contact' => $this->editCustomerContact ?: null,
             'customer_phone'   => $this->editCustomerPhone ?: null,
             'customer_email'   => $this->editCustomerEmail ?: null,
-            'is_private'       => $this->editIsPrivate,
         ]);
 
         $this->editingId = null;
@@ -144,16 +173,17 @@ new #[Layout('components.layouts.app')] class extends Component {
         $this->addAddress = '';
         $this->addCity = '';
         $this->addProvince = '';
+        $this->addLat = '';
+        $this->addLng = '';
+        $this->addZoneId = '';
         $this->addCustomerName = '';
-        $this->addCustomerContact = '';
         $this->addCustomerPhone = '';
         $this->addCustomerEmail = '';
-        $this->addIsPrivate = false;
     }
 
     public function with(): array
     {
-        $query = Location::with('company')
+        $query = Location::with(['company', 'zone'])
             ->when($this->search, function ($q) {
                 $q->where(function ($q) {
                     $q->where('company_name', 'like', "%{$this->search}%")
@@ -166,6 +196,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         return [
             'locations' => $query->paginate(25),
             'companies' => Company::orderBy('name')->get(),
+            'zones' => Zone::active()->orderBy('name')->get(),
         ];
     }
 };
@@ -203,7 +234,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                     <div>
                         <label class="block text-xs font-medium text-gray-700 mb-1">Owner Company</label>
                         <select wire:model="addCompanyId" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
-                            <option value="">— None (shared) —</option>
+                            <option value="">— None —</option>
                             @foreach($companies as $c)
                                 <option value="{{ $c->id }}">{{ $c->name }}</option>
                             @endforeach
@@ -214,10 +245,15 @@ new #[Layout('components.layouts.app')] class extends Component {
                         <input wire:model="addCompanyName" type="text" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
                         @error('addCompanyName')<p class="text-xs text-red-600 mt-1">{{ $message }}</p>@enderror
                     </div>
-                    <div>
+                    <div x-data="placesAutocomplete({ addressModel: 'addAddress', cityModel: 'addCity', provinceModel: 'addProvince', latModel: 'addLat', lngModel: 'addLng' })">
                         <label class="block text-xs font-medium text-gray-700 mb-1">Address *</label>
-                        <input wire:model="addAddress" type="text" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
+                        <input x-ref="addressInput" wire:model="addAddress" type="text" autocomplete="off" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500" placeholder="Start typing to search...">
                         @error('addAddress')<p class="text-xs text-red-600 mt-1">{{ $message }}</p>@enderror
+                        <button type="button" wire:click="lookupAddAddress" class="mt-1 inline-flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 font-medium">
+                            <svg class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" /></svg>
+                            <span wire:loading.remove wire:target="lookupAddAddress">Lookup Address</span>
+                            <span wire:loading wire:target="lookupAddAddress">Looking up...</span>
+                        </button>
                     </div>
                     <div>
                         <label class="block text-xs font-medium text-gray-700 mb-1">City *</label>
@@ -230,12 +266,15 @@ new #[Layout('components.layouts.app')] class extends Component {
                         @error('addProvince')<p class="text-xs text-red-600 mt-1">{{ $message }}</p>@enderror
                     </div>
                     <div>
-                        <label class="block text-xs font-medium text-gray-700 mb-1">Customer Name</label>
-                        <input wire:model="addCustomerName" type="text" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
+                        <label class="block text-xs font-medium text-gray-700 mb-1">Zone</label>
+                        <select wire:model="addZoneId" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
+                            <option value="">Select zone...</option>
+                            @foreach($zones as $z)<option value="{{ $z->id }}">{{ $z->name }}</option>@endforeach
+                        </select>
                     </div>
                     <div>
-                        <label class="block text-xs font-medium text-gray-700 mb-1">Customer Contact</label>
-                        <input wire:model="addCustomerContact" type="text" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
+                        <label class="block text-xs font-medium text-gray-700 mb-1">Customer Name</label>
+                        <input wire:model="addCustomerName" type="text" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
                     </div>
                     <div>
                         <label class="block text-xs font-medium text-gray-700 mb-1">Customer Phone</label>
@@ -246,12 +285,6 @@ new #[Layout('components.layouts.app')] class extends Component {
                         <input wire:model="addCustomerEmail" type="email" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
                         @error('addCustomerEmail')<p class="text-xs text-red-600 mt-1">{{ $message }}</p>@enderror
                     </div>
-                </div>
-                <div class="flex items-center gap-6">
-                    <label class="inline-flex items-center gap-2 text-sm text-gray-700">
-                        <input wire:model="addIsPrivate" type="checkbox" class="rounded border-gray-300 text-blue-600 focus:ring-blue-500">
-                        Private (only visible to owner company)
-                    </label>
                 </div>
                 <div class="flex items-center gap-3 pt-2">
                     <button type="submit" class="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-500 transition">Save Location</button>
@@ -271,8 +304,8 @@ new #[Layout('components.layouts.app')] class extends Component {
                             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Address</th>
                             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">City</th>
                             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Province</th>
+                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Zone</th>
                             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Company</th>
-                            <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Private</th>
                             <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Active</th>
                             <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                         </tr>
@@ -287,7 +320,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                                                 <div>
                                                     <label class="block text-xs font-medium text-gray-700 mb-1">Owner Company</label>
                                                     <select wire:model="editCompanyId" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
-                                                        <option value="">— None (shared) —</option>
+                                                        <option value="">— None —</option>
                                                         @foreach($companies as $c)
                                                             <option value="{{ $c->id }}">{{ $c->name }}</option>
                                                         @endforeach
@@ -298,10 +331,15 @@ new #[Layout('components.layouts.app')] class extends Component {
                                                     <input wire:model="editCompanyName" type="text" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
                                                     @error('editCompanyName')<p class="text-xs text-red-600 mt-1">{{ $message }}</p>@enderror
                                                 </div>
-                                                <div>
+                                                <div x-data="placesAutocomplete({ addressModel: 'editAddress', cityModel: 'editCity', provinceModel: 'editProvince', latModel: 'editLat', lngModel: 'editLng' })">
                                                     <label class="block text-xs font-medium text-gray-700 mb-1">Address *</label>
-                                                    <input wire:model="editAddress" type="text" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
+                                                    <input x-ref="addressInput" wire:model="editAddress" type="text" autocomplete="off" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500" placeholder="Start typing to search...">
                                                     @error('editAddress')<p class="text-xs text-red-600 mt-1">{{ $message }}</p>@enderror
+                                                    <button type="button" wire:click="lookupEditAddress" class="mt-1 inline-flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 font-medium">
+                                                        <svg class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" /></svg>
+                                                        <span wire:loading.remove wire:target="lookupEditAddress">Lookup Address</span>
+                                                        <span wire:loading wire:target="lookupEditAddress">Looking up...</span>
+                                                    </button>
                                                 </div>
                                                 <div>
                                                     <label class="block text-xs font-medium text-gray-700 mb-1">City *</label>
@@ -314,12 +352,15 @@ new #[Layout('components.layouts.app')] class extends Component {
                                                     @error('editProvince')<p class="text-xs text-red-600 mt-1">{{ $message }}</p>@enderror
                                                 </div>
                                                 <div>
-                                                    <label class="block text-xs font-medium text-gray-700 mb-1">Customer Name</label>
-                                                    <input wire:model="editCustomerName" type="text" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
+                                                    <label class="block text-xs font-medium text-gray-700 mb-1">Zone</label>
+                                                    <select wire:model="editZoneId" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
+                                                        <option value="">Select zone...</option>
+                                                        @foreach($zones as $z)<option value="{{ $z->id }}">{{ $z->name }}</option>@endforeach
+                                                    </select>
                                                 </div>
                                                 <div>
-                                                    <label class="block text-xs font-medium text-gray-700 mb-1">Customer Contact</label>
-                                                    <input wire:model="editCustomerContact" type="text" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
+                                                    <label class="block text-xs font-medium text-gray-700 mb-1">Customer Name</label>
+                                                    <input wire:model="editCustomerName" type="text" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
                                                 </div>
                                                 <div>
                                                     <label class="block text-xs font-medium text-gray-700 mb-1">Customer Phone</label>
@@ -330,12 +371,6 @@ new #[Layout('components.layouts.app')] class extends Component {
                                                     <input wire:model="editCustomerEmail" type="email" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
                                                     @error('editCustomerEmail')<p class="text-xs text-red-600 mt-1">{{ $message }}</p>@enderror
                                                 </div>
-                                            </div>
-                                            <div class="flex items-center gap-6">
-                                                <label class="inline-flex items-center gap-2 text-sm text-gray-700">
-                                                    <input wire:model="editIsPrivate" type="checkbox" class="rounded border-gray-300 text-blue-600 focus:ring-blue-500">
-                                                    Private (only visible to owner company)
-                                                </label>
                                             </div>
                                             <div class="flex items-center gap-3">
                                                 <button type="submit" class="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-500 transition">Save</button>
@@ -350,14 +385,8 @@ new #[Layout('components.layouts.app')] class extends Component {
                                     <td class="px-4 py-3 text-sm text-gray-600">{{ $loc->address }}</td>
                                     <td class="px-4 py-3 text-sm text-gray-600">{{ $loc->city }}</td>
                                     <td class="px-4 py-3 text-sm text-gray-600">{{ $loc->province }}</td>
+                                    <td class="px-4 py-3 text-sm text-gray-600">{{ $loc->zone?->name ?? '—' }}</td>
                                     <td class="px-4 py-3 text-sm text-gray-600">{{ $loc->company?->name ?? '—' }}</td>
-                                    <td class="px-4 py-3 text-center">
-                                        @if($loc->is_private)
-                                            <span class="inline-flex items-center rounded-full bg-yellow-50 px-2 py-0.5 text-xs font-medium text-yellow-700">Yes</span>
-                                        @else
-                                            <span class="inline-flex items-center rounded-full bg-gray-50 px-2 py-0.5 text-xs font-medium text-gray-500">No</span>
-                                        @endif
-                                    </td>
                                     <td class="px-4 py-3 text-center">
                                         @if($loc->is_active)
                                             <span class="inline-flex items-center rounded-full bg-green-50 px-2 py-0.5 text-xs font-medium text-green-700">Active</span>

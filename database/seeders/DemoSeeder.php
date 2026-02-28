@@ -161,7 +161,7 @@ class DemoSeeder extends Seeder
         foreach ($sharedLocations as $loc) {
             Location::firstOrCreate(
                 ['company_name' => $loc['company_name'], 'company_id' => null],
-                array_merge($loc, ['company_id' => null, 'is_private' => false])
+                array_merge($loc, ['company_id' => null])
             );
         }
     }

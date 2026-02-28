@@ -132,6 +132,10 @@ class Job extends Model
         'invoiced_at',
         'cancelled_at',
         'cancellation_reason',
+        'distance_km',
+        'estimated_duration_minutes',
+        'is_round_trip',
+        'estimated_toll_cost',
     ];
 
     protected function casts(): array
@@ -170,6 +174,10 @@ class Job extends Model
             'completed_at' => 'datetime',
             'invoiced_at' => 'datetime',
             'cancelled_at' => 'datetime',
+            'distance_km' => 'decimal:2',
+            'estimated_duration_minutes' => 'integer',
+            'is_round_trip' => 'boolean',
+            'estimated_toll_cost' => 'decimal:2',
         ];
     }
 
@@ -178,6 +186,15 @@ class Job extends Model
         static::creating(function (Job $job) {
             if (empty($job->uuid)) {
                 $job->uuid = (string) Str::uuid();
+            }
+        });
+
+        static::saving(function (Job $job) {
+            if ($job->vin) {
+                $job->vin = strtoupper($job->vin);
+            }
+            if ($job->original_vin) {
+                $job->original_vin = strtoupper($job->original_vin);
             }
         });
     }
@@ -318,5 +335,10 @@ class Job extends Model
     public function cancellation(): HasOne
     {
         return $this->hasOne(Cancellation::class, 'job_id');
+    }
+
+    public function changeRequests(): HasMany
+    {
+        return $this->hasMany(\App\Models\BookingChangeRequest::class, 'job_id');
     }
 }

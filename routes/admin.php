@@ -50,3 +50,11 @@ Volt::route('settings/body-types', 'admin.settings.body-types')->name('settings.
 Volt::route('settings/locations', 'admin.settings.locations')->name('settings.locations');
 Volt::route('settings/vehicle-classes', 'admin.settings.vehicle-classes')->name('settings.vehicle-classes');
 Volt::route('settings/storage', 'admin.settings.storage')->name('settings.storage');
+Volt::route('settings/booking', 'admin.settings.booking')->name('settings.booking');
+Volt::route('settings/toll-plazas', 'admin.settings.toll-plazas')->name('settings.toll-plazas');
+Volt::route('settings/integrations', 'admin.settings.integrations')->name('settings.integrations');
+Volt::route('settings/zones', 'admin.settings.zones')->name('settings.zones');
+Volt::route('settings/zone-rates', 'admin.settings.zone-rates')->name('settings.zone-rates');
+
+// Change Requests
+Volt::route('change-requests', 'admin.change-requests.index')->name('change-requests.index');

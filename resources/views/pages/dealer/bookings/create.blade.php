@@ -4,6 +4,7 @@ use App\Models\Brand;
 use App\Models\Location;
 use App\Models\VehicleClass;
 use App\Services\BookingService;
+use App\Services\GeocodingService;
 use Livewire\Volt\Component;
 use Livewire\Attributes\Layout;
 
@@ -17,7 +18,11 @@ new #[Layout('components.layouts.app')] class extends Component {
     public string $modelName = '';
     public string $vin = '';
     public string $registration = '';
-    public string $scheduledReadyTime = '';
+    public string $collectionDate = '';
+    public string $collectionTime = '';
+    public bool $isRoundTrip = false;
+
+    public ?float $previewDistance = null;
 
     public ?int $yardLocationId = null;
     public int $driversRequired = 1;
@@ -39,11 +44,11 @@ new #[Layout('components.layouts.app')] class extends Component {
     public string $newLocAddress = '';
     public string $newLocCity = '';
     public string $newLocProvince = '';
+    public string $newLocLat = '';
+    public string $newLocLng = '';
     public string $newLocCustomerName = '';
-    public string $newLocCustomerContact = '';
     public string $newLocCustomerPhone = '';
     public string $newLocCustomerEmail = '';
-    public bool $newLocIsPrivate = false;
 
     public function saveNewLocation(string $target): void
     {
@@ -56,12 +61,12 @@ new #[Layout('components.layouts.app')] class extends Component {
         $location = Location::create([
             'company_id' => $company?->id,
             'company_name' => $this->newLocCompanyName,
-            'is_private' => $this->newLocIsPrivate,
             'address' => $this->newLocAddress,
             'city' => $this->newLocCity ?: null,
             'province' => $this->newLocProvince ?: null,
+            'latitude' => $this->newLocLat ?: null,
+            'longitude' => $this->newLocLng ?: null,
             'customer_name' => $this->newLocCustomerName ?: null,
-            'customer_contact' => $this->newLocCustomerContact ?: null,
             'customer_phone' => $this->newLocCustomerPhone ?: null,
             'customer_email' => $this->newLocCustomerEmail ?: null,
         ]);
@@ -86,11 +91,57 @@ new #[Layout('components.layouts.app')] class extends Component {
         $this->newLocAddress = '';
         $this->newLocCity = '';
         $this->newLocProvince = '';
+        $this->newLocLat = '';
+        $this->newLocLng = '';
         $this->newLocCustomerName = '';
-        $this->newLocCustomerContact = '';
         $this->newLocCustomerPhone = '';
         $this->newLocCustomerEmail = '';
-        $this->newLocIsPrivate = false;
+    }
+
+    public function lookupNewLocAddress(): void
+    {
+        if (!$this->newLocAddress) return;
+        $result = GeocodingService::geocodeDetailed($this->newLocAddress);
+        if ($result) {
+            $this->newLocCity = $result['city'] ?? $this->newLocCity;
+            $this->newLocProvince = $result['province'] ?? $this->newLocProvince;
+            $this->newLocLat = (string) ($result['lat'] ?? '');
+            $this->newLocLng = (string) ($result['lng'] ?? '');
+        }
+    }
+
+    public ?float $previewPrice = null;
+    public ?string $previewOriginZone = null;
+    public ?string $previewDestZone = null;
+
+    public function updatedPickupLocationId(): void { $this->calculateRoutePreview(); }
+    public function updatedDeliveryLocationId(): void { $this->calculateRoutePreview(); }
+    public function updatedVehicleClassId(): void { $this->calculateRoutePreview(); }
+    public function updatedIsRoundTrip(): void { $this->calculateRoutePreview(); }
+
+    public function calculateRoutePreview(): void
+    {
+        $this->previewDistance = null;
+        $this->previewPrice = null;
+        $this->previewOriginZone = null;
+        $this->previewDestZone = null;
+
+        if (!$this->pickupLocationId || !$this->deliveryLocationId || !$this->vehicleClassId) return;
+        if ($this->pickupLocationId == $this->deliveryLocationId) return;
+
+        $result = BookingService::previewRoute(
+            $this->pickupLocationId,
+            $this->deliveryLocationId,
+            $this->vehicleClassId,
+            $this->isRoundTrip,
+        );
+
+        if ($result) {
+            $this->previewDistance = $result['distance_km'];
+            $this->previewPrice = $result['price'];
+            $this->previewOriginZone = $result['origin_zone'];
+            $this->previewDestZone = $result['destination_zone'];
+        }
     }
 
     public function submit(BookingService $bookingService): void
@@ -109,6 +160,8 @@ new #[Layout('components.layouts.app')] class extends Component {
                 'deliveryLocationId' => 'required|exists:locations,id|different:pickupLocationId',
                 'vehicleClassId' => 'required|exists:vehicle_classes,id',
                 'vin' => 'required|string|min:7|max:17',
+                'collectionDate' => 'required|date|after_or_equal:today',
+                'collectionTime' => 'required|date_format:H:i',
             ];
         } else {
             $rules += [
@@ -136,11 +189,13 @@ new #[Layout('components.layouts.app')] class extends Component {
                 'vehicle_class_id' => $this->vehicleClassId,
                 'brand_id' => $this->brandId,
                 'model_name' => $this->modelName,
-                'vin' => $this->vin,
-                'registration' => $this->registration ?: null,
-                'scheduled_ready_time' => $this->scheduledReadyTime ? now()->toDateString() . ' ' . $this->scheduledReadyTime : null,
+                'vin' => strtoupper($this->vin),
+                'registration' => $this->registration ? strtoupper($this->registration) : null,
+                'scheduled_date' => $this->collectionDate,
+                'scheduled_ready_time' => $this->collectionDate . ' ' . $this->collectionTime,
                 'is_emergency' => $this->isEmergency,
                 'emergency_reason' => $this->emergencyReason,
+                'is_round_trip' => $this->isRoundTrip,
             ];
             $job = $bookingService->createTransportBooking($data);
         } else {
@@ -192,7 +247,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">Pickup Location *</label>
-                    <select wire:model="pickupLocationId" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm">
+                    <select wire:model.live="pickupLocationId" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm">
                         <option value="">Select pickup...</option>
                         @foreach($locations as $loc)<option value="{{ $loc->id }}">{{ $loc->company_name }}{{ $loc->city ? " ({$loc->city})" : '' }}</option>@endforeach
                     </select>
@@ -204,7 +259,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                 </div>
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">Delivery Location *</label>
-                    <select wire:model="deliveryLocationId" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm">
+                    <select wire:model.live="deliveryLocationId" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm">
                         <option value="">Select delivery...</option>
                         @foreach($locations as $loc)<option value="{{ $loc->id }}">{{ $loc->company_name }}{{ $loc->city ? " ({$loc->city})" : '' }}</option>@endforeach
                     </select>
@@ -215,6 +270,37 @@ new #[Layout('components.layouts.app')] class extends Component {
                     @endif
                 </div>
             </div>
+
+            <div class="mt-4 flex items-center gap-4">
+                <label class="flex items-center gap-2 cursor-pointer">
+                    <input wire:model.live="isRoundTrip" type="checkbox" class="h-4 w-4 rounded border-gray-300 text-blue-600">
+                    <span class="text-sm font-medium text-gray-700">Round Trip</span>
+                </label>
+                <span class="text-xs text-gray-400">(e.g. COF, Weigh Bridge -- doubles distance)</span>
+            </div>
+
+            @if($previewDistance)
+            <div class="mt-4 rounded-lg bg-blue-50 border border-blue-200 px-4 py-3">
+                <div class="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
+                    <div class="flex items-center gap-2">
+                        <svg class="h-5 w-5 text-blue-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M9 6.75V15m6-6v8.25m.503 3.498 4.875-2.437c.381-.19.622-.58.622-1.006V4.82c0-.836-.88-1.38-1.628-1.006l-3.869 1.934c-.317.159-.69.159-1.006 0L9.503 3.252a1.125 1.125 0 0 0-1.006 0L3.622 5.689C3.24 5.88 3 6.27 3 6.695V19.18c0 .836.88 1.38 1.628 1.006l3.869-1.934c.317-.159.69-.159 1.006 0l4.994 2.497c.317.158.69.158 1.006 0Z" /></svg>
+                        <span class="font-semibold text-gray-900">{{ number_format($previewDistance, 1) }} km</span>
+                    </div>
+                    @if($previewPrice)
+                    <div>
+                        <span class="font-semibold text-blue-900">Price:</span>
+                        <span class="text-blue-700 ml-1">R{{ number_format($previewPrice, 2) }}</span>
+                    </div>
+                    @endif
+                    @if($previewOriginZone && $previewDestZone)
+                    <div class="text-xs text-blue-600">{{ $previewOriginZone }} &rarr; {{ $previewDestZone }}</div>
+                    @endif
+                    @if($isRoundTrip)
+                        <span class="inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700">Round Trip</span>
+                    @endif
+                </div>
+            </div>
+            @endif
 
             <details class="mt-4 group">
                 <summary class="text-sm font-medium text-gray-600 cursor-pointer hover:text-gray-900">Alternate contact person (optional)</summary>
@@ -241,7 +327,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             <div class="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">Vehicle Class *</label>
-                    <select wire:model="vehicleClassId" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm">
+                    <select wire:model.live="vehicleClassId" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm">
                         <option value="">Select class...</option>
                         @foreach($vehicleClasses as $vc)<option value="{{ $vc->id }}">{{ $vc->name }}</option>@endforeach
                     </select>
@@ -268,8 +354,14 @@ new #[Layout('components.layouts.app')] class extends Component {
                     <input wire:model="registration" type="text" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm uppercase" placeholder="Optional">
                 </div>
                 <div>
-                    <label class="block text-sm font-medium text-gray-700 mb-1">Ready Time</label>
-                    <input wire:model="scheduledReadyTime" type="time" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm">
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Collection Date *</label>
+                    <input wire:model="collectionDate" type="date" min="{{ date('Y-m-d') }}" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm">
+                    @error('collectionDate')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Collection Time *</label>
+                    <input wire:model="collectionTime" type="time" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm">
+                    @error('collectionTime')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
                 </div>
             </div>
             <div class="mt-4">

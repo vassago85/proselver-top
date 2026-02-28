@@ -6,6 +6,9 @@ use App\Services\AuditService;
 use Livewire\Volt\Component;
 use Livewire\Attributes\Layout;
 use Livewire\WithFileUploads;
+use App\Services\CutoffService;
+use App\Models\BookingChangeRequest;
+use Illuminate\Support\Facades\Storage;
 
 new #[Layout('components.layouts.app')] class extends Component {
     use WithFileUploads;
@@ -18,6 +21,11 @@ new #[Layout('components.layouts.app')] class extends Component {
     public string $poLabel = '';
     public $poFile;
 
+    // PO preview & replace
+    public ?int $previewPoId = null;
+    public ?int $replacePoId = null;
+    public $replacePoFile;
+
     public bool $showReassignForm = false;
     public ?int $reassignBrandId = null;
     public string $reassignModelName = '';
@@ -26,6 +34,17 @@ new #[Layout('components.layouts.app')] class extends Component {
     public string $reassignPoNumber = '';
     public string $reassignPoAmount = '';
     public $reassignPoFile;
+
+    // Collection date editing
+    public bool $showEditCollection = false;
+    public string $editCollectionDate = '';
+    public string $editCollectionTime = '';
+
+    // Change request (past cutoff)
+    public bool $showChangeRequestForm = false;
+    public string $requestedDate = '';
+    public string $requestedTime = '';
+    public string $changeReason = '';
 
     public function mount(Job $job): void
     {
@@ -65,6 +84,82 @@ new #[Layout('components.layouts.app')] class extends Component {
         $this->poFile = null;
         $this->refreshJob();
         session()->flash('success', 'Purchase order uploaded successfully.');
+    }
+
+    public function previewPo(int $poId): void
+    {
+        $this->previewPoId = $poId;
+    }
+
+    public function closePreview(): void
+    {
+        $this->previewPoId = null;
+    }
+
+    public function startReplacePo(int $poId): void
+    {
+        $po = PurchaseOrder::where('job_id', $this->job->id)->findOrFail($poId);
+        if ($po->is_verified) {
+            session()->flash('error', 'Cannot replace a verified PO.');
+            return;
+        }
+        $this->replacePoId = $poId;
+        $this->replacePoFile = null;
+    }
+
+    public function cancelReplace(): void
+    {
+        $this->replacePoId = null;
+        $this->replacePoFile = null;
+    }
+
+    public function replacePo(): void
+    {
+        $this->validate(['replacePoFile' => 'required|file|mimes:pdf,jpg,jpeg,png|max:10240']);
+
+        $po = PurchaseOrder::where('job_id', $this->job->id)->findOrFail($this->replacePoId);
+
+        if ($po->is_verified) {
+            session()->flash('error', 'Cannot replace a verified PO.');
+            return;
+        }
+
+        if ($po->document_path && Storage::disk($po->document_disk)->exists($po->document_path)) {
+            Storage::disk($po->document_disk)->delete($po->document_path);
+        }
+
+        $disk = config('filesystems.default') === 'local' ? 'local' : 'r2';
+        $path = $this->replacePoFile->store('jobs/' . $this->job->uuid . '/po', $disk);
+
+        $po->update([
+            'document_disk' => $disk,
+            'document_path' => $path,
+            'original_filename' => $this->replacePoFile->getClientOriginalName(),
+            'uploaded_by_user_id' => auth()->id(),
+        ]);
+
+        $this->replacePoId = null;
+        $this->replacePoFile = null;
+        $this->refreshJob();
+        session()->flash('success', 'PO document replaced.');
+    }
+
+    public function deletePo(int $poId): void
+    {
+        $po = PurchaseOrder::where('job_id', $this->job->id)->findOrFail($poId);
+
+        if ($po->is_verified) {
+            session()->flash('error', 'Cannot delete a verified PO.');
+            return;
+        }
+
+        if ($po->document_path && Storage::disk($po->document_disk)->exists($po->document_path)) {
+            Storage::disk($po->document_disk)->delete($po->document_path);
+        }
+
+        $po->delete();
+        $this->refreshJob();
+        session()->flash('success', 'Purchase order removed.');
     }
 
     public function reassignVehicle(): void
@@ -124,6 +219,51 @@ new #[Layout('components.layouts.app')] class extends Component {
         session()->flash('success', 'Vehicle reassigned successfully. New PO uploaded.');
     }
 
+    public function updateCollectionDate(): void
+    {
+        $this->validate([
+            'editCollectionDate' => 'required|date',
+            'editCollectionTime' => 'required|date_format:H:i',
+        ]);
+
+        $this->job->update([
+            'scheduled_date' => $this->editCollectionDate,
+            'scheduled_ready_time' => $this->editCollectionDate . ' ' . $this->editCollectionTime,
+        ]);
+
+        $this->showEditCollection = false;
+        $this->refreshJob();
+        session()->flash('success', 'Collection date updated.');
+    }
+
+    public function submitChangeRequest(): void
+    {
+        $this->validate([
+            'requestedDate' => 'required|date',
+            'requestedTime' => 'required|date_format:H:i',
+            'changeReason' => 'required|string|min:10',
+        ]);
+
+        BookingChangeRequest::create([
+            'job_id' => $this->job->id,
+            'requested_by_user_id' => auth()->id(),
+            'request_type' => 'collection_date_change',
+            'current_value' => [
+                'date' => $this->job->scheduled_date?->format('Y-m-d'),
+                'time' => $this->job->scheduled_ready_time?->format('H:i'),
+            ],
+            'requested_value' => [
+                'date' => $this->requestedDate,
+                'time' => $this->requestedTime,
+            ],
+            'reason' => $this->changeReason,
+        ]);
+
+        $this->showChangeRequestForm = false;
+        $this->changeReason = '';
+        session()->flash('success', 'Change request submitted for review.');
+    }
+
     private function refreshJob(): void
     {
         $this->job->refresh();
@@ -140,6 +280,8 @@ new #[Layout('components.layouts.app')] class extends Component {
                 Job::STATUS_APPROVED,
                 Job::STATUS_ASSIGNED,
             ]),
+            'isPastCutoff' => CutoffService::isPastCutoff($this->job),
+            'changeRequests' => $this->job->changeRequests()->latest()->get(),
         ];
     }
 };
@@ -165,6 +307,14 @@ new #[Layout('components.layouts.app')] class extends Component {
                     <div><dt class="text-gray-500">Type</dt><dd class="font-medium">{{ $job->isTransport() ? 'Transport' : 'Yard Work' }}</dd></div>
                     <div><dt class="text-gray-500">Created</dt><dd class="font-medium">{{ $job->created_at->format('d M Y H:i') }}</dd></div>
                     <div><dt class="text-gray-500">Booked By</dt><dd class="font-medium">{{ $job->createdBy?->name ?? '—' }}</dd></div>
+                    <div>
+                        <dt class="text-gray-500">Collection Date</dt>
+                        <dd class="font-medium">{{ $job->scheduled_date?->format('d M Y') ?? '—' }}</dd>
+                    </div>
+                    <div>
+                        <dt class="text-gray-500">Collection Time</dt>
+                        <dd class="font-medium">{{ $job->scheduled_ready_time?->format('H:i') ?? '—' }}</dd>
+                    </div>
                     @if($job->isTransport())
                     <div>
                         <dt class="text-gray-500">Pickup</dt>
@@ -178,6 +328,12 @@ new #[Layout('components.layouts.app')] class extends Component {
                         @if($job->deliveryLocation?->address)<dd class="text-xs text-gray-400">{{ $job->deliveryLocation->address }}</dd>@endif
                         <dd class="text-xs text-gray-500 mt-1">Contact: {{ $job->delivery_contact_name ?? $job->deliveryLocation?->customer_name ?? '—' }} {{ $job->delivery_contact_phone ?? $job->deliveryLocation?->customer_phone ?? '' }}</dd>
                     </div>
+                    @if($job->distance_km)
+                    <div>
+                        <dt class="text-gray-500">Distance</dt>
+                        <dd class="font-medium">{{ number_format($job->distance_km, 1) }} km @if($job->is_round_trip)<span class="inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700 ml-1">Round Trip</span>@endif</dd>
+                    </div>
+                    @endif
                     @else
                     <div>
                         <dt class="text-gray-500">Yard</dt>
@@ -185,6 +341,90 @@ new #[Layout('components.layouts.app')] class extends Component {
                     </div>
                     @endif
                 </dl>
+            </div>
+
+            {{-- Collection Date Management --}}
+            <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-lg font-semibold text-gray-900">Collection Schedule</h3>
+                    @if(!$isPastCutoff && !$showEditCollection)
+                        <button wire:click="$set('showEditCollection', true)" class="text-sm font-medium text-blue-600 hover:text-blue-700">Edit</button>
+                    @elseif($isPastCutoff && !$showChangeRequestForm)
+                        <button wire:click="$set('showChangeRequestForm', true)" class="text-sm font-medium text-amber-600 hover:text-amber-700">Request Change</button>
+                    @endif
+                </div>
+
+                <p class="text-sm text-gray-600">
+                    <strong>{{ $job->scheduled_date?->format('d M Y') }}</strong> at <strong>{{ $job->scheduled_ready_time?->format('H:i') ?? '—' }}</strong>
+                    @if($isPastCutoff)
+                        <span class="ml-2 inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">Past cutoff</span>
+                    @endif
+                </p>
+
+                @if($showEditCollection)
+                <div class="mt-4 rounded-lg border border-blue-200 bg-blue-50 p-4 space-y-3">
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                            <label class="block text-xs font-medium text-gray-600 mb-1">New Date *</label>
+                            <input wire:model="editCollectionDate" type="date" class="w-full rounded-md border border-gray-300 px-2.5 py-2 text-sm">
+                            @error('editCollectionDate')<p class="mt-0.5 text-xs text-red-600">{{ $message }}</p>@enderror
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-600 mb-1">New Time *</label>
+                            <input wire:model="editCollectionTime" type="time" class="w-full rounded-md border border-gray-300 px-2.5 py-2 text-sm">
+                            @error('editCollectionTime')<p class="mt-0.5 text-xs text-red-600">{{ $message }}</p>@enderror
+                        </div>
+                    </div>
+                    <div class="flex gap-2 justify-end">
+                        <button type="button" wire:click="$set('showEditCollection', false)" class="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50">Cancel</button>
+                        <button type="button" wire:click="updateCollectionDate" class="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-500">Save</button>
+                    </div>
+                </div>
+                @endif
+
+                @if($showChangeRequestForm)
+                <div class="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4 space-y-3">
+                    <p class="text-sm font-semibold text-gray-900">Request Collection Date Change</p>
+                    <p class="text-xs text-gray-500">The cutoff has passed. Your request will be reviewed by the operations team.</p>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                            <label class="block text-xs font-medium text-gray-600 mb-1">Requested Date *</label>
+                            <input wire:model="requestedDate" type="date" class="w-full rounded-md border border-gray-300 px-2.5 py-2 text-sm">
+                            @error('requestedDate')<p class="mt-0.5 text-xs text-red-600">{{ $message }}</p>@enderror
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-600 mb-1">Requested Time *</label>
+                            <input wire:model="requestedTime" type="time" class="w-full rounded-md border border-gray-300 px-2.5 py-2 text-sm">
+                            @error('requestedTime')<p class="mt-0.5 text-xs text-red-600">{{ $message }}</p>@enderror
+                        </div>
+                        <div class="sm:col-span-2">
+                            <label class="block text-xs font-medium text-gray-600 mb-1">Reason for Change *</label>
+                            <textarea wire:model="changeReason" rows="2" class="w-full rounded-md border border-gray-300 px-2.5 py-2 text-sm" placeholder="Please explain why the date needs to change..."></textarea>
+                            @error('changeReason')<p class="mt-0.5 text-xs text-red-600">{{ $message }}</p>@enderror
+                        </div>
+                    </div>
+                    <div class="flex gap-2 justify-end">
+                        <button type="button" wire:click="$set('showChangeRequestForm', false)" class="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50">Cancel</button>
+                        <button type="button" wire:click="submitChangeRequest" class="rounded-md bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-500">Submit Request</button>
+                    </div>
+                </div>
+                @endif
+
+                @if($changeRequests->isNotEmpty())
+                <div class="mt-4 space-y-2">
+                    <p class="text-xs font-medium text-gray-500 uppercase tracking-wider">Change Requests</p>
+                    @foreach($changeRequests as $cr)
+                    <div class="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-sm">
+                        <div class="flex items-center justify-between">
+                            <span>{{ $cr->requested_value['date'] ?? '' }} {{ $cr->requested_value['time'] ?? '' }}</span>
+                            <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium {{ $cr->status === 'approved' ? 'bg-green-100 text-green-700' : ($cr->status === 'rejected' ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700') }}">{{ ucfirst($cr->status) }}</span>
+                        </div>
+                        <p class="text-xs text-gray-500 mt-1">{{ $cr->reason }}</p>
+                        @if($cr->review_notes)<p class="text-xs text-gray-400 mt-0.5">Admin: {{ $cr->review_notes }}</p>@endif
+                    </div>
+                    @endforeach
+                </div>
+                @endif
             </div>
 
             @if($job->isTransport())
@@ -200,12 +440,12 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <dl class="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
                     <div><dt class="text-gray-500">Brand</dt><dd class="font-medium">{{ $job->brand?->name ?? '—' }}</dd></div>
                     <div><dt class="text-gray-500">Model</dt><dd class="font-medium">{{ $job->model_name ?? '—' }}</dd></div>
-                    <div><dt class="text-gray-500">VIN</dt><dd class="font-medium font-mono">{{ $job->vin ?? '—' }}</dd></div>
+                    <div><dt class="text-gray-500">VIN</dt><dd class="font-medium font-mono uppercase">{{ strtoupper($job->vin ?? '') ?: '—' }}</dd></div>
                     <div><dt class="text-gray-500">Registration</dt><dd class="font-medium">{{ $job->registration ?? '—' }}</dd></div>
                 </dl>
                 @if($job->original_vin && $job->original_vin !== $job->vin)
                     <p class="mt-3 text-xs text-amber-600 bg-amber-50 rounded-lg px-3 py-2">
-                        Vehicle reassigned on {{ $job->vehicle_reassigned_at->format('d M Y H:i') }}. Original VIN: <span class="font-mono">{{ $job->original_vin }}</span>
+                        Vehicle reassigned on {{ $job->vehicle_reassigned_at->format('d M Y H:i') }}. Original VIN: <span class="font-mono uppercase">{{ strtoupper($job->original_vin) }}</span>
                     </p>
                 @endif
 
@@ -273,28 +513,54 @@ new #[Layout('components.layouts.app')] class extends Component {
                 @if($job->purchaseOrders->isNotEmpty())
                     <div class="space-y-3">
                         @foreach($job->purchaseOrders as $po)
-                        <div class="flex items-start justify-between rounded-lg border border-gray-100 bg-gray-50 px-4 py-3">
-                            <div class="text-sm">
-                                <div class="flex items-center gap-2">
-                                    <span class="font-semibold text-gray-900">{{ $po->po_number }}</span>
-                                    @if($po->label)
-                                        <span class="inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700">{{ $po->label }}</span>
-                                    @endif
-                                    @if($po->is_verified)
-                                        <span class="inline-flex items-center rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700">Verified</span>
-                                    @else
-                                        <span class="inline-flex items-center rounded-full bg-yellow-100 px-2 py-0.5 text-xs font-medium text-yellow-700">Pending</span>
+                        <div class="rounded-lg border border-gray-100 bg-gray-50 px-4 py-3">
+                            <div class="flex items-start justify-between">
+                                <div class="text-sm">
+                                    <div class="flex items-center gap-2">
+                                        <span class="font-semibold text-gray-900">{{ $po->po_number }}</span>
+                                        @if($po->label)
+                                            <span class="inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700">{{ $po->label }}</span>
+                                        @endif
+                                        @if($po->is_verified)
+                                            <span class="inline-flex items-center rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700">Verified</span>
+                                        @else
+                                            <span class="inline-flex items-center rounded-full bg-yellow-100 px-2 py-0.5 text-xs font-medium text-yellow-700">Pending</span>
+                                        @endif
+                                    </div>
+                                    <p class="text-gray-600 mt-0.5">R{{ number_format($po->po_amount, 2) }}</p>
+                                    @if($po->original_filename)
+                                        <p class="text-xs text-gray-400 mt-0.5">{{ $po->original_filename }}</p>
                                     @endif
                                 </div>
-                                <p class="text-gray-600 mt-0.5">R{{ number_format($po->po_amount, 2) }}</p>
-                                @if($po->original_filename)
-                                    <p class="text-xs text-gray-400 mt-0.5">{{ $po->original_filename }}</p>
-                                @endif
+                                <div class="text-right text-xs">
+                                    <p class="text-gray-400">{{ $po->created_at->format('d M Y') }}</p>
+                                    <p class="text-gray-400">{{ $po->uploadedBy?->name }}</p>
+                                    <div class="mt-1 flex items-center gap-2 justify-end">
+                                        @if($po->document_path)
+                                            <button wire:click="previewPo({{ $po->id }})" class="text-blue-600 hover:text-blue-800 font-medium">View</button>
+                                        @endif
+                                        @if(!$po->is_verified)
+                                            <button wire:click="startReplacePo({{ $po->id }})" class="text-amber-600 hover:text-amber-800 font-medium">Replace</button>
+                                            <button wire:click="deletePo({{ $po->id }})" wire:confirm="Remove this PO? This cannot be undone." class="text-red-600 hover:text-red-800 font-medium">Remove</button>
+                                        @endif
+                                    </div>
+                                </div>
                             </div>
-                            <div class="text-right text-xs text-gray-400">
-                                <p>{{ $po->created_at->format('d M Y') }}</p>
-                                <p>{{ $po->uploadedBy?->name }}</p>
+
+                            @if($replacePoId === $po->id)
+                            <div class="mt-3 pt-3 border-t border-gray-200">
+                                <p class="text-xs font-medium text-gray-700 mb-2">Upload replacement document</p>
+                                <div class="flex items-center gap-3">
+                                    <input wire:model="replacePoFile" type="file" accept=".pdf,.jpg,.jpeg,.png" class="flex-1 text-sm text-gray-500 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-amber-50 file:text-amber-700 hover:file:bg-amber-100">
+                                    <button wire:click="replacePo" class="rounded-md bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-500" wire:loading.attr="disabled">
+                                        <span wire:loading.remove wire:target="replacePo">Upload</span>
+                                        <span wire:loading wire:target="replacePo">Uploading...</span>
+                                    </button>
+                                    <button wire:click="cancelReplace" class="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50">Cancel</button>
+                                </div>
+                                @error('replacePoFile')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
                             </div>
+                            @endif
                         </div>
                         @endforeach
                     </div>
@@ -384,4 +650,40 @@ new #[Layout('components.layouts.app')] class extends Component {
             </div>
         </div>
     </div>
+
+    {{-- PO Document Preview Modal --}}
+    @if($previewPoId)
+    @php $previewPo = $job->purchaseOrders->firstWhere('id', $previewPoId); @endphp
+    @if($previewPo)
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60" wire:click.self="closePreview">
+        <div class="relative w-full max-w-4xl mx-4 bg-white rounded-2xl shadow-2xl overflow-hidden" style="max-height: 90vh;">
+            <div class="flex items-center justify-between border-b border-gray-200 px-6 py-4">
+                <div>
+                    <h3 class="text-lg font-semibold text-gray-900">{{ $previewPo->po_number }}</h3>
+                    <p class="text-sm text-gray-500">{{ $previewPo->original_filename }} &middot; R{{ number_format($previewPo->po_amount, 2) }}</p>
+                </div>
+                <div class="flex items-center gap-3">
+                    <a href="{{ route('po.preview', $previewPo->id) }}" target="_blank" class="rounded-md bg-gray-100 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-200">Open in New Tab</a>
+                    <button wire:click="closePreview" class="rounded-full p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-100">
+                        <svg class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+                    </button>
+                </div>
+            </div>
+            <div class="p-0" style="height: 75vh;">
+                @php
+                    $ext = pathinfo($previewPo->original_filename ?? '', PATHINFO_EXTENSION);
+                    $isImage = in_array(strtolower($ext), ['jpg', 'jpeg', 'png', 'gif', 'webp']);
+                @endphp
+                @if($isImage)
+                    <div class="flex items-center justify-center h-full bg-gray-50 p-4">
+                        <img src="{{ route('po.preview', $previewPo->id) }}" alt="{{ $previewPo->original_filename }}" class="max-h-full max-w-full object-contain rounded">
+                    </div>
+                @else
+                    <iframe src="{{ route('po.preview', $previewPo->id) }}" class="w-full h-full border-0"></iframe>
+                @endif
+            </div>
+        </div>
+    </div>
+    @endif
+    @endif
 </div>

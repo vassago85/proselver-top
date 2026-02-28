@@ -3,9 +3,11 @@
 use App\Models\Job;
 use App\Models\User;
 use App\Models\JobDocument;
+use App\Models\PurchaseOrder;
 use App\Services\AuditService;
 use Livewire\Volt\Component;
 use Livewire\Attributes\Layout;
+use Illuminate\Support\Facades\Storage;
 
 new #[Layout('components.layouts.app')] class extends Component {
     public Job $job;
@@ -13,10 +15,21 @@ new #[Layout('components.layouts.app')] class extends Component {
     public array $verificationChecklist = [];
     public string $rejectionReason = '';
     public ?int $assignDriverId = null;
+    public ?int $previewPoId = null;
 
     public function mount(Job $job): void
     {
-        $this->job = $job->load(['company', 'pickupLocation', 'deliveryLocation', 'yardLocation', 'brand', 'driver', 'createdBy', 'documents', 'events']);
+        $this->job = $job->load(['company', 'pickupLocation', 'deliveryLocation', 'yardLocation', 'brand', 'driver', 'createdBy', 'documents', 'events', 'purchaseOrders.uploadedBy:id,name']);
+    }
+
+    public function previewPo(int $poId): void
+    {
+        $this->previewPoId = $poId;
+    }
+
+    public function closePreview(): void
+    {
+        $this->previewPoId = null;
     }
 
     public function verify(): void
@@ -106,8 +119,19 @@ new #[Layout('components.layouts.app')] class extends Component {
                         <div><dt class="text-gray-500">Delivery</dt><dd class="font-medium">{{ $job->deliveryLocation?->company_name }}</dd></div>
                         <div><dt class="text-gray-500">Brand</dt><dd class="font-medium">{{ $job->brand?->name }}</dd></div>
                         <div><dt class="text-gray-500">Model</dt><dd class="font-medium">{{ $job->model_name ?? '—' }}</dd></div>
-                        <div><dt class="text-gray-500">VIN</dt><dd class="font-medium font-mono">{{ $job->vin ?? '—' }}</dd></div>
+                        <div><dt class="text-gray-500">VIN</dt><dd class="font-medium font-mono uppercase">{{ strtoupper($job->vin ?? '') ?: '—' }}</dd></div>
                         <div><dt class="text-gray-500">Ready Time</dt><dd class="font-medium">{{ $job->scheduled_ready_time?->format('H:i') ?? '—' }}</dd></div>
+                        <div><dt class="text-gray-500">Collection Date</dt><dd class="font-medium">{{ $job->scheduled_date?->format('d M Y') ?? '—' }}</dd></div>
+                        <div><dt class="text-gray-500">Collection Time</dt><dd class="font-medium">{{ $job->scheduled_ready_time?->format('H:i') ?? '—' }}</dd></div>
+                        @if($job->distance_km)
+                        <div><dt class="text-gray-500">Distance</dt><dd class="font-medium">{{ number_format($job->distance_km, 1) }} km</dd></div>
+                        @endif
+                        @if($job->estimated_duration_minutes)
+                        <div><dt class="text-gray-500">Est. Duration</dt><dd class="font-medium">{{ floor($job->estimated_duration_minutes / 60) }}h {{ $job->estimated_duration_minutes % 60 }}min</dd></div>
+                        @endif
+                        @if($job->estimated_toll_cost)
+                        <div><dt class="text-gray-500">Est. Tolls</dt><dd class="font-medium">R{{ number_format($job->estimated_toll_cost, 2) }}</dd></div>
+                        @endif
                     @else
                         <div><dt class="text-gray-500">Yard</dt><dd class="font-medium">{{ $job->yardLocation?->company_name }}</dd></div>
                         <div><dt class="text-gray-500">Drivers Required</dt><dd class="font-medium">{{ $job->drivers_required }}</dd></div>
@@ -115,9 +139,52 @@ new #[Layout('components.layouts.app')] class extends Component {
                         <div><dt class="text-gray-500">Hourly Rate</dt><dd class="font-medium">R{{ number_format($job->hourly_rate, 2) }}</dd></div>
                     @endif
 
-                    <div><dt class="text-gray-500">PO Number</dt><dd class="font-medium">{{ $job->po_number ?? '—' }}</dd></div>
-                    <div><dt class="text-gray-500">PO Amount</dt><dd class="font-medium">R{{ number_format($job->po_amount ?? 0, 2) }}</dd></div>
                 </dl>
+            </div>
+
+            {{-- Purchase Orders --}}
+            <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+                <h3 class="text-lg font-semibold text-gray-900 mb-4">Purchase Orders</h3>
+
+                @if($job->purchaseOrders->isNotEmpty())
+                    <div class="space-y-3">
+                        @foreach($job->purchaseOrders as $po)
+                        <div class="flex items-start justify-between rounded-lg border border-gray-100 bg-gray-50 px-4 py-3">
+                            <div class="text-sm">
+                                <div class="flex items-center gap-2">
+                                    <span class="font-semibold text-gray-900">{{ $po->po_number }}</span>
+                                    @if($po->label)
+                                        <span class="inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700">{{ $po->label }}</span>
+                                    @endif
+                                    @if($po->is_verified)
+                                        <span class="inline-flex items-center rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700">Verified</span>
+                                    @else
+                                        <span class="inline-flex items-center rounded-full bg-yellow-100 px-2 py-0.5 text-xs font-medium text-yellow-700">Pending</span>
+                                    @endif
+                                </div>
+                                <p class="text-gray-600 mt-0.5">R{{ number_format($po->po_amount, 2) }}</p>
+                                @if($po->original_filename)
+                                    <p class="text-xs text-gray-400 mt-0.5">{{ $po->original_filename }}</p>
+                                @endif
+                            </div>
+                            <div class="text-right text-xs">
+                                <p class="text-gray-400">{{ $po->created_at->format('d M Y') }}</p>
+                                <p class="text-gray-400">{{ $po->uploadedBy?->name }}</p>
+                                @if($po->document_path)
+                                    <button wire:click="previewPo({{ $po->id }})" class="mt-1 text-blue-600 hover:text-blue-800 font-medium">View</button>
+                                @endif
+                            </div>
+                        </div>
+                        @endforeach
+                    </div>
+                    @php $poTotal = $job->purchaseOrders->sum('po_amount'); @endphp
+                    <div class="mt-3 flex justify-end text-sm">
+                        <span class="text-gray-500">Total PO Value:</span>
+                        <span class="ml-2 font-semibold text-gray-900">R{{ number_format($poTotal, 2) }}</span>
+                    </div>
+                @else
+                    <p class="text-sm text-gray-500">No purchase orders attached yet.</p>
+                @endif
             </div>
 
             {{-- Documents --}}
@@ -222,4 +289,40 @@ new #[Layout('components.layouts.app')] class extends Component {
             </div>
         </div>
     </div>
+
+    {{-- PO Document Preview Modal --}}
+    @if($previewPoId)
+    @php $previewPo = $job->purchaseOrders->firstWhere('id', $previewPoId); @endphp
+    @if($previewPo)
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60" wire:click.self="closePreview">
+        <div class="relative w-full max-w-4xl mx-4 bg-white rounded-2xl shadow-2xl overflow-hidden" style="max-height: 90vh;">
+            <div class="flex items-center justify-between border-b border-gray-200 px-6 py-4">
+                <div>
+                    <h3 class="text-lg font-semibold text-gray-900">{{ $previewPo->po_number }}</h3>
+                    <p class="text-sm text-gray-500">{{ $previewPo->original_filename }} &middot; R{{ number_format($previewPo->po_amount, 2) }}</p>
+                </div>
+                <div class="flex items-center gap-3">
+                    <a href="{{ route('po.preview', $previewPo->id) }}" target="_blank" class="rounded-md bg-gray-100 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-200">Open in New Tab</a>
+                    <button wire:click="closePreview" class="rounded-full p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-100">
+                        <svg class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+                    </button>
+                </div>
+            </div>
+            <div class="p-0" style="height: 75vh;">
+                @php
+                    $ext = pathinfo($previewPo->original_filename ?? '', PATHINFO_EXTENSION);
+                    $isImage = in_array(strtolower($ext), ['jpg', 'jpeg', 'png', 'gif', 'webp']);
+                @endphp
+                @if($isImage)
+                    <div class="flex items-center justify-center h-full bg-gray-50 p-4">
+                        <img src="{{ route('po.preview', $previewPo->id) }}" alt="{{ $previewPo->original_filename }}" class="max-h-full max-w-full object-contain rounded">
+                    </div>
+                @else
+                    <iframe src="{{ route('po.preview', $previewPo->id) }}" class="w-full h-full border-0"></iframe>
+                @endif
+            </div>
+        </div>
+    </div>
+    @endif
+    @endif
 </div>

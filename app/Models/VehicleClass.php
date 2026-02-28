@@ -9,12 +9,13 @@ class VehicleClass extends Model
 {
     use SoftDeletes;
 
-    protected $fillable = ['name', 'description', 'is_active'];
+    protected $fillable = ['name', 'description', 'is_active', 'toll_class'];
 
     protected function casts(): array
     {
         return [
             'is_active' => 'boolean',
+            'toll_class' => 'integer',
         ];
     }
 }

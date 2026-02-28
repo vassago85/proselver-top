@@ -3,8 +3,10 @@
 namespace App\Services;
 
 use App\Models\Job;
+use App\Models\Location;
 use App\Models\SystemSetting;
 use App\Models\TransportRoute;
+use App\Models\ZoneRate;
 use Carbon\Carbon;
 
 class BookingService
@@ -61,13 +63,16 @@ class BookingService
             'model_name' => $data['model_name'] ?? null,
             'vin' => $data['vin'],
             'registration' => $data['registration'] ?? null,
-            'scheduled_date' => now()->toDateString(),
+            'scheduled_date' => $data['scheduled_date'] ?? now()->toDateString(),
             'scheduled_ready_time' => $data['scheduled_ready_time'] ?? null,
             'po_number' => $data['po_number'] ?? null,
             'po_amount' => $data['po_amount'] ?? null,
             'is_emergency' => $data['is_emergency'] ?? false,
             'emergency_reason' => $data['emergency_reason'] ?? null,
+            'is_round_trip' => $data['is_round_trip'] ?? false,
         ]);
+
+        $this->calculateAndStoreRoute($job);
 
         return $job;
     }
@@ -83,7 +88,7 @@ class BookingService
             'company_id' => $data['company_id'],
             'created_by_user_id' => $data['created_by_user_id'],
             'yard_location_id' => $data['yard_location_id'],
-            'scheduled_date' => now()->toDateString(),
+            'scheduled_date' => $data['scheduled_date'] ?? now()->toDateString(),
             'drivers_required' => $data['drivers_required'],
             'hours_required' => $data['hours_required'],
             'hourly_rate' => $data['hourly_rate'] ?? $hourlyRate,
@@ -95,5 +100,52 @@ class BookingService
         $job->save();
 
         return $job;
+    }
+
+    protected function calculateAndStoreRoute(Job $job): void
+    {
+        $pickup = Location::find($job->pickup_location_id);
+        $delivery = Location::find($job->delivery_location_id);
+
+        if (!$pickup?->zone_id || !$delivery?->zone_id || !$job->vehicle_class_id) {
+            return;
+        }
+
+        $rate = ZoneRate::findRate($pickup->zone_id, $delivery->zone_id, $job->vehicle_class_id);
+        if (!$rate) {
+            return;
+        }
+
+        $multiplier = $job->is_round_trip ? 2 : 1;
+
+        $job->distance_km = round($rate->distance_km * $multiplier, 2);
+        $job->save();
+    }
+
+    /**
+     * Preview route distance/price from zone rates (for booking form preview).
+     */
+    public static function previewRoute(int $pickupId, int $deliveryId, int $vehicleClassId, bool $isRoundTrip = false): ?array
+    {
+        $pickup = Location::find($pickupId);
+        $delivery = Location::find($deliveryId);
+
+        if (!$pickup?->zone_id || !$delivery?->zone_id) {
+            return null;
+        }
+
+        $rate = ZoneRate::findRate($pickup->zone_id, $delivery->zone_id, $vehicleClassId);
+        if (!$rate) {
+            return null;
+        }
+
+        $multiplier = $isRoundTrip ? 2 : 1;
+
+        return [
+            'distance_km' => round($rate->distance_km * $multiplier, 2),
+            'price' => round($rate->price * $multiplier, 2),
+            'origin_zone' => $rate->originZone->name,
+            'destination_zone' => $rate->destinationZone->name,
+        ];
     }
 }

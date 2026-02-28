@@ -67,5 +67,71 @@
         </div>
     </div>
     @livewireScripts
+
+    @php
+        $__gmapsKey = \App\Models\SystemSetting::get('google_maps_api_key', config('services.google_maps.api_key'));
+    @endphp
+    @if($__gmapsKey)
+    <script>
+        function initGooglePlaces() {
+            window._googlePlacesReady = true;
+            if (window._placesQueue) {
+                window._placesQueue.forEach(fn => fn());
+                window._placesQueue = [];
+            }
+        }
+
+        document.addEventListener('alpine:init', () => {
+            Alpine.data('placesAutocomplete', (config) => ({
+                init() {
+                    if (window._googlePlacesReady) {
+                        this.$nextTick(() => this.setup());
+                    } else {
+                        window._placesQueue = window._placesQueue || [];
+                        window._placesQueue.push(() => this.setup());
+                    }
+                },
+                setup() {
+                    const input = this.$refs.addressInput;
+                    if (!input || input._autocompleteAttached) return;
+                    input._autocompleteAttached = true;
+
+                    const ac = new google.maps.places.Autocomplete(input, {
+                        componentRestrictions: { country: 'za' },
+                        fields: ['address_components', 'formatted_address', 'geometry'],
+                    });
+
+                    ac.addListener('place_changed', () => {
+                        const place = ac.getPlace();
+                        if (!place.address_components) return;
+
+                        if (config.addressModel) {
+                            this.$wire.set(config.addressModel, place.formatted_address);
+                        }
+
+                        let city = '', province = '';
+                        for (const c of place.address_components) {
+                            if (!city && (c.types.includes('locality') || c.types.includes('sublocality_level_1'))) {
+                                city = c.long_name;
+                            }
+                            if (c.types.includes('administrative_area_level_1')) {
+                                province = c.long_name;
+                            }
+                        }
+
+                        if (config.cityModel && city) this.$wire.set(config.cityModel, city);
+                        if (config.provinceModel && province) this.$wire.set(config.provinceModel, province);
+
+                        if (place.geometry?.location) {
+                            if (config.latModel) this.$wire.set(config.latModel, String(place.geometry.location.lat()));
+                            if (config.lngModel) this.$wire.set(config.lngModel, String(place.geometry.location.lng()));
+                        }
+                    });
+                }
+            }));
+        });
+    </script>
+    <script src="https://maps.googleapis.com/maps/api/js?key={{ $__gmapsKey }}&libraries=places&callback=initGooglePlaces" async defer></script>
+    @endif
 </body>
 </html>

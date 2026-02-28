@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Services\GeocodingService;
 use App\Traits\Auditable;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
@@ -16,15 +17,14 @@ class Location extends Model
     protected $fillable = [
         'uuid',
         'company_id',
+        'zone_id',
         'company_name',
-        'is_private',
         'address',
         'city',
         'province',
         'latitude',
         'longitude',
         'customer_name',
-        'customer_contact',
         'customer_phone',
         'customer_email',
         'is_active',
@@ -35,7 +35,6 @@ class Location extends Model
         return [
             'latitude' => 'decimal:8',
             'longitude' => 'decimal:8',
-            'is_private' => 'boolean',
             'is_active' => 'boolean',
         ];
     }
@@ -47,6 +46,16 @@ class Location extends Model
                 $location->uuid = (string) Str::uuid();
             }
         });
+
+        static::saving(function (Location $location) {
+            if ($location->address && empty($location->latitude) && empty($location->longitude)) {
+                $coords = GeocodingService::geocode($location->address);
+                if ($coords) {
+                    $location->latitude = $coords['lat'];
+                    $location->longitude = $coords['lng'];
+                }
+            }
+        });
     }
 
     public function company(): BelongsTo
@@ -54,12 +63,14 @@ class Location extends Model
         return $this->belongsTo(Company::class);
     }
 
+    public function zone(): BelongsTo
+    {
+        return $this->belongsTo(Zone::class);
+    }
+
     public function scopeVisibleTo(Builder $query, Company $company): Builder
     {
-        return $query->where(function ($q) use ($company) {
-            $q->where('company_id', $company->id)
-              ->orWhere('is_private', false);
-        });
+        return $query->where('company_id', $company->id);
     }
 
     public function scopeActive(Builder $query): Builder
