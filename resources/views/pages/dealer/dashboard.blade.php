@@ -17,7 +17,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         $completedJobs = Job::where('company_id', $company->id)->where('status', Job::STATUS_INVOICED)->count();
 
         $recentJobs = Job::where('company_id', $company->id)
-            ->with(['driver:id,name', 'fromHub:id,name', 'toHub:id,name'])
+            ->with(['driver:id,name', 'pickupLocation:id,company_name', 'deliveryLocation:id,company_name'])
             ->orderByDesc('created_at')
             ->limit(10)
             ->get();
@@ -68,7 +68,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <tr class="hover:bg-gray-50 cursor-pointer" onclick="window.location='{{ route('dealer.jobs.show', $job) }}'">
                     <td class="px-6 py-4 text-sm font-medium text-blue-600">{{ $job->job_number ?? '—' }}</td>
                     <td class="px-6 py-4 text-sm text-gray-500">
-                        @if($job->isTransport()){{ $job->fromHub?->name }} → {{ $job->toHub?->name }}@else Yard Work @endif
+                        @if($job->isTransport()){{ $job->pickupLocation?->company_name }} → {{ $job->deliveryLocation?->company_name }}@else Yard Work @endif
                     </td>
                     <td class="px-6 py-4 text-sm text-gray-500">{{ $job->driver?->name ?? '—' }}</td>
                     <td class="px-6 py-4"><x-status-badge :status="$job->status" /></td>

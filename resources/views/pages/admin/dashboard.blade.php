@@ -14,7 +14,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         $unassigned = Job::where('status', Job::STATUS_APPROVED)->whereNull('driver_user_id')->count();
         $inProgress = Job::where('status', Job::STATUS_IN_PROGRESS)->count();
 
-        $recentJobs = Job::with(['company:id,name', 'driver:id,name', 'fromHub:id,name', 'toHub:id,name'])
+        $recentJobs = Job::with(['company:id,name', 'driver:id,name', 'pickupLocation:id,company_name', 'deliveryLocation:id,company_name'])
             ->orderByDesc('created_at')
             ->limit(20)
             ->get();
@@ -68,9 +68,9 @@ new #[Layout('components.layouts.app')] class extends Component {
                         <td class="px-6 py-4 text-sm text-gray-900">{{ $job->company?->name }}</td>
                         <td class="px-6 py-4 text-sm text-gray-500">
                             @if($job->isTransport())
-                                {{ $job->fromHub?->name }} → {{ $job->toHub?->name }}
+                                {{ $job->pickupLocation?->company_name }} → {{ $job->deliveryLocation?->company_name }}
                             @else
-                                {{ $job->yardHub?->name ?? 'Yard Work' }}
+                                {{ $job->yardLocation?->company_name ?? 'Yard Work' }}
                             @endif
                         </td>
                         <td class="px-6 py-4 text-sm text-gray-500">{{ $job->driver?->name ?? '—' }}</td>

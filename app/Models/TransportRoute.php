@@ -11,8 +11,8 @@ class TransportRoute extends Model
     protected $table = 'transport_routes';
 
     protected $fillable = [
-        'origin_hub_id',
-        'destination_hub_id',
+        'origin_location_id',
+        'destination_location_id',
         'vehicle_class_id',
         'base_price',
         'is_active',
@@ -26,14 +26,14 @@ class TransportRoute extends Model
         ];
     }
 
-    public function originHub(): BelongsTo
+    public function originLocation(): BelongsTo
     {
-        return $this->belongsTo(Hub::class, 'origin_hub_id');
+        return $this->belongsTo(Location::class, 'origin_location_id');
     }
 
-    public function destinationHub(): BelongsTo
+    public function destinationLocation(): BelongsTo
     {
-        return $this->belongsTo(Hub::class, 'destination_hub_id');
+        return $this->belongsTo(Location::class, 'destination_location_id');
     }
 
     public function vehicleClass(): BelongsTo

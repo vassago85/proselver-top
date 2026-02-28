@@ -17,7 +17,7 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     public function with(): array
     {
-        $query = Job::with(['company:id,name', 'fromHub:id,name', 'toHub:id,name'])
+        $query = Job::with(['company:id,name', 'pickupLocation:id,company_name', 'deliveryLocation:id,company_name'])
             ->orderByDesc('created_at');
 
         if ($this->status) {
@@ -93,7 +93,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                     <td class="px-6 py-4 text-sm text-gray-900">{{ $job->company?->name }}</td>
                     <td class="px-6 py-4 text-sm text-gray-500">
                         @if($job->isTransport())
-                            {{ $job->fromHub?->name }} → {{ $job->toHub?->name }}
+                            {{ $job->pickupLocation?->company_name }} → {{ $job->deliveryLocation?->company_name }}
                         @else
                             Yard Work
                         @endif

@@ -79,12 +79,20 @@ class Job extends Model
         'created_by_user_id',
         'driver_user_id',
         'transport_route_id',
-        'from_hub_id',
-        'to_hub_id',
+        'pickup_location_id',
+        'pickup_contact_name',
+        'pickup_contact_phone',
+        'delivery_location_id',
+        'delivery_contact_name',
+        'delivery_contact_phone',
         'vehicle_class_id',
         'brand_id',
         'model_name',
         'vin',
+        'registration',
+        'original_vin',
+        'vehicle_reassigned_at',
+        'vehicle_reassigned_by',
         'scheduled_date',
         'scheduled_ready_time',
         'actual_ready_time',
@@ -93,7 +101,7 @@ class Job extends Model
         'po_verified',
         'po_verified_at',
         'po_verified_by',
-        'yard_hub_id',
+        'yard_location_id',
         'drivers_required',
         'hours_required',
         'hourly_rate',
@@ -135,6 +143,7 @@ class Job extends Model
             'po_amount' => 'decimal:2',
             'po_verified' => 'boolean',
             'po_verified_at' => 'datetime',
+            'vehicle_reassigned_at' => 'datetime',
             'hourly_rate' => 'decimal:2',
             'base_transport_price' => 'decimal:2',
             'delivery_fuel_price' => 'decimal:2',
@@ -261,19 +270,19 @@ class Job extends Model
         return $this->belongsTo(TransportRoute::class);
     }
 
-    public function fromHub(): BelongsTo
+    public function pickupLocation(): BelongsTo
     {
-        return $this->belongsTo(Hub::class, 'from_hub_id');
+        return $this->belongsTo(Location::class, 'pickup_location_id');
     }
 
-    public function toHub(): BelongsTo
+    public function deliveryLocation(): BelongsTo
     {
-        return $this->belongsTo(Hub::class, 'to_hub_id');
+        return $this->belongsTo(Location::class, 'delivery_location_id');
     }
 
-    public function yardHub(): BelongsTo
+    public function yardLocation(): BelongsTo
     {
-        return $this->belongsTo(Hub::class, 'yard_hub_id');
+        return $this->belongsTo(Location::class, 'yard_location_id');
     }
 
     public function vehicleClass(): BelongsTo
@@ -294,6 +303,11 @@ class Job extends Model
     public function documents(): HasMany
     {
         return $this->hasMany(JobDocument::class, 'job_id');
+    }
+
+    public function purchaseOrders(): HasMany
+    {
+        return $this->hasMany(PurchaseOrder::class, 'job_id')->orderBy('created_at');
     }
 
     public function invoice(): HasOne

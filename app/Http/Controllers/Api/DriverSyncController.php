@@ -17,7 +17,7 @@ class DriverSyncController extends Controller
     {
         $jobs = Job::where('driver_user_id', $request->user()->id)
             ->whereIn('status', [Job::STATUS_ASSIGNED, Job::STATUS_IN_PROGRESS])
-            ->with(['company:id,name', 'fromHub:id,name,address', 'toHub:id,name,address', 'yardHub:id,name,address', 'brand:id,name'])
+            ->with(['company:id,name', 'pickupLocation:id,company_name,address', 'deliveryLocation:id,company_name,address', 'yardLocation:id,company_name,address', 'brand:id,name'])
             ->get();
 
         return response()->json(['jobs' => $jobs]);

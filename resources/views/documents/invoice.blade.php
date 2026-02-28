@@ -46,7 +46,7 @@
                 <strong>Job #:</strong> {{ $invoice->job->job_number }}<br>
                 <strong>Type:</strong> {{ $invoice->job->isTransport() ? 'Transport' : 'Yard Work' }}<br>
                 @if($invoice->job->isTransport())
-                <strong>Route:</strong> {{ $invoice->job->fromHub?->name }} → {{ $invoice->job->toHub?->name }}<br>
+                <strong>Route:</strong> {{ $invoice->job->pickupLocation?->company_name }} → {{ $invoice->job->deliveryLocation?->company_name }}<br>
                 @endif
                 <strong>Date:</strong> {{ $invoice->job->scheduled_date?->format('d M Y') }}
             </td>
@@ -64,7 +64,7 @@
             <tr>
                 <td>
                     @if($invoice->job->isTransport())
-                        Transport: {{ $invoice->job->fromHub?->name }} → {{ $invoice->job->toHub?->name }}
+                        Transport: {{ $invoice->job->pickupLocation?->company_name }} → {{ $invoice->job->deliveryLocation?->company_name }}
                         @if($invoice->job->brand)<br>{{ $invoice->job->brand->name }} {{ $invoice->job->model_name }}@endif
                     @else
                         Yard Work: {{ $invoice->job->drivers_required }} driver(s) × {{ $invoice->job->hours_required }}h

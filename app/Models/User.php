@@ -58,6 +58,11 @@ class User extends Authenticatable
         return $this->companies()->first();
     }
 
+    public function driverProfile(): \Illuminate\Database\Eloquent\Relations\HasOne
+    {
+        return $this->hasOne(DriverProfile::class);
+    }
+
     public function assignedJobs(): HasMany
     {
         return $this->hasMany(Job::class, 'driver_user_id');

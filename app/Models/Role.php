@@ -14,6 +14,11 @@ class Role extends Model
         return $this->belongsToMany(User::class, 'user_roles')->withTimestamps();
     }
 
+    public function permissions(): BelongsToMany
+    {
+        return $this->belongsToMany(Permission::class, 'role_permissions');
+    }
+
     public function isInternal(): bool
     {
         return $this->tier === 'internal';
@@ -27,5 +32,10 @@ class Role extends Model
     public function isDriver(): bool
     {
         return $this->slug === 'driver';
+    }
+
+    public function hasPermission(string $permissionSlug): bool
+    {
+        return $this->permissions->contains('slug', $permissionSlug);
     }
 }

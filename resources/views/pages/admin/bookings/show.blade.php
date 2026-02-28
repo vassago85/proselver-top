@@ -16,7 +16,7 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     public function mount(Job $job): void
     {
-        $this->job = $job->load(['company', 'fromHub', 'toHub', 'yardHub', 'brand', 'driver', 'createdBy', 'documents', 'events']);
+        $this->job = $job->load(['company', 'pickupLocation', 'deliveryLocation', 'yardLocation', 'brand', 'driver', 'createdBy', 'documents', 'events']);
     }
 
     public function verify(): void
@@ -102,14 +102,14 @@ new #[Layout('components.layouts.app')] class extends Component {
                     <div><dt class="text-gray-500">Scheduled Date</dt><dd class="font-medium">{{ $job->scheduled_date?->format('d M Y') }}</dd></div>
 
                     @if($job->isTransport())
-                        <div><dt class="text-gray-500">From</dt><dd class="font-medium">{{ $job->fromHub?->name }}</dd></div>
-                        <div><dt class="text-gray-500">To</dt><dd class="font-medium">{{ $job->toHub?->name }}</dd></div>
+                        <div><dt class="text-gray-500">Pickup</dt><dd class="font-medium">{{ $job->pickupLocation?->company_name }}</dd></div>
+                        <div><dt class="text-gray-500">Delivery</dt><dd class="font-medium">{{ $job->deliveryLocation?->company_name }}</dd></div>
                         <div><dt class="text-gray-500">Brand</dt><dd class="font-medium">{{ $job->brand?->name }}</dd></div>
                         <div><dt class="text-gray-500">Model</dt><dd class="font-medium">{{ $job->model_name ?? '—' }}</dd></div>
                         <div><dt class="text-gray-500">VIN</dt><dd class="font-medium font-mono">{{ $job->vin ?? '—' }}</dd></div>
                         <div><dt class="text-gray-500">Ready Time</dt><dd class="font-medium">{{ $job->scheduled_ready_time?->format('H:i') ?? '—' }}</dd></div>
                     @else
-                        <div><dt class="text-gray-500">Yard</dt><dd class="font-medium">{{ $job->yardHub?->name }}</dd></div>
+                        <div><dt class="text-gray-500">Yard</dt><dd class="font-medium">{{ $job->yardLocation?->company_name }}</dd></div>
                         <div><dt class="text-gray-500">Drivers Required</dt><dd class="font-medium">{{ $job->drivers_required }}</dd></div>
                         <div><dt class="text-gray-500">Hours Required</dt><dd class="font-medium">{{ $job->hours_required }}</dd></div>
                         <div><dt class="text-gray-500">Hourly Rate</dt><dd class="font-medium">R{{ number_format($job->hourly_rate, 2) }}</dd></div>

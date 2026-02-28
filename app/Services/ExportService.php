@@ -35,8 +35,10 @@ class ExportService
             $j->job_type,
             $j->status,
             $j->company?->name,
-            $j->fromHub?->name,
-            $j->toHub?->name,
+            $j->pickupLocation?->company_name,
+            $j->deliveryLocation?->company_name,
+            $j->vin,
+            $j->registration,
             $j->driver?->name,
             $j->scheduled_date?->format('Y-m-d'),
             $j->po_number,
@@ -46,8 +48,8 @@ class ExportService
         ]);
 
         return $this->toCsv($data, [
-            'Job #', 'Type', 'Status', 'Company', 'From', 'To',
-            'Driver', 'Date', 'PO #', 'PO Amount', 'Total', 'Created',
+            'Job #', 'Type', 'Status', 'Company', 'Pickup', 'Delivery',
+            'VIN', 'Registration', 'Driver', 'Date', 'PO #', 'PO Amount', 'Total', 'Created',
         ], 'job_register.csv');
     }
 

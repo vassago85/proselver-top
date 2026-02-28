@@ -22,6 +22,55 @@ trait HasRoles
         return $this->roles->whereIn('slug', $roleSlugs)->isNotEmpty();
     }
 
+    public function hasPermission(string $permissionSlug): bool
+    {
+        if ($this->isSuperAdmin()) {
+            return true;
+        }
+
+        foreach ($this->roles as $role) {
+            if ($role->relationLoaded('permissions')) {
+                if ($role->permissions->contains('slug', $permissionSlug)) {
+                    return true;
+                }
+            } else {
+                if ($role->permissions()->where('slug', $permissionSlug)->exists()) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    public function hasAnyPermission(array $permissionSlugs): bool
+    {
+        if ($this->isSuperAdmin()) {
+            return true;
+        }
+
+        foreach ($this->roles as $role) {
+            if ($role->permissions()->whereIn('slug', $permissionSlugs)->exists()) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    public function getAllPermissionSlugs(): array
+    {
+        if ($this->isSuperAdmin()) {
+            return \App\Models\Permission::pluck('slug')->toArray();
+        }
+
+        return $this->roles
+            ->flatMap(fn ($role) => $role->permissions->pluck('slug'))
+            ->unique()
+            ->values()
+            ->toArray();
+    }
+
     public function isSuperAdmin(): bool
     {
         return $this->hasRole('super_admin');
@@ -29,12 +78,17 @@ trait HasRoles
 
     public function isInternal(): bool
     {
-        return $this->hasAnyRole(['super_admin', 'ops_manager', 'dispatcher', 'accounts']);
+        return $this->roles->where('tier', 'internal')->isNotEmpty();
     }
 
     public function isDealer(): bool
     {
-        return $this->hasAnyRole(['dealer_admin', 'dealer_scheduler', 'dealer_accounts', 'dealer_viewer']);
+        return $this->roles->where('tier', 'dealer')->isNotEmpty();
+    }
+
+    public function isOem(): bool
+    {
+        return $this->roles->where('tier', 'oem')->isNotEmpty();
     }
 
     public function isDriver(): bool
@@ -79,7 +133,7 @@ trait HasRoles
 
     public function canBookTransport(): bool
     {
-        return $this->hasAnyRole(['dealer_admin', 'dealer_scheduler']);
+        return $this->hasPermission('submit_booking');
     }
 
     public function assignRole(string $roleSlug): void
@@ -114,10 +168,14 @@ trait HasRoles
             'ops_manager' => 90,
             'dispatcher' => 80,
             'accounts' => 70,
-            'dealer_admin' => 60,
-            'dealer_scheduler' => 50,
-            'dealer_accounts' => 40,
-            'dealer_viewer' => 30,
+            'oem_admin' => 65,
+            'oem_planner' => 62,
+            'dealer_principal' => 60,
+            'sales_manager_new' => 55,
+            'sales_manager_used' => 55,
+            'stock_controller' => 50,
+            'sales_person_new' => 40,
+            'sales_person_used' => 40,
             'driver' => 20,
         ];
 
@@ -125,7 +183,7 @@ trait HasRoles
         $highestLevel = -1;
 
         foreach ($this->roles as $role) {
-            $level = $hierarchy[$role->slug] ?? 0;
+            $level = $hierarchy[$role->slug] ?? 10;
             if ($level > $highestLevel) {
                 $highestLevel = $level;
                 $highest = $role->slug;

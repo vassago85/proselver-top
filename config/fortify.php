@@ -8,7 +8,7 @@ return [
 
     'passwords' => 'users',
 
-    'username' => 'username',
+    'username' => 'identity',
 
     'email' => 'email',
 

@@ -13,7 +13,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         if ($job->driver_user_id !== auth()->id()) {
             abort(403);
         }
-        $this->job = $job->load(['company:id,name', 'fromHub:id,name,address', 'toHub:id,name,address', 'events']);
+        $this->job = $job->load(['company:id,name', 'pickupLocation:id,company_name,address', 'deliveryLocation:id,company_name,address', 'events']);
     }
 
     public function logEvent(string $eventType): void
@@ -64,11 +64,13 @@ new #[Layout('components.layouts.app')] class extends Component {
             </div>
             @if($job->isTransport())
             <div class="text-center py-4">
-                <p class="text-lg font-semibold text-gray-900">{{ $job->fromHub?->name }}</p>
-                <p class="text-sm text-gray-500">{{ $job->fromHub?->address }}</p>
+                <p class="text-lg font-semibold text-gray-900">{{ $job->pickupLocation?->company_name }}</p>
+                <p class="text-sm text-gray-500">{{ $job->pickupLocation?->address }}</p>
+                <p class="text-xs text-gray-500">Contact: {{ $job->pickup_contact_name ?? $job->pickupLocation?->customer_name ?? '—' }} {{ $job->pickup_contact_phone ?? $job->pickupLocation?->customer_phone ?? '' }}</p>
                 <div class="my-3 text-2xl text-gray-400">↓</div>
-                <p class="text-lg font-semibold text-gray-900">{{ $job->toHub?->name }}</p>
-                <p class="text-sm text-gray-500">{{ $job->toHub?->address }}</p>
+                <p class="text-lg font-semibold text-gray-900">{{ $job->deliveryLocation?->company_name }}</p>
+                <p class="text-sm text-gray-500">{{ $job->deliveryLocation?->address }}</p>
+                <p class="text-xs text-gray-500">Contact: {{ $job->delivery_contact_name ?? $job->deliveryLocation?->customer_name ?? '—' }} {{ $job->delivery_contact_phone ?? $job->deliveryLocation?->customer_phone ?? '' }}</p>
             </div>
             @endif
             <p class="text-sm text-gray-500 text-center">{{ $job->scheduled_date?->format('D, d M Y') }}</p>

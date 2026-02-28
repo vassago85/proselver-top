@@ -11,6 +11,9 @@ Route::get('/', function () {
         if ($user->isDealer()) {
             return redirect()->route('dealer.dashboard');
         }
+        if ($user->isOem()) {
+            return redirect()->route('oem.dashboard');
+        }
         if ($user->isDriver()) {
             return redirect()->route('driver.dashboard');
         }
@@ -25,6 +28,9 @@ Route::get('/dashboard', function () {
     }
     if ($user->isDealer()) {
         return redirect()->route('dealer.dashboard');
+    }
+    if ($user->isOem()) {
+        return redirect()->route('oem.dashboard');
     }
     if ($user->isDriver()) {
         return redirect()->route('driver.dashboard');

@@ -1,39 +1,97 @@
 <?php
 
 use App\Models\Brand;
-use App\Models\Hub;
+use App\Models\Location;
 use App\Models\VehicleClass;
 use App\Services\BookingService;
 use Livewire\Volt\Component;
 use Livewire\Attributes\Layout;
-use Livewire\WithFileUploads;
 
 new #[Layout('components.layouts.app')] class extends Component {
-    use WithFileUploads;
-
     public string $jobType = 'transport';
 
-    // Transport fields
-    public ?int $fromHubId = null;
-    public ?int $toHubId = null;
+    public ?int $pickupLocationId = null;
+    public ?int $deliveryLocationId = null;
     public ?int $vehicleClassId = null;
     public ?int $brandId = null;
     public string $modelName = '';
     public string $vin = '';
-    public string $scheduledDate = '';
+    public string $registration = '';
     public string $scheduledReadyTime = '';
 
-    // Yard fields
-    public ?int $yardHubId = null;
+    public ?int $yardLocationId = null;
     public int $driversRequired = 1;
     public float $hoursRequired = 8;
 
-    // Common
-    public string $poNumber = '';
-    public string $poAmount = '';
-    public $poFile;
+    public string $pickupContactName = '';
+    public string $pickupContactPhone = '';
+    public string $deliveryContactName = '';
+    public string $deliveryContactPhone = '';
+
     public bool $isEmergency = false;
     public string $emergencyReason = '';
+
+    public bool $showNewPickup = false;
+    public bool $showNewDelivery = false;
+    public bool $showNewYard = false;
+
+    public string $newLocCompanyName = '';
+    public string $newLocAddress = '';
+    public string $newLocCity = '';
+    public string $newLocProvince = '';
+    public string $newLocCustomerName = '';
+    public string $newLocCustomerContact = '';
+    public string $newLocCustomerPhone = '';
+    public string $newLocCustomerEmail = '';
+    public bool $newLocIsPrivate = false;
+
+    public function saveNewLocation(string $target): void
+    {
+        $this->validate([
+            'newLocCompanyName' => 'required|string|max:255',
+            'newLocAddress' => 'required|string|max:500',
+        ]);
+
+        $company = auth()->user()->company();
+        $location = Location::create([
+            'company_id' => $company?->id,
+            'company_name' => $this->newLocCompanyName,
+            'is_private' => $this->newLocIsPrivate,
+            'address' => $this->newLocAddress,
+            'city' => $this->newLocCity ?: null,
+            'province' => $this->newLocProvince ?: null,
+            'customer_name' => $this->newLocCustomerName ?: null,
+            'customer_contact' => $this->newLocCustomerContact ?: null,
+            'customer_phone' => $this->newLocCustomerPhone ?: null,
+            'customer_email' => $this->newLocCustomerEmail ?: null,
+        ]);
+
+        if ($target === 'pickup') {
+            $this->pickupLocationId = $location->id;
+            $this->showNewPickup = false;
+        } elseif ($target === 'delivery') {
+            $this->deliveryLocationId = $location->id;
+            $this->showNewDelivery = false;
+        } else {
+            $this->yardLocationId = $location->id;
+            $this->showNewYard = false;
+        }
+
+        $this->resetNewLocFields();
+    }
+
+    private function resetNewLocFields(): void
+    {
+        $this->newLocCompanyName = '';
+        $this->newLocAddress = '';
+        $this->newLocCity = '';
+        $this->newLocProvince = '';
+        $this->newLocCustomerName = '';
+        $this->newLocCustomerContact = '';
+        $this->newLocCustomerPhone = '';
+        $this->newLocCustomerEmail = '';
+        $this->newLocIsPrivate = false;
+    }
 
     public function submit(BookingService $bookingService): void
     {
@@ -43,22 +101,18 @@ new #[Layout('components.layouts.app')] class extends Component {
             return;
         }
 
-        $rules = [
-            'poNumber' => 'required|string|max:50',
-            'poAmount' => 'required|numeric|min:0.01',
-            'poFile' => 'required|file|mimes:pdf,jpg,jpeg,png|max:10240',
-            'scheduledDate' => 'required|date|after:today',
-        ];
+        $rules = [];
 
         if ($this->jobType === 'transport') {
             $rules += [
-                'fromHubId' => 'required|exists:hubs,id',
-                'toHubId' => 'required|exists:hubs,id|different:fromHubId',
+                'pickupLocationId' => 'required|exists:locations,id',
+                'deliveryLocationId' => 'required|exists:locations,id|different:pickupLocationId',
                 'vehicleClassId' => 'required|exists:vehicle_classes,id',
+                'vin' => 'required|string|min:7|max:17',
             ];
         } else {
             $rules += [
-                'yardHubId' => 'required|exists:hubs,id',
+                'yardLocationId' => 'required|exists:locations,id',
                 'driversRequired' => 'required|integer|min:1',
                 'hoursRequired' => 'required|numeric|min:0.5',
             ];
@@ -69,49 +123,33 @@ new #[Layout('components.layouts.app')] class extends Component {
         $data = [
             'company_id' => $company->id,
             'created_by_user_id' => auth()->id(),
-            'po_number' => $this->poNumber,
-            'po_amount' => $this->poAmount,
-            'scheduled_date' => $this->scheduledDate,
         ];
 
         if ($this->jobType === 'transport') {
             $data += [
-                'from_hub_id' => $this->fromHubId,
-                'to_hub_id' => $this->toHubId,
+                'pickup_location_id' => $this->pickupLocationId,
+                'pickup_contact_name' => $this->pickupContactName ?: null,
+                'pickup_contact_phone' => $this->pickupContactPhone ?: null,
+                'delivery_location_id' => $this->deliveryLocationId,
+                'delivery_contact_name' => $this->deliveryContactName ?: null,
+                'delivery_contact_phone' => $this->deliveryContactPhone ?: null,
                 'vehicle_class_id' => $this->vehicleClassId,
                 'brand_id' => $this->brandId,
                 'model_name' => $this->modelName,
                 'vin' => $this->vin,
-                'scheduled_ready_time' => $this->scheduledDate . ' ' . ($this->scheduledReadyTime ?: '08:00'),
+                'registration' => $this->registration ?: null,
+                'scheduled_ready_time' => $this->scheduledReadyTime ? now()->toDateString() . ' ' . $this->scheduledReadyTime : null,
                 'is_emergency' => $this->isEmergency,
                 'emergency_reason' => $this->emergencyReason,
             ];
             $job = $bookingService->createTransportBooking($data);
         } else {
             $data += [
-                'yard_hub_id' => $this->yardHubId,
+                'yard_location_id' => $this->yardLocationId,
                 'drivers_required' => $this->driversRequired,
                 'hours_required' => $this->hoursRequired,
             ];
             $job = $bookingService->createYardBooking($data);
-        }
-
-        // Upload PO document
-        if ($this->poFile) {
-            $disk = config('filesystems.default') === 'local' ? 'local' : 'r2';
-            $path = $this->poFile->store('jobs/' . $job->uuid . '/documents', $disk);
-
-            \App\Models\JobDocument::create([
-                'job_id' => $job->id,
-                'uploaded_by_user_id' => auth()->id(),
-                'category' => 'purchase_order',
-                'disk' => $disk,
-                'path' => $path,
-                'original_filename' => $this->poFile->getClientOriginalName(),
-                'mime_type' => $this->poFile->getMimeType(),
-                'size_bytes' => $this->poFile->getSize(),
-                'file_hash' => hash_file('sha256', $this->poFile->getRealPath()),
-            ]);
         }
 
         session()->flash('success', "Booking {$job->job_number} created successfully.");
@@ -120,8 +158,9 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     public function with(): array
     {
+        $company = auth()->user()->company();
         return [
-            'hubs' => Hub::where('is_active', true)->orderBy('name')->get(['id', 'name', 'city']),
+            'locations' => $company ? Location::visibleTo($company)->active()->orderBy('company_name')->get(['id', 'company_name', 'city', 'address']) : collect(),
             'vehicleClasses' => VehicleClass::where('is_active', true)->orderBy('name')->get(['id', 'name']),
             'brands' => Brand::where('is_active', true)->orderBy('name')->get(['id', 'name']),
         ];
@@ -152,21 +191,54 @@ new #[Layout('components.layouts.app')] class extends Component {
             <h3 class="text-lg font-semibold text-gray-900 mb-4">Transport Details</h3>
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                    <label class="block text-sm font-medium text-gray-700 mb-1">From Hub *</label>
-                    <select wire:model="fromHubId" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm">
-                        <option value="">Select origin...</option>
-                        @foreach($hubs as $hub)<option value="{{ $hub->id }}">{{ $hub->name }}{{ $hub->city ? " ({$hub->city})" : '' }}</option>@endforeach
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Pickup Location *</label>
+                    <select wire:model="pickupLocationId" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm">
+                        <option value="">Select pickup...</option>
+                        @foreach($locations as $loc)<option value="{{ $loc->id }}">{{ $loc->company_name }}{{ $loc->city ? " ({$loc->city})" : '' }}</option>@endforeach
                     </select>
-                    @error('fromHubId')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
+                    @error('pickupLocationId')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
+                    <button type="button" wire:click="$toggle('showNewPickup')" class="mt-1 text-xs text-blue-600 hover:underline">+ Add New Location</button>
+                    @if($showNewPickup)
+                        @include('partials.new-location-form', ['target' => 'pickup'])
+                    @endif
                 </div>
                 <div>
-                    <label class="block text-sm font-medium text-gray-700 mb-1">To Hub *</label>
-                    <select wire:model="toHubId" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm">
-                        <option value="">Select destination...</option>
-                        @foreach($hubs as $hub)<option value="{{ $hub->id }}">{{ $hub->name }}{{ $hub->city ? " ({$hub->city})" : '' }}</option>@endforeach
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Delivery Location *</label>
+                    <select wire:model="deliveryLocationId" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm">
+                        <option value="">Select delivery...</option>
+                        @foreach($locations as $loc)<option value="{{ $loc->id }}">{{ $loc->company_name }}{{ $loc->city ? " ({$loc->city})" : '' }}</option>@endforeach
                     </select>
-                    @error('toHubId')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
+                    @error('deliveryLocationId')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
+                    <button type="button" wire:click="$toggle('showNewDelivery')" class="mt-1 text-xs text-blue-600 hover:underline">+ Add New Location</button>
+                    @if($showNewDelivery)
+                        @include('partials.new-location-form', ['target' => 'delivery'])
+                    @endif
                 </div>
+            </div>
+
+            <details class="mt-4 group">
+                <summary class="text-sm font-medium text-gray-600 cursor-pointer hover:text-gray-900">Alternate contact person (optional)</summary>
+                <div class="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-4 rounded-lg border border-gray-200 bg-gray-50 p-4">
+                    <div>
+                        <label class="block text-xs font-medium text-gray-600 mb-1">Pickup Contact Name</label>
+                        <input wire:model="pickupContactName" type="text" class="w-full rounded-md border border-gray-300 px-2.5 py-2 text-sm" placeholder="Leave blank to use location default">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-gray-600 mb-1">Pickup Contact Phone</label>
+                        <input wire:model="pickupContactPhone" type="text" class="w-full rounded-md border border-gray-300 px-2.5 py-2 text-sm" placeholder="Leave blank to use location default">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-gray-600 mb-1">Delivery Contact Name</label>
+                        <input wire:model="deliveryContactName" type="text" class="w-full rounded-md border border-gray-300 px-2.5 py-2 text-sm" placeholder="Leave blank to use location default">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-gray-600 mb-1">Delivery Contact Phone</label>
+                        <input wire:model="deliveryContactPhone" type="text" class="w-full rounded-md border border-gray-300 px-2.5 py-2 text-sm" placeholder="Leave blank to use location default">
+                    </div>
+                </div>
+            </details>
+
+            <div class="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">Vehicle Class *</label>
                     <select wire:model="vehicleClassId" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm">
@@ -187,22 +259,27 @@ new #[Layout('components.layouts.app')] class extends Component {
                     <input wire:model="modelName" type="text" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm" placeholder="e.g. NQR 500">
                 </div>
                 <div>
-                    <label class="block text-sm font-medium text-gray-700 mb-1">VIN / Chassis</label>
-                    <input wire:model="vin" type="text" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm font-mono" placeholder="Optional">
+                    <label class="block text-sm font-medium text-gray-700 mb-1">VIN / Chassis *</label>
+                    <input wire:model="vin" type="text" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm font-mono uppercase" placeholder="Full VIN number" maxlength="17">
+                    @error('vin')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
                 </div>
                 <div>
-                    <label class="block text-sm font-medium text-gray-700 mb-1">Scheduled Ready Time</label>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Registration</label>
+                    <input wire:model="registration" type="text" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm uppercase" placeholder="Optional">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Ready Time</label>
                     <input wire:model="scheduledReadyTime" type="time" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm">
                 </div>
             </div>
             <div class="mt-4">
                 <label class="flex items-center gap-2 cursor-pointer">
                     <input wire:model.live="isEmergency" type="checkbox" class="h-4 w-4 rounded border-gray-300 text-red-600">
-                    <span class="text-sm font-medium text-red-700">Emergency booking (bypasses cut-off rules)</span>
+                    <span class="text-sm font-medium text-red-700">Emergency booking</span>
                 </label>
                 @if($isEmergency)
                 <div class="mt-2">
-                    <textarea wire:model="emergencyReason" rows="2" placeholder="Emergency reason (required)..." class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"></textarea>
+                    <textarea wire:model="emergencyReason" rows="2" placeholder="Emergency reason..." class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"></textarea>
                 </div>
                 @endif
             </div>
@@ -213,11 +290,15 @@ new #[Layout('components.layouts.app')] class extends Component {
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">Yard Location *</label>
-                    <select wire:model="yardHubId" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm">
+                    <select wire:model="yardLocationId" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm">
                         <option value="">Select yard...</option>
-                        @foreach($hubs as $hub)<option value="{{ $hub->id }}">{{ $hub->name }}</option>@endforeach
+                        @foreach($locations as $loc)<option value="{{ $loc->id }}">{{ $loc->company_name }}{{ $loc->city ? " ({$loc->city})" : '' }}</option>@endforeach
                     </select>
-                    @error('yardHubId')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
+                    @error('yardLocationId')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
+                    <button type="button" wire:click="$toggle('showNewYard')" class="mt-1 text-xs text-blue-600 hover:underline">+ Add New Location</button>
+                    @if($showNewYard)
+                        @include('partials.new-location-form', ['target' => 'yard'])
+                    @endif
                 </div>
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">Drivers Required *</label>
@@ -230,32 +311,6 @@ new #[Layout('components.layouts.app')] class extends Component {
             </div>
         </div>
         @endif
-
-        <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
-            <h3 class="text-lg font-semibold text-gray-900 mb-4">Purchase Order</h3>
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                    <label class="block text-sm font-medium text-gray-700 mb-1">Scheduled Date *</label>
-                    <input wire:model="scheduledDate" type="date" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm">
-                    @error('scheduledDate')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
-                </div>
-                <div>
-                    <label class="block text-sm font-medium text-gray-700 mb-1">PO Number *</label>
-                    <input wire:model="poNumber" type="text" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm">
-                    @error('poNumber')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
-                </div>
-                <div>
-                    <label class="block text-sm font-medium text-gray-700 mb-1">PO Amount (ZAR) *</label>
-                    <input wire:model="poAmount" type="number" step="0.01" min="0.01" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm">
-                    @error('poAmount')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
-                </div>
-                <div>
-                    <label class="block text-sm font-medium text-gray-700 mb-1">PO Document *</label>
-                    <input wire:model="poFile" type="file" accept=".pdf,.jpg,.jpeg,.png" class="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100">
-                    @error('poFile')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
-                </div>
-            </div>
-        </div>
 
         <div class="flex justify-end gap-3">
             <a href="{{ route('dealer.bookings.index') }}" class="rounded-lg border border-gray-300 bg-white px-6 py-3 text-sm font-semibold text-gray-700 hover:bg-gray-50">Cancel</a>

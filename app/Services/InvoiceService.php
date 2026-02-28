@@ -44,7 +44,7 @@ class InvoiceService
 
     public function generatePdf(Invoice $invoice): string
     {
-        $invoice->load(['job.company', 'job.fromHub', 'job.toHub', 'job.brand']);
+        $invoice->load(['job.company', 'job.pickupLocation', 'job.deliveryLocation', 'job.brand']);
 
         $html = view('documents.invoice', ['invoice' => $invoice])->render();
 

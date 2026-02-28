@@ -1,8 +1,10 @@
 # Workflows
 
 ## A. Transport Booking
-1. Dealer fills booking form (from/to hub, date, vehicle class, PO upload)
-2. System creates job in `pending_verification` status
+1. Dealer/OEM fills booking form (pickup/delivery location, vehicle class, brand, model)
+2. PO is NOT required at creation -- can be uploaded later from the booking detail page
+3. `scheduled_date` is auto-set to current date on submission
+4. System creates job in `pending_verification` status
 3. Job number generated (YYMM + 4-digit sequence)
 4. Notification sent to Ops Manager
 

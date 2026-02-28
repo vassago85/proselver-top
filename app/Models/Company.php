@@ -18,6 +18,7 @@ class Company extends Model
         'uuid',
         'name',
         'normalized_name',
+        'type',
         'address',
         'vat_number',
         'billing_email',

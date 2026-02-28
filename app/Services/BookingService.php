@@ -36,8 +36,8 @@ class BookingService
     public function createTransportBooking(array $data): Job
     {
         $route = TransportRoute::firstOrCreate([
-            'origin_hub_id' => $data['from_hub_id'],
-            'destination_hub_id' => $data['to_hub_id'],
+            'origin_location_id' => $data['pickup_location_id'],
+            'destination_location_id' => $data['delivery_location_id'],
             'vehicle_class_id' => $data['vehicle_class_id'],
         ], [
             'base_price' => 0,
@@ -50,16 +50,21 @@ class BookingService
             'company_id' => $data['company_id'],
             'created_by_user_id' => $data['created_by_user_id'],
             'transport_route_id' => $route->id,
-            'from_hub_id' => $data['from_hub_id'],
-            'to_hub_id' => $data['to_hub_id'],
+            'pickup_location_id' => $data['pickup_location_id'],
+            'pickup_contact_name' => $data['pickup_contact_name'] ?? null,
+            'pickup_contact_phone' => $data['pickup_contact_phone'] ?? null,
+            'delivery_location_id' => $data['delivery_location_id'],
+            'delivery_contact_name' => $data['delivery_contact_name'] ?? null,
+            'delivery_contact_phone' => $data['delivery_contact_phone'] ?? null,
             'vehicle_class_id' => $data['vehicle_class_id'],
             'brand_id' => $data['brand_id'] ?? null,
             'model_name' => $data['model_name'] ?? null,
-            'vin' => $data['vin'] ?? null,
-            'scheduled_date' => $data['scheduled_date'],
+            'vin' => $data['vin'],
+            'registration' => $data['registration'] ?? null,
+            'scheduled_date' => now()->toDateString(),
             'scheduled_ready_time' => $data['scheduled_ready_time'] ?? null,
-            'po_number' => $data['po_number'],
-            'po_amount' => $data['po_amount'],
+            'po_number' => $data['po_number'] ?? null,
+            'po_amount' => $data['po_amount'] ?? null,
             'is_emergency' => $data['is_emergency'] ?? false,
             'emergency_reason' => $data['emergency_reason'] ?? null,
         ]);
@@ -77,13 +82,13 @@ class BookingService
             'status' => Job::STATUS_PENDING_VERIFICATION,
             'company_id' => $data['company_id'],
             'created_by_user_id' => $data['created_by_user_id'],
-            'yard_hub_id' => $data['yard_hub_id'],
-            'scheduled_date' => $data['scheduled_date'],
+            'yard_location_id' => $data['yard_location_id'],
+            'scheduled_date' => now()->toDateString(),
             'drivers_required' => $data['drivers_required'],
             'hours_required' => $data['hours_required'],
             'hourly_rate' => $data['hourly_rate'] ?? $hourlyRate,
-            'po_number' => $data['po_number'],
-            'po_amount' => $data['po_amount'],
+            'po_number' => $data['po_number'] ?? null,
+            'po_amount' => $data['po_amount'] ?? null,
         ]);
 
         $job->calculateFinancials();

@@ -8,7 +8,7 @@ new #[Layout('components.layouts.app')] class extends Component {
     {
         $assignedJobs = Job::where('driver_user_id', auth()->id())
             ->whereIn('status', [Job::STATUS_ASSIGNED, Job::STATUS_IN_PROGRESS])
-            ->with(['company:id,name', 'fromHub:id,name,address', 'toHub:id,name,address', 'yardHub:id,name'])
+            ->with(['company:id,name', 'pickupLocation:id,company_name,address', 'deliveryLocation:id,company_name,address', 'yardLocation:id,company_name'])
             ->orderBy('scheduled_date')
             ->get();
 
@@ -28,10 +28,10 @@ new #[Layout('components.layouts.app')] class extends Component {
             </div>
             <p class="text-sm text-gray-600 mb-1">{{ $job->company?->name }}</p>
             @if($job->isTransport())
-            <p class="text-base font-medium text-gray-900">{{ $job->fromHub?->name }} → {{ $job->toHub?->name }}</p>
-            <p class="text-sm text-gray-500">{{ $job->fromHub?->address }}</p>
+            <p class="text-base font-medium text-gray-900">{{ $job->pickupLocation?->company_name }} → {{ $job->deliveryLocation?->company_name }}</p>
+            <p class="text-sm text-gray-500">{{ $job->pickupLocation?->address }}</p>
             @else
-            <p class="text-base font-medium text-gray-900">Yard Work — {{ $job->yardHub?->name }}</p>
+            <p class="text-base font-medium text-gray-900">Yard Work — {{ $job->yardLocation?->company_name }}</p>
             @endif
             <p class="mt-2 text-sm text-gray-500">{{ $job->scheduled_date?->format('D, d M Y') }} {{ $job->scheduled_ready_time?->format('H:i') ?? '' }}</p>
         </a>

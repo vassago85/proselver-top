@@ -26,7 +26,12 @@ class FortifyServiceProvider extends ServiceProvider
         Fortify::resetUserPasswordsUsing(ResetUserPassword::class);
 
         Fortify::authenticateUsing(function (Request $request) {
-            $user = User::where('username', Str::lower($request->username))->first();
+            $identity = Str::lower(trim($request->input('identity', '')));
+
+            $user = User::where('email', $identity)
+                ->orWhere('username', $identity)
+                ->orWhere('phone', $identity)
+                ->first();
 
             if ($user && $user->is_active && Hash::check($request->password, $user->password)) {
                 return $user;
@@ -48,7 +53,7 @@ class FortifyServiceProvider extends ServiceProvider
         });
 
         RateLimiter::for('login', function (Request $request) {
-            $throttleKey = Str::transliterate(Str::lower($request->input(Fortify::username())).'|'.$request->ip());
+            $throttleKey = Str::transliterate(Str::lower($request->input('identity', '')).'|'.$request->ip());
 
             return Limit::perMinute(5)->by($throttleKey);
         });
