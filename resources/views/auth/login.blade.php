@@ -10,15 +10,9 @@
     <div class="flex min-h-full flex-col justify-center px-6 py-12 lg:px-8">
         <div class="sm:mx-auto sm:w-full sm:max-w-sm">
             <div class="flex justify-center">
-                <div class="h-16 w-16 bg-blue-600 rounded-xl flex items-center justify-center">
-                    <span class="text-white font-bold text-2xl">P</span>
-                </div>
+                <img src="/logo.png" alt="Proselver Trident — Control • Dispatch • Deliver" class="h-32 w-auto object-contain" />
             </div>
-            <h2 class="mt-6 text-center text-2xl font-bold tracking-tight text-gray-900">
-                Proselver Trident
-            </h2>
-            <p class="text-center text-xs font-medium tracking-widest text-blue-600 uppercase mt-1">Control • Dispatch • Deliver</p>
-            <p class="mt-1 text-center text-sm text-gray-500">Sign in to your account</p>
+            <p class="mt-4 text-center text-sm text-gray-500">Sign in to your account</p>
         </div>
 
         <div class="mt-8 sm:mx-auto sm:w-full sm:max-w-sm">
