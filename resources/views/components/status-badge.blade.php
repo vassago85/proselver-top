@@ -1,8 +1,8 @@
-@props(['status'])
+@props(['status', 'dot' => true, 'size' => 'md'])
 
 @php
     $statusMap = [
-        // Legacy statuses
+        // Legacy statuses (kept for backward compatibility)
         'pending_verification' => ['label' => 'Pending Verification', 'color' => 'yellow'],
         'verified' => ['label' => 'Verified', 'color' => 'blue'],
         'approved' => ['label' => 'Approved', 'color' => 'blue'],
@@ -13,8 +13,9 @@
         'ready_for_invoicing' => ['label' => 'Ready for Invoicing', 'color' => 'blue'],
         'invoiced' => ['label' => 'Invoiced', 'color' => 'green'],
         'cancelled' => ['label' => 'Cancelled', 'color' => 'red'],
-        // Phase 1 statuses
-        'received' => ['label' => 'Received', 'color' => 'yellow'],
+
+        // Phase 1 Trident statuses
+        'received' => ['label' => 'Received', 'color' => 'slate'],
         'awaiting_customer_confirmation' => ['label' => 'Awaiting Confirmation', 'color' => 'amber'],
         'confirmation_issue' => ['label' => 'Confirmation Issue', 'color' => 'red'],
         'confirmed' => ['label' => 'Confirmed', 'color' => 'blue'],
@@ -25,7 +26,7 @@
         'in_transit' => ['label' => 'In Transit', 'color' => 'orange'],
         'delivered' => ['label' => 'Delivered', 'color' => 'emerald'],
     ];
-    $info = $statusMap[$status] ?? ['label' => ucfirst(str_replace('_', ' ', $status)), 'color' => 'gray'];
+    $info = $statusMap[$status] ?? ['label' => ucwords(str_replace('_', ' ', $status)), 'color' => 'gray'];
 @endphp
 
-<x-badge :color="$info['color']">{{ $info['label'] }}</x-badge>
+<x-badge :color="$info['color']" :dot="$dot" :size="$size">{{ $info['label'] }}</x-badge>

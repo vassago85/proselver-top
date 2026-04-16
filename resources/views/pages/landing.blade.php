@@ -92,7 +92,7 @@
                     </span>
                 </h1>
                 <p class="mt-6 text-lg text-slate-600 leading-relaxed">
-                    Proselver Trident is the operations platform for moving vehicles between plants, depots and dealers — with verified dispatch, live execution, and document trails your customers can trust.
+                    Proselver Trident is the operations platform for driving new vehicles from manufacturing plants to dealerships — and on to end customers — with verified dispatch, live execution, and document trails you can prove.
                 </p>
                 <div class="mt-9 flex flex-col sm:flex-row items-center justify-center gap-3">
                     <a href="#contact" class="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-5 py-3 text-sm font-semibold text-white shadow-sm hover:bg-blue-500 transition-colors">
@@ -178,7 +178,7 @@
                                     <text x="280" y="115" text-anchor="middle">Collected</text>
                                     <text x="370" y="115" text-anchor="middle">Delivered</text>
                                 </g>
-                                {{-- Secondary branch (FAW confirmation loop) --}}
+                                {{-- Secondary branch: customer confirmation loop --}}
                                 <path d="M 100 90 Q 130 140 160 90" fill="none" stroke="#f59e0b" stroke-width="1.25" stroke-dasharray="3 3" opacity="0.8"/>
                                 <text x="130" y="158" text-anchor="middle" font-family="ui-sans-serif, system-ui" font-size="7.5" fill="#b45309">Customer confirmation</text>
                             </svg>
@@ -188,7 +188,7 @@
                         <div class="col-span-12 md:col-span-3 border-t md:border-t-0 md:border-l border-slate-100 p-5">
                             <p class="text-[10px] font-semibold uppercase tracking-widest text-slate-400">Latest movement</p>
                             <p class="mt-2 text-sm font-semibold text-slate-900">TRD-48921</p>
-                            <p class="text-xs text-slate-500">FAW Coega → JHB Dealer</p>
+                            <p class="text-xs text-slate-500">Coastal plant → JHB dealer</p>
                             <div class="mt-3 rounded-lg bg-slate-50 border border-slate-100 p-3 space-y-2">
                                 <div class="flex justify-between text-[11px]"><span class="text-slate-500">Driver</span><span class="font-medium text-slate-800">T. Molefe</span></div>
                                 <div class="flex justify-between text-[11px]"><span class="text-slate-500">VIN</span><span class="font-mono text-slate-800">LFW••••7291</span></div>
@@ -203,11 +203,11 @@
 
             {{-- Customer row --}}
             <div class="mt-14 flex flex-wrap items-center justify-center gap-x-10 gap-y-4 text-slate-400">
-                <span class="text-[10px] font-semibold tracking-[0.2em] uppercase">Trusted workflows for</span>
-                <span class="text-sm font-semibold text-slate-500 tracking-tight">FAW</span>
-                <span class="text-sm font-semibold text-slate-500 tracking-tight">Isuzu</span>
-                <span class="text-sm font-semibold text-slate-500 tracking-tight">Powerstar</span>
-                <span class="text-sm font-semibold text-slate-500 tracking-tight">Multi-brand dealer groups</span>
+                <span class="text-[10px] font-semibold tracking-[0.2em] uppercase">Built for</span>
+                <span class="text-sm font-semibold text-slate-500 tracking-tight">OEM plants</span>
+                <span class="text-sm font-semibold text-slate-500 tracking-tight">Dealer groups</span>
+                <span class="text-sm font-semibold text-slate-500 tracking-tight">Fleet operations</span>
+                <span class="text-sm font-semibold text-slate-500 tracking-tight">Vehicle logistics controllers</span>
             </div>
         </div>
     </section>
@@ -274,7 +274,7 @@
                     <p class="text-xs font-semibold tracking-[0.2em] uppercase text-blue-700">Why it matters</p>
                     <h2 class="mt-3 text-3xl sm:text-4xl font-semibold tracking-tight text-slate-900">Fewer missed calls. Cleaner handovers. Verified delivery.</h2>
                     <p class="mt-5 text-base text-slate-600 leading-relaxed">
-                        Transport operations live and die on information: who is confirming the load, which driver has been assigned, which document is missing, which vehicle left the yard. Trident makes that information the single source of truth — not an email thread.
+                        Vehicle movement operations live and die on information: who is confirming the unit, which driver has been assigned, which document is missing, which vehicle left the plant. Trident makes that information the single source of truth — not an email thread.
                     </p>
                     <a href="#contact" class="mt-8 inline-flex items-center gap-2 text-sm font-semibold text-blue-600 hover:text-blue-700">
                         See it in your environment
@@ -287,7 +287,7 @@
                             ['t' => 'Real operational control', 'd' => 'Every order, confirmation, assignment and document is auditable against a movement — not a person.'],
                             ['t' => 'Faster dispatch decisions', 'd' => 'See who is confirmed, who is not, which drivers are clear to collect, and which orders still need intervention.'],
                             ['t' => 'Cleaner document handling', 'd' => 'POs, collection notes and PODs live on the movement record. Customers pull their own. You stop being the inbox.'],
-                            ['t' => 'Customer-specific workflows', 'd' => 'Some OEMs insist on confirming each load before dispatch. Standard accounts skip it. Both supported by default.'],
+                            ['t' => 'Customer-specific workflows', 'd' => 'Some OEMs insist on confirming each vehicle before dispatch. Standard accounts skip it. Both supported by default.'],
                         ];
                     @endphp
                     @foreach($values as $v)
@@ -325,9 +325,9 @@
                         ['t' => 'Driver allocation', 'd' => 'Assign by location, license class, PDP validity and current availability — not by memory.', 'i' => '<circle cx="12" cy="8" r="4"/><path d="M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1"/>'],
                         ['t' => 'Collection notes', 'd' => 'Generated on demand. Driver ID, cellphone, chassis, location, reference — signed by a verifiable QR.', 'i' => '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="15" y2="17"/>'],
                         ['t' => 'POD & documents', 'd' => 'Customers access their own documents. You stop emailing attachments. Everything is on the record.', 'i' => '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>'],
-                        ['t' => 'Customer workflows', 'd' => 'Per-account configuration. FAW-style confirmation loops and standard workflows, side by side.', 'i' => '<polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>'],
+                        ['t' => 'Customer workflows', 'd' => 'Per-account configuration. Confirmation-gated and standard workflows, side by side.', 'i' => '<polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>'],
                         ['t' => 'QR verification', 'd' => 'Every collection note carries a signed QR. Scan it, see the movement. No more forged paperwork.', 'i' => '<rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><path d="M14 14h3v3h-3z"/><path d="M17 17h4v4h-4z"/>'],
-                        ['t' => 'Driver expiry tracking', 'd' => 'License and PDP expiries surface at the right time — before the driver is put on a load they can\'t legally carry.', 'i' => '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>'],
+                        ['t' => 'Driver expiry tracking', 'd' => 'License and PDP expiries surface at the right time — before a driver is assigned to a vehicle class they can\'t legally move.', 'i' => '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>'],
                         ['t' => 'Developer impersonation', 'd' => 'Test every role end-to-end with a safe impersonation banner. No shadow accounts. No risky logins.', 'i' => '<path d="M16 18l6-6-6-6"/><path d="M8 6 2 12l6 6"/><path d="M14 4l-4 16"/>'],
                     ];
                 @endphp
@@ -395,10 +395,10 @@
                         Some customers need to confirm a vehicle is physically ready before anyone dispatches. Others don't. Trident supports both as first-class workflows — configured on the account, not hardcoded in logic.
                     </p>
                     <ul class="mt-6 space-y-3 text-sm text-slate-700">
-                        <li class="flex gap-3"><span class="mt-1 h-1.5 w-1.5 rounded-full bg-blue-600 shrink-0"></span>Per-account workflow type — e.g. <span class="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded">standard</span> or <span class="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded">faw</span>.</li>
-                        <li class="flex gap-3"><span class="mt-1 h-1.5 w-1.5 rounded-full bg-blue-600 shrink-0"></span>Customer dispatchers scoped to a specific location (Coega, Johannesburg, etc).</li>
+                        <li class="flex gap-3"><span class="mt-1 h-1.5 w-1.5 rounded-full bg-blue-600 shrink-0"></span>Per-account workflow type — <span class="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded">standard</span> or <span class="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded">confirmation-gated</span>.</li>
+                        <li class="flex gap-3"><span class="mt-1 h-1.5 w-1.5 rounded-full bg-blue-600 shrink-0"></span>Customer dispatchers scoped to a specific plant, depot or branch.</li>
                         <li class="flex gap-3"><span class="mt-1 h-1.5 w-1.5 rounded-full bg-blue-600 shrink-0"></span>Brand-level access limits per customer — no irrelevant options in the order form.</li>
-                        <li class="flex gap-3"><span class="mt-1 h-1.5 w-1.5 rounded-full bg-blue-600 shrink-0"></span>Confirmation exceptions handled gracefully: truck missing, damaged, not ready.</li>
+                        <li class="flex gap-3"><span class="mt-1 h-1.5 w-1.5 rounded-full bg-blue-600 shrink-0"></span>Confirmation exceptions handled gracefully: vehicle missing, damaged, not ready.</li>
                     </ul>
                 </div>
 
@@ -409,7 +409,7 @@
                             <div class="flex items-center justify-between mb-4">
                                 <div>
                                     <p class="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">Standard account</p>
-                                    <p class="text-sm font-semibold text-slate-900">Isuzu · Powerstar · dealer-originated orders</p>
+                                    <p class="text-sm font-semibold text-slate-900">Dealer-originated orders · direct dispatch</p>
                                 </div>
                                 <span class="text-[10px] font-semibold tracking-wider uppercase px-2 py-1 rounded-full bg-emerald-50 text-emerald-700">default</span>
                             </div>
@@ -425,14 +425,14 @@
                                 <span class="px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 whitespace-nowrap">Delivered</span>
                             </div>
                         </div>
-                        {{-- FAW flow --}}
+                        {{-- Confirmation-gated flow --}}
                         <div class="p-6 bg-amber-50/40">
                             <div class="flex items-center justify-between mb-4">
                                 <div>
-                                    <p class="text-[10px] font-semibold uppercase tracking-[0.2em] text-amber-700">FAW account</p>
+                                    <p class="text-[10px] font-semibold uppercase tracking-[0.2em] text-amber-700">Confirmation-gated account</p>
                                     <p class="text-sm font-semibold text-slate-900">Requires customer confirmation before dispatch</p>
                                 </div>
-                                <span class="text-[10px] font-semibold tracking-wider uppercase px-2 py-1 rounded-full bg-amber-100 text-amber-800">workflow: faw</span>
+                                <span class="text-[10px] font-semibold tracking-wider uppercase px-2 py-1 rounded-full bg-amber-100 text-amber-800">workflow: confirmation</span>
                             </div>
                             <div class="flex items-center gap-2 text-xs font-medium text-slate-700 overflow-x-auto">
                                 <span class="px-3 py-1.5 rounded-lg bg-slate-100 whitespace-nowrap">Received</span>
@@ -445,7 +445,7 @@
                                 <span class="text-slate-300">→</span>
                                 <span class="px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 whitespace-nowrap">Delivered</span>
                             </div>
-                            <p class="mt-4 text-xs text-amber-900/70">Customer dispatchers (e.g. FAW Coega) confirm the vehicle is physically ready — or flag it as missing, damaged, or not ready — before dispatch proceeds.</p>
+                            <p class="mt-4 text-xs text-amber-900/70">Plant-side customer dispatchers confirm the vehicle is physically ready — or flag it as missing, damaged, or not ready — before dispatch proceeds.</p>
                         </div>
                     </div>
                 </div>
@@ -463,7 +463,7 @@
                     <p class="text-xs font-semibold tracking-[0.2em] uppercase text-blue-700">Proof, not promises</p>
                     <h2 class="mt-3 text-3xl sm:text-4xl font-semibold tracking-tight text-slate-900">Every movement leaves a verifiable trail.</h2>
                     <p class="mt-5 text-slate-600 leading-relaxed">
-                        A collection note is not a piece of paper. In Trident, it's a signed record tied to a driver, a vehicle, a location, and a scannable QR code — so the person receiving the load can confirm it's real in a second.
+                        A collection note is not a piece of paper. In Trident, it's a signed record tied to a driver, a vehicle, a location, and a scannable QR code — so the person receiving the vehicle can confirm it's real in a second.
                     </p>
                     <dl class="mt-8 space-y-5">
                         <div class="flex gap-4">
@@ -520,18 +520,18 @@
                                     </div>
                                     <div>
                                         <p class="text-[10px] font-semibold uppercase tracking-widest text-slate-400">Vehicle</p>
-                                        <p class="text-slate-900 font-medium mt-1">FAW J6P · 6x4 Truck Tractor</p>
-                                        <p class="text-xs text-slate-500 font-mono">VIN LFWSRXSE7MG007291</p>
+                                        <p class="text-slate-900 font-medium mt-1">6x4 Truck Tractor</p>
+                                        <p class="text-xs text-slate-500 font-mono">VIN ••••••••••7291</p>
                                     </div>
                                     <div class="grid grid-cols-2 gap-4">
                                         <div>
                                             <p class="text-[10px] font-semibold uppercase tracking-widest text-slate-400">From</p>
-                                            <p class="text-slate-900 font-medium mt-1 text-sm">FAW Coega Plant</p>
-                                            <p class="text-xs text-slate-500">Gqeberha</p>
+                                            <p class="text-slate-900 font-medium mt-1 text-sm">Coastal plant</p>
+                                            <p class="text-xs text-slate-500">Eastern Cape</p>
                                         </div>
                                         <div>
                                             <p class="text-[10px] font-semibold uppercase tracking-widest text-slate-400">To</p>
-                                            <p class="text-slate-900 font-medium mt-1 text-sm">FAW Sandton</p>
+                                            <p class="text-slate-900 font-medium mt-1 text-sm">JHB dealer</p>
                                             <p class="text-xs text-slate-500">Johannesburg</p>
                                         </div>
                                     </div>
@@ -600,7 +600,7 @@
                 <img src="/logo.png" alt="Proselver Trident" class="h-9 w-auto object-contain" />
                 <span class="hidden sm:inline text-xs text-slate-400">· ProSelver — Prospect • Select • Verify</span>
             </div>
-            <p class="text-xs text-slate-500">© {{ date('Y') }} Proselver. Built for operations that don't miss loads.</p>
+            <p class="text-xs text-slate-500">© {{ date('Y') }} Proselver. Built for operations that move every vehicle accounted for.</p>
         </div>
     </footer>
 

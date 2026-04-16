@@ -1,102 +1,184 @@
 <!DOCTYPE html>
-<html lang="{{ str_replace('_', '-', app()->getLocale()) }}" class="h-full bg-gray-100">
+<html lang="{{ str_replace('_', '-', app()->getLocale()) }}" class="h-full bg-slate-50">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="csrf-token" content="{{ csrf_token() }}">
     <title>{{ $title ?? config('app.name') }}</title>
     <link rel="manifest" href="/manifest.json">
-    <meta name="theme-color" content="#1e40af">
+    <meta name="theme-color" content="#0f172a">
     @vite(['resources/css/app.css', 'resources/js/app.js'])
     @livewireStyles
+    <style>
+        [x-cloak] { display: none !important; }
+        .node-pulse { animation: node-pulse 2.4s ease-in-out infinite; }
+        @keyframes node-pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.6; transform: scale(1.15); }
+        }
+        /* subtle scrollbar for sidebar + main */
+        ::-webkit-scrollbar { width: 10px; height: 10px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 8px; border: 2px solid transparent; background-clip: content-box; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; border: 2px solid transparent; background-clip: content-box; }
+    </style>
 </head>
-<body class="h-full font-sans antialiased">
+<body class="h-full font-sans antialiased text-slate-900 selection:bg-blue-600 selection:text-white">
+
+    {{-- =================================================================== --}}
+    {{-- IMPERSONATION BANNER                                                 --}}
+    {{-- =================================================================== --}}
     @if(session('impersonating_from'))
-    <div class="fixed top-0 left-0 right-0 z-[100] bg-amber-500 text-white text-center py-1.5 text-sm font-medium shadow-md">
-        Impersonating <strong>{{ auth()->user()->name }}</strong>
-        ({{ auth()->user()->roles->pluck('name')->join(', ') }})
-        <form method="POST" action="{{ route('admin.impersonate.stop') }}" class="inline ml-4">
-            @csrf
-            <button type="submit" class="underline font-semibold hover:text-amber-100">Return to your account</button>
-        </form>
+    <div class="fixed inset-x-0 top-0 z-[100] border-b border-amber-300/80 bg-gradient-to-r from-amber-500 via-amber-400 to-amber-500 text-white shadow-sm">
+        <div class="mx-auto flex max-w-full items-center gap-3 px-4 py-2 text-sm">
+            <svg viewBox="0 0 24 24" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg>
+            <span>
+                Impersonating <strong class="font-semibold">{{ auth()->user()->name }}</strong>
+                <span class="hidden sm:inline text-amber-900/80">· {{ auth()->user()->roles->pluck('name')->join(', ') }}</span>
+            </span>
+            <form method="POST" action="{{ route('admin.impersonate.stop') }}" class="ml-auto">
+                @csrf
+                <button type="submit" class="inline-flex items-center gap-1 rounded-md bg-white/15 hover:bg-white/25 px-2.5 py-1 text-xs font-semibold backdrop-blur-sm transition">
+                    Return to your account
+                    <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+                </button>
+            </form>
+        </div>
     </div>
     @endif
 
-    <div class="min-h-full {{ session('impersonating_from') ? 'pt-9' : '' }}" x-data="{ sidebarOpen: false }">
+    <div class="min-h-full {{ session('impersonating_from') ? 'pt-10' : '' }}" x-data="{ sidebarOpen: false, userMenu: false }">
+
         {{-- Mobile sidebar overlay --}}
-        <div x-show="sidebarOpen" x-transition:enter="transition-opacity ease-linear duration-300" x-transition:enter-start="opacity-0" x-transition:enter-end="opacity-100" x-transition:leave="transition-opacity ease-linear duration-300" x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0" class="fixed inset-0 z-40 bg-gray-600/75 lg:hidden" @click="sidebarOpen = false"></div>
+        <div x-show="sidebarOpen" x-cloak x-transition:enter="transition-opacity ease-linear duration-200" x-transition:enter-start="opacity-0" x-transition:enter-end="opacity-100" x-transition:leave="transition-opacity ease-linear duration-200" x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0" class="fixed inset-0 z-40 bg-slate-900/40 backdrop-blur-sm lg:hidden" @click="sidebarOpen = false"></div>
 
         {{-- Mobile sidebar --}}
-        <div x-show="sidebarOpen" x-transition:enter="transition ease-in-out duration-300 transform" x-transition:enter-start="-translate-x-full" x-transition:enter-end="translate-x-0" x-transition:leave="transition ease-in-out duration-300 transform" x-transition:leave-start="translate-x-0" x-transition:leave-end="-translate-x-full" class="fixed inset-y-0 left-0 z-50 w-72 lg:hidden">
+        <div x-show="sidebarOpen" x-cloak x-transition:enter="transition ease-out duration-200" x-transition:enter-start="-translate-x-full" x-transition:enter-end="translate-x-0" x-transition:leave="transition ease-in duration-150" x-transition:leave-start="translate-x-0" x-transition:leave-end="-translate-x-full" class="fixed inset-y-0 left-0 z-50 w-72 lg:hidden {{ session('impersonating_from') ? 'top-10' : '' }}">
             <x-sidebar />
         </div>
 
         {{-- Desktop sidebar --}}
-        <div class="hidden lg:fixed lg:inset-y-0 lg:z-40 lg:flex lg:w-64 lg:flex-col">
+        <div class="hidden lg:fixed lg:inset-y-0 lg:z-40 lg:flex lg:w-64 lg:flex-col {{ session('impersonating_from') ? 'lg:top-10' : '' }}">
             <x-sidebar />
         </div>
 
-        {{-- Main content --}}
-        <div class="lg:pl-64">
+        {{-- Main column --}}
+        <div class="lg:pl-64 flex min-h-screen flex-col">
+
             {{-- Top bar --}}
-            <div class="sticky top-0 z-30 flex h-16 shrink-0 items-center gap-x-4 border-b border-gray-200 bg-white px-4 shadow-sm sm:gap-x-6 sm:px-6 lg:px-8">
-                <button type="button" class="-m-2.5 p-2.5 text-gray-700 lg:hidden" @click="sidebarOpen = true">
-                    <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
-                        <line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="18" y2="18"/>
-                    </svg>
+            <header class="sticky top-0 z-30 flex h-16 shrink-0 items-center gap-x-3 border-b border-slate-200 bg-white/80 backdrop-blur px-4 sm:px-6 lg:px-8 {{ session('impersonating_from') ? 'top-10' : '' }}">
+                <button type="button" class="-ml-1 p-2 rounded-md text-slate-500 hover:text-slate-900 hover:bg-slate-100 lg:hidden transition" @click="sidebarOpen = true" aria-label="Open navigation">
+                    <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="18" y2="18"/></svg>
                 </button>
+                <div class="h-6 w-px bg-slate-200 lg:hidden"></div>
 
-                <div class="h-6 w-px bg-gray-200 lg:hidden"></div>
+                <div class="flex flex-1 items-center min-w-0">
+                    @isset($header)
+                        <h1 class="text-[15px] font-semibold tracking-tight text-slate-900 truncate">{{ $header }}</h1>
+                    @endisset
+                </div>
 
-                <div class="flex flex-1 gap-x-4 self-stretch lg:gap-x-6">
-                    <div class="flex flex-1 items-center">
-                        @isset($header)
-                            <h1 class="text-lg font-semibold text-gray-900">{{ $header }}</h1>
-                        @endisset
+                <div class="flex items-center gap-1.5 sm:gap-3">
+                    {{-- Live clock --}}
+                    <div class="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-full border border-slate-200 text-slate-500 text-xs font-medium" x-data="{ t: '' }" x-init="t = new Date().toLocaleTimeString('en-ZA', {hour:'2-digit',minute:'2-digit'}); setInterval(() => t = new Date().toLocaleTimeString('en-ZA', {hour:'2-digit',minute:'2-digit'}), 30000)">
+                        <span class="h-1.5 w-1.5 rounded-full bg-emerald-500 node-pulse"></span>
+                        <span class="tabular-nums" x-text="t"></span>
                     </div>
-                    <div class="flex items-center gap-x-4 lg:gap-x-6">
-                        <span class="text-sm text-gray-500">{{ auth()->user()->name }}</span>
-                        <form method="POST" action="{{ route('logout') }}">
-                            @csrf
-                            <button type="submit" class="text-sm font-medium text-gray-500 hover:text-gray-700">Sign out</button>
-                        </form>
+
+                    {{-- User menu --}}
+                    <div class="relative" @click.outside="userMenu = false">
+                        <button type="button" @click="userMenu = !userMenu" class="flex items-center gap-2 rounded-lg p-1.5 hover:bg-slate-100 transition">
+                            <span class="h-8 w-8 rounded-lg bg-gradient-to-br from-slate-800 to-slate-900 text-white flex items-center justify-center text-xs font-semibold ring-1 ring-slate-900/10">
+                                {{ strtoupper(substr(auth()->user()->name, 0, 1)) }}{{ strtoupper(substr(strstr(auth()->user()->name, ' ') ?: '', 1, 1)) }}
+                            </span>
+                            <span class="hidden md:flex flex-col items-start leading-tight text-left">
+                                <span class="text-sm font-semibold text-slate-900 truncate max-w-[140px]">{{ auth()->user()->name }}</span>
+                                <span class="text-[10px] font-medium tracking-wider uppercase text-slate-400 truncate max-w-[140px]">{{ auth()->user()->roles->first()?->name ?? 'Member' }}</span>
+                            </span>
+                            <svg viewBox="0 0 24 24" class="hidden md:block h-3.5 w-3.5 text-slate-400" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+                        </button>
+
+                        <div x-show="userMenu" x-cloak x-transition:enter="transition ease-out duration-100" x-transition:enter-start="opacity-0 scale-95" x-transition:enter-end="opacity-100 scale-100" x-transition:leave="transition ease-in duration-75" x-transition:leave-start="opacity-100 scale-100" x-transition:leave-end="opacity-0 scale-95" class="absolute right-0 mt-2 w-60 rounded-xl border border-slate-200 bg-white shadow-xl shadow-slate-900/5 overflow-hidden">
+                            <div class="px-4 py-3 border-b border-slate-100">
+                                <p class="text-sm font-semibold text-slate-900 truncate">{{ auth()->user()->name }}</p>
+                                <p class="text-xs text-slate-500 truncate">{{ auth()->user()->email ?: auth()->user()->username }}</p>
+                            </div>
+                            <div class="py-1">
+                                <form method="POST" action="{{ route('logout') }}">
+                                    @csrf
+                                    <button type="submit" class="flex w-full items-center gap-2 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 transition">
+                                        <svg viewBox="0 0 24 24" class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/></svg>
+                                        Sign out
+                                    </button>
+                                </form>
+                            </div>
+                        </div>
                     </div>
                 </div>
-            </div>
+            </header>
 
-            <main class="py-6">
-                <div class="px-4 sm:px-6 lg:px-8">
+            {{-- Main content --}}
+            <main class="flex-1">
+                <div class="px-4 sm:px-6 lg:px-8 py-6 lg:py-8">
+                    {{-- Session flash messages --}}
                     @if (session('success'))
-                        <div class="mb-4 rounded-lg bg-green-50 p-4 text-sm text-green-700">{{ session('success') }}</div>
+                        <div x-data="{ show: true }" x-show="show" x-init="setTimeout(() => show = false, 6000)" class="mb-5 flex items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800">
+                            <svg viewBox="0 0 24 24" class="h-5 w-5 shrink-0 text-emerald-600" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                            <p class="flex-1 leading-relaxed">{{ session('success') }}</p>
+                            <button @click="show = false" class="text-emerald-600 hover:text-emerald-800" aria-label="Dismiss">
+                                <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+                            </button>
+                        </div>
                     @endif
                     @if (session('error'))
-                        <div class="mb-4 rounded-lg bg-red-50 p-4 text-sm text-red-700">{{ session('error') }}</div>
+                        <div x-data="{ show: true }" x-show="show" class="mb-5 flex items-start gap-3 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
+                            <svg viewBox="0 0 24 24" class="h-5 w-5 shrink-0 text-rose-600" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" x2="9" y1="9" y2="15"/><line x1="9" x2="15" y1="9" y2="15"/></svg>
+                            <p class="flex-1 leading-relaxed">{{ session('error') }}</p>
+                            <button @click="show = false" class="text-rose-600 hover:text-rose-800" aria-label="Dismiss">
+                                <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+                            </button>
+                        </div>
                     @endif
                     {{ $slot }}
                 </div>
             </main>
+
+            {{-- Footer (light, unobtrusive) --}}
+            <footer class="border-t border-slate-200 bg-white/60 px-4 sm:px-6 lg:px-8 py-4">
+                <p class="text-[11px] text-slate-400 text-center">Proselver Trident · Control • Dispatch • Deliver · © {{ date('Y') }}</p>
+            </footer>
         </div>
     </div>
     @livewireScripts
 
+    {{-- =================================================================== --}}
+    {{-- DEVELOPER ROLE-SWITCHER BAR                                          --}}
+    {{-- =================================================================== --}}
     @if(auth()->user()?->roles->contains('slug', 'developer') && !session('impersonating_from'))
-    <div class="fixed bottom-0 left-0 right-0 z-[90] bg-gray-900 text-white text-sm px-4 py-2 flex items-center gap-4 shadow-lg" x-data>
-        <span class="font-semibold text-gray-400">DEV</span>
+    <div class="fixed bottom-0 left-0 right-0 z-[90] border-t border-slate-800 bg-gradient-to-r from-slate-950 via-slate-900 to-slate-950 text-slate-200 px-4 py-2.5 flex items-center gap-4 shadow-[0_-4px_20px_-8px_rgba(15,23,42,0.6)]" x-data>
+        <span class="inline-flex items-center gap-2 text-xs font-semibold tracking-[0.2em] uppercase text-blue-400">
+            <span class="h-1.5 w-1.5 rounded-full bg-blue-400 node-pulse"></span>
+            Developer
+        </span>
         <form method="POST" action="{{ route('admin.dev.role-switch') }}" class="flex items-center gap-2">
             @csrf
-            <label class="text-gray-400">View as:</label>
-            <select name="role_slug" onchange="this.form.submit()" class="bg-gray-800 border-gray-700 text-white text-xs rounded px-2 py-1">
-                <option value="reset" {{ !session('dev_role_override') ? 'selected' : '' }}>Developer (default)</option>
+            <label class="text-xs text-slate-400 hidden sm:inline">View as</label>
+            <select name="role_slug" onchange="this.form.submit()" class="bg-slate-800 border border-slate-700 text-slate-100 text-xs rounded-md px-2.5 py-1.5 focus:ring-1 focus:ring-blue-500 focus:outline-none">
+                <option value="reset" {{ !session('dev_role_override') ? 'selected' : '' }}>Default (Developer)</option>
                 @foreach(\App\Models\Role::orderBy('tier')->orderBy('name')->get() as $r)
                     <option value="{{ $r->slug }}" {{ session('dev_role_override') === $r->slug ? 'selected' : '' }}>
-                        {{ $r->name }} ({{ $r->tier }})
+                        {{ $r->name }} · {{ $r->tier }}
                     </option>
                 @endforeach
             </select>
         </form>
         @if(session('dev_role_override'))
-            <span class="text-amber-400 font-semibold">Active: {{ session('dev_role_override') }}</span>
+            <span class="inline-flex items-center gap-1.5 text-xs font-semibold text-amber-400">
+                <svg viewBox="0 0 24 24" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/></svg>
+                Acting as {{ session('dev_role_override') }}
+            </span>
         @endif
+        <span class="ml-auto text-[10px] tracking-[0.25em] uppercase text-slate-500 hidden md:inline">Developer toolbar</span>
     </div>
     @endif
 
