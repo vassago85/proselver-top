@@ -58,22 +58,24 @@ Route::get('/dashboard', function () {
     return redirect()->to(resolveUserHomePath(auth()->user()));
 })->middleware('auth')->name('dashboard');
 
-function resolveUserHomePath($user): string
-{
-    if ($user->isInternal() || $user->isDeveloper()) {
-        return route('admin.dashboard');
+if (!function_exists('resolveUserHomePath')) {
+    function resolveUserHomePath($user): string
+    {
+        if ($user->isInternal() || $user->isDeveloper()) {
+            return route('admin.dashboard');
+        }
+        if ($user->isCustomer()) {
+            return route('customer.dashboard');
+        }
+        if ($user->isDealer()) {
+            return route('dealer.dashboard');
+        }
+        if ($user->isOem()) {
+            return route('oem.dashboard');
+        }
+        if ($user->isDriver()) {
+            return route('driver.dashboard');
+        }
+        return route('login');
     }
-    if ($user->isCustomer()) {
-        return route('customer.dashboard');
-    }
-    if ($user->isDealer()) {
-        return route('dealer.dashboard');
-    }
-    if ($user->isOem()) {
-        return route('oem.dashboard');
-    }
-    if ($user->isDriver()) {
-        return route('driver.dashboard');
-    }
-    return route('login');
 }
