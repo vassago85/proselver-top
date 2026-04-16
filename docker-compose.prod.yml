@@ -46,7 +46,7 @@ services:
     volumes:
       - app-logs:/var/www/html/storage/logs
     ports:
-      - "${APP_PORT:-8090}:80"
+      - "${APP_PORT:-8091}:80"
     networks:
       - proselver-network
     depends_on:
