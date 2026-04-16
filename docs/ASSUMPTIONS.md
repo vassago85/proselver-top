@@ -1,7 +1,7 @@
 # Assumptions
 
 ## Platform Scope
-- This is the Proselver TOP (Transport Operations Platform) built by Charsley Digital.
+- This is Proselver Trident (Booking, Dispatching & Tracking) built by Charsley Digital.
 - The platform replaces manual transport booking, PO verification, driver management, and invoicing workflows.
 - No native mobile app; PWA (Progressive Web App) with offline capability is used for drivers.
 

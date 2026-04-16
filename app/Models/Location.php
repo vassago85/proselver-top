@@ -48,11 +48,22 @@ class Location extends Model
         });
 
         static::saving(function (Location $location) {
-            if ($location->address && empty($location->latitude) && empty($location->longitude)) {
-                $coords = GeocodingService::geocode($location->address);
-                if ($coords) {
-                    $location->latitude = $coords['lat'];
-                    $location->longitude = $coords['lng'];
+            if ($location->latitude === '' || $location->latitude === null) {
+                $location->latitude = null;
+            }
+            if ($location->longitude === '' || $location->longitude === null) {
+                $location->longitude = null;
+            }
+
+            if ($location->address && $location->latitude === null && $location->longitude === null) {
+                try {
+                    $coords = GeocodingService::geocode($location->address);
+                    if ($coords) {
+                        $location->latitude = $coords['lat'];
+                        $location->longitude = $coords['lng'];
+                    }
+                } catch (\Throwable $e) {
+                    // Geocoding unavailable -- save without coordinates
                 }
             }
         });

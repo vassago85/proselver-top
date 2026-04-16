@@ -124,9 +124,9 @@ new #[Layout('components.layouts.app')] class extends Component {
                                 {{ $model->name }}
                                 <button wire:click="toggleModel({{ $model->id }})" class="ml-1 {{ $model->is_active ? 'text-gray-400 hover:text-red-500' : 'text-green-500' }}" title="{{ $model->is_active ? 'Disable' : 'Enable' }}">
                                     @if($model->is_active)
-                                        <svg class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12" /></svg>
+                                        <svg class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
                                     @else
-                                        <svg class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m4.5 12.75 6 6 9-13.5" /></svg>
+                                        <svg class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
                                     @endif
                                 </button>
                             </span>

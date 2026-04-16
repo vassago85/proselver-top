@@ -19,6 +19,7 @@ class Company extends Model
         'name',
         'normalized_name',
         'type',
+        'workflow_type',
         'address',
         'vat_number',
         'billing_email',
@@ -51,7 +52,9 @@ class Company extends Model
 
     public function users(): BelongsToMany
     {
-        return $this->belongsToMany(User::class, 'company_users')->withTimestamps();
+        return $this->belongsToMany(User::class, 'company_users')
+            ->withPivot('location_id')
+            ->withTimestamps();
     }
 
     public function jobs(): HasMany
@@ -67,5 +70,20 @@ class Company extends Model
     public function creditNotes(): HasMany
     {
         return $this->hasMany(CreditNote::class);
+    }
+
+    public function locations(): HasMany
+    {
+        return $this->hasMany(Location::class);
+    }
+
+    public function brands(): BelongsToMany
+    {
+        return $this->belongsToMany(Brand::class, 'brand_company')->withTimestamps();
+    }
+
+    public function requiresExternalConfirmation(): bool
+    {
+        return $this->workflow_type !== 'standard';
     }
 }

@@ -31,38 +31,49 @@ Route::get('/po/{po}/preview', function (PurchaseOrder $po) {
     ]);
 })->middleware('auth')->name('po.preview');
 
+// Collection Note verification (public, no auth)
+Route::get('/verify/{job:uuid}', function (\App\Models\Job $job) {
+    $job->load(['company', 'driver', 'brand', 'pickupLocation', 'deliveryLocation']);
+    return view('verify.collection-note', compact('job'));
+})->name('verify.collection-note');
+
+// Collection Note PDF download (authenticated)
+Route::get('/collection-note/{job}/download', function (\App\Models\Job $job) {
+    $service = app(\App\Services\CollectionNoteService::class);
+    $pdf = $service->generate($job);
+    return response($pdf, 200, [
+        'Content-Type' => 'application/pdf',
+        'Content-Disposition' => 'inline; filename="collection-note-' . $job->job_number . '.pdf"',
+    ]);
+})->middleware('auth')->name('collection-note.download');
+
 Route::get('/', function () {
     if (auth()->check()) {
-        $user = auth()->user();
-        if ($user->isInternal()) {
-            return redirect()->route('admin.dashboard');
-        }
-        if ($user->isDealer()) {
-            return redirect()->route('dealer.dashboard');
-        }
-        if ($user->isOem()) {
-            return redirect()->route('oem.dashboard');
-        }
-        if ($user->isDriver()) {
-            return redirect()->route('driver.dashboard');
-        }
+        return redirect()->to(resolveUserHomePath(auth()->user()));
     }
     return redirect()->route('login');
 })->name('home');
 
 Route::get('/dashboard', function () {
-    $user = auth()->user();
-    if ($user->isInternal()) {
-        return redirect()->route('admin.dashboard');
+    return redirect()->to(resolveUserHomePath(auth()->user()));
+})->middleware('auth')->name('dashboard');
+
+function resolveUserHomePath($user): string
+{
+    if ($user->isInternal() || $user->isDeveloper()) {
+        return route('admin.dashboard');
+    }
+    if ($user->isCustomer()) {
+        return route('customer.dashboard');
     }
     if ($user->isDealer()) {
-        return redirect()->route('dealer.dashboard');
+        return route('dealer.dashboard');
     }
     if ($user->isOem()) {
-        return redirect()->route('oem.dashboard');
+        return route('oem.dashboard');
     }
     if ($user->isDriver()) {
-        return redirect()->route('driver.dashboard');
+        return route('driver.dashboard');
     }
-    return redirect()->route('login');
-})->middleware('auth')->name('dashboard');
+    return route('login');
+}

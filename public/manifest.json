@@ -1,7 +1,7 @@
 {
-    "name": "Proselver TOP",
-    "short_name": "Proselver TOP",
-    "description": "Proselver Transport Operations Platform",
+    "name": "Proselver Trident",
+    "short_name": "Proselver Trident",
+    "description": "Proselver Trident — Booking, Dispatching & Tracking",
     "start_url": "/",
     "display": "standalone",
     "background_color": "#1e3a5f",

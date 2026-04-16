@@ -12,23 +12,39 @@ trait HasRoles
         return $this->belongsToMany(Role::class, 'user_roles')->withTimestamps();
     }
 
+    // --- Developer role override (session-based for testing) ---
+
+    protected function effectiveRoles()
+    {
+        $override = session('dev_role_override');
+        if ($override && $this->roles->contains('slug', 'developer')) {
+            $role = Role::where('slug', $override)->first();
+            if ($role) {
+                return collect([$role]);
+            }
+        }
+        return $this->roles;
+    }
+
+    // --- Core role checks ---
+
     public function hasRole(string $roleSlug): bool
     {
-        return $this->roles->contains('slug', $roleSlug);
+        return $this->effectiveRoles()->contains('slug', $roleSlug);
     }
 
     public function hasAnyRole(array $roleSlugs): bool
     {
-        return $this->roles->whereIn('slug', $roleSlugs)->isNotEmpty();
+        return $this->effectiveRoles()->whereIn('slug', $roleSlugs)->isNotEmpty();
     }
 
     public function hasPermission(string $permissionSlug): bool
     {
-        if ($this->isSuperAdmin()) {
+        if ($this->isSuperAdmin() || $this->isDeveloper()) {
             return true;
         }
 
-        foreach ($this->roles as $role) {
+        foreach ($this->effectiveRoles() as $role) {
             if ($role->relationLoaded('permissions')) {
                 if ($role->permissions->contains('slug', $permissionSlug)) {
                     return true;
@@ -45,11 +61,11 @@ trait HasRoles
 
     public function hasAnyPermission(array $permissionSlugs): bool
     {
-        if ($this->isSuperAdmin()) {
+        if ($this->isSuperAdmin() || $this->isDeveloper()) {
             return true;
         }
 
-        foreach ($this->roles as $role) {
+        foreach ($this->effectiveRoles() as $role) {
             if ($role->permissions()->whereIn('slug', $permissionSlugs)->exists()) {
                 return true;
             }
@@ -60,15 +76,22 @@ trait HasRoles
 
     public function getAllPermissionSlugs(): array
     {
-        if ($this->isSuperAdmin()) {
+        if ($this->isSuperAdmin() || $this->isDeveloper()) {
             return \App\Models\Permission::pluck('slug')->toArray();
         }
 
-        return $this->roles
+        return $this->effectiveRoles()
             ->flatMap(fn ($role) => $role->permissions->pluck('slug'))
             ->unique()
             ->values()
             ->toArray();
+    }
+
+    // --- Tier checks ---
+
+    public function isDeveloper(): bool
+    {
+        return $this->roles->contains('slug', 'developer');
     }
 
     public function isSuperAdmin(): bool
@@ -78,17 +101,26 @@ trait HasRoles
 
     public function isInternal(): bool
     {
-        return $this->roles->where('tier', 'internal')->isNotEmpty();
+        return $this->effectiveRoles()->where('tier', 'internal')->isNotEmpty();
+    }
+
+    public function isCustomer(): bool
+    {
+        return $this->effectiveRoles()->where('tier', 'customer')->isNotEmpty();
     }
 
     public function isDealer(): bool
     {
-        return $this->roles->where('tier', 'dealer')->isNotEmpty();
+        $roles = $this->effectiveRoles();
+        return $roles->where('tier', 'dealer')->isNotEmpty()
+            || $roles->where('tier', 'customer')->isNotEmpty();
     }
 
     public function isOem(): bool
     {
-        return $this->roles->where('tier', 'oem')->isNotEmpty();
+        $roles = $this->effectiveRoles();
+        return $roles->where('tier', 'oem')->isNotEmpty()
+            || $roles->where('tier', 'customer')->isNotEmpty();
     }
 
     public function isDriver(): bool
@@ -96,45 +128,79 @@ trait HasRoles
         return $this->hasRole('driver');
     }
 
+    public function isOwner(): bool
+    {
+        return $this->hasRole('owner');
+    }
+
+    public function isOperationsController(): bool
+    {
+        return $this->hasRole('operations_controller');
+    }
+
+    public function isCustomerDispatcher(): bool
+    {
+        return $this->hasRole('customer_dispatcher');
+    }
+
+    // --- Capability checks ---
+
     public function canManageUsers(): bool
     {
-        return $this->hasAnyRole(['super_admin', 'ops_manager']);
+        return $this->hasAnyRole(['super_admin', 'developer', 'ops_manager', 'operations_controller']);
     }
 
     public function canManagePricing(): bool
     {
-        return $this->hasRole('super_admin');
+        return $this->hasAnyRole(['super_admin', 'developer']);
     }
 
     public function canAssignDrivers(): bool
     {
-        return $this->hasAnyRole(['super_admin', 'ops_manager', 'dispatcher']);
+        return $this->hasAnyRole(['super_admin', 'developer', 'ops_manager', 'operations_controller', 'dispatcher']);
     }
 
     public function canApproveBookings(): bool
     {
-        return $this->hasAnyRole(['super_admin', 'ops_manager']);
+        return $this->hasAnyRole(['super_admin', 'developer', 'ops_manager', 'operations_controller']);
     }
 
     public function canManageInvoices(): bool
     {
-        return $this->hasAnyRole(['super_admin', 'accounts']);
+        return $this->hasAnyRole(['super_admin', 'developer', 'accounts']);
     }
 
     public function canOverride(): bool
     {
-        return $this->hasAnyRole(['super_admin', 'ops_manager']);
+        return $this->hasAnyRole(['super_admin', 'developer', 'ops_manager', 'operations_controller']);
     }
 
     public function canViewFinancials(): bool
     {
-        return $this->hasAnyRole(['super_admin', 'ops_manager', 'accounts']);
+        return $this->hasAnyRole(['super_admin', 'developer', 'ops_manager', 'operations_controller', 'accounts']);
     }
 
     public function canBookTransport(): bool
     {
         return $this->hasPermission('submit_booking');
     }
+
+    public function canConfirmCustomerOrder(): bool
+    {
+        return $this->hasAnyRole(['customer_dispatcher', 'customer_owner']);
+    }
+
+    public function canPlanOrders(): bool
+    {
+        return $this->hasAnyRole(['super_admin', 'developer', 'operations_controller']);
+    }
+
+    public function canGenerateCollectionNote(): bool
+    {
+        return $this->hasAnyRole(['super_admin', 'developer', 'operations_controller', 'dispatcher']);
+    }
+
+    // --- Role mutation ---
 
     public function assignRole(string $roleSlug): void
     {
@@ -164,13 +230,20 @@ trait HasRoles
     public function highestRole(): ?string
     {
         $hierarchy = [
+            'developer' => 110,
             'super_admin' => 100,
+            'owner' => 95,
+            'operations_controller' => 90,
             'ops_manager' => 90,
             'dispatcher' => 80,
             'accounts' => 70,
+            'customer_owner' => 65,
             'oem_admin' => 65,
+            'customer_admin' => 62,
             'oem_planner' => 62,
+            'customer_dispatcher' => 60,
             'dealer_principal' => 60,
+            'customer_user' => 55,
             'sales_manager_new' => 55,
             'sales_manager_used' => 55,
             'stock_controller' => 50,

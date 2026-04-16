@@ -10,7 +10,13 @@ class EnsureOemAccess
 {
     public function handle(Request $request, Closure $next): Response
     {
-        if (!$request->user()?->isOem()) {
+        $user = $request->user();
+
+        if ($user?->isDeveloper()) {
+            return $next($request);
+        }
+
+        if (!$user?->isOem()) {
             abort(403, 'OEM access required.');
         }
 

@@ -14,7 +14,7 @@ class JobPolicy
 
     public function view(User $user, Job $job): bool
     {
-        if ($user->isInternal()) {
+        if ($user->isInternal() || $user->isDeveloper()) {
             return true;
         }
 
@@ -22,7 +22,7 @@ class JobPolicy
             return $job->driver_user_id === $user->id;
         }
 
-        if ($user->isDealer()) {
+        if ($user->isCustomer() || $user->isDealer() || $user->isOem()) {
             return $user->companies->pluck('id')->contains($job->company_id);
         }
 
@@ -31,16 +31,24 @@ class JobPolicy
 
     public function create(User $user): bool
     {
-        return $user->canBookTransport() || $user->isInternal();
+        return $user->canBookTransport() || $user->isInternal() || $user->isDeveloper();
     }
 
     public function update(User $user, Job $job): bool
     {
-        if ($user->isSuperAdmin() || $user->hasRole('ops_manager')) {
+        if ($user->isDeveloper() || $user->isSuperAdmin() || $user->hasRole('ops_manager') || $user->isOperationsController()) {
             return true;
         }
 
-        if ($user->hasRole('dispatcher') && in_array($job->status, [Job::STATUS_APPROVED, Job::STATUS_ASSIGNED])) {
+        if ($user->hasRole('dispatcher') && in_array($job->status, [
+            Job::STATUS_APPROVED,
+            Job::STATUS_ASSIGNED,
+            Job::STATUS_PLANNED,
+            Job::STATUS_DRIVER_ASSIGNED,
+            Job::STATUS_READY_FOR_COLLECTION,
+            Job::STATUS_COLLECTED,
+            Job::STATUS_IN_TRANSIT,
+        ])) {
             return true;
         }
 
@@ -57,23 +65,54 @@ class JobPolicy
         return $user->canApproveBookings() && $job->status === Job::STATUS_VERIFIED;
     }
 
+    public function confirmCustomerOrder(User $user, Job $job): bool
+    {
+        if ($job->status !== Job::STATUS_AWAITING_CUSTOMER_CONFIRMATION) {
+            return false;
+        }
+
+        if ($user->isInternal() || $user->isDeveloper()) {
+            return true;
+        }
+
+        if ($user->canConfirmCustomerOrder() && $user->companies->pluck('id')->contains($job->company_id)) {
+            return true;
+        }
+
+        return false;
+    }
+
+    public function plan(User $user, Job $job): bool
+    {
+        return $user->canPlanOrders() && $job->status === Job::STATUS_CONFIRMED;
+    }
+
     public function assignDriver(User $user, Job $job): bool
     {
-        return $user->canAssignDrivers() && in_array($job->status, [Job::STATUS_APPROVED, Job::STATUS_ASSIGNED]);
+        return $user->canAssignDrivers() && in_array($job->status, [
+            Job::STATUS_APPROVED,
+            Job::STATUS_ASSIGNED,
+            Job::STATUS_PLANNED,
+            Job::STATUS_DRIVER_ASSIGNED,
+        ]);
     }
 
     public function cancel(User $user, Job $job): bool
     {
-        if ($user->isSuperAdmin() || $user->hasRole('ops_manager')) {
+        if ($user->isDeveloper() || $user->isSuperAdmin() || $user->hasRole('ops_manager') || $user->isOperationsController()) {
             return true;
         }
 
-        if ($user->isDealer() && $user->companies->pluck('id')->contains($job->company_id)) {
+        if (($user->isCustomer() || $user->isDealer()) && $user->companies->pluck('id')->contains($job->company_id)) {
             return in_array($job->status, [
                 Job::STATUS_PENDING_VERIFICATION,
                 Job::STATUS_VERIFIED,
                 Job::STATUS_APPROVED,
                 Job::STATUS_ASSIGNED,
+                Job::STATUS_RECEIVED,
+                Job::STATUS_AWAITING_CUSTOMER_CONFIRMATION,
+                Job::STATUS_CONFIRMED,
+                Job::STATUS_PLANNED,
             ]);
         }
 
@@ -93,5 +132,17 @@ class JobPolicy
     public function viewFinancials(User $user, Job $job): bool
     {
         return $user->canViewFinancials();
+    }
+
+    public function generateCollectionNote(User $user, Job $job): bool
+    {
+        return $user->canGenerateCollectionNote() && in_array($job->status, [
+            Job::STATUS_DRIVER_ASSIGNED,
+            Job::STATUS_READY_FOR_COLLECTION,
+            Job::STATUS_COLLECTED,
+            Job::STATUS_IN_TRANSIT,
+            Job::STATUS_DELIVERED,
+            Job::STATUS_COMPLETED,
+        ]);
     }
 }

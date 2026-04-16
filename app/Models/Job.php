@@ -20,6 +20,7 @@ class Job extends Model
     const TYPE_TRANSPORT = 'transport';
     const TYPE_YARD_WORK = 'yard_work';
 
+    // Legacy statuses (kept for backward compatibility)
     const STATUS_PENDING_VERIFICATION = 'pending_verification';
     const STATUS_VERIFIED = 'verified';
     const STATUS_APPROVED = 'approved';
@@ -30,6 +31,18 @@ class Job extends Model
     const STATUS_READY_FOR_INVOICING = 'ready_for_invoicing';
     const STATUS_INVOICED = 'invoiced';
     const STATUS_CANCELLED = 'cancelled';
+
+    // Phase 1 statuses
+    const STATUS_RECEIVED = 'received';
+    const STATUS_AWAITING_CUSTOMER_CONFIRMATION = 'awaiting_customer_confirmation';
+    const STATUS_CONFIRMATION_ISSUE = 'confirmation_issue';
+    const STATUS_CONFIRMED = 'confirmed';
+    const STATUS_PLANNED = 'planned';
+    const STATUS_DRIVER_ASSIGNED = 'driver_assigned';
+    const STATUS_READY_FOR_COLLECTION = 'ready_for_collection';
+    const STATUS_COLLECTED = 'collected';
+    const STATUS_IN_TRANSIT = 'in_transit';
+    const STATUS_DELIVERED = 'delivered';
 
     const TRANSPORT_STATUSES = [
         self::STATUS_PENDING_VERIFICATION,
@@ -68,6 +81,61 @@ class Job extends Model
         self::STATUS_READY_FOR_INVOICING => [self::STATUS_INVOICED],
         self::STATUS_INVOICED => [],
         self::STATUS_CANCELLED => [],
+    ];
+
+    const PHASE1_STATUSES = [
+        self::STATUS_RECEIVED,
+        self::STATUS_AWAITING_CUSTOMER_CONFIRMATION,
+        self::STATUS_CONFIRMATION_ISSUE,
+        self::STATUS_CONFIRMED,
+        self::STATUS_PLANNED,
+        self::STATUS_DRIVER_ASSIGNED,
+        self::STATUS_READY_FOR_COLLECTION,
+        self::STATUS_COLLECTED,
+        self::STATUS_IN_TRANSIT,
+        self::STATUS_DELIVERED,
+        self::STATUS_COMPLETED,
+        self::STATUS_CANCELLED,
+    ];
+
+    const CONFIRMATION_ISSUE_REASONS = [
+        'truck_not_at_location' => 'Truck has not arrived at this location',
+        'truck_damaged' => 'Truck is here but has visible damage',
+        'mechanical_issue' => 'Truck is here but has a mechanical issue (won\'t start, flat battery, etc.)',
+        'parts_missing' => 'Truck is here but parts or accessories are missing',
+        'documentation_issue' => 'Paperwork or documentation is incomplete',
+        'loading_access_issue' => 'Truck blocked in, yard closed, or access problem',
+        'other' => 'Other (see notes)',
+    ];
+
+    const PHASE1_TRANSITIONS = [
+        self::STATUS_RECEIVED => [self::STATUS_AWAITING_CUSTOMER_CONFIRMATION, self::STATUS_CONFIRMED, self::STATUS_CANCELLED],
+        self::STATUS_AWAITING_CUSTOMER_CONFIRMATION => [self::STATUS_CONFIRMED, self::STATUS_CONFIRMATION_ISSUE, self::STATUS_CANCELLED],
+        self::STATUS_CONFIRMATION_ISSUE => [self::STATUS_AWAITING_CUSTOMER_CONFIRMATION, self::STATUS_CANCELLED],
+        self::STATUS_CONFIRMED => [self::STATUS_PLANNED, self::STATUS_CANCELLED],
+        self::STATUS_PLANNED => [self::STATUS_DRIVER_ASSIGNED, self::STATUS_CANCELLED],
+        self::STATUS_DRIVER_ASSIGNED => [self::STATUS_READY_FOR_COLLECTION, self::STATUS_CANCELLED],
+        self::STATUS_READY_FOR_COLLECTION => [self::STATUS_COLLECTED, self::STATUS_CANCELLED],
+        self::STATUS_COLLECTED => [self::STATUS_IN_TRANSIT],
+        self::STATUS_IN_TRANSIT => [self::STATUS_DELIVERED],
+        self::STATUS_DELIVERED => [self::STATUS_COMPLETED],
+        self::STATUS_COMPLETED => [],
+        self::STATUS_CANCELLED => [],
+    ];
+
+    const PHASE1_STATUS_LABELS = [
+        self::STATUS_RECEIVED => 'Received',
+        self::STATUS_AWAITING_CUSTOMER_CONFIRMATION => 'Awaiting Confirmation',
+        self::STATUS_CONFIRMATION_ISSUE => 'Confirmation Issue',
+        self::STATUS_CONFIRMED => 'Confirmed',
+        self::STATUS_PLANNED => 'Planned',
+        self::STATUS_DRIVER_ASSIGNED => 'Driver Assigned',
+        self::STATUS_READY_FOR_COLLECTION => 'Ready for Collection',
+        self::STATUS_COLLECTED => 'Collected',
+        self::STATUS_IN_TRANSIT => 'In Transit',
+        self::STATUS_DELIVERED => 'Delivered',
+        self::STATUS_COMPLETED => 'Completed',
+        self::STATUS_CANCELLED => 'Cancelled',
     ];
 
     protected $fillable = [
@@ -136,6 +204,15 @@ class Job extends Model
         'estimated_duration_minutes',
         'is_round_trip',
         'estimated_toll_cost',
+        'customer_confirmed_at',
+        'customer_confirmed_by',
+        'planned_at',
+        'ready_for_collection_at',
+        'collected_at',
+        'in_transit_at',
+        'delivered_at',
+        'confirmation_reason',
+        'confirmation_note',
     ];
 
     protected function casts(): array
@@ -178,6 +255,12 @@ class Job extends Model
             'estimated_duration_minutes' => 'integer',
             'is_round_trip' => 'boolean',
             'estimated_toll_cost' => 'decimal:2',
+            'customer_confirmed_at' => 'datetime',
+            'planned_at' => 'datetime',
+            'ready_for_collection_at' => 'datetime',
+            'collected_at' => 'datetime',
+            'in_transit_at' => 'datetime',
+            'delivered_at' => 'datetime',
         ];
     }
 
@@ -201,7 +284,9 @@ class Job extends Model
 
     public function canTransitionTo(string $newStatus): bool
     {
-        $allowed = self::ALLOWED_TRANSITIONS[$this->status] ?? [];
+        $allowed = self::ALLOWED_TRANSITIONS[$this->status]
+            ?? self::PHASE1_TRANSITIONS[$this->status]
+            ?? [];
 
         return in_array($newStatus, $allowed);
     }
@@ -215,12 +300,21 @@ class Job extends Model
         $this->status = $newStatus;
 
         $timestampMap = [
+            // Legacy
             self::STATUS_VERIFIED => 'verified_at',
             self::STATUS_APPROVED => 'approved_at',
             self::STATUS_ASSIGNED => 'assigned_at',
             self::STATUS_IN_PROGRESS => 'started_at',
-            self::STATUS_COMPLETED => 'completed_at',
             self::STATUS_INVOICED => 'invoiced_at',
+            // Phase 1
+            self::STATUS_CONFIRMED => 'customer_confirmed_at',
+            self::STATUS_PLANNED => 'planned_at',
+            self::STATUS_DRIVER_ASSIGNED => 'assigned_at',
+            self::STATUS_READY_FOR_COLLECTION => 'ready_for_collection_at',
+            self::STATUS_COLLECTED => 'collected_at',
+            self::STATUS_IN_TRANSIT => 'in_transit_at',
+            self::STATUS_DELIVERED => 'delivered_at',
+            self::STATUS_COMPLETED => 'completed_at',
             self::STATUS_CANCELLED => 'cancelled_at',
         ];
 
@@ -229,6 +323,40 @@ class Job extends Model
         }
 
         return $this->save();
+    }
+
+    public function isPhase1Status(): bool
+    {
+        return in_array($this->status, self::PHASE1_STATUSES);
+    }
+
+    public function phase1StatusLabel(): string
+    {
+        return self::PHASE1_STATUS_LABELS[$this->status] ?? ucfirst(str_replace('_', ' ', $this->status));
+    }
+
+    public function reportConfirmationIssue(string $reason, ?string $note = null): bool
+    {
+        if (!$this->canTransitionTo(self::STATUS_CONFIRMATION_ISSUE)) {
+            return false;
+        }
+
+        $this->confirmation_reason = $reason;
+        $this->confirmation_note = $note;
+        $this->status = self::STATUS_CONFIRMATION_ISSUE;
+
+        return $this->save();
+    }
+
+    public function availablePhase1Transitions(): array
+    {
+        $transitions = self::PHASE1_TRANSITIONS[$this->status] ?? [];
+
+        if ($this->status === self::STATUS_RECEIVED && !$this->company?->requiresExternalConfirmation()) {
+            $transitions = array_values(array_diff($transitions, [self::STATUS_AWAITING_CUSTOMER_CONFIRMATION]));
+        }
+
+        return $transitions;
     }
 
     public function isTransport(): bool

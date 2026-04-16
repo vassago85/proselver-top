@@ -62,7 +62,10 @@ new #[Layout('components.layouts.app')] class extends Component {
             'password' => $this->newPassword,
         ]);
 
-        $user->roles()->sync($this->newSelectedRoles);
+        $validRoleIds = $company
+            ? Role::forCompany($company->id)->whereIn('id', $this->newSelectedRoles)->pluck('id')->toArray()
+            : [];
+        $user->roles()->sync($validRoleIds);
         if ($company) {
             $user->companies()->sync([$company->id]);
         }
@@ -102,7 +105,11 @@ new #[Layout('components.layouts.app')] class extends Component {
         }
 
         $user->update($data);
-        $user->roles()->sync($this->editSelectedRoles);
+        $company = auth()->user()->company();
+        $validRoleIds = $company
+            ? Role::forCompany($company->id)->whereIn('id', $this->editSelectedRoles)->pluck('id')->toArray()
+            : [];
+        $user->roles()->sync($validRoleIds);
         $this->editingUserId = null;
         session()->flash('success', "{$user->name} updated.");
     }
@@ -144,7 +151,9 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         return [
             'members' => $users,
-            'oemRoles' => Role::where('tier', 'oem')->orderBy('name')->get(),
+            'oemRoles' => $company
+                ? Role::forCompany($company->id)->orderBy('name')->get()
+                : collect(),
         ];
     }
 };

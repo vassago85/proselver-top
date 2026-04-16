@@ -10,7 +10,13 @@ class EnsureDriverAccess
 {
     public function handle(Request $request, Closure $next): Response
     {
-        if (!$request->user()?->isDriver()) {
+        $user = $request->user();
+
+        if ($user?->isDeveloper()) {
+            return $next($request);
+        }
+
+        if (!$user?->isDriver()) {
             abort(403, 'Driver access required.');
         }
 

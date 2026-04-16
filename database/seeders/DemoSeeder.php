@@ -2,7 +2,9 @@
 
 namespace Database\Seeders;
 
+use App\Models\Brand;
 use App\Models\Company;
+use App\Models\DriverProfile;
 use App\Models\Location;
 use App\Models\User;
 use Illuminate\Database\Seeder;
@@ -12,7 +14,142 @@ class DemoSeeder extends Seeder
 {
     public function run(): void
     {
-        // Demo company
+        $password = Hash::make('changeme');
+
+        // ===== DEVELOPER =====
+        $developer = User::firstOrCreate(
+            ['username' => 'developer'],
+            ['name' => 'Developer', 'email' => 'dev@proselver.test', 'password' => $password, 'is_active' => true]
+        );
+        $developer->assignRole('developer');
+
+        // ===== INTERNAL STAFF =====
+        $owner = User::firstOrCreate(
+            ['username' => 'owner'],
+            ['name' => 'Business Owner', 'email' => 'owner@proselver.test', 'password' => $password, 'is_active' => true]
+        );
+        $owner->assignRole('owner');
+
+        $opsController = User::firstOrCreate(
+            ['username' => 'ops'],
+            ['name' => 'Cassius Jege', 'email' => 'cassius@proselver.test', 'password' => $password, 'is_active' => true]
+        );
+        $opsController->syncRoles(['operations_controller']);
+
+        $opsController2 = User::firstOrCreate(
+            ['username' => 'wiaan'],
+            ['name' => 'Wiaan Swart', 'email' => 'wiaan@proselver.test', 'password' => $password, 'is_active' => true]
+        );
+        $opsController2->assignRole('operations_controller');
+
+        $dispatcher = User::firstOrCreate(
+            ['username' => 'dispatch'],
+            ['name' => 'Michael Esbie', 'email' => 'michael@proselver.test', 'password' => $password, 'is_active' => true]
+        );
+        $dispatcher->syncRoles(['dispatcher']);
+
+        $dispatcher2 = User::firstOrCreate(
+            ['username' => 'busani'],
+            ['name' => 'Busani Ndwandwe', 'email' => 'busani@proselver.test', 'password' => $password, 'is_active' => true]
+        );
+        $dispatcher2->assignRole('dispatcher');
+
+        $accounts = User::firstOrCreate(
+            ['username' => 'accounts'],
+            ['name' => 'Demo Accounts', 'password' => $password, 'is_active' => true]
+        );
+        $accounts->assignRole('accounts');
+
+        // ===== FAW COMPANY (requires external confirmation) =====
+        $faw = Company::firstOrCreate(
+            ['normalized_name' => 'faw south africa'],
+            [
+                'name' => 'FAW South Africa',
+                'type' => 'oem',
+                'workflow_type' => 'faw',
+                'address' => '1 FAW Drive, Coega IDZ, Gqeberha',
+                'vat_number' => '4111111111',
+                'billing_email' => 'accounts@faw.co.za',
+                'phone' => '041 404 0000',
+            ]
+        );
+
+        // FAW locations (created first so we can assign them to users)
+        $fawCoega = Location::firstOrCreate(
+            ['company_name' => 'FAW Coega Plant', 'company_id' => $faw->id],
+            ['address' => '1 FAW Drive, Coega IDZ', 'city' => 'Gqeberha', 'province' => 'Eastern Cape', 'customer_name' => 'Plant Manager', 'customer_phone' => '041 404 0001', 'company_id' => $faw->id]
+        );
+        $fawJhb = Location::firstOrCreate(
+            ['company_name' => 'FAW Johannesburg Depot', 'company_id' => $faw->id],
+            ['address' => '120 Buccleuch Dr, Sandton', 'city' => 'Johannesburg', 'province' => 'Gauteng', 'customer_name' => 'JHB Manager', 'customer_phone' => '011 555 0001', 'company_id' => $faw->id]
+        );
+
+        $fawOwner = User::firstOrCreate(
+            ['username' => 'fawowner'],
+            ['name' => 'FAW Customer Owner', 'email' => 'owner@faw.test', 'password' => $password, 'is_active' => true]
+        );
+        $fawOwner->assignRole('customer_owner');
+        $faw->users()->syncWithoutDetaching([$fawOwner->id => ['location_id' => null]]);
+
+        $fawDispatcher = User::firstOrCreate(
+            ['username' => 'fawdispatch'],
+            ['name' => 'FAW Coega Dispatcher', 'email' => 'dispatcher@faw.test', 'password' => $password, 'is_active' => true]
+        );
+        $fawDispatcher->assignRole('customer_dispatcher');
+        $faw->users()->syncWithoutDetaching([$fawDispatcher->id => ['location_id' => $fawCoega->id]]);
+
+        $fawJhbDispatcher = User::firstOrCreate(
+            ['username' => 'fawjhb'],
+            ['name' => 'FAW JHB Dispatcher', 'email' => 'jhb@faw.test', 'password' => $password, 'is_active' => true]
+        );
+        $fawJhbDispatcher->assignRole('customer_dispatcher');
+        $faw->users()->syncWithoutDetaching([$fawJhbDispatcher->id => ['location_id' => $fawJhb->id]]);
+
+        $fawUser = User::firstOrCreate(
+            ['username' => 'fawuser'],
+            ['name' => 'FAW User', 'email' => 'user@faw.test', 'password' => $password, 'is_active' => true]
+        );
+        $fawUser->assignRole('customer_user');
+        $faw->users()->syncWithoutDetaching([$fawUser->id => ['location_id' => $fawJhb->id]]);
+
+        // FAW brand link
+        $fawBrand = Brand::where('name', 'FAW')->first();
+        if ($fawBrand) {
+            $faw->brands()->syncWithoutDetaching([$fawBrand->id]);
+        }
+
+        // ===== STANDARD CUSTOMER (Isuzu) =====
+        $isuzu = Company::firstOrCreate(
+            ['normalized_name' => 'isuzu motors sa'],
+            [
+                'name' => 'Isuzu Motors SA',
+                'type' => 'oem',
+                'workflow_type' => 'standard',
+                'address' => '1 Isuzu Way, Struandale, Gqeberha',
+                'vat_number' => '4222222222',
+                'billing_email' => 'accounts@isuzu.test',
+                'phone' => '041 995 0000',
+            ]
+        );
+
+        $isuzuPlant = Location::firstOrCreate(
+            ['company_name' => 'Isuzu Struandale Plant', 'company_id' => $isuzu->id],
+            ['address' => '1 Isuzu Way, Struandale', 'city' => 'Gqeberha', 'province' => 'Eastern Cape', 'customer_name' => 'Plant Manager', 'customer_phone' => '041 995 0001', 'company_id' => $isuzu->id]
+        );
+
+        $isuzuAdmin = User::firstOrCreate(
+            ['username' => 'isuzuadmin'],
+            ['name' => 'Isuzu Admin', 'email' => 'admin@isuzu.test', 'password' => $password, 'is_active' => true]
+        );
+        $isuzuAdmin->assignRole('customer_admin');
+        $isuzu->users()->syncWithoutDetaching([$isuzuAdmin->id => ['location_id' => $isuzuPlant->id]]);
+
+        $isuzuBrand = Brand::where('name', 'Isuzu')->first();
+        if ($isuzuBrand) {
+            $isuzu->brands()->syncWithoutDetaching([$isuzuBrand->id]);
+        }
+
+        // ===== LEGACY DEMO COMPANY (Dealer) =====
         $company = Company::firstOrCreate(
             ['normalized_name' => 'demo motors'],
             [
@@ -24,131 +161,79 @@ class DemoSeeder extends Seeder
             ]
         );
 
-        // Demo dealer admin
         $dealerAdmin = User::firstOrCreate(
             ['username' => 'dealer'],
-            [
-                'name' => 'Demo Dealer Admin',
-                'email' => 'dealer@demomotors.test',
-                'password' => Hash::make('changeme'),
-                'is_active' => true,
-            ]
+            ['name' => 'Demo Dealer Admin', 'email' => 'dealer@demomotors.test', 'password' => $password, 'is_active' => true]
         );
         $dealerAdmin->assignRole('dealer_principal');
         $company->users()->syncWithoutDetaching([$dealerAdmin->id]);
 
-        // Demo ops manager
-        $opsManager = User::firstOrCreate(
-            ['username' => 'ops'],
-            [
-                'name' => 'Demo Ops Manager',
-                'email' => 'ops@proselver.test',
-                'password' => Hash::make('changeme'),
-                'is_active' => true,
-            ]
+        // Demo dealer locations
+        Location::firstOrCreate(
+            ['company_name' => 'Demo Motors Sandton', 'company_id' => $company->id],
+            ['address' => '123 Main Rd, Sandton', 'city' => 'Johannesburg', 'province' => 'Gauteng', 'customer_name' => 'John Dealer', 'customer_phone' => '011 123 4567', 'company_id' => $company->id]
         );
-        $opsManager->assignRole('ops_manager');
-
-        // Demo dispatcher
-        $dispatcher = User::firstOrCreate(
-            ['username' => 'dispatch'],
-            [
-                'name' => 'Demo Dispatcher',
-                'password' => Hash::make('changeme'),
-                'is_active' => true,
-            ]
+        Location::firstOrCreate(
+            ['company_name' => 'Demo Motors Pretoria', 'company_id' => $company->id],
+            ['address' => '45 Church St, Pretoria', 'city' => 'Pretoria', 'province' => 'Gauteng', 'customer_name' => 'Jane Dealer', 'customer_phone' => '012 345 6789', 'company_id' => $company->id]
         );
-        $dispatcher->assignRole('dispatcher');
 
-        // Demo driver
-        $driver = User::firstOrCreate(
+        // ===== DRIVERS WITH FULL PROFILES =====
+        $driver1 = User::firstOrCreate(
             ['username' => 'driver'],
-            [
-                'name' => 'Demo Driver',
-                'phone' => '082 123 4567',
-                'password' => Hash::make('changeme'),
-                'is_active' => true,
-            ]
+            ['name' => 'Thabo Molefe', 'phone' => '082 123 4567', 'password' => $password, 'is_active' => true]
         );
-        $driver->assignRole('driver');
-
-        // Demo accounts
-        $accounts = User::firstOrCreate(
-            ['username' => 'accounts'],
+        $driver1->assignRole('driver');
+        DriverProfile::updateOrCreate(
+            ['user_id' => $driver1->id],
             [
-                'name' => 'Demo Accounts',
-                'password' => Hash::make('changeme'),
-                'is_active' => true,
-            ]
-        );
-        $accounts->assignRole('accounts');
-
-        // Demo OEM company
-        $oemCompany = Company::firstOrCreate(
-            ['normalized_name' => 'demo oem trucks'],
-            [
-                'name' => 'Demo OEM Trucks',
-                'type' => 'oem',
-                'address' => '1 Factory Rd, Rosslyn, Pretoria',
-                'vat_number' => '4987654321',
-                'billing_email' => 'accounts@demooemtrucks.test',
-                'phone' => '012 987 6543',
+                'id_number' => '8501015123081',
+                'cellphone' => '082 123 4567',
+                'base_location' => 'Johannesburg',
+                'license_code' => 'EC',
+                'license_number' => 'LIC-001234',
+                'license_expiry' => now()->addMonths(8),
+                'prdp_expiry' => now()->addMonths(4),
             ]
         );
 
-        // Demo OEM admin
-        $oemAdmin = User::firstOrCreate(
-            ['username' => 'oemadmin'],
+        $driver2 = User::firstOrCreate(
+            ['username' => 'driver2'],
+            ['name' => 'Sipho Nkosi', 'phone' => '083 987 6543', 'password' => $password, 'is_active' => true]
+        );
+        $driver2->assignRole('driver');
+        DriverProfile::updateOrCreate(
+            ['user_id' => $driver2->id],
             [
-                'name' => 'Demo OEM Admin',
-                'email' => 'admin@demooemtrucks.test',
-                'password' => Hash::make('changeme'),
-                'is_active' => true,
+                'id_number' => '9003025234089',
+                'cellphone' => '083 987 6543',
+                'base_location' => 'Pretoria',
+                'license_code' => 'EC1',
+                'license_number' => 'LIC-005678',
+                'license_expiry' => now()->addMonths(14),
+                'prdp_expiry' => now()->addMonths(2),
             ]
         );
-        $oemAdmin->assignRole('oem_admin');
-        $oemCompany->users()->syncWithoutDetaching([$oemAdmin->id]);
 
-        // Demo OEM planner
-        $oemPlanner = User::firstOrCreate(
-            ['username' => 'oemplanner'],
+        $driver3 = User::firstOrCreate(
+            ['username' => 'driver3'],
+            ['name' => 'David Botha', 'phone' => '071 555 0000', 'password' => $password, 'is_active' => true]
+        );
+        $driver3->assignRole('driver');
+        DriverProfile::updateOrCreate(
+            ['user_id' => $driver3->id],
             [
-                'name' => 'Demo OEM Planner',
-                'email' => 'planner@demooemtrucks.test',
-                'password' => Hash::make('changeme'),
-                'is_active' => true,
+                'id_number' => '8712105345083',
+                'cellphone' => '071 555 0000',
+                'base_location' => 'Gqeberha',
+                'license_code' => 'C1',
+                'license_number' => 'LIC-009012',
+                'license_expiry' => now()->subMonths(1),
+                'prdp_expiry' => now()->addMonths(6),
             ]
         );
-        $oemPlanner->assignRole('oem_planner');
-        $oemCompany->users()->syncWithoutDetaching([$oemPlanner->id]);
 
-        // Demo locations (dealer-owned)
-        $dealerLocations = [
-            ['company_name' => 'Demo Motors Sandton', 'address' => '123 Main Rd, Sandton', 'city' => 'Johannesburg', 'province' => 'Gauteng', 'customer_name' => 'John Dealer', 'customer_phone' => '011 123 4567'],
-            ['company_name' => 'Demo Motors Pretoria', 'address' => '45 Church St, Pretoria', 'city' => 'Pretoria', 'province' => 'Gauteng', 'customer_name' => 'Jane Dealer', 'customer_phone' => '012 345 6789'],
-        ];
-
-        foreach ($dealerLocations as $loc) {
-            Location::firstOrCreate(
-                ['company_name' => $loc['company_name'], 'company_id' => $company->id],
-                array_merge($loc, ['company_id' => $company->id])
-            );
-        }
-
-        // Demo locations (OEM-owned)
-        $oemLocations = [
-            ['company_name' => 'OEM Factory Rosslyn', 'address' => '1 Factory Rd, Rosslyn', 'city' => 'Pretoria', 'province' => 'Gauteng', 'customer_name' => 'Factory Manager', 'customer_phone' => '012 987 6543'],
-            ['company_name' => 'OEM Distribution Centre', 'address' => '200 Truck Ave, Isando', 'city' => 'Johannesburg', 'province' => 'Gauteng'],
-        ];
-
-        foreach ($oemLocations as $loc) {
-            Location::firstOrCreate(
-                ['company_name' => $loc['company_name'], 'company_id' => $oemCompany->id],
-                array_merge($loc, ['company_id' => $oemCompany->id])
-            );
-        }
-
-        // Shared (public) locations
+        // ===== SHARED LOCATIONS =====
         $sharedLocations = [
             ['company_name' => 'Johannesburg Depot', 'address' => '1 Truck St, Germiston', 'city' => 'Johannesburg', 'province' => 'Gauteng', 'latitude' => -26.2041, 'longitude' => 28.0473],
             ['company_name' => 'Cape Town Depot', 'address' => '100 Voortrekker Rd, Bellville', 'city' => 'Cape Town', 'province' => 'Western Cape', 'latitude' => -33.9249, 'longitude' => 18.4241],

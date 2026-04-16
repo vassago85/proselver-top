@@ -1,12 +1,16 @@
 <?php
 use App\Models\Job;
+use App\Models\JobDocument;
 use App\Models\JobEvent;
-use App\Services\AuditService;
 use Livewire\Volt\Component;
 use Livewire\Attributes\Layout;
+use Livewire\WithFileUploads;
 
 new #[Layout('components.layouts.app')] class extends Component {
+    use WithFileUploads;
+
     public Job $job;
+    public $photoUpload;
 
     public function mount(Job $job): void
     {
@@ -29,21 +33,80 @@ new #[Layout('components.layouts.app')] class extends Component {
             'client_uuid' => \Illuminate\Support\Str::uuid(),
         ]);
 
+        // Legacy transitions
         if ($eventType === JobEvent::TYPE_ARRIVED_PICKUP && $this->job->status === Job::STATUS_ASSIGNED) {
             $this->job->transitionTo(Job::STATUS_IN_PROGRESS);
         }
-
         if ($eventType === JobEvent::TYPE_VEHICLE_READY) {
             $this->job->actual_ready_time = now();
             $this->job->save();
         }
+        if ($eventType === JobEvent::TYPE_JOB_COMPLETED && $this->job->status === Job::STATUS_IN_PROGRESS) {
+            $this->job->transitionTo(Job::STATUS_COMPLETED);
+        }
 
-        if ($eventType === JobEvent::TYPE_JOB_COMPLETED) {
+        // Phase 1 transitions
+        if ($eventType === JobEvent::TYPE_ARRIVED_PICKUP && $this->job->status === Job::STATUS_READY_FOR_COLLECTION) {
+            $this->job->transitionTo(Job::STATUS_COLLECTED);
+        }
+        if ($eventType === JobEvent::TYPE_DEPARTED_PICKUP && $this->job->status === Job::STATUS_COLLECTED) {
+            $this->job->transitionTo(Job::STATUS_IN_TRANSIT);
+        }
+        if ($eventType === JobEvent::TYPE_ARRIVED_DELIVERY && $this->job->status === Job::STATUS_IN_TRANSIT) {
+            $this->job->transitionTo(Job::STATUS_DELIVERED);
+        }
+        if ($eventType === JobEvent::TYPE_JOB_COMPLETED && $this->job->status === Job::STATUS_DELIVERED) {
             $this->job->transitionTo(Job::STATUS_COMPLETED);
         }
 
         $this->job->refresh()->load('events');
         session()->flash('success', ucfirst(str_replace('_', ' ', $eventType)) . ' logged.');
+    }
+
+    public function uploadPhoto(): void
+    {
+        $this->validate(['photoUpload' => 'required|image|max:5120']);
+
+        $disk = config('filesystems.default') === 'local' ? 'local' : 'r2';
+        $path = $this->photoUpload->store('jobs/' . $this->job->uuid . '/documents', $disk);
+
+        JobDocument::create([
+            'job_id' => $this->job->id,
+            'uploaded_by_user_id' => auth()->id(),
+            'category' => JobDocument::CATEGORY_PHOTO,
+            'disk' => $disk,
+            'path' => $path,
+            'original_filename' => $this->photoUpload->getClientOriginalName(),
+            'mime_type' => $this->photoUpload->getMimeType(),
+            'size_bytes' => $this->photoUpload->getSize(),
+            'file_hash' => hash_file('sha256', $this->photoUpload->getRealPath()),
+        ]);
+
+        $this->reset('photoUpload');
+        session()->flash('success', 'Photo uploaded.');
+    }
+
+    public function uploadPod(): void
+    {
+        $this->validate(['photoUpload' => 'required|file|max:10240']);
+
+        $disk = config('filesystems.default') === 'local' ? 'local' : 'r2';
+        $path = $this->photoUpload->store('jobs/' . $this->job->uuid . '/documents', $disk);
+
+        JobDocument::create([
+            'job_id' => $this->job->id,
+            'uploaded_by_user_id' => auth()->id(),
+            'category' => JobDocument::CATEGORY_POD,
+            'disk' => $disk,
+            'path' => $path,
+            'original_filename' => $this->photoUpload->getClientOriginalName(),
+            'mime_type' => $this->photoUpload->getMimeType(),
+            'size_bytes' => $this->photoUpload->getSize(),
+            'file_hash' => hash_file('sha256', $this->photoUpload->getRealPath()),
+        ]);
+
+        $this->reset('photoUpload');
+        session()->flash('success', 'POD uploaded.');
     }
 
     public function with(): array
@@ -93,7 +156,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                 @if(in_array($step['type'], $loggedTypes))
                     <button disabled class="w-full rounded-lg bg-gray-100 px-4 py-4 text-sm font-semibold text-gray-400 flex items-center justify-between">
                         {{ $step['label'] }}
-                        <svg class="h-5 w-5 text-green-500" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" /></svg>
+                        <svg class="h-5 w-5 text-green-500" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" fill="none"><path d="M20 6 9 17l-5-5"/></svg>
                     </button>
                 @else
                     <button wire:click="logEvent('{{ $step['type'] }}')" wire:confirm="Log '{{ $step['label'] }}'?"
@@ -102,6 +165,23 @@ new #[Layout('components.layouts.app')] class extends Component {
                     </button>
                 @endif
             @endforeach
+        </div>
+
+        {{-- Photo / POD Upload --}}
+        <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6" x-data="imageCompressor()">
+            <h3 class="text-lg font-semibold text-gray-900 mb-4">Upload Photo / POD</h3>
+            <input type="file" accept="image/*,application/pdf" @change="compressAndAttach($event)" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100">
+            @error('photoUpload') <p class="text-red-600 text-xs mt-1">{{ $message }}</p> @enderror
+            <div class="mt-3 flex gap-2">
+                <button wire:click="uploadPhoto" class="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-500" wire:loading.attr="disabled">
+                    <span wire:loading.remove wire:target="uploadPhoto">Upload Photo</span>
+                    <span wire:loading wire:target="uploadPhoto">Uploading...</span>
+                </button>
+                <button wire:click="uploadPod" class="rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white hover:bg-green-500" wire:loading.attr="disabled">
+                    <span wire:loading.remove wire:target="uploadPod">Upload POD</span>
+                    <span wire:loading wire:target="uploadPod">Uploading...</span>
+                </button>
+            </div>
         </div>
 
         {{-- Event Timeline --}}
@@ -119,4 +199,37 @@ new #[Layout('components.layouts.app')] class extends Component {
         </div>
         @endif
     </div>
+
+    <script>
+    function imageCompressor() {
+        return {
+            compressAndAttach(event) {
+                const file = event.target.files[0];
+                if (!file || !file.type.startsWith('image/')) {
+                    @this.upload('photoUpload', file);
+                    return;
+                }
+                const maxWidth = 1200;
+                const quality = 0.7;
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const img = new Image();
+                    img.onload = () => {
+                        const canvas = document.createElement('canvas');
+                        let w = img.width, h = img.height;
+                        if (w > maxWidth) { h = h * maxWidth / w; w = maxWidth; }
+                        canvas.width = w; canvas.height = h;
+                        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+                        canvas.toBlob((blob) => {
+                            const compressed = new File([blob], file.name, { type: 'image/jpeg' });
+                            @this.upload('photoUpload', compressed);
+                        }, 'image/jpeg', quality);
+                    };
+                    img.src = e.target.result;
+                };
+                reader.readAsDataURL(file);
+            }
+        };
+    }
+    </script>
 </div>

@@ -26,6 +26,11 @@ return Application::configure(basePath: dirname(__DIR__))
                 ->name('oem.')
                 ->group(base_path('routes/oem.php'));
 
+            Route::middleware(['web', 'auth', 'customer'])
+                ->prefix('customer')
+                ->name('customer.')
+                ->group(base_path('routes/customer.php'));
+
             Route::middleware(['web', 'auth', 'driver.access'])
                 ->prefix('driver')
                 ->name('driver.')
@@ -43,6 +48,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'company' => \App\Http\Middleware\EnsureCompanyAccess::class,
             'permission' => \App\Http\Middleware\EnsurePermission::class,
             'oem' => \App\Http\Middleware\EnsureOemAccess::class,
+            'customer' => \App\Http\Middleware\EnsureCustomerAccess::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {

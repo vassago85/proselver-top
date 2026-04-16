@@ -5,7 +5,50 @@ use Livewire\Volt\Volt;
 
 Volt::route('dashboard', 'admin.dashboard')->name('dashboard');
 
-// Bookings
+// Phase 1 operational routes
+Volt::route('planning', 'admin.planning')->name('planning');
+Volt::route('orders', 'admin.orders.index')->name('orders.index');
+Volt::route('orders/{job}', 'admin.orders.show')->name('orders.show');
+Volt::route('dispatch', 'admin.dispatch')->name('dispatch');
+Volt::route('documents', 'admin.documents.index')->name('documents.index');
+Volt::route('customers', 'admin.customers.index')->name('customers.index');
+Volt::route('customers/{company}', 'admin.customers.show')->name('customers.show');
+
+// Impersonation
+Route::post('impersonate/{user}', function (\App\Models\User $user) {
+    if (!auth()->user()->isDeveloper()) {
+        abort(403);
+    }
+    session(['impersonating_from' => auth()->id()]);
+    \Illuminate\Support\Facades\Auth::loginUsingId($user->id);
+    return redirect()->route('dashboard');
+})->name('impersonate');
+
+Route::post('impersonate/stop', function () {
+    $originalId = session('impersonating_from');
+    if (!$originalId) {
+        return redirect()->route('admin.dashboard');
+    }
+    session()->forget('impersonating_from');
+    session()->forget('dev_role_override');
+    \Illuminate\Support\Facades\Auth::loginUsingId($originalId);
+    return redirect()->route('admin.dashboard');
+})->name('impersonate.stop');
+
+// Developer role switching
+Route::post('dev/role-switch', function (\Illuminate\Http\Request $request) {
+    if (!auth()->user()->isDeveloper()) {
+        abort(403);
+    }
+    if ($request->role_slug === 'reset') {
+        session()->forget('dev_role_override');
+    } else {
+        session(['dev_role_override' => $request->role_slug]);
+    }
+    return redirect()->back();
+})->name('dev.role-switch');
+
+// Legacy bookings (still accessible by URL)
 Volt::route('bookings', 'admin.bookings.index')->name('bookings.index');
 Volt::route('bookings/{job}', 'admin.bookings.show')->name('bookings.show');
 

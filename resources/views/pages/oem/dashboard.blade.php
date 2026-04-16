@@ -17,7 +17,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         $completedJobs = Job::where('company_id', $company->id)->where('status', Job::STATUS_INVOICED)->count();
 
         $recentJobs = Job::where('company_id', $company->id)
-            ->with(['driver:id,name', 'pickupLocation:id,company_name', 'deliveryLocation:id,company_name'])
+            ->with(['driver:id,name', 'pickupLocation:id,company_name', 'deliveryLocation:id,company_name', 'brand:id,name'])
             ->orderByDesc('created_at')
             ->limit(10)
             ->get();
@@ -59,6 +59,8 @@ new #[Layout('components.layouts.app')] class extends Component {
             <thead class="bg-gray-50">
                 <tr>
                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Job #</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Make / Model</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">VIN</th>
                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Route</th>
                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Driver</th>
                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
@@ -69,6 +71,8 @@ new #[Layout('components.layouts.app')] class extends Component {
                 @forelse($recentJobs as $job)
                 <tr class="hover:bg-gray-50 cursor-pointer" onclick="window.location='{{ route('oem.jobs.show', $job) }}'">
                     <td class="px-6 py-4 text-sm font-medium text-blue-600">{{ $job->job_number ?? '—' }}</td>
+                    <td class="px-6 py-4 text-sm text-gray-900">{{ $job->brand?->name }} {{ $job->model_name }}</td>
+                    <td class="px-6 py-4 text-sm font-mono text-gray-600 uppercase">{{ $job->vin ? strtoupper($job->vin) : '—' }}</td>
                     <td class="px-6 py-4 text-sm text-gray-500">
                         @if($job->isTransport()){{ $job->pickupLocation?->company_name }} &rarr; {{ $job->deliveryLocation?->company_name }}@else Yard Work @endif
                     </td>
@@ -77,7 +81,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                     <td class="px-6 py-4 text-sm text-gray-500">{{ $job->scheduled_date?->format('d M Y') }}</td>
                 </tr>
                 @empty
-                <tr><td colspan="5" class="px-6 py-12 text-center text-sm text-gray-500">No jobs yet. @if(auth()->user()->hasPermission('submit_booking'))<a href="{{ route('oem.bookings.create') }}" class="text-blue-600 hover:underline">Create your first booking</a>@endif</td></tr>
+                <tr><td colspan="7" class="px-6 py-12 text-center text-sm text-gray-500">No jobs yet. @if(auth()->user()->hasPermission('submit_booking'))<a href="{{ route('oem.bookings.create') }}" class="text-blue-600 hover:underline">Create your first booking</a>@endif</td></tr>
                 @endforelse
             </tbody>
         </table>

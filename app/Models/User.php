@@ -50,12 +50,32 @@ class User extends Authenticatable
     public function companies(): BelongsToMany
     {
         return $this->belongsToMany(Company::class, 'company_users')
+            ->withPivot('location_id')
             ->withTimestamps();
     }
 
     public function company(): ?Company
     {
         return $this->companies()->first();
+    }
+
+    public function assignedLocation(): ?Location
+    {
+        $company = $this->companies()->first();
+        if (!$company) {
+            return null;
+        }
+
+        $locationId = $company->pivot->location_id;
+
+        return $locationId ? Location::find($locationId) : null;
+    }
+
+    public function assignedLocationId(): ?int
+    {
+        $company = $this->companies()->first();
+
+        return $company?->pivot?->location_id;
     }
 
     public function driverProfile(): \Illuminate\Database\Eloquent\Relations\HasOne

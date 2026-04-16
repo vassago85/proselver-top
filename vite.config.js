@@ -18,6 +18,8 @@ export default defineConfig({
         },
         watch: {
             usePolling: true,
+            interval: 2000,
+            ignored: ['**/vendor/**', '**/node_modules/**', '**/storage/**', '**/.git/**'],
         },
     },
 });

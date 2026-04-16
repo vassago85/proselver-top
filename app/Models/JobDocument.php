@@ -21,6 +21,7 @@ class JobDocument extends Model
 
     const CATEGORY_PO = 'purchase_order';
     const CATEGORY_POD = 'proof_of_delivery';
+    const CATEGORY_COLLECTION_NOTE = 'collection_note';
     const CATEGORY_INVOICE = 'invoice';
     const CATEGORY_FUEL_SLIP = 'fuel_slip';
     const CATEGORY_PHOTO = 'photo';

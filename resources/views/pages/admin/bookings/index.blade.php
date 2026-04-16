@@ -17,11 +17,23 @@ new #[Layout('components.layouts.app')] class extends Component {
     #[Url]
     public string $search = '';
 
+    #[Url]
+    public string $sortBy = 'scheduled_date';
+
+    #[Url]
+    public string $sortDir = 'desc';
+
     public ?int $quickViewJobId = null;
     public ?int $previewPoId = null;
+    public ?int $approveJobId = null;
+    public ?int $approveDriverId = null;
 
     public function with(): array
     {
+        $allowedSorts = ['job_number', 'vin', 'scheduled_date', 'created_at'];
+        $col = in_array($this->sortBy, $allowedSorts) ? $this->sortBy : 'scheduled_date';
+        $dir = $this->sortDir === 'asc' ? 'asc' : 'desc';
+
         $query = Job::with([
                 'company:id,name',
                 'pickupLocation:id,company_name',
@@ -29,7 +41,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                 'purchaseOrders:id,job_id,po_number,po_amount,is_verified,original_filename,document_path',
                 'brand:id,name',
             ])
-            ->orderByDesc('created_at');
+            ->orderBy($col, $dir);
 
         if ($this->status) {
             $query->where('status', $this->status);
@@ -39,12 +51,24 @@ new #[Layout('components.layouts.app')] class extends Component {
             $query->where(function ($q) {
                 $q->where('job_number', 'ilike', "%{$this->search}%")
                     ->orWhere('vin', 'ilike', "%{$this->search}%")
+                    ->orWhere('model_name', 'ilike', "%{$this->search}%")
+                    ->orWhereHas('brand', fn($q) => $q->where('name', 'ilike', "%{$this->search}%"))
                     ->orWhereHas('purchaseOrders', fn($q) => $q->where('po_number', 'ilike', "%{$this->search}%"))
-                    ->orWhereHas('company', fn($q) => $q->where('name', 'ilike', "%{$this->search}%"));
+                    ->orWhereHas('company', fn($q) => $q->where('name', 'ilike', "%{$this->search}%"))
+                    ->orWhereHas('pickupLocation', fn($q) => $q->where('company_name', 'ilike', "%{$this->search}%"))
+                    ->orWhereHas('deliveryLocation', fn($q) => $q->where('company_name', 'ilike', "%{$this->search}%"));
             });
         }
 
-        return ['jobs' => $query->paginate(25)];
+        $drivers = \App\Models\User::whereHas('roles', fn($q) => $q->where('slug', 'driver'))
+            ->where('is_active', true)
+            ->orderBy('name')
+            ->get(['id', 'name']);
+
+        return [
+            'jobs' => $query->paginate(25),
+            'drivers' => $drivers,
+        ];
     }
 
     public function updatedSearch(): void
@@ -54,6 +78,17 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     public function updatedStatus(): void
     {
+        $this->resetPage();
+    }
+
+    public function sort(string $column): void
+    {
+        if ($this->sortBy === $column) {
+            $this->sortDir = $this->sortDir === 'asc' ? 'desc' : 'asc';
+        } else {
+            $this->sortBy = $column;
+            $this->sortDir = 'asc';
+        }
         $this->resetPage();
     }
 
@@ -96,17 +131,43 @@ new #[Layout('components.layouts.app')] class extends Component {
         session()->flash('success', "Job {$job->job_number} verified.");
     }
 
-    public function quickApprove(int $jobId): void
+    public function openApproveModal(int $jobId): void
     {
-        $job = Job::findOrFail($jobId);
+        $this->approveJobId = $jobId;
+        $this->approveDriverId = null;
+    }
+
+    public function closeApproveModal(): void
+    {
+        $this->approveJobId = null;
+        $this->approveDriverId = null;
+    }
+
+    public function approveAndAssign(): void
+    {
+        $job = Job::findOrFail($this->approveJobId);
         if ($job->status !== Job::STATUS_VERIFIED || !auth()->user()->canApproveBookings()) {
             session()->flash('error', 'Cannot approve this booking.');
+            $this->closeApproveModal();
             return;
         }
+
         $job->transitionTo(Job::STATUS_APPROVED);
         AuditService::log('approved', 'job', $job->id);
+
+        if ($this->approveDriverId) {
+            $this->validate(['approveDriverId' => 'required|exists:users,id']);
+            $driver = \App\Models\User::findOrFail($this->approveDriverId);
+            $job->driver_user_id = $driver->id;
+            $job->transitionTo(Job::STATUS_ASSIGNED);
+            AuditService::log('driver_assigned', 'job', $job->id, null, ['driver_id' => $driver->id, 'driver_name' => $driver->name]);
+            session()->flash('success', "Job {$job->job_number} approved and driver {$driver->name} assigned.");
+        } else {
+            session()->flash('success', "Job {$job->job_number} approved.");
+        }
+
         $this->quickViewJobId = null;
-        session()->flash('success', "Job {$job->job_number} approved.");
+        $this->closeApproveModal();
     }
 
     public function quickReject(int $jobId): void
@@ -138,7 +199,7 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     <div class="mb-6 flex flex-col sm:flex-row gap-4">
         <div class="flex-1">
-            <input wire:model.live.debounce.300ms="search" type="text" placeholder="Search by job #, VIN, PO, or company..."
+            <input wire:model.live.debounce.300ms="search" type="text" placeholder="Search by job #, VIN, make/model, PO, company, or route..."
                 class="w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm focus:border-blue-500 focus:ring-blue-500">
         </div>
         <select wire:model.live="status" class="rounded-lg border border-gray-300 px-4 py-2.5 text-sm focus:border-blue-500 focus:ring-blue-500">
@@ -160,13 +221,32 @@ new #[Layout('components.layouts.app')] class extends Component {
         <table class="min-w-full divide-y divide-gray-200">
             <thead class="bg-gray-50">
                 <tr>
-                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Job #</th>
+                    <th wire:click="sort('job_number')" class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase cursor-pointer hover:text-gray-700 select-none">
+                        <span class="inline-flex items-center gap-1">Job #
+                            @if($sortBy === 'job_number')
+                                <svg class="h-3 w-3 {{ $sortDir === 'asc' ? '' : 'rotate-180' }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m18 15-6-6-6 6"/></svg>
+                            @endif
+                        </span>
+                    </th>
                     <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Company</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Make / Model</th>
+                    <th wire:click="sort('vin')" class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase cursor-pointer hover:text-gray-700 select-none">
+                        <span class="inline-flex items-center gap-1">VIN
+                            @if($sortBy === 'vin')
+                                <svg class="h-3 w-3 {{ $sortDir === 'asc' ? '' : 'rotate-180' }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m18 15-6-6-6 6"/></svg>
+                            @endif
+                        </span>
+                    </th>
                     <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Route</th>
-                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">VIN</th>
                     <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">PO</th>
                     <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
-                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
+                    <th wire:click="sort('scheduled_date')" class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase cursor-pointer hover:text-gray-700 select-none">
+                        <span class="inline-flex items-center gap-1">Date
+                            @if($sortBy === 'scheduled_date')
+                                <svg class="h-3 w-3 {{ $sortDir === 'asc' ? '' : 'rotate-180' }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m18 15-6-6-6 6"/></svg>
+                            @endif
+                        </span>
+                    </th>
                     <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Actions</th>
                 </tr>
             </thead>
@@ -177,6 +257,8 @@ new #[Layout('components.layouts.app')] class extends Component {
                         <a href="{{ route('admin.bookings.show', $job) }}" class="text-sm font-medium text-blue-600 hover:text-blue-800">{{ $job->job_number ?? '—' }}</a>
                     </td>
                     <td class="px-4 py-3 text-sm text-gray-900">{{ $job->company?->name }}</td>
+                    <td class="px-4 py-3 text-sm text-gray-900">{{ $job->brand?->name }} {{ $job->model_name }}</td>
+                    <td class="px-4 py-3 text-sm font-mono text-gray-600 uppercase">{{ $job->vin ? strtoupper($job->vin) : '—' }}</td>
                     <td class="px-4 py-3 text-sm text-gray-500">
                         @if($job->isTransport())
                             {{ $job->pickupLocation?->company_name }} &rarr; {{ $job->deliveryLocation?->company_name }}
@@ -184,7 +266,6 @@ new #[Layout('components.layouts.app')] class extends Component {
                             Yard Work
                         @endif
                     </td>
-                    <td class="px-4 py-3 text-sm font-mono text-gray-600 uppercase">{{ $job->vin ? strtoupper($job->vin) : '—' }}</td>
                     <td class="px-4 py-3 text-sm">
                         @if($job->purchaseOrders->isNotEmpty())
                             <span class="text-gray-900">{{ $job->purchaseOrders->first()->po_number }}</span>
@@ -202,18 +283,18 @@ new #[Layout('components.layouts.app')] class extends Component {
                         <div class="flex items-center justify-center gap-1">
                             @if($job->purchaseOrders->isNotEmpty() && $job->purchaseOrders->first()->document_path)
                                 <button wire:click="quickView({{ $job->id }})" class="rounded-md bg-blue-50 px-2 py-1 text-xs font-medium text-blue-700 hover:bg-blue-100" title="Quick View PO & Actions">
-                                    <svg class="h-4 w-4 inline" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" /><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                                    <svg class="h-4 w-4 inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
                                     PO
                                 </button>
                             @endif
                             @if($job->status === 'pending_verification' && auth()->user()->canApproveBookings())
                                 <button wire:click="quickVerify({{ $job->id }})" wire:confirm="Verify this booking?" class="rounded-md bg-green-50 px-2 py-1 text-xs font-medium text-green-700 hover:bg-green-100" title="Verify">
-                                    <svg class="h-4 w-4 inline" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                                    <svg class="h-4 w-4 inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="m9 11 3 3L22 4"/></svg>
                                 </button>
                             @endif
                             @if($job->status === 'verified' && auth()->user()->canApproveBookings())
-                                <button wire:click="quickApprove({{ $job->id }})" wire:confirm="Approve this booking?" class="rounded-md bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-100" title="Approve">
-                                    <svg class="h-4 w-4 inline" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" /></svg>
+                                <button wire:click="openApproveModal({{ $job->id }})" class="rounded-md bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-100" title="Approve & Assign Driver">
+                                    <svg class="h-4 w-4 inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
                                 </button>
                             @endif
                         </div>
@@ -221,7 +302,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                 </tr>
                 @empty
                 <tr>
-                    <td colspan="8" class="px-6 py-12 text-center text-sm text-gray-500">No bookings found.</td>
+                    <td colspan="9" class="px-6 py-12 text-center text-sm text-gray-500">No bookings found.</td>
                 </tr>
                 @endforelse
             </tbody>
@@ -249,7 +330,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <div class="flex items-center gap-2">
                     <a href="{{ route('admin.bookings.show', $qvJob) }}" class="rounded-md bg-gray-100 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-200">Full Details</a>
                     <button wire:click="closeQuickView" class="rounded-full p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-100">
-                        <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+                        <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
                     </button>
                 </div>
             </div>
@@ -321,7 +402,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                                 Reject
                             </button>
                         @elseif($qvJob->status === 'verified')
-                            <button wire:click="quickApprove({{ $qvJob->id }})" wire:confirm="Approve this booking?" class="w-full rounded-lg bg-green-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-green-500 transition-colors">
+                            <button wire:click="openApproveModal({{ $qvJob->id }})" class="w-full rounded-lg bg-green-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-green-500 transition-colors">
                                 Approve Booking
                             </button>
                             <button wire:click="quickReject({{ $qvJob->id }})" wire:confirm="Reject this booking?" class="w-full rounded-lg bg-red-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-red-500 transition-colors">
@@ -333,6 +414,53 @@ new #[Layout('components.layouts.app')] class extends Component {
                     </div>
                 </div>
                 @endif
+            </div>
+        </div>
+    </div>
+    @endif
+    @endif
+
+    {{-- Approve & Assign Driver Modal --}}
+    @if($approveJobId)
+    @php $approveJob = $jobs->firstWhere('id', $approveJobId) ?? \App\Models\Job::with('company')->find($approveJobId); @endphp
+    @if($approveJob)
+    <div class="fixed inset-0 z-[60] flex items-center justify-center bg-black/60" wire:click.self="closeApproveModal">
+        <div class="relative w-full max-w-md mx-4 bg-white rounded-2xl shadow-2xl overflow-hidden">
+            <div class="border-b border-gray-200 px-6 py-4">
+                <h3 class="text-lg font-semibold text-gray-900">Approve Booking</h3>
+                <p class="text-sm text-gray-500 mt-0.5">{{ $approveJob->job_number }} &middot; {{ $approveJob->company?->name }}</p>
+            </div>
+
+            <div class="px-6 py-5 space-y-5">
+                <div class="rounded-lg bg-green-50 border border-green-200 p-4">
+                    <div class="flex items-start gap-3">
+                        <svg class="h-5 w-5 text-green-600 mt-0.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="m9 11 3 3L22 4"/></svg>
+                        <div class="text-sm">
+                            <p class="font-medium text-green-800">PO Verified</p>
+                            <p class="text-green-700 mt-0.5">This booking has been verified and is ready for approval.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div>
+                    <label for="indexApproveDriverSelect" class="block text-sm font-medium text-gray-700 mb-1.5">Assign Driver <span class="text-gray-400 font-normal">(optional)</span></label>
+                    <select wire:model="approveDriverId" id="indexApproveDriverSelect" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-purple-500 focus:ring-purple-500">
+                        <option value="">Skip — assign later</option>
+                        @foreach($drivers as $d)
+                            <option value="{{ $d->id }}">{{ $d->name }}</option>
+                        @endforeach
+                    </select>
+                    <p class="mt-1.5 text-xs text-gray-500">Selecting a driver will also mark the booking as assigned.</p>
+                </div>
+            </div>
+
+            <div class="border-t border-gray-200 px-6 py-4 flex items-center justify-end gap-3 bg-gray-50">
+                <button wire:click="closeApproveModal" class="rounded-lg px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-100 transition-colors">
+                    Cancel
+                </button>
+                <button wire:click="approveAndAssign" class="rounded-lg bg-green-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-green-500 transition-colors">
+                    Approve{{ $approveDriverId ? ' & Assign' : '' }}
+                </button>
             </div>
         </div>
     </div>
@@ -359,7 +487,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <div class="flex items-center gap-3">
                     <a href="{{ route('po.preview', $previewPo->id) }}" target="_blank" class="rounded-md bg-gray-100 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-200">Open in New Tab</a>
                     <button wire:click="closePreview" class="rounded-full p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-100">
-                        <svg class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+                        <svg class="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
                     </button>
                 </div>
             </div>

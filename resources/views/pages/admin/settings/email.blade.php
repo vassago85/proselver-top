@@ -62,9 +62,9 @@ new #[Layout('components.layouts.app')] class extends Component {
         $this->validate(['testEmailAddress' => 'required|email']);
 
         try {
-            Mail::raw('This is a test email from Proselver TOP.', function ($message) {
+            Mail::raw('This is a test email from Proselver Trident.', function ($message) {
                 $message->to($this->testEmailAddress)
-                    ->subject('Test Email - Proselver TOP');
+                    ->subject('Test Email - Proselver Trident');
             });
             session()->flash('success', "Test email sent to {$this->testEmailAddress}.");
         } catch (\Throwable $e) {
@@ -101,7 +101,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">From Name *</label>
-                    <input wire:model="fromName" type="text" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:ring-blue-500" placeholder="Proselver TOP">
+                    <input wire:model="fromName" type="text" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:ring-blue-500" placeholder="Proselver Trident">
                     @error('fromName')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
                 </div>
                 <div>

@@ -48,10 +48,19 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     public function mount(Job $job): void
     {
-        $company = auth()->user()->company();
+        $user = auth()->user();
+        $company = $user->company();
         if (!$company || $job->company_id !== $company->id) {
             abort(403);
         }
+
+        $canView = $user->hasPermission('view_all_bookings')
+            || ($user->hasPermission('view_own_bookings') && $job->created_by_user_id === $user->id);
+
+        if (!$canView) {
+            abort(403);
+        }
+
         $this->job = $job->load(['driver:id,name,phone', 'pickupLocation', 'deliveryLocation', 'yardLocation', 'events', 'documents', 'createdBy:id,name', 'brand:id,name', 'purchaseOrders.uploadedBy:id,name']);
     }
 
@@ -272,14 +281,21 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     public function with(): array
     {
+        $user = auth()->user();
+        $isOwner = $this->job->created_by_user_id === $user->id;
+        $canEdit = $user->hasPermission('edit_all_bookings')
+            || ($user->hasPermission('edit_own_bookings') && $isOwner);
+
         return [
             'brands' => Brand::where('is_active', true)->orderBy('name')->get(['id', 'name']),
-            'canReassign' => $this->job->isTransport() && in_array($this->job->status, [
+            'canReassign' => $canEdit && $this->job->isTransport() && in_array($this->job->status, [
                 Job::STATUS_PENDING_VERIFICATION,
                 Job::STATUS_VERIFIED,
                 Job::STATUS_APPROVED,
                 Job::STATUS_ASSIGNED,
             ]),
+            'canEdit' => $canEdit,
+            'canUploadDocs' => $user->hasPermission('upload_documents'),
             'isPastCutoff' => CutoffService::isPastCutoff($this->job),
             'changeRequests' => $this->job->changeRequests()->latest()->get(),
         ];
@@ -347,10 +363,12 @@ new #[Layout('components.layouts.app')] class extends Component {
             <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
                 <div class="flex items-center justify-between mb-4">
                     <h3 class="text-lg font-semibold text-gray-900">Collection Schedule</h3>
-                    @if(!$isPastCutoff && !$showEditCollection)
-                        <button wire:click="$set('showEditCollection', true)" class="text-sm font-medium text-blue-600 hover:text-blue-700">Edit</button>
-                    @elseif($isPastCutoff && !$showChangeRequestForm)
-                        <button wire:click="$set('showChangeRequestForm', true)" class="text-sm font-medium text-amber-600 hover:text-amber-700">Request Change</button>
+                    @if($canEdit)
+                        @if(!$isPastCutoff && !$showEditCollection)
+                            <button wire:click="$set('showEditCollection', true)" class="text-sm font-medium text-blue-600 hover:text-blue-700">Edit</button>
+                        @elseif($isPastCutoff && !$showChangeRequestForm)
+                            <button wire:click="$set('showChangeRequestForm', true)" class="text-sm font-medium text-amber-600 hover:text-amber-700">Request Change</button>
+                        @endif
                     @endif
                 </div>
 
@@ -505,7 +523,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
                 <div class="flex items-center justify-between mb-4">
                     <h3 class="text-lg font-semibold text-gray-900">Purchase Orders</h3>
-                    @if(!$showPoForm)
+                    @if(!$showPoForm && $canUploadDocs)
                         <button wire:click="$set('showPoForm', true)" class="text-sm font-medium text-blue-600 hover:text-blue-700">+ Add PO</button>
                     @endif
                 </div>
@@ -539,7 +557,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                                         @if($po->document_path)
                                             <button wire:click="previewPo({{ $po->id }})" class="text-blue-600 hover:text-blue-800 font-medium">View</button>
                                         @endif
-                                        @if(!$po->is_verified)
+                                        @if(!$po->is_verified && $canUploadDocs)
                                             <button wire:click="startReplacePo({{ $po->id }})" class="text-amber-600 hover:text-amber-800 font-medium">Replace</button>
                                             <button wire:click="deletePo({{ $po->id }})" wire:confirm="Remove this PO? This cannot be undone." class="text-red-600 hover:text-red-800 font-medium">Remove</button>
                                         @endif
@@ -665,7 +683,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <div class="flex items-center gap-3">
                     <a href="{{ route('po.preview', $previewPo->id) }}" target="_blank" class="rounded-md bg-gray-100 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-200">Open in New Tab</a>
                     <button wire:click="closePreview" class="rounded-full p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-100">
-                        <svg class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+                        <svg class="h-6 w-6" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" fill="none"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
                     </button>
                 </div>
             </div>

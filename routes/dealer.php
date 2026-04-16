@@ -12,5 +12,6 @@ Volt::route('jobs/{job}', 'dealer.jobs.show')->name('jobs.show');
 Volt::route('invoices', 'dealer.invoices.index')->name('invoices.index');
 Volt::route('performance', 'dealer.performance')->name('performance');
 Volt::route('team', 'dealer.team.index')->name('team.index');
+Volt::route('settings/roles', 'dealer.settings.roles')->name('settings.roles');
 Volt::route('locations', 'dealer.locations.index')->name('locations.index');
 Volt::route('help', 'dealer.help.index')->name('help');

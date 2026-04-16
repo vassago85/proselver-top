@@ -16,6 +16,7 @@ new #[Layout('components.layouts.app')] class extends Component {
     public string $rejectionReason = '';
     public ?int $assignDriverId = null;
     public ?int $previewPoId = null;
+    public bool $showApproveModal = false;
 
     public function mount(Job $job): void
     {
@@ -44,12 +45,36 @@ new #[Layout('components.layouts.app')] class extends Component {
         session()->flash('success', 'Booking verified successfully.');
     }
 
-    public function approve(): void
+    public function openApproveModal(): void
+    {
+        $this->assignDriverId = null;
+        $this->showApproveModal = true;
+    }
+
+    public function closeApproveModal(): void
+    {
+        $this->showApproveModal = false;
+    }
+
+    public function approveAndAssign(): void
     {
         $this->authorize('approve', $this->job);
+
         $this->job->transitionTo(Job::STATUS_APPROVED);
         AuditService::log('approved', 'job', $this->job->id);
-        session()->flash('success', 'Booking approved.');
+
+        if ($this->assignDriverId) {
+            $this->validate(['assignDriverId' => 'required|exists:users,id']);
+            $driver = User::findOrFail($this->assignDriverId);
+            $this->job->driver_user_id = $driver->id;
+            $this->job->transitionTo(Job::STATUS_ASSIGNED);
+            AuditService::log('driver_assigned', 'job', $this->job->id, null, ['driver_id' => $driver->id, 'driver_name' => $driver->name]);
+            session()->flash('success', "Booking approved and driver {$driver->name} assigned.");
+        } else {
+            session()->flash('success', 'Booking approved.');
+        }
+
+        $this->showApproveModal = false;
     }
 
     public function reject(): void
@@ -237,7 +262,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                     @endif
 
                     @if($job->status === 'verified' && auth()->user()->canApproveBookings())
-                        <button wire:click="approve" wire:confirm="Approve this booking?" class="w-full rounded-lg bg-green-600 px-4 py-3 text-sm font-semibold text-white hover:bg-green-500 transition-colors">
+                        <button wire:click="openApproveModal" class="w-full rounded-lg bg-green-600 px-4 py-3 text-sm font-semibold text-white hover:bg-green-500 transition-colors">
                             Approve Booking
                         </button>
                     @endif
@@ -290,6 +315,50 @@ new #[Layout('components.layouts.app')] class extends Component {
         </div>
     </div>
 
+    {{-- Approve & Assign Driver Modal --}}
+    @if($showApproveModal)
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60" wire:click.self="closeApproveModal">
+        <div class="relative w-full max-w-md mx-4 bg-white rounded-2xl shadow-2xl overflow-hidden" x-data x-trap.noscroll="true">
+            <div class="border-b border-gray-200 px-6 py-4">
+                <h3 class="text-lg font-semibold text-gray-900">Approve Booking</h3>
+                <p class="text-sm text-gray-500 mt-0.5">{{ $job->job_number }} &middot; {{ $job->company?->name }}</p>
+            </div>
+
+            <div class="px-6 py-5 space-y-5">
+                <div class="rounded-lg bg-green-50 border border-green-200 p-4">
+                    <div class="flex items-start gap-3">
+                        <svg class="h-5 w-5 text-green-600 mt-0.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="m9 11 3 3L22 4"/></svg>
+                        <div class="text-sm">
+                            <p class="font-medium text-green-800">PO Verified</p>
+                            <p class="text-green-700 mt-0.5">This booking has been verified and is ready for approval.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div>
+                    <label for="approveDriverSelect" class="block text-sm font-medium text-gray-700 mb-1.5">Assign Driver <span class="text-gray-400 font-normal">(optional)</span></label>
+                    <select wire:model="assignDriverId" id="approveDriverSelect" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-purple-500 focus:ring-purple-500">
+                        <option value="">Skip — assign later</option>
+                        @foreach($drivers as $d)
+                            <option value="{{ $d->id }}">{{ $d->name }}</option>
+                        @endforeach
+                    </select>
+                    <p class="mt-1.5 text-xs text-gray-500">Selecting a driver will also mark the booking as assigned.</p>
+                </div>
+            </div>
+
+            <div class="border-t border-gray-200 px-6 py-4 flex items-center justify-end gap-3 bg-gray-50">
+                <button wire:click="closeApproveModal" class="rounded-lg px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-100 transition-colors">
+                    Cancel
+                </button>
+                <button wire:click="approveAndAssign" class="rounded-lg bg-green-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-green-500 transition-colors">
+                    Approve{{ $assignDriverId ? ' & Assign' : '' }}
+                </button>
+            </div>
+        </div>
+    </div>
+    @endif
+
     {{-- PO Document Preview Modal --}}
     @if($previewPoId)
     @php $previewPo = $job->purchaseOrders->firstWhere('id', $previewPoId); @endphp
@@ -304,7 +373,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <div class="flex items-center gap-3">
                     <a href="{{ route('po.preview', $previewPo->id) }}" target="_blank" class="rounded-md bg-gray-100 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-200">Open in New Tab</a>
                     <button wire:click="closePreview" class="rounded-full p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-100">
-                        <svg class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+                        <svg class="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
                     </button>
                 </div>
             </div>

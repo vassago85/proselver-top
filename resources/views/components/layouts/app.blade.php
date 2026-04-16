@@ -11,7 +11,18 @@
     @livewireStyles
 </head>
 <body class="h-full font-sans antialiased">
-    <div class="min-h-full" x-data="{ sidebarOpen: false }">
+    @if(session('impersonating_from'))
+    <div class="fixed top-0 left-0 right-0 z-[100] bg-amber-500 text-white text-center py-1.5 text-sm font-medium shadow-md">
+        Impersonating <strong>{{ auth()->user()->name }}</strong>
+        ({{ auth()->user()->roles->pluck('name')->join(', ') }})
+        <form method="POST" action="{{ route('admin.impersonate.stop') }}" class="inline ml-4">
+            @csrf
+            <button type="submit" class="underline font-semibold hover:text-amber-100">Return to your account</button>
+        </form>
+    </div>
+    @endif
+
+    <div class="min-h-full {{ session('impersonating_from') ? 'pt-9' : '' }}" x-data="{ sidebarOpen: false }">
         {{-- Mobile sidebar overlay --}}
         <div x-show="sidebarOpen" x-transition:enter="transition-opacity ease-linear duration-300" x-transition:enter-start="opacity-0" x-transition:enter-end="opacity-100" x-transition:leave="transition-opacity ease-linear duration-300" x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0" class="fixed inset-0 z-40 bg-gray-600/75 lg:hidden" @click="sidebarOpen = false"></div>
 
@@ -30,8 +41,8 @@
             {{-- Top bar --}}
             <div class="sticky top-0 z-30 flex h-16 shrink-0 items-center gap-x-4 border-b border-gray-200 bg-white px-4 shadow-sm sm:gap-x-6 sm:px-6 lg:px-8">
                 <button type="button" class="-m-2.5 p-2.5 text-gray-700 lg:hidden" @click="sidebarOpen = true">
-                    <svg class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
+                    <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="18" y2="18"/>
                     </svg>
                 </button>
 
@@ -67,6 +78,27 @@
         </div>
     </div>
     @livewireScripts
+
+    @if(auth()->user()?->roles->contains('slug', 'developer') && !session('impersonating_from'))
+    <div class="fixed bottom-0 left-0 right-0 z-[90] bg-gray-900 text-white text-sm px-4 py-2 flex items-center gap-4 shadow-lg" x-data>
+        <span class="font-semibold text-gray-400">DEV</span>
+        <form method="POST" action="{{ route('admin.dev.role-switch') }}" class="flex items-center gap-2">
+            @csrf
+            <label class="text-gray-400">View as:</label>
+            <select name="role_slug" onchange="this.form.submit()" class="bg-gray-800 border-gray-700 text-white text-xs rounded px-2 py-1">
+                <option value="reset" {{ !session('dev_role_override') ? 'selected' : '' }}>Developer (default)</option>
+                @foreach(\App\Models\Role::orderBy('tier')->orderBy('name')->get() as $r)
+                    <option value="{{ $r->slug }}" {{ session('dev_role_override') === $r->slug ? 'selected' : '' }}>
+                        {{ $r->name }} ({{ $r->tier }})
+                    </option>
+                @endforeach
+            </select>
+        </form>
+        @if(session('dev_role_override'))
+            <span class="text-amber-400 font-semibold">Active: {{ session('dev_role_override') }}</span>
+        @endif
+    </div>
+    @endif
 
     @php
         $__gmapsKey = \App\Models\SystemSetting::get('google_maps_api_key', config('services.google_maps.api_key'));

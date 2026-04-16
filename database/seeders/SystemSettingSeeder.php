@@ -18,6 +18,11 @@ class SystemSettingSeeder extends Seeder
             ['key' => 'min_monthly_jobs_for_discount', 'value' => '10', 'type' => 'integer', 'description' => 'Minimum eligible jobs per month for performance credit'],
             ['key' => 'min_accuracy_for_credit', 'value' => '90', 'type' => 'float', 'description' => 'Minimum accuracy percentage for performance credit'],
             ['key' => 'performance_credit_percent', 'value' => '3', 'type' => 'float', 'description' => 'Performance credit note percentage'],
+
+            // Driver expiry notification settings
+            ['key' => 'driver_license_expiry_warn_months', 'value' => '3', 'type' => 'integer', 'description' => 'Months before license expiry to start warnings'],
+            ['key' => 'driver_pdp_expiry_warn_months', 'value' => '3', 'type' => 'integer', 'description' => 'Months before PDP expiry to start warnings'],
+            ['key' => 'driver_expiry_notify_roles', 'value' => 'operations_controller,super_admin', 'type' => 'string', 'description' => 'Role slugs to notify on driver document expiries (comma-separated)'],
         ];
 
         foreach ($settings as $setting) {

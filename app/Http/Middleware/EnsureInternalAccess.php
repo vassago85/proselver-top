@@ -10,7 +10,13 @@ class EnsureInternalAccess
 {
     public function handle(Request $request, Closure $next): Response
     {
-        if (!$request->user()?->isInternal()) {
+        $user = $request->user();
+
+        if ($user?->isDeveloper()) {
+            return $next($request);
+        }
+
+        if (!$user?->isInternal()) {
             abort(403, 'Internal access required.');
         }
 

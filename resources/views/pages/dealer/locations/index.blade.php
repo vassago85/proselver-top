@@ -221,7 +221,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                     <input x-ref="addressInput" wire:model="addAddress" type="text" autocomplete="off" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500" placeholder="Start typing to search...">
                     @error('addAddress') <p class="mt-1 text-xs text-red-600">{{ $message }}</p> @enderror
                     <button type="button" wire:click="lookupAddAddress" class="mt-1 inline-flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 font-medium">
-                        <svg class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" /></svg>
+                        <svg class="h-3 w-3" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" fill="none"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
                         <span wire:loading.remove wire:target="lookupAddAddress">Lookup Address</span>
                         <span wire:loading wire:target="lookupAddAddress">Looking up...</span>
                     </button>
@@ -299,7 +299,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                                         <input x-ref="addressInput" wire:model="editAddress" type="text" autocomplete="off" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500" placeholder="Start typing to search...">
                                         @error('editAddress') <p class="mt-1 text-xs text-red-600">{{ $message }}</p> @enderror
                                         <button type="button" wire:click="lookupEditAddress" class="mt-1 inline-flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 font-medium">
-                                            <svg class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" /></svg>
+                                            <svg class="h-3 w-3" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" fill="none"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
                                             <span wire:loading.remove wire:target="lookupEditAddress">Lookup Address</span>
                                             <span wire:loading wire:target="lookupEditAddress">Looking up...</span>
                                         </button>

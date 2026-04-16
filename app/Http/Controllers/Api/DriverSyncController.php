@@ -16,7 +16,11 @@ class DriverSyncController extends Controller
     public function jobs(Request $request): JsonResponse
     {
         $jobs = Job::where('driver_user_id', $request->user()->id)
-            ->whereIn('status', [Job::STATUS_ASSIGNED, Job::STATUS_IN_PROGRESS])
+            ->whereIn('status', [
+                Job::STATUS_ASSIGNED, Job::STATUS_IN_PROGRESS,
+                Job::STATUS_DRIVER_ASSIGNED, Job::STATUS_READY_FOR_COLLECTION,
+                Job::STATUS_COLLECTED, Job::STATUS_IN_TRANSIT,
+            ])
             ->with(['company:id,name', 'pickupLocation:id,company_name,address', 'deliveryLocation:id,company_name,address', 'yardLocation:id,company_name,address', 'brand:id,name'])
             ->get();
 
@@ -59,6 +63,7 @@ class DriverSyncController extends Controller
                 'client_uuid' => $eventData['client_uuid'],
             ]);
 
+            // Legacy status transitions
             if ($eventData['event_type'] === JobEvent::TYPE_ARRIVED_PICKUP && $job->status === Job::STATUS_ASSIGNED) {
                 $job->transitionTo(Job::STATUS_IN_PROGRESS);
             }
@@ -69,6 +74,23 @@ class DriverSyncController extends Controller
             }
 
             if ($eventData['event_type'] === JobEvent::TYPE_JOB_COMPLETED && $job->status === Job::STATUS_IN_PROGRESS) {
+                $job->transitionTo(Job::STATUS_COMPLETED);
+            }
+
+            // Phase 1 status transitions
+            if ($eventData['event_type'] === JobEvent::TYPE_ARRIVED_PICKUP && $job->status === Job::STATUS_READY_FOR_COLLECTION) {
+                $job->transitionTo(Job::STATUS_COLLECTED);
+            }
+
+            if ($eventData['event_type'] === JobEvent::TYPE_DEPARTED_PICKUP && $job->status === Job::STATUS_COLLECTED) {
+                $job->transitionTo(Job::STATUS_IN_TRANSIT);
+            }
+
+            if ($eventData['event_type'] === JobEvent::TYPE_ARRIVED_DELIVERY && $job->status === Job::STATUS_IN_TRANSIT) {
+                $job->transitionTo(Job::STATUS_DELIVERED);
+            }
+
+            if ($eventData['event_type'] === JobEvent::TYPE_JOB_COMPLETED && $job->status === Job::STATUS_DELIVERED) {
                 $job->transitionTo(Job::STATUS_COMPLETED);
             }
 

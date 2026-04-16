@@ -9,10 +9,19 @@ class DriverProfile extends Model
 {
     protected $fillable = [
         'user_id',
+        'id_number',
+        'cellphone',
+        'base_location',
         'license_code',
         'license_number',
         'license_expiry',
         'prdp_expiry',
+        'license_document_disk',
+        'license_document_path',
+        'license_document_filename',
+        'pdp_document_disk',
+        'pdp_document_path',
+        'pdp_document_filename',
         'notes',
     ];
 

@@ -9,6 +9,11 @@
         'yellow' => 'bg-yellow-100 text-yellow-700',
         'orange' => 'bg-orange-100 text-orange-700',
         'purple' => 'bg-purple-100 text-purple-700',
+        'amber' => 'bg-amber-100 text-amber-700',
+        'indigo' => 'bg-indigo-100 text-indigo-700',
+        'cyan' => 'bg-cyan-100 text-cyan-700',
+        'teal' => 'bg-teal-100 text-teal-700',
+        'emerald' => 'bg-emerald-100 text-emerald-700',
     ];
 @endphp
 

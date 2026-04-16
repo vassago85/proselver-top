@@ -6,7 +6,7 @@ services:
     container_name: proselver-app
     restart: unless-stopped
     environment:
-      APP_NAME: "Proselver TOP"
+      APP_NAME: "Proselver Trident"
       APP_ENV: local
       APP_DEBUG: "true"
       APP_URL: http://localhost:8090

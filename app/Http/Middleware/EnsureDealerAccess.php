@@ -10,7 +10,13 @@ class EnsureDealerAccess
 {
     public function handle(Request $request, Closure $next): Response
     {
-        if (!$request->user()?->isDealer()) {
+        $user = $request->user();
+
+        if ($user?->isDeveloper()) {
+            return $next($request);
+        }
+
+        if (!$user?->isDealer()) {
             abort(403, 'Dealer access required.');
         }
 

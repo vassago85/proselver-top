@@ -23,8 +23,8 @@
     <table style="width: 100%; margin-bottom: 30px;">
         <tr>
             <td style="border: none; padding: 0;">
-                <div class="company-name">Proselver TOP</div>
-                <div style="color: #666; margin-top: 5px;">Transport Operations Platform</div>
+                <div class="company-name">Proselver Trident</div>
+                <div style="color: #666; margin-top: 5px;">Booking, Dispatching & Tracking</div>
             </td>
             <td style="border: none; padding: 0; text-align: right;">
                 <div class="invoice-title">INVOICE</div>
@@ -111,7 +111,7 @@
     <div style="clear: both;"></div>
 
     <div class="footer">
-        <p>Proselver TOP &mdash; Generated {{ now()->format('d M Y H:i') }}</p>
+        <p>Proselver Trident &mdash; Generated {{ now()->format('d M Y H:i') }}</p>
     </div>
 </body>
 </html>

@@ -30,7 +30,7 @@ chmod -R 775 storage bootstrap/cache
 
 echo ""
 echo "============================================"
-echo "  Proselver TOP is starting up!"
+echo "  Proselver Trident is starting up!"
 echo "  App:  http://localhost:8090"
 echo "  Vite: http://localhost:5173"
 echo "============================================"
