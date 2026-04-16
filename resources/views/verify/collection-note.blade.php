@@ -11,7 +11,7 @@
     <header class="bg-white shadow-sm">
         <div class="max-w-2xl mx-auto px-4 py-4">
             <h1 class="text-2xl font-bold text-blue-800">ProSelverTech</h1>
-            <p class="text-sm text-gray-500">Booking, Dispatching & Tracking</p>
+            <p class="text-sm text-gray-500">Control • Dispatch • Deliver</p>
         </div>
     </header>
 

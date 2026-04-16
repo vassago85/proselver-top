@@ -1,4 +1,4 @@
-# Proselver Trident — Booking, Dispatching & Tracking
+# Proselver Trident — Control • Dispatch • Deliver
 
 End-to-end booking, scheduling, execution & governance system for vehicle transport operations.
 

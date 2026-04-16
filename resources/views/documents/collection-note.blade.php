@@ -25,7 +25,7 @@
         <tr>
             <td style="border: none; padding: 0;">
                 <div class="company-name">ProSelverTech</div>
-                <div style="color: #666; margin-top: 5px;">Booking, Dispatching & Tracking</div>
+                <div style="color: #666; margin-top: 5px;">Control • Dispatch • Deliver</div>
             </td>
             <td style="border: none; padding: 0; text-align: right;">
                 <div class="doc-title">Collection Note</div>

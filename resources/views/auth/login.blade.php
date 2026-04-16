@@ -17,7 +17,7 @@
             <h2 class="mt-6 text-center text-2xl font-bold tracking-tight text-gray-900">
                 Proselver Trident
             </h2>
-            <p class="text-center text-xs font-medium tracking-widest text-blue-600 uppercase mt-1">Booking · Dispatching · Tracking</p>
+            <p class="text-center text-xs font-medium tracking-widest text-blue-600 uppercase mt-1">Control • Dispatch • Deliver</p>
             <p class="mt-1 text-center text-sm text-gray-500">Sign in to your account</p>
         </div>
 
