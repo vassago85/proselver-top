@@ -51,7 +51,7 @@ Route::get('/', function () {
     if (auth()->check()) {
         return redirect()->to(resolveUserHomePath(auth()->user()));
     }
-    return redirect()->route('login');
+    return view('pages.landing');
 })->name('home');
 
 Route::get('/dashboard', function () {
