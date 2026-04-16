@@ -125,7 +125,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             :href="route('admin.planning')" />
 
         <x-stat-card
-            label="In Flight"
+            label="In Transit"
             :value="$inFlight"
             color="orange"
             :href="route('admin.tracking')" />
