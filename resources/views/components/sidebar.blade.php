@@ -14,7 +14,7 @@
 
 <div class="flex grow flex-col gap-y-5 overflow-y-auto bg-blue-900 px-6 pb-4">
     <div class="flex h-16 shrink-0 items-center">
-        <span class="text-xl font-bold text-white">ProSelver<span class="text-blue-300">Tech</span></span>
+        <span class="text-xl font-bold text-white">Proselver <span class="text-blue-300">Trident</span></span>
     </div>
 
     <nav class="flex flex-1 flex-col">
@@ -25,15 +25,20 @@
             {{-- ============================================================ --}}
             @if($isInternal)
 
-                {{-- OPERATIONS section --}}
+                {{-- OVERVIEW --}}
                 <li>
-                    <p class="mb-2 px-2 text-xs font-semibold uppercase tracking-wider text-blue-400">Operations</p>
                     <ul role="list" class="-mx-2 space-y-1">
                         <x-sidebar-link :href="route('admin.dashboard')" :active="request()->routeIs('admin.dashboard')">
                             <x-slot:icon><svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg></x-slot:icon>
                             Dashboard
                         </x-sidebar-link>
+                    </ul>
+                </li>
 
+                {{-- BOOKING section --}}
+                <li>
+                    <p class="mb-2 px-2 text-xs font-semibold uppercase tracking-wider text-blue-400">Booking</p>
+                    <ul role="list" class="-mx-2 space-y-1">
                         <x-sidebar-link :href="route('admin.orders.index')" :active="request()->routeIs('admin.orders.*')">
                             <x-slot:icon><svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4"/><path d="M12 16h4"/><path d="M8 11h.01"/><path d="M8 16h.01"/></svg></x-slot:icon>
                             Orders
@@ -46,10 +51,10 @@
                     </ul>
                 </li>
 
-                {{-- PLANNING & DISPATCH section --}}
+                {{-- DISPATCH section --}}
                 @if($isDeveloper || $isSuperAdmin || $isOpsController || $isDispatcher || $isOwner)
                 <li>
-                    <p class="mb-2 px-2 text-xs font-semibold uppercase tracking-wider text-blue-400">Planning & Dispatch</p>
+                    <p class="mb-2 px-2 text-xs font-semibold uppercase tracking-wider text-blue-400">Dispatch</p>
                     <ul role="list" class="-mx-2 space-y-1">
                         @if($isDeveloper || $isSuperAdmin || $isOpsController || $isOwner)
                         <x-sidebar-link :href="route('admin.planning')" :active="request()->routeIs('admin.planning')">
@@ -71,10 +76,21 @@
                 </li>
                 @endif
 
-                {{-- CUSTOMERS & DATA section --}}
+                {{-- TRACKING section --}}
+                <li>
+                    <p class="mb-2 px-2 text-xs font-semibold uppercase tracking-wider text-blue-400">Tracking</p>
+                    <ul role="list" class="-mx-2 space-y-1">
+                        <x-sidebar-link :href="route('admin.tracking')" :active="request()->routeIs('admin.tracking')">
+                            <x-slot:icon><svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></x-slot:icon>
+                            Active Movements
+                        </x-sidebar-link>
+                    </ul>
+                </li>
+
+                {{-- CUSTOMERS section --}}
                 @if($isDeveloper || $isSuperAdmin || $isOpsController || $isOwner)
                 <li>
-                    <p class="mb-2 px-2 text-xs font-semibold uppercase tracking-wider text-blue-400">Customers & Data</p>
+                    <p class="mb-2 px-2 text-xs font-semibold uppercase tracking-wider text-blue-400">Customers</p>
                     <ul role="list" class="-mx-2 space-y-1">
                         <x-sidebar-link :href="route('admin.customers.index')" :active="request()->routeIs('admin.customers.*')">
                             <x-slot:icon><svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z"/><path d="M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2"/><path d="M18 9h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2"/><path d="M10 6h4"/><path d="M10 10h4"/><path d="M10 14h4"/><path d="M10 18h4"/></svg></x-slot:icon>

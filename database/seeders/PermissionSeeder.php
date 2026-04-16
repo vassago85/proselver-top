@@ -72,11 +72,47 @@ class PermissionSeeder extends Seeder
             'oem_planner' => ['view_all_bookings', 'view_own_bookings', 'edit_all_bookings', 'edit_own_bookings', 'submit_booking', 'approve_booking', 'cancel_booking', 'upload_documents', 'view_stock', 'manage_movements', 'view_movement_overview', 'generate_po', 'upload_po', 'view_po', 'view_invoices'],
         ];
 
-        // Phase 1 role-permission mappings
-        $rolePermissions['customer_owner'] = $fullAccess;
+        // Phase 1 role-permission mappings (customer tier)
+        $rolePermissions['customer_owner'] = array_merge($fullAccess, ['confirm_customer_order', 'manage_locations', 'view_locations']);
         $rolePermissions['customer_admin'] = ['view_all_bookings', 'view_own_bookings', 'edit_all_bookings', 'submit_booking', 'cancel_booking', 'upload_documents', 'view_po', 'generate_po', 'upload_po', 'view_invoices', 'manage_dealer_users', 'manage_locations', 'view_locations'];
         $rolePermissions['customer_user'] = ['view_own_bookings', 'submit_booking', 'upload_documents', 'view_locations'];
         $rolePermissions['customer_dispatcher'] = ['view_all_bookings', 'view_own_bookings', 'confirm_customer_order', 'upload_documents', 'view_locations'];
+
+        // Phase 1 role-permission mappings (internal tier)
+        // Super Admin and Developer bypass permission checks in HasRoles, but we still assign
+        // DB-level permissions so permission-driven UI gating stays consistent.
+        $opsControllerPerms = [
+            'view_all_bookings', 'view_own_bookings', 'edit_all_bookings',
+            'submit_booking', 'approve_booking', 'cancel_booking',
+            'upload_documents', 'view_po', 'upload_po', 'generate_po',
+            'view_planning_queue', 'plan_orders', 'assign_drivers',
+            'generate_collection_note',
+            'manage_locations', 'view_locations',
+            'manage_movements', 'view_movement_overview',
+            'view_performance',
+        ];
+        $dispatcherPerms = [
+            'view_all_bookings', 'view_own_bookings',
+            'upload_documents', 'view_po',
+            'view_planning_queue', 'assign_drivers',
+            'generate_collection_note',
+            'view_locations',
+        ];
+        $ownerPerms = [
+            'view_all_bookings', 'view_own_bookings',
+            'view_po', 'view_invoices', 'view_performance',
+            'view_planning_queue', 'view_locations',
+            'view_movement_overview',
+        ];
+
+        $rolePermissions['super_admin'] = array_merge($fullAccess, [
+            'confirm_customer_order', 'view_planning_queue', 'plan_orders', 'assign_drivers',
+            'generate_collection_note', 'manage_locations', 'view_locations',
+        ]);
+        $rolePermissions['developer'] = $rolePermissions['super_admin'];
+        $rolePermissions['operations_controller'] = $opsControllerPerms;
+        $rolePermissions['dispatcher'] = $dispatcherPerms;
+        $rolePermissions['owner'] = $ownerPerms;
 
         foreach ($rolePermissions as $roleSlug => $permSlugs) {
             $roles = Role::where('slug', $roleSlug)

@@ -26,7 +26,7 @@ class DatabaseSeeder extends Seeder
         \App\Models\SystemSetting::set('collection_cutoff_days', '1', 'integer', 'Days before collection date for cutoff');
         \App\Models\SystemSetting::set('collection_cutoff_time', '15:00', 'string', 'Time on cutoff day');
 
-        if (app()->environment('local', 'development', 'testing')) {
+        if (app()->environment('local', 'development', 'testing') || env('SEED_DEMO_USERS') === 'true') {
             $this->call(DemoSeeder::class);
         }
     }
