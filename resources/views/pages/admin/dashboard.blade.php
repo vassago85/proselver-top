@@ -135,12 +135,35 @@ new #[Layout('components.layouts.app')] class extends Component {
             :value="$deliveredToday"
             color="emerald" />
 
+        @php
+            // Driver Compliance tile surfaces everything that needs action:
+            //   expired licences/PDPs (urgent) + those expiring inside the
+            //   60-day window. Headline count is the *total* action list so
+            //   a big "0" never hides an expired driver sitting underneath.
+            $driversNeedingAction = $driversExpired + $driversExpiringSoon;
+            $complianceHelper = match (true) {
+                $driversExpired > 0 && $driversExpiringSoon > 0
+                    => $driversExpired . ' expired · ' . $driversExpiringSoon . ' expiring soon',
+                $driversExpired > 0
+                    => $driversExpired . ' expired · action required',
+                $driversExpiringSoon > 0
+                    => $driversExpiringSoon . ' expiring in 60 days',
+                default
+                    => 'All licences valid',
+            };
+            $complianceColor = match (true) {
+                $driversExpired > 0 => 'red',
+                $driversExpiringSoon > 0 => 'amber',
+                default => 'slate',
+            };
+        @endphp
+
         <x-stat-card
             label="Driver Compliance"
-            :value="$driversExpiringSoon"
-            :color="$driversExpired > 0 ? 'red' : 'slate'"
-            :helper="$driversExpired > 0 ? $driversExpired . ' expired · action required' : 'expiring in 60 days'"
-            :helperColor="$driversExpired > 0 ? 'red' : 'slate'"
+            :value="$driversNeedingAction"
+            :color="$complianceColor"
+            :helper="$complianceHelper"
+            :helperColor="$complianceColor"
             :href="route('admin.drivers.index')" />
     </div>
 
