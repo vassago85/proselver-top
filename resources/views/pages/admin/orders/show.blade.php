@@ -78,16 +78,6 @@ new #[Layout('components.layouts.app')] class extends Component {
         session()->flash('success', "Driver {$driver->name} assigned.");
     }
 
-    public function markReady(): void
-    {
-        if (!$this->job->transitionTo(Job::STATUS_READY_FOR_COLLECTION)) {
-            session()->flash('error', 'Cannot mark as ready.');
-            return;
-        }
-        AuditService::log('ready_for_collection', 'job', $this->job->id);
-        session()->flash('success', "Order {$this->job->job_number} ready for collection.");
-    }
-
     public function markCollected(): void
     {
         if (!$this->job->transitionTo(Job::STATUS_COLLECTED)) {
@@ -384,14 +374,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                         </div>
                     @endif
 
-                    @if($job->status === 'driver_assigned')
-                        <button wire:click="markReady" wire:confirm="Mark as ready for collection?"
-                            class="w-full rounded-lg bg-cyan-600 px-4 py-3 text-sm font-semibold text-white hover:bg-cyan-500 transition-colors">
-                            Ready for Collection
-                        </button>
-                    @endif
-
-                    @if($job->status === 'ready_for_collection')
+                    @if(in_array($job->status, ['driver_assigned', 'ready_for_collection']))
                         <button wire:click="markCollected" wire:confirm="Mark as collected?"
                             class="w-full rounded-lg bg-teal-600 px-4 py-3 text-sm font-semibold text-white hover:bg-teal-500 transition-colors">
                             Mark Collected

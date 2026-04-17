@@ -39,7 +39,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         $this->job->confirmation_note = null;
         $this->job->transitionTo(Job::STATUS_CONFIRMED);
         $this->job->refresh();
-        session()->flash('success', 'Order confirmed — truck is here and ready for collection.');
+        session()->flash('success', 'Collection confirmed — ProSelver operations will dispatch a driver.');
     }
 
     public function reportIssue(): void

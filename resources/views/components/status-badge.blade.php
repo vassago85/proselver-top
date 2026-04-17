@@ -18,10 +18,12 @@
         'received' => ['label' => 'Received', 'color' => 'slate'],
         'awaiting_customer_confirmation' => ['label' => 'Awaiting Confirmation', 'color' => 'amber'],
         'confirmation_issue' => ['label' => 'Confirmation Issue', 'color' => 'red'],
-        'confirmed' => ['label' => 'Confirmed', 'color' => 'blue'],
+        'confirmed' => ['label' => 'Collection Confirmed', 'color' => 'cyan'],
         'planned' => ['label' => 'Planned', 'color' => 'indigo'],
         'driver_assigned' => ['label' => 'Driver Assigned', 'color' => 'purple'],
-        'ready_for_collection' => ['label' => 'Ready for Collection', 'color' => 'cyan'],
+        // Legacy: older orders may still be in ready_for_collection; surface them
+        // under the same "Collection Confirmed" label so the ops board reads cleanly.
+        'ready_for_collection' => ['label' => 'Collection Confirmed', 'color' => 'cyan'],
         'collected' => ['label' => 'Collected', 'color' => 'teal'],
         'in_transit' => ['label' => 'In Transit', 'color' => 'orange'],
         'delivered' => ['label' => 'Delivered', 'color' => 'emerald'],

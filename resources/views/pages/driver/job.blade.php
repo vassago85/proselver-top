@@ -47,8 +47,12 @@ new #[Layout('components.layouts.driver')] class extends Component {
             $this->job->transitionTo(Job::STATUS_COMPLETED);
         }
 
-        // Phase 1 transitions
-        if ($eventType === JobEvent::TYPE_ARRIVED_PICKUP && $this->job->status === Job::STATUS_READY_FOR_COLLECTION) {
+        // Phase 1 transitions. "Arrived at pickup" flips the job to COLLECTED
+        // straight from DRIVER_ASSIGNED (or the legacy READY_FOR_COLLECTION
+        // state for orders booked under the previous workflow).
+        if ($eventType === JobEvent::TYPE_ARRIVED_PICKUP
+            && in_array($this->job->status, [Job::STATUS_DRIVER_ASSIGNED, Job::STATUS_READY_FOR_COLLECTION], true)
+        ) {
             $this->job->transitionTo(Job::STATUS_COLLECTED);
         }
         if ($eventType === JobEvent::TYPE_DEPARTED_PICKUP && $this->job->status === Job::STATUS_COLLECTED) {

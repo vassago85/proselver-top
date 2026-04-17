@@ -4,12 +4,17 @@ use App\Models\Brand;
 use App\Models\Company;
 use App\Models\Job;
 use App\Models\Location;
+use App\Models\PurchaseOrder;
 use App\Models\VehicleClass;
+use App\Models\VehicleModel;
 use App\Services\BookingService;
 use Livewire\Volt\Component;
 use Livewire\Attributes\Layout;
+use Livewire\WithFileUploads;
 
 new #[Layout('components.layouts.app')] class extends Component {
+    use WithFileUploads;
+
     public ?Company $company = null;
     public bool $hasLocations = false;
 
@@ -23,6 +28,7 @@ new #[Layout('components.layouts.app')] class extends Component {
     public string $scheduledDate = '';
     public string $poNumber = '';
     public ?string $poAmount = null;
+    public $poFile = null;
     public string $notes = '';
 
     public function mount(): void
@@ -48,6 +54,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             'scheduledDate' => 'required|date|after:today',
             'poNumber' => 'nullable|string|max:100',
             'poAmount' => 'nullable|numeric|min:0',
+            'poFile' => 'nullable|file|mimes:pdf,jpg,jpeg,png|max:10240',
         ]);
 
         $service = app(BookingService::class);
@@ -70,6 +77,21 @@ new #[Layout('components.layouts.app')] class extends Component {
         $job->status = Job::STATUS_RECEIVED;
         $job->save();
 
+        if ($this->poFile) {
+            $disk = config('filesystems.default') === 'local' ? 'local' : 'r2';
+            $path = $this->poFile->store('jobs/' . $job->uuid . '/po', $disk);
+
+            PurchaseOrder::create([
+                'job_id' => $job->id,
+                'po_number' => $this->poNumber ?: $job->job_number,
+                'po_amount' => $this->poAmount,
+                'document_disk' => $disk,
+                'document_path' => $path,
+                'original_filename' => $this->poFile->getClientOriginalName(),
+                'uploaded_by_user_id' => auth()->id(),
+            ]);
+        }
+
         session()->flash('success', 'Order submitted successfully — reference ' . $job->job_number);
         $this->redirect(route('customer.orders.show', $job), navigate: true);
     }
@@ -91,11 +113,38 @@ new #[Layout('components.layouts.app')] class extends Component {
             ? $companyBrands
             : Brand::where('is_active', true)->orderBy('name')->get(['id', 'name']);
 
+        // Model suggestions: filter to the selected brand when one is picked,
+        // otherwise fall back to models across the customer's allowed brands so
+        // the datalist is never empty. Models are data-driven (admins can add
+        // more via Brands & Models) and the input stays free-text for any
+        // variant not yet catalogued.
+        $modelsQuery = VehicleModel::where('is_active', true)->orderBy('name');
+        if ($this->brandId) {
+            $modelsQuery->where('brand_id', $this->brandId);
+        } elseif ($brands->isNotEmpty()) {
+            $modelsQuery->whereIn('brand_id', $brands->pluck('id'));
+        }
+        $vehicleModels = $modelsQuery->get(['id', 'brand_id', 'name']);
+
+        $selectedBrand = $this->brandId ? $brands->firstWhere('id', (int) $this->brandId) : null;
+        $modelPlaceholder = match (true) {
+            $vehicleModels->isNotEmpty() && $selectedBrand !== null
+                => 'e.g. ' . $vehicleModels->first()->name,
+            $vehicleModels->isNotEmpty()
+                => 'Type or pick a model…',
+            $selectedBrand !== null
+                => 'Enter model for ' . $selectedBrand->name,
+            default
+                => 'Enter model',
+        };
+
         return [
             'companyLocations' => $companyLocations,
             'sharedLocations' => $sharedLocations,
             'brands' => $brands,
             'vehicleClasses' => VehicleClass::where('is_active', true)->orderBy('name')->get(['id', 'name']),
+            'vehicleModels' => $vehicleModels,
+            'modelPlaceholder' => $modelPlaceholder,
         ];
     }
 };
@@ -181,7 +230,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1">Brand</label>
-                        <select wire:model="brandId"
+                        <select wire:model.live="brandId"
                             class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:ring-blue-500">
                             <option value="">Select brand</option>
                             @foreach($brands as $brand)
@@ -191,10 +240,25 @@ new #[Layout('components.layouts.app')] class extends Component {
                         @error('brandId') <p class="mt-1 text-xs text-red-600">{{ $message }}</p> @enderror
                     </div>
                     <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">Model Name</label>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">
+                            Model Name
+                            @if($vehicleModels->isNotEmpty())
+                                <span class="ml-1 text-xs font-normal text-gray-500">
+                                    · {{ $vehicleModels->count() }} suggestion{{ $vehicleModels->count() === 1 ? '' : 's' }}
+                                </span>
+                            @endif
+                        </label>
                         <input wire:model="modelName" type="text"
+                            list="customer-order-model-suggestions"
+                            autocomplete="off"
                             class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:ring-blue-500"
-                            placeholder="e.g. Ranger, Hilux">
+                            placeholder="{{ $modelPlaceholder }}">
+                        @if($vehicleModels->isNotEmpty())
+                            <datalist id="customer-order-model-suggestions">
+                                @foreach($vehicleModels as $vm)<option value="{{ $vm->name }}"></option>@endforeach
+                            </datalist>
+                            <p class="mt-1 text-xs text-gray-500">Start typing to filter suggestions — you can also enter any model not in the list.</p>
+                        @endif
                         @error('modelName') <p class="mt-1 text-xs text-red-600">{{ $message }}</p> @enderror
                     </div>
                     <div>
@@ -250,6 +314,47 @@ new #[Layout('components.layouts.app')] class extends Component {
                         @error('poAmount') <p class="mt-1 text-xs text-red-600">{{ $message }}</p> @enderror
                     </div>
                 </div>
+
+                {{-- PO Document Upload --}}
+                <div class="mt-4" x-data="{ uploading: false, progress: 0 }"
+                    x-on:livewire-upload-start="uploading = true"
+                    x-on:livewire-upload-finish="uploading = false"
+                    x-on:livewire-upload-cancel="uploading = false"
+                    x-on:livewire-upload-error="uploading = false"
+                    x-on:livewire-upload-progress="progress = $event.detail.progress">
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Purchase Order Document</label>
+                    <p class="text-xs text-gray-500 mb-2">PDF, JPG or PNG &middot; max 10&nbsp;MB &middot; optional</p>
+
+                    @if($poFile)
+                        <div class="flex items-center justify-between rounded-lg border border-green-200 bg-green-50 px-3 py-2.5">
+                            <div class="flex items-center gap-2 min-w-0">
+                                <svg class="h-4 w-4 shrink-0 text-green-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                                <span class="text-sm text-gray-800 truncate">{{ $poFile->getClientOriginalName() }}</span>
+                                <span class="text-xs text-gray-500">({{ number_format($poFile->getSize() / 1024, 0) }} KB)</span>
+                            </div>
+                            <button type="button" wire:click="$set('poFile', null)"
+                                class="text-xs font-medium text-red-600 hover:text-red-700 shrink-0 ml-3">
+                                Remove
+                            </button>
+                        </div>
+                    @else
+                        <label class="flex items-center justify-center gap-2 w-full rounded-lg border-2 border-dashed border-gray-300 bg-gray-50 px-4 py-5 text-sm text-gray-600 hover:border-blue-400 hover:bg-blue-50 cursor-pointer transition-colors">
+                            <svg class="h-5 w-5 text-gray-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                            <span>Click to upload PO document</span>
+                            <input wire:model="poFile" type="file" accept="application/pdf,image/jpeg,image/png" class="hidden">
+                        </label>
+                    @endif
+
+                    <div x-show="uploading" x-cloak class="mt-2">
+                        <div class="h-1.5 w-full rounded-full bg-gray-200 overflow-hidden">
+                            <div class="h-full bg-blue-500 transition-all" :style="`width: ${progress}%`"></div>
+                        </div>
+                        <p class="mt-1 text-xs text-gray-500">Uploading… <span x-text="progress"></span>%</p>
+                    </div>
+
+                    @error('poFile') <p class="mt-1 text-xs text-red-600">{{ $message }}</p> @enderror
+                </div>
+
                 <div class="mt-4">
                     <label class="block text-sm font-medium text-gray-700 mb-1">Notes</label>
                     <textarea wire:model="notes" rows="3"

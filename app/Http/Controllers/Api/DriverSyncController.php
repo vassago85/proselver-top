@@ -76,8 +76,11 @@ class DriverSyncController extends Controller
                 $job->transitionTo(Job::STATUS_COMPLETED);
             }
 
-            // Phase 1 status transitions
-            if ($eventData['event_type'] === JobEvent::TYPE_ARRIVED_PICKUP && $job->status === Job::STATUS_READY_FOR_COLLECTION) {
+            // Phase 1 status transitions. "Arrived at pickup" flips straight to
+            // COLLECTED from DRIVER_ASSIGNED (or legacy READY_FOR_COLLECTION rows).
+            if ($eventData['event_type'] === JobEvent::TYPE_ARRIVED_PICKUP
+                && in_array($job->status, [Job::STATUS_DRIVER_ASSIGNED, Job::STATUS_READY_FOR_COLLECTION], true)
+            ) {
                 $job->transitionTo(Job::STATUS_COLLECTED);
             }
 

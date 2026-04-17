@@ -54,20 +54,6 @@ new #[Layout('components.layouts.app')] class extends Component {
         session()->flash('success', "Driver {$driver->name} assigned to order {$job->job_number}.");
     }
 
-    public function markReady(int $jobId): void
-    {
-        $job = Job::findOrFail($jobId);
-
-        if (!$job->canTransitionTo(Job::STATUS_READY_FOR_COLLECTION)) {
-            session()->flash('error', 'This job cannot be marked ready for collection.');
-            return;
-        }
-
-        $job->transitionTo(Job::STATUS_READY_FOR_COLLECTION);
-
-        session()->flash('success', "Order {$job->job_number} marked as ready for collection.");
-    }
-
     public function with(): array
     {
         $statuses = match ($this->statusFilter) {
@@ -221,14 +207,10 @@ new #[Layout('components.layouts.app')] class extends Component {
                             </div>
                             @elseif($job->status === 'driver_assigned')
                             <div class="flex justify-end">
-                                <button
-                                    wire:click="markReady({{ $job->id }})"
-                                    wire:confirm="Mark order {{ $job->job_number }} as ready for collection?"
-                                    class="inline-flex items-center gap-1.5 rounded-lg bg-green-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-green-700 transition-colors"
-                                >
+                                <span class="inline-flex items-center gap-1.5 rounded-lg bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-600">
                                     <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
-                                    Ready for Collection
-                                </button>
+                                    Awaiting driver pickup
+                                </span>
                             </div>
                             @endif
                         </td>

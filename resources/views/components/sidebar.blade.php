@@ -125,6 +125,22 @@
                 </li>
                 @endif
 
+                {{-- CATALOGUE --}}
+                {{-- Brands & Models is exposed here (not only buried under Settings)
+                     because operational staff and Owners extend the model list
+                     regularly — every new FAW / Isuzu variant, every new OEM. --}}
+                @if($isDeveloper || $isSuperAdmin || $isOwner)
+                <li>
+                    <p class="mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">Catalogue</p>
+                    <ul role="list" class="space-y-0.5">
+                        <x-sidebar-link :href="route('admin.settings.brands')" :active="request()->routeIs('admin.settings.brands')">
+                            <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12"/><path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17"/></svg></x-slot:icon>
+                            Brands &amp; Models
+                        </x-sidebar-link>
+                    </ul>
+                </li>
+                @endif
+
                 {{-- ADMIN --}}
                 @if($isDeveloper || $isSuperAdmin)
                 <li>

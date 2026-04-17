@@ -114,7 +114,12 @@ class Job extends Model
         self::STATUS_CONFIRMATION_ISSUE => [self::STATUS_AWAITING_CUSTOMER_CONFIRMATION, self::STATUS_CANCELLED],
         self::STATUS_CONFIRMED => [self::STATUS_PLANNED, self::STATUS_CANCELLED],
         self::STATUS_PLANNED => [self::STATUS_DRIVER_ASSIGNED, self::STATUS_CANCELLED],
-        self::STATUS_DRIVER_ASSIGNED => [self::STATUS_READY_FOR_COLLECTION, self::STATUS_CANCELLED],
+        // Once a driver is assigned the next event is the driver arriving at pickup
+        // (which flips straight to COLLECTED). STATUS_READY_FOR_COLLECTION is kept
+        // only as a legacy terminal-ish state for in-flight orders created before
+        // the workflow was simplified — those rows still need to be able to move to
+        // COLLECTED or CANCELLED, hence the entry below.
+        self::STATUS_DRIVER_ASSIGNED => [self::STATUS_COLLECTED, self::STATUS_CANCELLED],
         self::STATUS_READY_FOR_COLLECTION => [self::STATUS_COLLECTED, self::STATUS_CANCELLED],
         self::STATUS_COLLECTED => [self::STATUS_IN_TRANSIT],
         self::STATUS_IN_TRANSIT => [self::STATUS_DELIVERED],
@@ -127,10 +132,10 @@ class Job extends Model
         self::STATUS_RECEIVED => 'Received',
         self::STATUS_AWAITING_CUSTOMER_CONFIRMATION => 'Awaiting Confirmation',
         self::STATUS_CONFIRMATION_ISSUE => 'Confirmation Issue',
-        self::STATUS_CONFIRMED => 'Confirmed',
+        self::STATUS_CONFIRMED => 'Collection Confirmed',
         self::STATUS_PLANNED => 'Planned',
         self::STATUS_DRIVER_ASSIGNED => 'Driver Assigned',
-        self::STATUS_READY_FOR_COLLECTION => 'Ready for Collection',
+        self::STATUS_READY_FOR_COLLECTION => 'Collection Confirmed',
         self::STATUS_COLLECTED => 'Collected',
         self::STATUS_IN_TRANSIT => 'In Transit',
         self::STATUS_DELIVERED => 'Delivered',

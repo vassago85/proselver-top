@@ -25,10 +25,10 @@ new #[Layout('components.layouts.app')] class extends Component {
             ->whereDate('delivered_at', today())
             ->count();
 
-        // Live pulse row: counts per live status
+        // Live pulse row: counts per live status. driver_assigned absorbs legacy
+        // ready_for_collection rows so the board never shows both side by side.
         $liveCounts = [
-            'driver_assigned'      => Job::where('status', Job::STATUS_DRIVER_ASSIGNED)->count(),
-            'ready_for_collection' => Job::where('status', Job::STATUS_READY_FOR_COLLECTION)->count(),
+            'driver_assigned'      => Job::whereIn('status', [Job::STATUS_DRIVER_ASSIGNED, Job::STATUS_READY_FOR_COLLECTION])->count(),
             'collected'            => Job::where('status', Job::STATUS_COLLECTED)->count(),
             'in_transit'           => Job::where('status', Job::STATUS_IN_TRANSIT)->count(),
         ];
@@ -158,10 +158,9 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></svg>
             </a>
         </div>
-        <div class="grid grid-cols-2 md:grid-cols-4 divide-y md:divide-y-0 md:divide-x divide-slate-100">
+        <div class="grid grid-cols-3 divide-y md:divide-y-0 md:divide-x divide-slate-100">
             @foreach([
                 ['label' => 'Driver Assigned', 'key' => 'driver_assigned', 'dot' => 'bg-purple-500'],
-                ['label' => 'Ready for Collection', 'key' => 'ready_for_collection', 'dot' => 'bg-cyan-500'],
                 ['label' => 'Collected', 'key' => 'collected', 'dot' => 'bg-teal-500'],
                 ['label' => 'In Transit', 'key' => 'in_transit', 'dot' => 'bg-orange-500'],
             ] as $node)
