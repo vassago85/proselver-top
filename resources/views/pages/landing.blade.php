@@ -228,9 +228,9 @@
                     $pillars = [
                         [
                             'num' => '01',
-                            'title' => 'Booking',
-                            'desc' => 'Capture movement orders from OEMs, dealers and internal controllers. Customer-specific fields, brand limits and workflow flags are built in — without a workflow engine to maintain.',
-                            'icon' => '<path d="M9 2h6v4H9z"/><rect x="4" y="6" width="16" height="16" rx="2"/><path d="M8 12h8"/><path d="M8 16h5"/>',
+                            'title' => 'Control',
+                            'desc' => 'Capture every movement order in one place. Per-customer fields, brand limits, confirmation gates and role-based access are built in — so you control exactly who can book what, and which checks run before a truck moves.',
+                            'icon' => '<line x1="21" x2="14" y1="4" y2="4"/><line x1="10" x2="3" y1="4" y2="4"/><line x1="21" x2="12" y1="12" y2="12"/><line x1="8" x2="3" y1="12" y2="12"/><line x1="21" x2="16" y1="20" y2="20"/><line x1="12" x2="3" y1="20" y2="20"/><circle cx="12" cy="4" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="14" cy="20" r="2"/>',
                         ],
                         [
                             'num' => '02',
