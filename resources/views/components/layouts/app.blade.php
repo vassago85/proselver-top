@@ -2,11 +2,20 @@
 <html lang="{{ str_replace('_', '-', app()->getLocale()) }}" class="h-full bg-slate-50">
 <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="csrf-token" content="{{ csrf_token() }}">
     <title>{{ $title ?? config('app.name') }}</title>
+
+    {{-- PWA + iOS standalone: allows owner/ops to add to Home Screen on iPhone
+         and launch into a chromeless app. Without these iOS will refuse to
+         remove Safari UI and the in-app nav buttons below make no sense. --}}
     <link rel="manifest" href="/manifest.json">
     <meta name="theme-color" content="#0f172a">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Trident">
+    <link rel="apple-touch-icon" href="/logo.png">
+
     @vite(['resources/css/app.css', 'resources/js/app.js'])
     @livewireStyles
     <style>
@@ -21,7 +30,29 @@
         ::-webkit-scrollbar-track { background: transparent; }
         ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 8px; border: 2px solid transparent; background-clip: content-box; }
         ::-webkit-scrollbar-thumb:hover { background: #94a3b8; border: 2px solid transparent; background-clip: content-box; }
+
+        /* iOS PWA standalone adjustments:
+           - safe-area padding on the body for the notch / home bar
+           - show the standalone-only bottom nav
+           - reserve room above the bottom nav so content isn't hidden */
+        @media (display-mode: standalone) {
+            body { padding-top: env(safe-area-inset-top); }
+            .pwa-bottom-nav { display: flex !important; }
+            .pwa-standalone-pad { padding-bottom: calc(4rem + env(safe-area-inset-bottom)) !important; }
+        }
+        /* iOS-specific legacy fallback for `navigator.standalone` */
+        html.ios-standalone body { padding-top: env(safe-area-inset-top); }
+        html.ios-standalone .pwa-bottom-nav { display: flex !important; }
+        html.ios-standalone .pwa-standalone-pad { padding-bottom: calc(4rem + env(safe-area-inset-bottom)) !important; }
     </style>
+    <script>
+        // Tag the <html> element early so the standalone-only styles apply on
+        // iOS (where matchMedia('(display-mode: standalone)') doesn't match
+        // until iOS 16.4+, but navigator.standalone has worked since iOS 4).
+        if (window.navigator.standalone === true) {
+            document.documentElement.classList.add('ios-standalone');
+        }
+    </script>
 </head>
 <body class="h-full font-sans antialiased text-slate-900 selection:bg-blue-600 selection:text-white">
 
@@ -47,7 +78,9 @@
     </div>
     @endif
 
-    <div class="min-h-full {{ session('impersonating_from') ? 'pt-10' : '' }}" x-data="{ sidebarOpen: false, userMenu: false }">
+    <div class="min-h-full {{ session('impersonating_from') ? 'pt-10' : '' }}"
+         x-data="{ sidebarOpen: false, userMenu: false }"
+         @open-mobile-sidebar.window="sidebarOpen = true">
 
         {{-- Mobile sidebar overlay --}}
         <div x-show="sidebarOpen" x-cloak x-transition:enter="transition-opacity ease-linear duration-200" x-transition:enter-start="opacity-0" x-transition:enter-end="opacity-100" x-transition:leave="transition-opacity ease-linear duration-200" x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0" class="fixed inset-0 z-40 bg-slate-900/40 backdrop-blur-sm lg:hidden" @click="sidebarOpen = false"></div>
@@ -66,10 +99,30 @@
         <div class="lg:pl-64 flex min-h-screen flex-col">
 
             {{-- Top bar --}}
-            <header class="sticky top-0 z-30 flex h-16 shrink-0 items-center gap-x-3 border-b border-slate-200 bg-white/80 backdrop-blur px-4 sm:px-6 lg:px-8 {{ session('impersonating_from') ? 'top-10' : '' }}">
+            @php $homeUrl = auth()->check() ? resolveUserHomePath(auth()->user()) : route('login'); @endphp
+            <header class="sticky top-0 z-30 flex h-16 shrink-0 items-center gap-x-1 sm:gap-x-3 border-b border-slate-200 bg-white/80 backdrop-blur px-3 sm:px-6 lg:px-8 {{ session('impersonating_from') ? 'top-10' : '' }}">
+                {{-- Mobile: Menu / Back / Home trio. Back is hidden when we're
+                     already on the role home route so we don't dead-end the user. --}}
                 <button type="button" class="-ml-1 p-2 rounded-md text-slate-500 hover:text-slate-900 hover:bg-slate-100 lg:hidden transition" @click="sidebarOpen = true" aria-label="Open navigation">
                     <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="18" y2="18"/></svg>
                 </button>
+
+                <button type="button" class="p-2 rounded-md text-slate-500 hover:text-slate-900 hover:bg-slate-100 lg:hidden transition"
+                        x-data="{ canBack: false }"
+                        x-init="canBack = (window.history.length > 1) && (document.referrer.startsWith(window.location.origin) || document.referrer === '')"
+                        x-show="canBack"
+                        x-cloak
+                        @click="window.history.back()"
+                        aria-label="Back">
+                    <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+                </button>
+
+                <a href="{{ $homeUrl }}" class="p-2 rounded-md text-slate-500 hover:text-slate-900 hover:bg-slate-100 lg:hidden transition"
+                   aria-label="Home"
+                   @if(request()->url() === $homeUrl) aria-current="page" @endif>
+                    <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+                </a>
+
                 <div class="h-6 w-px bg-slate-200 lg:hidden"></div>
 
                 <div class="flex flex-1 items-center min-w-0">
@@ -118,7 +171,7 @@
             </header>
 
             {{-- Main content --}}
-            <main class="flex-1">
+            <main class="flex-1 pwa-standalone-pad">
                 <div class="px-4 sm:px-6 lg:px-8 py-6 lg:py-8">
                     {{-- Session flash messages --}}
                     @if (session('success'))
@@ -149,6 +202,40 @@
             </footer>
         </div>
     </div>
+
+    {{-- =================================================================== --}}
+    {{-- STANDALONE-MODE BOTTOM NAV (iPhone / Android PWA installed)         --}}
+    {{-- Hidden by default; flipped to `display: flex` by the `.pwa-bottom-nav` --}}
+    {{-- CSS rules in <head> when @media (display-mode: standalone) OR when  --}}
+    {{-- iOS `navigator.standalone` is true. Home Screen launch = bottom nav.--}}
+    {{-- =================================================================== --}}
+    <nav class="pwa-bottom-nav fixed inset-x-0 bottom-0 z-[85] hidden items-stretch border-t border-slate-200 bg-white/95 backdrop-blur pb-[env(safe-area-inset-bottom)] shadow-[0_-4px_16px_-8px_rgba(15,23,42,0.15)]"
+         aria-label="App navigation">
+        <button type="button"
+                x-data="{ canBack: false }"
+                x-init="canBack = (window.history.length > 1) && (document.referrer.startsWith(window.location.origin) || document.referrer === '')"
+                @click="window.history.back()"
+                :disabled="!canBack"
+                :class="canBack ? 'text-slate-700' : 'text-slate-300'"
+                class="flex-1 flex flex-col items-center justify-center gap-0.5 py-2 text-[11px] font-semibold active:bg-slate-100">
+            <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+            <span>Back</span>
+        </button>
+
+        <a href="{{ $homeUrl ?? '/' }}"
+           class="flex-1 flex flex-col items-center justify-center gap-0.5 py-2 text-[11px] font-semibold text-slate-700 active:bg-slate-100"
+           @if(isset($homeUrl) && request()->url() === $homeUrl) aria-current="page" @endif>
+            <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+            <span>Home</span>
+        </a>
+
+        <button type="button" x-data @click="$dispatch('open-mobile-sidebar')"
+                class="flex-1 flex flex-col items-center justify-center gap-0.5 py-2 text-[11px] font-semibold text-slate-700 active:bg-slate-100">
+            <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="18" y2="18"/></svg>
+            <span>Menu</span>
+        </button>
+    </nav>
+
     @livewireScripts
 
     {{-- =================================================================== --}}
