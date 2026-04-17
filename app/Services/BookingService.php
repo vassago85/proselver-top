@@ -70,11 +70,35 @@ class BookingService
             'is_emergency' => $data['is_emergency'] ?? false,
             'emergency_reason' => $data['emergency_reason'] ?? null,
             'is_round_trip' => $data['is_round_trip'] ?? false,
+            'customer_notes' => $data['customer_notes'] ?? null,
         ]);
 
         $this->calculateAndStoreRoute($job);
 
         return $job;
+    }
+
+    /**
+     * Create multiple transport bookings sharing the same route, date, and customer notes.
+     * $vehicles is an array of ['vin' => ..., 'model_name' => ..., 'brand_id' => ..., 'registration' => ...]
+     * Returns a collection of the created Jobs.
+     */
+    public function createTransportBookingBatch(array $common, array $vehicles): \Illuminate\Support\Collection
+    {
+        $jobs = collect();
+
+        foreach ($vehicles as $vehicle) {
+            $payload = array_merge($common, [
+                'vin' => $vehicle['vin'],
+                'model_name' => $vehicle['model_name'] ?? null,
+                'brand_id' => $vehicle['brand_id'] ?? ($common['brand_id'] ?? null),
+                'registration' => $vehicle['registration'] ?? null,
+            ]);
+
+            $jobs->push($this->createTransportBooking($payload));
+        }
+
+        return $jobs;
     }
 
     public function createYardBooking(array $data): Job

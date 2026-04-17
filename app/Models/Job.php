@@ -213,6 +213,7 @@ class Job extends Model
         'delivered_at',
         'confirmation_reason',
         'confirmation_note',
+        'customer_notes',
     ];
 
     protected function casts(): array
