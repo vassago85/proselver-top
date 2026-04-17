@@ -71,6 +71,9 @@ class JobPolicy
             return false;
         }
 
+        // Internal ProSelver staff / Developer retain an override for support
+        // cases (e.g. confirming on a customer's behalf after a phone call,
+        // with the audit log recording who did it).
         if ($user->isInternal() || $user->isDeveloper()) {
             return true;
         }
@@ -83,12 +86,15 @@ class JobPolicy
             return false;
         }
 
-        // Location scoping: a dispatcher pinned to a specific branch (e.g. FAW
-        // JHB) can only confirm orders that collect *from* their branch. The
-        // confirmation represents "the truck is here and ready" — which only
-        // makes physical sense at the pickup site. Account-wide roles
-        // (customer_owner / customer_admin) skip this check.
-        if ($user->isLocationRestricted() && $job->pickup_location_id !== $user->assignedLocationId()) {
+        // Hard rule: the person confirming must be physically at the pickup
+        // depot. The whole purpose of this step is "truck is here, ready to
+        // roll" — a statement only someone pinned to that depot can honestly
+        // make. Account-wide roles (customer_owner / customer_admin in JHB)
+        // are deliberately blocked here, otherwise they re-create the exact
+        // problem this step exists to prevent (driver dispatched to a depot
+        // where the vehicle isn't present or not driveable).
+        $userDepotId = $user->assignedLocationId();
+        if ($userDepotId === null || $job->pickup_location_id !== $userDepotId) {
             return false;
         }
 

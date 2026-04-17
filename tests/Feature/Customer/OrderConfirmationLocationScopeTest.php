@@ -76,10 +76,31 @@ test('the Cape Town dispatcher can confirm their own pickup', function () {
     expect($cpt->can('confirmCustomerOrder', $job))->toBeTrue();
 });
 
-test('the account owner (no location) can confirm any pickup', function () {
+test('the account owner in JHB cannot confirm a Cape Town pickup', function () {
+    // The owner places orders centrally but has no way to physically verify
+    // a truck sitting at Coega. Allowing them to confirm would re-create the
+    // exact problem this step exists to prevent (driver dispatched to an
+    // empty / unready yard). Only the depot-pinned dispatcher can confirm.
     ['owner' => $owner, 'cptJob' => $job] = makeFawScenario();
 
-    expect($owner->can('confirmCustomerOrder', $job))->toBeTrue();
+    expect($owner->can('confirmCustomerOrder', $job))->toBeFalse();
+});
+
+test('an account owner cannot confirm any order, even one that matches no depot', function () {
+    ['owner' => $owner, 'faw' => $faw, 'jhb' => $jhb] = makeFawScenario();
+
+    $jhbJob = \App\Models\Job::create([
+        'uuid' => (string) \Illuminate\Support\Str::uuid(),
+        'job_type' => 'transport',
+        'status' => \App\Models\Job::STATUS_AWAITING_CUSTOMER_CONFIRMATION,
+        'company_id' => $faw->id,
+        'created_by_user_id' => $owner->id,
+        'pickup_location_id' => $jhb->id,
+        'delivery_location_id' => $jhb->id,
+        'scheduled_date' => now()->addDay()->toDateString(),
+    ]);
+
+    expect($owner->can('confirmCustomerOrder', $jhbJob))->toBeFalse();
 });
 
 test('a JHB dispatcher 404s on a Cape Town order detail page', function () {
