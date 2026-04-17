@@ -18,15 +18,42 @@ class VehicleModelSeeder extends Seeder
     public function run(): void
     {
         $catalogue = [
+            // FAW SA current model range (scraped from faw.co.za).
+            // Mix of freight carriers (FL), truck tractors (FT), tippers (FD),
+            // and mixers (FC). Legacy codes kept for historical orders.
             'FAW' => [
+                // Freight carriers
                 '4.110FL-MT',
+                '6.130FL',
                 '8.140FL',
+                '8.140FL-AMT',
                 '15.180FL',
                 'JK6 15.220FL',
-                'JK6 15.180FL',
+                'JK6 16.260FL',
+                'JK6 16.260FL-AMT',
                 'J5N 28.290FL',
-                'J7 28.550FTP',
+                // Truck tractors
+                '15.180FT',
+                'JK6 15.220FD/FT',
+                'J5N 28.380FT',
+                'J5N 33.420FT',
+                'JH6 28.500FT',
                 'JH6 28.550FT',
+                'JH6 33.420FT',
+                'JH6 33.460FT-AMT',
+                'J7 28.550FT/M',
+                'J7 28.550FT/P',
+                // Tippers
+                '15.180FD',
+                'JK6 16.240FD/FT',
+                'J5N 28.290FD',
+                'J5N 33.340FD',
+                'J5N 35.340FD',
+                // Mixers
+                'J5N 33.340FC',
+                'J5N 35.340FC',
+                // Legacy (retained for historical order compatibility)
+                'JK6 15.180FL',
             ],
             'Isuzu' => [
                 'NQR500AC',

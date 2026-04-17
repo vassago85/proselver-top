@@ -486,6 +486,13 @@ new #[Layout('components.layouts.app')] class extends Component {
             </div>
             @endif
 
+            @if($vehicleModels->isNotEmpty())
+                <datalist id="vehicle-models-datalist">
+                    @foreach($vehicleModels as $vm)<option value="{{ $vm->name }}"></option>@endforeach
+                </datalist>
+                <p class="mb-2 text-xs text-gray-500">Model field has {{ $vehicleModels->count() }} suggestion{{ $vehicleModels->count() === 1 ? '' : 's' }} â€” start typing or pick from the list. You can enter any value.</p>
+            @endif
+
             <div class="overflow-x-auto">
                 <table class="min-w-full text-sm">
                     <thead>
@@ -506,14 +513,12 @@ new #[Layout('components.layouts.app')] class extends Component {
                                 @error("vehicles.$i.vin")<p class="mt-0.5 text-xs text-red-600">{{ $message }}</p>@enderror
                             </td>
                             <td class="px-2 py-2">
-                                @if($vehicleModels->isNotEmpty())
-                                    <select wire:model="vehicles.{{ $i }}.model_name" class="w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm">
-                                        <option value="">Select model...</option>
-                                        @foreach($vehicleModels as $vm)<option value="{{ $vm->name }}">{{ $vm->name }}</option>@endforeach
-                                    </select>
-                                @else
-                                    <input wire:model="vehicles.{{ $i }}.model_name" type="text" class="w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm" placeholder="e.g. Actros 2645">
-                                @endif
+                                <input wire:model="vehicles.{{ $i }}.model_name"
+                                    list="vehicle-models-datalist"
+                                    type="text"
+                                    autocomplete="off"
+                                    class="w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+                                    placeholder="{{ $vehicleModels->isNotEmpty() ? 'Type or pick a model...' : 'e.g. Actros 2645' }}">
                             </td>
                             <td class="px-2 py-2">
                                 <input wire:model="vehicles.{{ $i }}.registration" type="text" class="w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm uppercase" placeholder="Optional">
