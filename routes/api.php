@@ -1,10 +1,9 @@
 <?php
 
-use App\Http\Controllers\Api\DriverSyncController;
-use Illuminate\Support\Facades\Route;
-
-Route::middleware('auth:sanctum')->prefix('driver')->group(function () {
-    Route::get('jobs', [DriverSyncController::class, 'jobs']);
-    Route::post('jobs/{job}/events', [DriverSyncController::class, 'syncEvents']);
-    Route::post('jobs/{job}/documents', [DriverSyncController::class, 'uploadDocument']);
-});
+/*
+ * Global API routes live here when added. Driver PWA sync endpoints live in
+ * routes/driver.php under /driver/api/... so they inherit the same session
+ * auth + driver.access middleware stack as the rest of the driver app
+ * (see bootstrap/app.php), avoiding a separate token stack for what is a
+ * same-origin installable web app.
+ */

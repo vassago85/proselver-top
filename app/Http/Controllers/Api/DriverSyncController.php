@@ -9,7 +9,6 @@ use App\Models\JobEvent;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Str;
 
 class DriverSyncController extends Controller
 {
@@ -100,16 +99,33 @@ class DriverSyncController extends Controller
         return response()->json(['synced' => $synced]);
     }
 
+    /**
+     * Idempotent document upload. The PWA queues captures with a client-generated
+     * uuid and retries until we confirm; this endpoint de-dupes on client_uuid so
+     * a flaky network never produces duplicate rows.
+     */
     public function uploadDocument(Request $request, Job $job): JsonResponse
     {
         if ($job->driver_user_id !== $request->user()->id) {
             return response()->json(['error' => 'Unauthorized'], 403);
         }
 
-        $request->validate([
+        $validated = $request->validate([
             'file' => 'required|file|max:10240',
-            'category' => 'required|string|in:proof_of_delivery,fuel_slip,photo,other',
+            'category' => 'required|string|in:' . implode(',', JobDocument::allowedCategories()),
+            'client_uuid' => 'required|uuid',
+            'captured_at' => 'nullable|date',
+            'latitude' => 'nullable|numeric|between:-90,90',
+            'longitude' => 'nullable|numeric|between:-180,180',
+            'notes' => 'nullable|string|max:500',
         ]);
+
+        // Idempotency short-circuit — a retry with the same client_uuid returns
+        // the original row with 200 instead of creating a duplicate.
+        $existing = JobDocument::where('client_uuid', $validated['client_uuid'])->first();
+        if ($existing) {
+            return response()->json(['document' => $existing, 'idempotent' => true], 200);
+        }
 
         $file = $request->file('file');
         $disk = config('filesystems.default') === 'local' ? 'local' : 'r2';
@@ -118,13 +134,18 @@ class DriverSyncController extends Controller
         $doc = JobDocument::create([
             'job_id' => $job->id,
             'uploaded_by_user_id' => $request->user()->id,
-            'category' => $request->category,
+            'category' => $validated['category'],
             'disk' => $disk,
             'path' => $path,
             'original_filename' => $file->getClientOriginalName(),
             'mime_type' => $file->getMimeType(),
             'size_bytes' => $file->getSize(),
             'file_hash' => hash_file('sha256', $file->getRealPath()),
+            'client_uuid' => $validated['client_uuid'],
+            'captured_at' => $validated['captured_at'] ?? null,
+            'latitude' => $validated['latitude'] ?? null,
+            'longitude' => $validated['longitude'] ?? null,
+            'notes' => $validated['notes'] ?? null,
         ]);
 
         return response()->json(['document' => $doc], 201);

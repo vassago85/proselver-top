@@ -1,0 +1,33 @@
+{
+    "name": "Proselver Trident Driver",
+    "short_name": "Trident",
+    "description": "Offline-first driver app for Proselver Trident — capture collection / delivery photos, POD, and petty cash slips.",
+    "id": "/driver/",
+    "start_url": "/driver/dashboard",
+    "scope": "/driver/",
+    "display": "standalone",
+    "orientation": "portrait",
+    "background_color": "#0f172a",
+    "theme_color": "#1e40af",
+    "categories": ["business", "productivity", "utilities"],
+    "icons": [
+        {
+            "src": "/logo.png",
+            "sizes": "192x192",
+            "type": "image/png",
+            "purpose": "any"
+        },
+        {
+            "src": "/logo.png",
+            "sizes": "512x512",
+            "type": "image/png",
+            "purpose": "any"
+        },
+        {
+            "src": "/logo.png",
+            "sizes": "512x512",
+            "type": "image/png",
+            "purpose": "maskable"
+        }
+    ]
+}
