@@ -75,11 +75,24 @@ class JobPolicy
             return true;
         }
 
-        if ($user->canConfirmCustomerOrder() && $user->companies->pluck('id')->contains($job->company_id)) {
-            return true;
+        if (! $user->canConfirmCustomerOrder()) {
+            return false;
         }
 
-        return false;
+        if (! $user->companies->pluck('id')->contains($job->company_id)) {
+            return false;
+        }
+
+        // Location scoping: a dispatcher pinned to a specific branch (e.g. FAW
+        // JHB) can only confirm orders that collect *from* their branch. The
+        // confirmation represents "the truck is here and ready" — which only
+        // makes physical sense at the pickup site. Account-wide roles
+        // (customer_owner / customer_admin) skip this check.
+        if ($user->isLocationRestricted() && $job->pickup_location_id !== $user->assignedLocationId()) {
+            return false;
+        }
+
+        return true;
     }
 
     public function plan(User $user, Job $job): bool

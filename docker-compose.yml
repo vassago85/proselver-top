@@ -1,3 +1,18 @@
+# ============================================================================
+# LOCAL DEVELOPMENT ONLY.
+#
+# This compose file bind-mounts the host into the container and uses the
+# dev Dockerfile (no `npm run build` step, no compiled assets baked in).
+# Running this on the server will break CSS/JS because there is no
+# public/build manifest inside the container.
+#
+# For production deploys ALWAYS pass the prod file explicitly:
+#
+#     docker compose -f docker-compose.prod.yml build --no-cache app
+#     docker compose -f docker-compose.prod.yml up -d --force-recreate app scheduler queue
+#
+# ============================================================================
+
 services:
   app:
     build:

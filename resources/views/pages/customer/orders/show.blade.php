@@ -20,6 +20,17 @@ new #[Layout('components.layouts.app')] class extends Component {
         $company = $user->company();
         abort_unless($company && $job->company_id === $company->id, 403);
 
+        // Location scoping for dispatcher-level customer users: mirror the
+        // order list rule — you can only open an order that either collects
+        // from *or* delivers to your assigned branch. Account-wide roles
+        // (customer_owner / customer_admin) see every location.
+        if ($user->isLocationRestricted()) {
+            $locationId = $user->assignedLocationId();
+            $matches = $job->pickup_location_id === $locationId
+                || $job->delivery_location_id === $locationId;
+            abort_unless($matches, 404);
+        }
+
         $this->job = $job->load([
             'pickupLocation',
             'deliveryLocation',
@@ -79,9 +90,8 @@ new #[Layout('components.layouts.app')] class extends Component {
         $phase1Statuses = Job::PHASE1_STATUSES;
         $currentIndex = array_search($this->job->status, $phase1Statuses);
 
-        $canConfirm = auth()->user()->canConfirmCustomerOrder()
-            && $this->requiresConfirmation
-            && $this->job->status === Job::STATUS_AWAITING_CUSTOMER_CONFIRMATION;
+        $canConfirm = auth()->user()->can('confirmCustomerOrder', $this->job)
+            && $this->requiresConfirmation;
 
         return [
             'allDocuments' => $allDocuments,

@@ -8,6 +8,15 @@ mkdir -p /var/www/html/storage/framework/views
 mkdir -p /var/www/html/storage/logs
 mkdir -p /var/www/html/bootstrap/cache
 
+# Defensive: if public/hot ever slips into the image (bind mount, stray
+# commit, manual exec running `npm run dev`), strip it now. Its presence
+# forces @vite to resolve every asset to the host's localhost:5173 dev
+# server, breaking all CSS/JS in production.
+if [ -f /var/www/html/public/hot ]; then
+    echo "Removing stray public/hot (Vite dev-server marker)..."
+    rm -f /var/www/html/public/hot
+fi
+
 echo "Setting permissions..."
 chown -R www-data:www-data /var/www/html/storage /var/www/html/bootstrap/cache
 chmod -R 775 /var/www/html/storage /var/www/html/bootstrap/cache

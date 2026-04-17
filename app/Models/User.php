@@ -78,6 +78,28 @@ class User extends Authenticatable
         return $company?->pivot?->location_id;
     }
 
+    /**
+     * A user is "location-restricted" when their pivot row pins them to a
+     * specific branch/depot AND their role is not an account-wide one
+     * (customer_owner / customer_admin always see / act across all locations
+     * for that account). Internal / developer roles are never restricted.
+     *
+     * Used to scope both visibility (order lists, dashboards) and privileged
+     * actions (confirming FAW-style external orders).
+     */
+    public function isLocationRestricted(): bool
+    {
+        if ($this->isInternal() || $this->isDeveloper() || $this->isDriver()) {
+            return false;
+        }
+
+        if ($this->hasAnyRole(['customer_owner', 'customer_admin'])) {
+            return false;
+        }
+
+        return $this->assignedLocationId() !== null;
+    }
+
     public function driverProfile(): \Illuminate\Database\Eloquent\Relations\HasOne
     {
         return $this->hasOne(DriverProfile::class);
