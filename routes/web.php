@@ -3,6 +3,7 @@
 use App\Models\PurchaseOrder;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Storage;
+use Livewire\Volt\Volt;
 
 Route::get('/po/{po}/preview', function (PurchaseOrder $po) {
     $user = auth()->user();
@@ -57,3 +58,10 @@ Route::get('/', function () {
 Route::get('/dashboard', function () {
     return redirect()->to(resolveUserHomePath(auth()->user()));
 })->middleware('auth')->name('dashboard');
+
+// Self-service profile & password for every signed-in user, regardless of
+// role. Sits outside the role-scoped /admin, /dealer, /oem, /customer groups
+// so a user can always reach their own settings from the top-right dropdown.
+Volt::route('/profile', 'profile.index')
+    ->middleware('auth')
+    ->name('profile.index');
