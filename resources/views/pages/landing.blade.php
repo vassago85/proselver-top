@@ -47,7 +47,7 @@
     <header class="fixed inset-x-0 top-0 z-40 backdrop-blur-md bg-white/75 border-b border-slate-200/70">
         <div class="mx-auto max-w-7xl px-6 lg:px-8 h-16 flex items-center justify-between">
             <a href="#top" class="flex items-center gap-2.5 group">
-                <img src="/logo.png" alt="TRIDENT" class="h-10 w-auto object-contain" />
+                <img src="/logo.png?v=2" alt="TRIDENT" class="h-10 w-auto object-contain" />
                 <span class="sr-only">TRIDENT Control &amp; Dispatch Center</span>
             </a>
             <nav class="hidden md:flex items-center gap-8 text-sm text-slate-600">
@@ -79,7 +79,7 @@
         <div class="relative mx-auto max-w-7xl px-6 lg:px-8 pt-20 lg:pt-28 pb-20 lg:pb-28">
             <div class="mx-auto max-w-3xl text-center">
                 <div class="flex justify-center">
-                    <img src="/logo.png" alt="TRIDENT — Control &amp; Dispatch Center" class="h-40 sm:h-48 lg:h-56 w-auto object-contain drop-shadow-sm" />
+                    <img src="/logo.png?v=2" alt="TRIDENT — Control &amp; Dispatch Center" class="h-40 sm:h-48 lg:h-56 w-auto object-contain drop-shadow-sm" />
                 </div>
                 <div class="mt-8 inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white/60 backdrop-blur px-3 py-1 text-xs font-medium text-slate-600 shadow-sm">
                     <span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
@@ -597,7 +597,7 @@
     <footer class="border-t border-slate-200 bg-white">
         <div class="mx-auto max-w-7xl px-6 lg:px-8 py-10 flex flex-col sm:flex-row items-center justify-between gap-4">
             <div class="flex items-center gap-3">
-                <img src="/logo.png" alt="TRIDENT" class="h-9 w-auto object-contain" />
+                <img src="/logo.png?v=2" alt="TRIDENT" class="h-9 w-auto object-contain" />
                 <span class="hidden sm:inline text-xs text-slate-400">· TRIDENT — Control &amp; Dispatch Center</span>
             </div>
             <p class="text-xs text-slate-500">© {{ date('Y') }} TRIDENT. Built for operations that move every vehicle accounted for.</p>

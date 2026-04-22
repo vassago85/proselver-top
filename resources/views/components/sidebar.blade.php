@@ -30,7 +30,7 @@
     {{-- Brand --}}
     <div class="flex shrink-0 items-center gap-3 px-5 pt-5">
         <a href="{{ route('home') }}" class="flex items-center gap-3 group">
-            <img src="/logo.png" alt="TRIDENT Control &amp; Dispatch Center" class="h-11 w-auto object-contain" />
+            <img src="/logo.png?v=2" alt="TRIDENT Control &amp; Dispatch Center" class="h-11 w-auto object-contain" />
         </a>
     </div>
 

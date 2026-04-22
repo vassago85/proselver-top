@@ -12,7 +12,7 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="Trident Driver">
-    <link rel="apple-touch-icon" href="/logo.png">
+    <link rel="apple-touch-icon" href="/logo.png?v=2">
 
     @vite(['resources/css/app.css', 'resources/js/driver/driver.js'])
     @livewireStyles
@@ -35,7 +35,7 @@
         {{-- Top bar --}}
         <header class="sticky top-0 z-30 flex h-14 items-center gap-3 border-b border-slate-200 bg-white/95 backdrop-blur px-4">
             <a href="{{ route('driver.dashboard') }}" class="flex items-center gap-2 min-w-0 flex-1">
-                <img src="/logo.png" alt="" class="h-7 w-7 object-contain">
+                <img src="/logo.png?v=2" alt="" class="h-7 w-7 object-contain">
                 <span class="text-sm font-semibold tracking-tight text-slate-900 truncate">
                     @isset($header){{ $header }}@else Trident Driver @endisset
                 </span>
