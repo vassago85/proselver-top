@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Traits\Auditable;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -143,12 +144,28 @@ class Job extends Model
         self::STATUS_CANCELLED => 'Cancelled',
     ];
 
+    // Where the vehicle is going. Dealer + body_builder are both "delivered"
+    // outcomes from an inventory perspective (see InventoryLifecycleService);
+    // yard is a transit stop, other is a catch-all.
+    const DESTINATION_DEALER = 'dealer';
+    const DESTINATION_BODY_BUILDER = 'body_builder';
+    const DESTINATION_YARD = 'yard';
+    const DESTINATION_OTHER = 'other';
+
+    const DESTINATION_TYPES = [
+        self::DESTINATION_DEALER,
+        self::DESTINATION_BODY_BUILDER,
+        self::DESTINATION_YARD,
+        self::DESTINATION_OTHER,
+    ];
+
     protected $fillable = [
         'uuid',
         'job_number',
         'job_type',
         'status',
         'company_id',
+        'executing_company_id',
         'created_by_user_id',
         'driver_user_id',
         'transport_route_id',
@@ -156,12 +173,14 @@ class Job extends Model
         'pickup_contact_name',
         'pickup_contact_phone',
         'delivery_location_id',
+        'destination_type',
         'delivery_contact_name',
         'delivery_contact_phone',
         'vehicle_class_id',
         'brand_id',
         'model_name',
         'vin',
+        'inventory_id',
         'registration',
         'original_vin',
         'vehicle_reassigned_at',
@@ -406,6 +425,25 @@ class Job extends Model
         return $this->belongsTo(Company::class);
     }
 
+    /**
+     * Company actually moving the vehicle. NULL means the platform-owner
+     * company (us) is executing internally — the default for every existing
+     * and newly-booked job until 3PL transporters are onboarded.
+     */
+    public function executingCompany(): BelongsTo
+    {
+        return $this->belongsTo(Company::class, 'executing_company_id');
+    }
+
+    /**
+     * Optional link to the per-chassis inventory row this job is moving.
+     * Populated only when config('features.inventory_link') is on.
+     */
+    public function inventory(): BelongsTo
+    {
+        return $this->belongsTo(Inventory::class, 'inventory_id');
+    }
+
     public function createdBy(): BelongsTo
     {
         return $this->belongsTo(User::class, 'created_by_user_id');
@@ -474,5 +512,29 @@ class Job extends Model
     public function changeRequests(): HasMany
     {
         return $this->hasMany(\App\Models\BookingChangeRequest::class, 'job_id');
+    }
+
+    /**
+     * Opt-in visibility scope mirroring JobPolicy::view. Platform-owner /
+     * internal users see everything; everyone else sees jobs where their
+     * company is either the booking customer OR the executing transporter.
+     *
+     * This is NOT a global scope; apply it explicitly where it's wanted.
+     */
+    public function scopeVisibleTo(Builder $query, User $user): Builder
+    {
+        if ($user->isInternal() || $user->belongsToPlatformOwner()) {
+            return $query;
+        }
+
+        $companyIds = $user->operatingCompanyIds();
+        if (empty($companyIds)) {
+            return $query->whereRaw('1 = 0');
+        }
+
+        return $query->where(function (Builder $q) use ($companyIds) {
+            $q->whereIn('company_id', $companyIds)
+                ->orWhereIn('executing_company_id', $companyIds);
+        });
     }
 }

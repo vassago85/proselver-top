@@ -59,6 +59,27 @@ class User extends Authenticatable
         return $this->companies()->first();
     }
 
+    /**
+     * True when the user is linked to the platform-owner company. Used by the
+     * visibility scopes on Job / Inventory so platform-owner users can see
+     * everything, regardless of which other companies they may also belong to.
+     */
+    public function belongsToPlatformOwner(): bool
+    {
+        return $this->companies()->where('is_platform_owner', true)->exists();
+    }
+
+    /**
+     * IDs of every company this user belongs to. Used by opt-in scopes that
+     * filter by "companies I'm a member of" (booking customer OR executor).
+     *
+     * @return array<int, int>
+     */
+    public function operatingCompanyIds(): array
+    {
+        return $this->companies()->pluck('companies.id')->all();
+    }
+
     public function assignedLocation(): ?Location
     {
         $company = $this->companies()->first();

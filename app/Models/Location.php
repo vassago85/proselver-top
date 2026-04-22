@@ -14,11 +14,26 @@ class Location extends Model
 {
     use Auditable, SoftDeletes;
 
+    public const TYPE_PLANT = 'plant';
+    public const TYPE_YARD = 'yard';
+    public const TYPE_STORAGE = 'storage';
+    public const TYPE_DEALER = 'dealer';
+    public const TYPE_BODY_BUILDER = 'body_builder';
+
+    public const TYPES = [
+        self::TYPE_PLANT,
+        self::TYPE_YARD,
+        self::TYPE_STORAGE,
+        self::TYPE_DEALER,
+        self::TYPE_BODY_BUILDER,
+    ];
+
     protected $fillable = [
         'uuid',
         'company_id',
         'zone_id',
         'company_name',
+        'type',
         'address',
         'city',
         'province',

@@ -60,6 +60,41 @@ class DemoSeeder extends Seeder
         );
         $accounts->assignRole('accounts');
 
+        // ===== PLATFORM OWNER (TRIDENT Control & Dispatch Center) =====
+        // The company operating the platform. Flagged `is_platform_owner = true`
+        // so User::belongsToPlatformOwner() returns true for any user linked
+        // here. Type is 'transporter' because the same entity also physically
+        // moves vehicles today; once 3PL transporters are onboarded they
+        // become additional `type = 'transporter'` rows without this flag.
+        $platformOwner = Company::firstOrCreate(
+            ['normalized_name' => 'trident control & dispatch center'],
+            [
+                'name' => 'TRIDENT Control & Dispatch Center',
+                'type' => 'transporter',
+                'workflow_type' => 'standard',
+                'is_platform_owner' => true,
+                'billing_email' => 'billing@tcdc.test',
+            ]
+        );
+        // Ensure the flag is set even if the row pre-existed from an earlier
+        // run that didn't know about is_platform_owner.
+        if (! $platformOwner->is_platform_owner) {
+            $platformOwner->update(['is_platform_owner' => true]);
+        }
+
+        // Link internal staff to the platform-owner company so the new
+        // visibility helpers (belongsToPlatformOwner / operatingCompanyIds)
+        // resolve correctly. syncWithoutDetaching preserves any prior pivot
+        // rows, so this is idempotent and safe to re-run.
+        $platformOwner->users()->syncWithoutDetaching([
+            $owner->id => ['location_id' => null],
+            $opsController->id => ['location_id' => null],
+            $opsController2->id => ['location_id' => null],
+            $dispatcher->id => ['location_id' => null],
+            $dispatcher2->id => ['location_id' => null],
+            $accounts->id => ['location_id' => null],
+        ]);
+
         // ===== FAW COMPANY (requires external confirmation) =====
         $faw = Company::firstOrCreate(
             ['normalized_name' => 'faw south africa'],

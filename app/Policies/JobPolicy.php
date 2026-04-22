@@ -18,12 +18,29 @@ class JobPolicy
             return true;
         }
 
+        // Platform-owner users (e.g. ProSelver / TCDC ops) see every job
+        // regardless of role, matching the Phase 1 visibility rules. For any
+        // user who is already isInternal() this is a no-op; it only matters
+        // for future platform-owner users whose role tier is something other
+        // than 'internal'.
+        if ($user->belongsToPlatformOwner()) {
+            return true;
+        }
+
         if ($user->isDriver()) {
             return $job->driver_user_id === $user->id;
         }
 
         if ($user->isCustomer() || $user->isDealer() || $user->isOem()) {
-            return $user->companies->pluck('id')->contains($job->company_id);
+            $companyIds = $user->companies->pluck('id');
+            if ($companyIds->contains($job->company_id)) {
+                return true;
+            }
+            // Future 3PL transporters: a user can view jobs their company is
+            // executing, even when they didn't book them.
+            if ($job->executing_company_id !== null && $companyIds->contains($job->executing_company_id)) {
+                return true;
+            }
         }
 
         return false;
