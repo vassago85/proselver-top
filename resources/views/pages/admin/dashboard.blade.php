@@ -33,7 +33,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             'in_transit'           => Job::where('status', Job::STATUS_IN_TRANSIT)->count(),
         ];
 
-        // Driver compliance
+        // Driver compliance (licence + PDP, 60-day horizon)
         $driverThreshold = now()->addDays(60);
         $driversExpiringSoon = DriverProfile::where(function ($q) use ($driverThreshold) {
                 $q->whereBetween('license_expiry', [now(), $driverThreshold])
@@ -43,6 +43,34 @@ new #[Layout('components.layouts.app')] class extends Component {
                 $q->where('license_expiry', '<', now())
                   ->orWhere('prdp_expiry', '<', now());
             })->count();
+
+        // Fleet Health — trade plates, equipment coverage, identity flags.
+        // Deliberately scoped to drivers whose user account is active so ops
+        // are not chasing retired drivers about an expired plate.
+        $activeDriverProfiles = DriverProfile::whereHas('user', fn($q) => $q->where('is_active', true));
+        $activeDriverCount = (clone $activeDriverProfiles)->count();
+
+        $tradePlateHeld       = (clone $activeDriverProfiles)->whereNotNull('trade_plate')->where('trade_plate', '!=', '')->count();
+        $tradePlateExpired    = (clone $activeDriverProfiles)->whereNotNull('trade_plate_expiry')->whereDate('trade_plate_expiry', '<', now())->count();
+        $tradePlateExpiring   = (clone $activeDriverProfiles)->whereNotNull('trade_plate_expiry')->whereBetween('trade_plate_expiry', [now(), $driverThreshold])->count();
+
+        // "Missing" only counts drivers who actually *have* a plate issued but
+        // no expiry recorded — a data-quality prompt for ops, not a compliance
+        // flag on the driver himself.
+        $tradePlateMissingExpiry = (clone $activeDriverProfiles)
+            ->whereNotNull('trade_plate')->where('trade_plate', '!=', '')
+            ->whereNull('trade_plate_expiry')->count();
+
+        $missingTracker  = (clone $activeDriverProfiles)->where(fn($q) => $q->whereNull('tracker_id')->orWhere('tracker_id', ''))->count();
+        $missingCamera   = (clone $activeDriverProfiles)->where(fn($q) => $q->whereNull('camera_id')->orWhere('camera_id', ''))->count();
+        $missingTollCard = (clone $activeDriverProfiles)->where(fn($q) => $q->whereNull('toll_card_number')->orWhere('toll_card_number', ''))->count();
+
+        $passportHolders = (clone $activeDriverProfiles)->where('id_type', DriverProfile::ID_TYPE_PASSPORT)->count();
+        // SA ID sanity: 13-digit-only; anything else flagged for verification.
+        $saIdAnomalies = (clone $activeDriverProfiles)
+            ->where('id_type', DriverProfile::ID_TYPE_SA_ID)
+            ->whereRaw("length(regexp_replace(id_number, '\\D', '', 'g')) <> 13")
+            ->count();
 
         $recentOrders = Job::with(['company:id,name,workflow_type', 'pickupLocation:id,company_name,city', 'deliveryLocation:id,company_name,city', 'brand:id,name'])
             ->whereIn('status', Job::PHASE1_STATUSES)
@@ -68,6 +96,16 @@ new #[Layout('components.layouts.app')] class extends Component {
             'driversExpired',
             'recentOrders',
             'activeMovements',
+            'activeDriverCount',
+            'tradePlateHeld',
+            'tradePlateExpired',
+            'tradePlateExpiring',
+            'tradePlateMissingExpiry',
+            'missingTracker',
+            'missingCamera',
+            'missingTollCard',
+            'passportHolders',
+            'saIdAnomalies',
         );
     }
 };
@@ -196,6 +234,116 @@ new #[Layout('components.layouts.app')] class extends Component {
                     <span class="text-lg font-semibold tabular-nums text-slate-900">{{ $liveCounts[$node['key']] ?? 0 }}</span>
                 </div>
             @endforeach
+        </div>
+    </div>
+
+    {{-- Fleet Health strip --}}
+    {{-- Three horizontal clusters: Trade Plates, Equipment coverage, Identity.
+         Each chip deep-links into /admin/drivers with the matching filter so
+         ops can triage expired plates / missing trackers / passport holders
+         without opening a second tab. Counts are scoped to ACTIVE drivers
+         only so retired staff never inflate the "needs action" number. --}}
+    @php
+        $driversRoute = route('admin.drivers.index');
+        $fleetChipBase = 'inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold transition-colors';
+        $fleetChipSlate = $fleetChipBase . ' bg-slate-100 text-slate-700 hover:bg-slate-200';
+        $fleetChipAmber = $fleetChipBase . ' bg-amber-100 text-amber-800 hover:bg-amber-200';
+        $fleetChipRed   = $fleetChipBase . ' bg-red-100 text-red-800 hover:bg-red-200';
+        $fleetChipBlue  = $fleetChipBase . ' bg-blue-50 text-blue-700 hover:bg-blue-100';
+    @endphp
+    <div class="mb-6 rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+        <div class="flex items-center justify-between gap-3 border-b border-slate-100 px-6 py-4">
+            <div class="flex items-center gap-3">
+                <span class="inline-flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.25em] text-emerald-600">
+                    <span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
+                    Fleet health
+                </span>
+                <span class="text-[11px] text-slate-400">{{ $activeDriverCount }} active driver{{ $activeDriverCount === 1 ? '' : 's' }}</span>
+            </div>
+            <a href="{{ $driversRoute }}" class="text-xs font-semibold text-slate-600 hover:text-slate-900 inline-flex items-center gap-1 transition-colors">
+                Open drivers
+                <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></svg>
+            </a>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-3 divide-y md:divide-y-0 md:divide-x divide-slate-100">
+
+            {{-- Trade plates --}}
+            <div class="px-6 py-4">
+                <div class="flex items-center justify-between gap-3 mb-2">
+                    <span class="text-xs font-semibold text-slate-700">Trade Plates</span>
+                    <span class="text-lg font-semibold tabular-nums text-slate-900">{{ $tradePlateHeld }}</span>
+                </div>
+                <div class="flex flex-wrap gap-1.5">
+                    @if($tradePlateExpired > 0)
+                        <a href="{{ $driversRoute }}?trade_plate=expired" class="{{ $fleetChipRed }}">
+                            <span class="h-1.5 w-1.5 rounded-full bg-red-500"></span>
+                            {{ $tradePlateExpired }} expired
+                        </a>
+                    @endif
+                    @if($tradePlateExpiring > 0)
+                        <a href="{{ $driversRoute }}?trade_plate=expiring" class="{{ $fleetChipAmber }}">
+                            <span class="h-1.5 w-1.5 rounded-full bg-amber-500"></span>
+                            {{ $tradePlateExpiring }} expiring 60d
+                        </a>
+                    @endif
+                    @if($tradePlateMissingExpiry > 0)
+                        <a href="{{ $driversRoute }}?trade_plate=missing_expiry" class="{{ $fleetChipSlate }}">
+                            {{ $tradePlateMissingExpiry }} missing expiry date
+                        </a>
+                    @endif
+                    @if($tradePlateExpired === 0 && $tradePlateExpiring === 0 && $tradePlateMissingExpiry === 0)
+                        <span class="text-[11px] text-slate-400">All plates current</span>
+                    @endif
+                </div>
+            </div>
+
+            {{-- Equipment --}}
+            <div class="px-6 py-4">
+                <div class="flex items-center justify-between gap-3 mb-2">
+                    <span class="text-xs font-semibold text-slate-700">Equipment</span>
+                    <span class="text-[11px] text-slate-400">tracker · camera · toll card</span>
+                </div>
+                <div class="flex flex-wrap gap-1.5">
+                    <a href="{{ $driversRoute }}?missing=tracker" class="{{ $missingTracker > 0 ? $fleetChipAmber : $fleetChipSlate }}">
+                        <span class="h-1.5 w-1.5 rounded-full {{ $missingTracker > 0 ? 'bg-amber-500' : 'bg-slate-400' }}"></span>
+                        {{ $missingTracker }} no tracker
+                    </a>
+                    <a href="{{ $driversRoute }}?missing=camera" class="{{ $missingCamera > 0 ? $fleetChipAmber : $fleetChipSlate }}">
+                        <span class="h-1.5 w-1.5 rounded-full {{ $missingCamera > 0 ? 'bg-amber-500' : 'bg-slate-400' }}"></span>
+                        {{ $missingCamera }} no camera
+                    </a>
+                    <a href="{{ $driversRoute }}?missing=toll_card" class="{{ $missingTollCard > 0 ? $fleetChipAmber : $fleetChipSlate }}">
+                        <span class="h-1.5 w-1.5 rounded-full {{ $missingTollCard > 0 ? 'bg-amber-500' : 'bg-slate-400' }}"></span>
+                        {{ $missingTollCard }} no toll card
+                    </a>
+                </div>
+            </div>
+
+            {{-- Identity --}}
+            <div class="px-6 py-4">
+                <div class="flex items-center justify-between gap-3 mb-2">
+                    <span class="text-xs font-semibold text-slate-700">Identity</span>
+                    <span class="text-[11px] text-slate-400">SA ID vs passport</span>
+                </div>
+                <div class="flex flex-wrap gap-1.5">
+                    @if($passportHolders > 0)
+                        <a href="{{ $driversRoute }}?id_type=passport" class="{{ $fleetChipBlue }}">
+                            <span class="h-1.5 w-1.5 rounded-full bg-blue-500"></span>
+                            {{ $passportHolders }} passport
+                        </a>
+                    @endif
+                    @if($saIdAnomalies > 0)
+                        <a href="{{ $driversRoute }}?id_anomaly=1" class="{{ $fleetChipAmber }}">
+                            <span class="h-1.5 w-1.5 rounded-full bg-amber-500"></span>
+                            {{ $saIdAnomalies }} SA ID to verify
+                        </a>
+                    @endif
+                    @if($passportHolders === 0 && $saIdAnomalies === 0)
+                        <span class="text-[11px] text-slate-400">All SA IDs valid</span>
+                    @endif
+                </div>
+            </div>
+
         </div>
     </div>
 
