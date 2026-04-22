@@ -336,13 +336,66 @@ new #[Layout('components.layouts.app')] class extends Component {
             @endif
         </div>
 
-        {{-- Right column: Actions --}}
+        {{-- Right column: Actions — priority is driven by status. When a driver has
+             been assigned, Printing the Delivery Paperwork becomes the most important
+             next step and sits above Mark Collected. Once the vehicle has been
+             collected, the status-change button takes over as primary and the
+             Collection Note demotes to a reprint-style secondary button below it.
+             Cancel is only allowed while the vehicle is still on the depot. --}}
+        @php
+            $preReleaseStatuses = [
+                Job::STATUS_DRIVER_ASSIGNED,
+                Job::STATUS_READY_FOR_COLLECTION,
+            ];
+            $inFlightStatuses = [
+                Job::STATUS_COLLECTED,
+                Job::STATUS_IN_TRANSIT,
+                Job::STATUS_DELIVERED,
+            ];
+            $cancellableStatuses = [
+                Job::STATUS_RECEIVED,
+                Job::STATUS_AWAITING_CUSTOMER_CONFIRMATION,
+                Job::STATUS_CONFIRMED,
+                Job::STATUS_PLANNED,
+                Job::STATUS_DRIVER_ASSIGNED,
+                Job::STATUS_READY_FOR_COLLECTION,
+            ];
+            $isPreRelease = in_array($job->status, $preReleaseStatuses, true);
+            $isInFlight = in_array($job->status, $inFlightStatuses, true);
+            $isCancellable = in_array($job->status, $cancellableStatuses, true);
+            $isTerminal = in_array($job->status, [Job::STATUS_COMPLETED, Job::STATUS_CANCELLED], true);
+        @endphp
         <div class="space-y-6">
             <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
                 <h3 class="text-lg font-semibold text-gray-900 mb-4">Actions</h3>
                 <div class="space-y-3">
 
-                    @if($job->status === 'received')
+                    {{-- =========================================================
+                         1. PAPERWORK PROMPT (top priority when driver assigned)
+                         ========================================================= --}}
+                    @can('generateCollectionNote', $job)
+                        @if($isPreRelease)
+                            <div class="rounded-lg border border-green-300 bg-green-50 p-3.5">
+                                <div class="flex items-start gap-2.5 mb-3">
+                                    <svg class="h-5 w-5 text-green-600 mt-0.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+                                    <div class="min-w-0">
+                                        <h4 class="text-sm font-semibold text-green-900">Print Delivery Paperwork</h4>
+                                        <p class="mt-0.5 text-xs text-green-800 leading-snug">POD, Collection Note &amp; Manual Inspection Sheet &mdash; 4 pages. Print double-sided and hand to the driver before the vehicle leaves.</p>
+                                    </div>
+                                </div>
+                                <a href="{{ route('collection-note.download', $job) }}" target="_blank"
+                                    class="flex w-full items-center justify-center gap-2 rounded-lg bg-green-600 px-4 py-3 text-sm font-semibold text-white hover:bg-green-500 transition-colors shadow-sm">
+                                    <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+                                    Print Paperwork
+                                </a>
+                            </div>
+                        @endif
+                    @endcan
+
+                    {{-- =========================================================
+                         2. STATUS TRANSITION BUTTON
+                         ========================================================= --}}
+                    @if($job->status === Job::STATUS_RECEIVED)
                         @if($job->company?->requiresExternalConfirmation())
                             <button wire:click="sendToCustomer" wire:confirm="Send to customer for confirmation?"
                                 class="w-full rounded-lg bg-amber-600 px-4 py-3 text-sm font-semibold text-white hover:bg-amber-500 transition-colors">
@@ -354,25 +407,19 @@ new #[Layout('components.layouts.app')] class extends Component {
                                 Confirm Order
                             </button>
                         @endif
-                    @endif
-
-                    @if($job->status === 'awaiting_customer_confirmation')
+                    @elseif($job->status === Job::STATUS_AWAITING_CUSTOMER_CONFIRMATION)
                         <div class="rounded-lg bg-amber-50 border border-amber-200 p-4 text-sm text-amber-800">
                             <div class="flex items-start gap-2">
                                 <svg class="h-5 w-5 text-amber-500 mt-0.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
                                 <span>Waiting for customer confirmation.</span>
                             </div>
                         </div>
-                    @endif
-
-                    @if($job->status === 'confirmed')
+                    @elseif($job->status === Job::STATUS_CONFIRMED)
                         <button wire:click="planOrder" wire:confirm="Mark as planned?"
                             class="w-full rounded-lg bg-indigo-600 px-4 py-3 text-sm font-semibold text-white hover:bg-indigo-500 transition-colors">
                             Plan Order
                         </button>
-                    @endif
-
-                    @if($job->status === 'planned')
+                    @elseif($job->status === Job::STATUS_PLANNED)
                         <div>
                             <label class="block text-sm font-medium text-gray-700 mb-1.5">Assign Driver</label>
                             <select wire:model="driverId" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-purple-500 focus:ring-purple-500 mb-2">
@@ -386,53 +433,57 @@ new #[Layout('components.layouts.app')] class extends Component {
                                 Assign Driver
                             </button>
                         </div>
-                    @endif
-
-                    @if(in_array($job->status, ['driver_assigned', 'ready_for_collection']))
-                        <button wire:click="markCollected" wire:confirm="Mark as collected?"
-                            class="w-full rounded-lg bg-teal-600 px-4 py-3 text-sm font-semibold text-white hover:bg-teal-500 transition-colors">
+                    @elseif($isPreRelease)
+                        {{-- Secondary to the paperwork prompt above — outlined so ops
+                             only presses it once the paperwork is out and signed. --}}
+                        <button wire:click="markCollected" wire:confirm="Has the paperwork been printed and handed to the driver? Mark as collected?"
+                            class="w-full rounded-lg border border-teal-600 bg-white px-4 py-3 text-sm font-semibold text-teal-700 hover:bg-teal-50 transition-colors">
                             Mark Collected
                         </button>
-                    @endif
-
-                    @if($job->status === 'collected')
+                    @elseif($job->status === Job::STATUS_COLLECTED)
                         <button wire:click="markInTransit" wire:confirm="Mark as in transit?"
                             class="w-full rounded-lg bg-orange-600 px-4 py-3 text-sm font-semibold text-white hover:bg-orange-500 transition-colors">
                             Mark In Transit
                         </button>
-                    @endif
-
-                    @if($job->status === 'in_transit')
+                    @elseif($job->status === Job::STATUS_IN_TRANSIT)
                         <button wire:click="markDelivered" wire:confirm="Mark as delivered?"
                             class="w-full rounded-lg bg-emerald-600 px-4 py-3 text-sm font-semibold text-white hover:bg-emerald-500 transition-colors">
                             Mark Delivered
                         </button>
-                    @endif
-
-                    @if($job->status === 'delivered')
+                    @elseif($job->status === Job::STATUS_DELIVERED)
                         <button wire:click="completeOrder" wire:confirm="Complete this order?"
                             class="w-full rounded-lg bg-green-600 px-4 py-3 text-sm font-semibold text-white hover:bg-green-500 transition-colors">
                             Complete Order
                         </button>
                     @endif
 
+                    {{-- =========================================================
+                         3. COLLECTION NOTE REPRINT (only after vehicle has left)
+                         ========================================================= --}}
                     @can('generateCollectionNote', $job)
-                        <a href="{{ route('collection-note.download', $job) }}" target="_blank"
-                            class="flex w-full items-center justify-center gap-2 rounded-lg border border-blue-600 bg-white px-4 py-3 text-sm font-semibold text-blue-700 hover:bg-blue-50 transition-colors">
-                            <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
-                            Collection Note
-                        </a>
+                        @if(!$isPreRelease)
+                            <a href="{{ route('collection-note.download', $job) }}" target="_blank"
+                                class="flex w-full items-center justify-center gap-2 rounded-lg border border-blue-600 bg-white px-4 py-3 text-sm font-semibold text-blue-700 hover:bg-blue-50 transition-colors">
+                                <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+                                Collection Note (reprint)
+                            </a>
+                        @endif
                     @endcan
 
-                    @if(!in_array($job->status, ['completed', 'cancelled']))
+                    {{-- =========================================================
+                         4. CANCEL / TERMINAL STATE
+                         ========================================================= --}}
+                    @if($isCancellable)
                         <button wire:click="openCancelModal"
                             class="w-full rounded-lg bg-red-600 px-4 py-3 text-sm font-semibold text-white hover:bg-red-500 transition-colors">
                             Cancel Order
                         </button>
-                    @endif
-
-                    @if(in_array($job->status, ['completed', 'cancelled']))
-                        <p class="text-sm text-gray-400 text-center py-2">No actions available.</p>
+                    @elseif($isInFlight)
+                        <div class="rounded-lg bg-gray-50 border border-gray-200 px-3 py-2.5 text-xs text-gray-600 leading-relaxed">
+                            <strong class="text-gray-800">Cannot cancel</strong> &mdash; the vehicle has left the depot. If the order needs to be reversed, record a return movement against the destination.
+                        </div>
+                    @elseif($isTerminal)
+                        <p class="text-sm text-gray-400 text-center py-2">No further actions.</p>
                     @endif
                 </div>
             </div>
