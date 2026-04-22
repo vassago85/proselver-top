@@ -4,7 +4,10 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="csrf-token" content="{{ csrf_token() }}">
-    <title>{{ $title ?? config('app.name') }}</title>
+    {{-- Tab title: pages can set $title for per-page context (e.g. "Orders"),
+         otherwise fall back to the product name. Hardcoded so the rebrand
+         can't regress if the APP_NAME env var is left on an old value. --}}
+    <title>{{ $title ? $title . ' · TRIDENT' : 'TRIDENT — Control & Dispatch Center' }}</title>
 
     {{-- PWA + iOS standalone: allows owner/ops to add to Home Screen on iPhone
          and launch into a chromeless app. Without these iOS will refuse to
