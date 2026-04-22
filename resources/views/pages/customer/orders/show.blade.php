@@ -50,7 +50,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         $this->job->confirmation_note = null;
         $this->job->transitionTo(Job::STATUS_CONFIRMED);
         $this->job->refresh();
-        session()->flash('success', 'Collection confirmed — ProSelver operations will dispatch a driver.');
+        session()->flash('success', 'Collection confirmed — TCDC operations will dispatch a driver.');
     }
 
     public function reportIssue(): void
@@ -69,7 +69,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         $this->issueReason = '';
         $this->issueNote = '';
 
-        session()->flash('success', 'Issue reported — ProSelver operations has been notified.');
+        session()->flash('success', 'Issue reported — TCDC operations has been notified.');
     }
 
     public function with(): array
@@ -204,7 +204,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                     @if($job->confirmation_note)
                         <p class="mt-1 text-sm text-amber-700"><strong>Details:</strong> {{ $job->confirmation_note }}</p>
                     @endif
-                    <p class="mt-2 text-xs text-amber-600">ProSelver operations has been notified and will follow up.</p>
+                    <p class="mt-2 text-xs text-amber-600">TCDC operations has been notified and will follow up.</p>
                 </div>
             </div>
         </div>

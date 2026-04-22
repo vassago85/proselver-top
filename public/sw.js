@@ -1,4 +1,4 @@
-const CACHE_NAME = 'proselver-v1';
+const CACHE_NAME = 'tcdc-v2';
 const STATIC_ASSETS = [
     '/',
     '/manifest.json',
@@ -82,7 +82,7 @@ async function syncJobEvents() {
 
 function openDB() {
     return new Promise((resolve, reject) => {
-        const request = indexedDB.open('ProselverDriver', 1);
+        const request = indexedDB.open('TcdcDriver', 1);
         request.onupgradeneeded = (e) => {
             const db = e.target.result;
             if (!db.objectStoreNames.contains('pendingEvents')) {

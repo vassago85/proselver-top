@@ -2,7 +2,7 @@
 
 ## Role Tiers
 
-### Internal (Proselver Staff)
+### Internal (TCDC Staff)
 | Role | Slug | Capabilities |
 |------|------|-------------|
 | Super Admin | `super_admin` | Full system control, pricing config, overrides, margin dashboards, user management |

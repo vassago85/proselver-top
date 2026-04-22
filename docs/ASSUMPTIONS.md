@@ -1,7 +1,7 @@
 # Assumptions
 
 ## Platform Scope
-- This is Proselver Trident (Control • Dispatch • Deliver) built by Charsley Digital.
+- This is TRIDENT (Control & Dispatch Center) built by Charsley Digital.
 - The platform replaces manual transport booking, PO verification, driver management, and invoicing workflows.
 - No native mobile app; PWA (Progressive Web App) with offline capability is used for drivers.
 
@@ -12,7 +12,7 @@
 
 ## Multi-Tenancy
 - Single-tenant deployment per Charsley Digital Architecture V1.
-- Each Proselver instance gets its own app, database, and Redis.
+- Each TRIDENT instance gets its own app, database, and Redis.
 
 ## Roles
 - Roles are stored in a database table and assigned via many-to-many pivot.

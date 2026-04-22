@@ -38,7 +38,7 @@ class ChangeRequestReviewedNotification extends Notification implements ShouldQu
             $mail->line("Admin notes: {$this->changeRequest->review_notes}");
         }
 
-        return $mail->salutation('Proselver Trident System');
+        return $mail->salutation('TRIDENT Control & Dispatch Center');
     }
 
     public function toArray($notifiable): array

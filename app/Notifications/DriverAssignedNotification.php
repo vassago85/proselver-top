@@ -28,7 +28,7 @@ class DriverAssignedNotification extends Notification implements ShouldQueue
             ->line("Job: {$this->job->job_number}")
             ->line("Date: {$this->job->scheduled_date->format('d M Y')}")
             ->action('View Job', url("/driver/jobs/{$this->job->id}"))
-            ->salutation('Proselver Trident');
+            ->salutation('TRIDENT Control & Dispatch Center');
 
         NotificationLog::create([
             'to_email' => $notifiable->email ?? $notifiable->username,

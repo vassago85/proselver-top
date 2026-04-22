@@ -39,4 +39,9 @@ return [
         'api_key' => env('GOOGLE_MAPS_API_KEY'),
     ],
 
+    // Base URL used for public verification links (QR codes on collection notes).
+    // Leave blank to fall back to APP_URL. Useful during domain cutovers when
+    // the app is reachable on multiple hostnames.
+    'collection_note_public_url' => env('COLLECTION_NOTE_PUBLIC_URL'),
+
 ];

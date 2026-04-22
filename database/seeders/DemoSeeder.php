@@ -19,38 +19,38 @@ class DemoSeeder extends Seeder
         // ===== DEVELOPER =====
         $developer = User::firstOrCreate(
             ['username' => 'developer'],
-            ['name' => 'Developer', 'email' => 'dev@proselver.test', 'password' => $password, 'is_active' => true]
+            ['name' => 'Developer', 'email' => 'dev@tcdc.test', 'password' => $password, 'is_active' => true]
         );
         $developer->assignRole('developer');
 
         // ===== INTERNAL STAFF =====
         $owner = User::firstOrCreate(
             ['username' => 'owner'],
-            ['name' => 'Business Owner', 'email' => 'owner@proselver.test', 'password' => $password, 'is_active' => true]
+            ['name' => 'Business Owner', 'email' => 'owner@tcdc.test', 'password' => $password, 'is_active' => true]
         );
         $owner->assignRole('owner');
 
         $opsController = User::firstOrCreate(
             ['username' => 'ops'],
-            ['name' => 'Cassius Jege', 'email' => 'cassius@proselver.test', 'password' => $password, 'is_active' => true]
+            ['name' => 'Cassius Jege', 'email' => 'cassius@tcdc.test', 'password' => $password, 'is_active' => true]
         );
         $opsController->syncRoles(['operations_controller']);
 
         $opsController2 = User::firstOrCreate(
             ['username' => 'wiaan'],
-            ['name' => 'Wiaan Swart', 'email' => 'wiaan@proselver.test', 'password' => $password, 'is_active' => true]
+            ['name' => 'Wiaan Swart', 'email' => 'wiaan@tcdc.test', 'password' => $password, 'is_active' => true]
         );
         $opsController2->assignRole('operations_controller');
 
         $dispatcher = User::firstOrCreate(
             ['username' => 'dispatch'],
-            ['name' => 'Michael Esbie', 'email' => 'michael@proselver.test', 'password' => $password, 'is_active' => true]
+            ['name' => 'Michael Esbie', 'email' => 'michael@tcdc.test', 'password' => $password, 'is_active' => true]
         );
         $dispatcher->syncRoles(['dispatcher']);
 
         $dispatcher2 = User::firstOrCreate(
             ['username' => 'busani'],
-            ['name' => 'Busani Ndwandwe', 'email' => 'busani@proselver.test', 'password' => $password, 'is_active' => true]
+            ['name' => 'Busani Ndwandwe', 'email' => 'busani@tcdc.test', 'password' => $password, 'is_active' => true]
         );
         $dispatcher2->assignRole('dispatcher');
 

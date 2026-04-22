@@ -56,7 +56,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div class="sm:col-span-2">
                     <label class="block text-sm font-medium text-gray-700 mb-1">Company Name *</label>
-                    <input wire:model="companyName" type="text" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:ring-blue-500" placeholder="Proselver (Pty) Ltd">
+                    <input wire:model="companyName" type="text" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:ring-blue-500" placeholder="TRIDENT (Pty) Ltd">
                     @error('companyName')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
                 </div>
                 <div>

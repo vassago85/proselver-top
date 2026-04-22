@@ -1,4 +1,4 @@
-# Proselver Trident — Control • Dispatch • Deliver
+# TRIDENT — Control & Dispatch Center
 
 End-to-end booking, scheduling, execution & governance system for vehicle transport operations.
 
@@ -94,9 +94,12 @@ npm run dev
 ## Production Deployment
 See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for Docker deployment instructions.
 
-Use `docker-compose.prod.yml` for production:
+Production uses the default `docker-compose.yml` (self-contained image, no bind mounts,
+assets baked in at build time). Local development uses `docker-compose.dev.yml`:
+
 ```bash
-docker compose -f docker-compose.prod.yml up -d
+docker compose up -d                               # production (on the server)
+docker compose -f docker-compose.dev.yml up -d     # local development
 ```
 
 ## Documentation

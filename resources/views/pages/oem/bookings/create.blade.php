@@ -470,7 +470,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                     </select>
                 @endif
                 @if($vehicleModels->isEmpty() && $brandId)
-                    <p class="mt-1 text-xs text-amber-600">No models defined for this brand — ask your Proselver admin to add them.</p>
+                    <p class="mt-1 text-xs text-amber-600">No models defined for this brand — ask your TCDC admin to add them.</p>
                 @endif
             </div>
 

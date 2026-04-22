@@ -21,7 +21,7 @@ services:
     container_name: proselver-app
     restart: unless-stopped
     environment:
-      APP_NAME: "Proselver Trident"
+      APP_NAME: "TRIDENT (dev)"
       APP_ENV: local
       APP_DEBUG: "true"
       APP_URL: ${APP_URL:-http://localhost:8091}

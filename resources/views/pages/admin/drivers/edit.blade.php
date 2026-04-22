@@ -24,6 +24,8 @@ new #[Layout('components.layouts.app')] class extends Component {
     public string $idNumber = '';
     public string $cellphone = '';
     public string $baseLocation = '';
+    public string $tradePlate = '';
+    public string $tradePlateExpiry = '';
     public string $licenseCode = '';
     public string $licenseNumber = '';
     public string $licenseExpiry = '';
@@ -50,6 +52,8 @@ new #[Layout('components.layouts.app')] class extends Component {
             $this->idNumber = $profile->id_number ?? '';
             $this->cellphone = $profile->cellphone ?? '';
             $this->baseLocation = $profile->base_location ?? '';
+            $this->tradePlate = $profile->trade_plate ?? '';
+            $this->tradePlateExpiry = $profile->trade_plate_expiry?->format('Y-m-d') ?? '';
             $this->licenseCode = $profile->license_code ?? '';
             $this->licenseNumber = $profile->license_number ?? '';
             $this->licenseExpiry = $profile->license_expiry?->format('Y-m-d') ?? '';
@@ -93,6 +97,8 @@ new #[Layout('components.layouts.app')] class extends Component {
             'idNumber' => 'nullable|string|max:20',
             'cellphone' => 'nullable|string|max:20',
             'baseLocation' => 'nullable|string|max:255',
+            'tradePlate' => 'nullable|string|max:20',
+            'tradePlateExpiry' => 'nullable|date',
             'licenseCode' => 'nullable|string|max:20',
             'licenseNumber' => 'nullable|string|max:50',
             'licenseExpiry' => 'nullable|date',
@@ -119,6 +125,8 @@ new #[Layout('components.layouts.app')] class extends Component {
             'id_number' => $this->idNumber ?: null,
             'cellphone' => $this->cellphone ?: null,
             'base_location' => $this->baseLocation ?: null,
+            'trade_plate' => $this->tradePlate ?: null,
+            'trade_plate_expiry' => $this->tradePlateExpiry ?: null,
             'license_code' => $this->licenseCode ?: null,
             'license_number' => $this->licenseNumber ?: null,
             'license_expiry' => $this->licenseExpiry ?: null,
@@ -223,6 +231,16 @@ new #[Layout('components.layouts.app')] class extends Component {
                     <label class="block text-sm font-medium text-gray-700 mb-1">Base Location</label>
                     <input wire:model="baseLocation" type="text" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:ring-blue-500" placeholder="e.g. Johannesburg">
                     @error('baseLocation')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Trade Plate</label>
+                    <input wire:model="tradePlate" type="text" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:ring-blue-500" placeholder="e.g. AGC 166 GP">
+                    @error('tradePlate')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Trade Plate Expiry</label>
+                    <input wire:model="tradePlateExpiry" type="date" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:ring-blue-500">
+                    @error('tradePlateExpiry')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
                 </div>
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">License Code</label>

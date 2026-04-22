@@ -12,6 +12,8 @@ class DriverProfile extends Model
         'id_number',
         'cellphone',
         'base_location',
+        'trade_plate',
+        'trade_plate_expiry',
         'license_code',
         'license_number',
         'license_expiry',
@@ -30,6 +32,7 @@ class DriverProfile extends Model
         return [
             'license_expiry' => 'date',
             'prdp_expiry' => 'date',
+            'trade_plate_expiry' => 'date',
         ];
     }
 

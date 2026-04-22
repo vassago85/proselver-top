@@ -71,7 +71,7 @@ class JobPolicy
             return false;
         }
 
-        // Internal ProSelver staff / Developer retain an override for support
+        // Internal TCDC staff / Developer retain an override for support
         // cases (e.g. confirming on a customer's behalf after a phone call,
         // with the audit log recording who did it).
         if ($user->isInternal() || $user->isDeveloper()) {

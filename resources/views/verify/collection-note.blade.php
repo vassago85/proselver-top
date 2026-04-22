@@ -3,15 +3,15 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Collection Note Verified - ProSelverTech</title>
+    <title>Collection Note Verified - TRIDENT</title>
     <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body class="bg-gray-50 min-h-screen flex flex-col">
     {{-- Header --}}
     <header class="bg-white shadow-sm">
         <div class="max-w-2xl mx-auto px-4 py-4">
-            <h1 class="text-2xl font-bold text-blue-800">ProSelverTech</h1>
-            <p class="text-sm text-gray-500">Control • Dispatch • Deliver</p>
+            <h1 class="text-2xl font-bold text-blue-800">TRIDENT</h1>
+            <p class="text-sm text-gray-500">Control &amp; Dispatch Center</p>
         </div>
     </header>
 
@@ -25,7 +25,7 @@
                 </svg>
             </div>
             <h2 class="text-2xl font-bold text-gray-900">Collection Note Verified</h2>
-            <p class="text-gray-500 mt-1">This is a valid collection note issued by ProSelverTech</p>
+            <p class="text-gray-500 mt-1">This is a valid collection note issued by TRIDENT Control &amp; Dispatch Center</p>
         </div>
 
         {{-- Details Card --}}
@@ -95,7 +95,7 @@
     {{-- Footer --}}
     <footer class="bg-white border-t border-gray-200 mt-8">
         <div class="max-w-2xl mx-auto px-4 py-4 text-center">
-            <p class="text-xs text-gray-400">This collection note was issued by ProSelverTech</p>
+            <p class="text-xs text-gray-400">This collection note was issued by TRIDENT Control &amp; Dispatch Center</p>
         </div>
     </footer>
 </body>

@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="Proselver Trident — the operational command center for vehicle movement. Control, dispatch and deliver with precision.">
-    <title>Proselver Trident — Control • Dispatch • Deliver</title>
+    <meta name="description" content="TRIDENT Control &amp; Dispatch Center — the operational command center for vehicle movement. Control and dispatch with precision.">
+    <title>TRIDENT — Control &amp; Dispatch Center</title>
     <link rel="icon" href="/favicon.ico">
     @vite(['resources/css/app.css', 'resources/js/app.js'])
     <style>
@@ -47,8 +47,8 @@
     <header class="fixed inset-x-0 top-0 z-40 backdrop-blur-md bg-white/75 border-b border-slate-200/70">
         <div class="mx-auto max-w-7xl px-6 lg:px-8 h-16 flex items-center justify-between">
             <a href="#top" class="flex items-center gap-2.5 group">
-                <img src="/logo.png" alt="Proselver Trident" class="h-10 w-auto object-contain" />
-                <span class="sr-only">Proselver Trident</span>
+                <img src="/logo.png" alt="TRIDENT" class="h-10 w-auto object-contain" />
+                <span class="sr-only">TRIDENT Control &amp; Dispatch Center</span>
             </a>
             <nav class="hidden md:flex items-center gap-8 text-sm text-slate-600">
                 <a href="#pillars" class="hover:text-slate-900 transition-colors">Platform</a>
@@ -79,7 +79,7 @@
         <div class="relative mx-auto max-w-7xl px-6 lg:px-8 pt-20 lg:pt-28 pb-20 lg:pb-28">
             <div class="mx-auto max-w-3xl text-center">
                 <div class="flex justify-center">
-                    <img src="/logo.png" alt="Proselver Trident — Control • Dispatch • Deliver" class="h-40 sm:h-48 lg:h-56 w-auto object-contain drop-shadow-sm" />
+                    <img src="/logo.png" alt="TRIDENT — Control &amp; Dispatch Center" class="h-40 sm:h-48 lg:h-56 w-auto object-contain drop-shadow-sm" />
                 </div>
                 <div class="mt-8 inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white/60 backdrop-blur px-3 py-1 text-xs font-medium text-slate-600 shadow-sm">
                     <span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
@@ -92,7 +92,7 @@
                     </span>
                 </h1>
                 <p class="mt-6 text-lg text-slate-600 leading-relaxed">
-                    Proselver Trident is the operations platform for driving new vehicles from manufacturing plants to dealerships — and on to end customers — with verified dispatch, live execution, and document trails you can prove.
+                    TRIDENT is the Control &amp; Dispatch Center for driving new vehicles from manufacturing plants to dealerships — and on to end customers — with verified dispatch, live execution, and document trails you can prove.
                 </p>
                 <div class="mt-9 flex flex-col sm:flex-row items-center justify-center gap-3">
                     <a href="#contact" class="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-5 py-3 text-sm font-semibold text-white shadow-sm hover:bg-blue-500 transition-colors">
@@ -549,7 +549,7 @@
                                             <rect x="14" y="30" width="2" height="4"/><rect x="18" y="30" width="4" height="2"/><rect x="24" y="32" width="2" height="4"/><rect x="28" y="30" width="4" height="2"/><rect x="34" y="34" width="2" height="4"/>
                                         </svg>
                                     </div>
-                                    <p class="mt-3 text-[10px] text-slate-500 text-right leading-tight">Scan to verify<br><span class="font-mono text-slate-400">proselver.co.za/verify</span></p>
+                                    <p class="mt-3 text-[10px] text-slate-500 text-right leading-tight">Scan to verify<br><span class="font-mono text-slate-400">tcdc.co.za/verify</span></p>
                                 </div>
                             </div>
                             <div class="border-t border-slate-100 px-6 py-3 bg-slate-50/70 flex items-center justify-between">
@@ -557,7 +557,7 @@
                                     <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
                                     Signed · valid
                                 </span>
-                                <span class="text-[10px] text-slate-400">Proselver Trident · auto-generated</span>
+                                <span class="text-[10px] text-slate-400">TRIDENT · auto-generated</span>
                             </div>
                         </div>
                     </div>
@@ -574,10 +574,10 @@
             <p class="text-xs font-semibold tracking-[0.25em] uppercase text-blue-300">Ready when you are</p>
             <h2 class="mt-4 text-3xl sm:text-5xl font-semibold tracking-tight">Put your dispatch under one roof.</h2>
             <p class="mt-5 text-slate-300 max-w-2xl mx-auto text-lg leading-relaxed">
-                We'll stand up a private instance of Proselver Trident, configure your accounts and workflows, and run your first movements alongside your team.
+                We'll stand up a private instance of TRIDENT, configure your accounts and workflows, and run your first movements alongside your team.
             </p>
             <div class="mt-9 flex flex-col sm:flex-row items-center justify-center gap-3">
-                <a href="mailto:hello@proselver.co.za?subject=Proselver%20Trident%20demo" class="inline-flex items-center gap-2 rounded-lg bg-blue-500 hover:bg-blue-400 px-6 py-3.5 text-sm font-semibold text-white transition-colors">
+                <a href="mailto:hello@tcdc.co.za?subject=TRIDENT%20demo" class="inline-flex items-center gap-2 rounded-lg bg-blue-500 hover:bg-blue-400 px-6 py-3.5 text-sm font-semibold text-white transition-colors">
                     Book a walkthrough
                     <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
                 </a>
@@ -585,7 +585,7 @@
                     Sign in to Trident
                 </a>
             </div>
-            <p class="mt-10 text-xs font-semibold tracking-[0.25em] uppercase text-blue-300">Control • Dispatch • Deliver</p>
+            <p class="mt-10 text-xs font-semibold tracking-[0.25em] uppercase text-blue-300">Control &amp; Dispatch Center</p>
         </div>
     </section>
 
@@ -597,10 +597,10 @@
     <footer class="border-t border-slate-200 bg-white">
         <div class="mx-auto max-w-7xl px-6 lg:px-8 py-10 flex flex-col sm:flex-row items-center justify-between gap-4">
             <div class="flex items-center gap-3">
-                <img src="/logo.png" alt="Proselver Trident" class="h-9 w-auto object-contain" />
-                <span class="hidden sm:inline text-xs text-slate-400">· ProSelver — Prospect • Select • Verify</span>
+                <img src="/logo.png" alt="TRIDENT" class="h-9 w-auto object-contain" />
+                <span class="hidden sm:inline text-xs text-slate-400">· TRIDENT — Control &amp; Dispatch Center</span>
             </div>
-            <p class="text-xs text-slate-500">© {{ date('Y') }} Proselver. Built for operations that move every vehicle accounted for.</p>
+            <p class="text-xs text-slate-500">© {{ date('Y') }} TRIDENT. Built for operations that move every vehicle accounted for.</p>
         </div>
     </footer>
 

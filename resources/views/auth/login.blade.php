@@ -10,7 +10,7 @@
     <div class="flex min-h-full flex-col justify-center px-6 py-12 lg:px-8">
         <div class="sm:mx-auto sm:w-full sm:max-w-sm">
             <div class="flex justify-center">
-                <img src="/logo.png" alt="Proselver Trident — Control • Dispatch • Deliver" class="h-32 w-auto object-contain" />
+                <img src="/logo.png" alt="TRIDENT — Control &amp; Dispatch Center" class="h-32 w-auto object-contain" />
             </div>
             <p class="mt-4 text-center text-sm text-gray-500">Sign in to your account</p>
         </div>

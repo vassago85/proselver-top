@@ -33,7 +33,7 @@ class ChangeRequestSubmittedNotification extends Notification implements ShouldQ
             ->line("Requested date: {$requested['date']} at {$requested['time']}")
             ->line("Reason: {$this->changeRequest->reason}")
             ->action('Review Request', url('/admin/change-requests'))
-            ->salutation('Proselver Trident System');
+            ->salutation('TRIDENT Control & Dispatch Center');
     }
 
     public function toArray($notifiable): array

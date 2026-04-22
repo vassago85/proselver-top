@@ -1,5 +1,5 @@
 /*
- * Proselver Trident — Driver PWA service worker.
+ * TRIDENT Control & Dispatch Center — Driver PWA service worker.
  *
  * Scope: /driver/   (registered from the driver layout)
  *
@@ -16,7 +16,7 @@
  *    would otherwise leak between users on shared devices.
  */
 
-const CACHE_VERSION = 'v1';
+const CACHE_VERSION = 'v2';
 const SHELL_CACHE = `trident-driver-shell-${CACHE_VERSION}`;
 
 // Only static, non-authenticated, unchanging assets belong in the shell.

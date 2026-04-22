@@ -1,7 +1,7 @@
 {
-    "name": "Proselver Trident Driver",
-    "short_name": "Trident",
-    "description": "Offline-first driver app for Proselver Trident — capture collection / delivery photos, POD, and petty cash slips.",
+    "name": "TRIDENT Driver",
+    "short_name": "TRIDENT",
+    "description": "Offline-first driver app for TRIDENT Control & Dispatch Center — capture collection / delivery photos, POD, and petty cash slips.",
     "id": "/driver/",
     "start_url": "/driver/dashboard",
     "scope": "/driver/",

@@ -29,7 +29,7 @@ class BookingCreatedNotification extends Notification implements ShouldQueue
             ->line("Company: {$this->job->company->name}")
             ->line("Type: " . ($this->job->isTransport() ? 'Transport' : 'Yard Work'))
             ->action('View Booking', url("/admin/bookings/{$this->job->id}"))
-            ->salutation('Proselver Trident');
+            ->salutation('TRIDENT Control & Dispatch Center');
 
         NotificationLog::create([
             'to_email' => $notifiable->email ?? $notifiable->username,

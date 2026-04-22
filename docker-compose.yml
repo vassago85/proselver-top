@@ -31,10 +31,10 @@ services:
     container_name: proselver-app
     restart: unless-stopped
     environment:
-      - APP_NAME=Proselver Trident
+      - APP_NAME=${APP_NAME:-TRIDENT}
       - APP_ENV=production
       - APP_DEBUG=false
-      - APP_URL=${APP_URL:-https://proselver.charsleydigital.co.za}
+      - APP_URL=${APP_URL:-https://tcdc.co.za}
       - APP_KEY=${APP_KEY}
       - LOG_CHANNEL=stack
       - LOG_STACK=single
@@ -58,8 +58,8 @@ services:
       - MAIL_USERNAME=${MAIL_USERNAME:-}
       - MAIL_PASSWORD=${MAIL_PASSWORD:-}
       - MAIL_ENCRYPTION=${MAIL_ENCRYPTION:-tls}
-      - MAIL_FROM_ADDRESS=${MAIL_FROM_ADDRESS:-noreply@proselver.co.za}
-      - MAIL_FROM_NAME=${MAIL_FROM_NAME:-Proselver Trident}
+      - MAIL_FROM_ADDRESS=${MAIL_FROM_ADDRESS:-noreply@tcdc.co.za}
+      - MAIL_FROM_NAME=${MAIL_FROM_NAME:-TRIDENT Control & Dispatch Center}
       - FILESYSTEM_DISK=${FILESYSTEM_DISK:-r2}
       - R2_ACCESS_KEY_ID=${R2_ACCESS_KEY_ID:-}
       - R2_SECRET_ACCESS_KEY=${R2_SECRET_ACCESS_KEY:-}
@@ -72,6 +72,7 @@ services:
       - R2_BACKUP_ENDPOINT=${R2_BACKUP_ENDPOINT:-}
       - R2_BACKUP_REGION=${R2_BACKUP_REGION:-auto}
       - GOOGLE_MAPS_API_KEY=${GOOGLE_MAPS_API_KEY:-}
+      - COLLECTION_NOTE_PUBLIC_URL=${COLLECTION_NOTE_PUBLIC_URL:-}
       - LIVEWIRE_TEMPORARY_FILE_UPLOAD_DISK=public
     volumes:
       - app-logs:/var/www/html/storage/logs
@@ -125,10 +126,10 @@ services:
     entrypoint: []
     command: sh -c "while true; do php /var/www/html/artisan schedule:run --verbose --no-interaction; sleep 60; done"
     environment:
-      - APP_NAME=Proselver Trident
+      - APP_NAME=${APP_NAME:-TRIDENT}
       - APP_ENV=production
       - APP_DEBUG=false
-      - APP_URL=${APP_URL:-https://proselver.charsleydigital.co.za}
+      - APP_URL=${APP_URL:-https://tcdc.co.za}
       - APP_KEY=${APP_KEY}
       - LOG_CHANNEL=stack
       - LOG_STACK=single
@@ -169,10 +170,10 @@ services:
     entrypoint: []
     command: php /var/www/html/artisan queue:work redis --sleep=3 --tries=3 --max-time=3600
     environment:
-      - APP_NAME=Proselver Trident
+      - APP_NAME=${APP_NAME:-TRIDENT}
       - APP_ENV=production
       - APP_DEBUG=false
-      - APP_URL=${APP_URL:-https://proselver.charsleydigital.co.za}
+      - APP_URL=${APP_URL:-https://tcdc.co.za}
       - APP_KEY=${APP_KEY}
       - LOG_CHANNEL=stack
       - LOG_STACK=single
@@ -194,14 +195,15 @@ services:
       - MAIL_USERNAME=${MAIL_USERNAME:-}
       - MAIL_PASSWORD=${MAIL_PASSWORD:-}
       - MAIL_ENCRYPTION=${MAIL_ENCRYPTION:-tls}
-      - MAIL_FROM_ADDRESS=${MAIL_FROM_ADDRESS:-noreply@proselver.co.za}
-      - MAIL_FROM_NAME=${MAIL_FROM_NAME:-Proselver Trident}
+      - MAIL_FROM_ADDRESS=${MAIL_FROM_ADDRESS:-noreply@tcdc.co.za}
+      - MAIL_FROM_NAME=${MAIL_FROM_NAME:-TRIDENT Control & Dispatch Center}
       - FILESYSTEM_DISK=${FILESYSTEM_DISK:-r2}
       - R2_ACCESS_KEY_ID=${R2_ACCESS_KEY_ID:-}
       - R2_SECRET_ACCESS_KEY=${R2_SECRET_ACCESS_KEY:-}
       - R2_BUCKET=${R2_BUCKET:-}
       - R2_ENDPOINT=${R2_ENDPOINT:-}
       - R2_REGION=${R2_REGION:-auto}
+      - COLLECTION_NOTE_PUBLIC_URL=${COLLECTION_NOTE_PUBLIC_URL:-}
       - LIVEWIRE_TEMPORARY_FILE_UPLOAD_DISK=public
     volumes:
       - app-logs:/var/www/html/storage/logs

@@ -24,8 +24,8 @@
     <table style="margin-bottom: 20px;">
         <tr>
             <td style="border: none; padding: 0;">
-                <div class="company-name">ProSelverTech</div>
-                <div style="color: #666; margin-top: 5px;">Control • Dispatch • Deliver</div>
+                <div class="company-name">TRIDENT</div>
+                <div style="color: #666; margin-top: 5px;">Control &amp; Dispatch Center</div>
             </td>
             <td style="border: none; padding: 0; text-align: right;">
                 <div class="doc-title">Collection Note</div>
@@ -65,6 +65,14 @@
         <tr>
             <td class="detail-label">Cellphone</td>
             <td class="detail-value">{{ $profile?->cellphone ?? $driver?->phone ?? '-' }}</td>
+        </tr>
+        <tr>
+            <td class="detail-label">Trade Plate</td>
+            <td class="detail-value">{{ $profile?->trade_plate ?: '—' }}</td>
+        </tr>
+        <tr>
+            <td class="detail-label">Trade Plate Expiry</td>
+            <td class="detail-value">{{ $profile?->trade_plate_expiry?->format('d M Y') ?: '—' }}</td>
         </tr>
     </table>
 
@@ -124,7 +132,7 @@
 
     {{-- Footer --}}
     <div class="footer">
-        <p>ProSelverTech &mdash; Generated {{ now()->format('d M Y H:i') }}</p>
+        <p>TRIDENT Control &amp; Dispatch Center &mdash; Generated {{ now()->format('d M Y H:i') }}</p>
     </div>
 </body>
 </html>

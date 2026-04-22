@@ -1,7 +1,7 @@
 {
-    "name": "Proselver Trident",
-    "short_name": "Proselver Trident",
-    "description": "Proselver Trident — Control • Dispatch • Deliver",
+    "name": "TRIDENT Control & Dispatch Center",
+    "short_name": "TRIDENT",
+    "description": "TRIDENT — Control & Dispatch Center for vehicle movement.",
     "start_url": "/",
     "display": "standalone",
     "background_color": "#1e3a5f",
