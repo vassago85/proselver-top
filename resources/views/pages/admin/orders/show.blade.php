@@ -200,9 +200,9 @@ new #[Layout('components.layouts.app')] class extends Component {
                     @if($job->model_name)
                     <div><dt class="text-gray-500">Model</dt><dd class="font-medium">{{ $job->model_name }}</dd></div>
                     @endif
-                    <div><dt class="text-gray-500">VIN</dt><dd class="font-medium font-mono uppercase">{{ strtoupper($job->vin ?? '') ?: '—' }}</dd></div>
+                    <div><dt class="text-gray-500">VIN</dt><dd class="font-medium">{{ $job->vin ?: '—' }}</dd></div>
                     @if($job->registration)
-                    <div><dt class="text-gray-500">Registration</dt><dd class="font-medium uppercase">{{ $job->registration }}</dd></div>
+                    <div><dt class="text-gray-500">Registration</dt><dd class="font-medium">{{ $job->registration }}</dd></div>
                     @endif
                     <div><dt class="text-gray-500">Scheduled Date</dt><dd class="font-medium">{{ $job->scheduled_date?->format('d M Y') ?? '—' }}</dd></div>
                 </dl>

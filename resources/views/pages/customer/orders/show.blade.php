@@ -293,7 +293,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                     </div>
                     <div>
                         <dt class="text-gray-500">VIN</dt>
-                        <dd class="font-medium font-mono uppercase text-gray-900">{{ strtoupper($job->vin ?? '') ?: '—' }}</dd>
+                        <dd class="font-medium text-gray-900">{{ $job->vin ?: '—' }}</dd>
                     </div>
                     @if($job->registration)
                     <div>

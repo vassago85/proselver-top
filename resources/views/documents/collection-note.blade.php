@@ -428,11 +428,11 @@
             <td class="lbl">Make / Model</td>
             <td class="val">{{ $job->brand?->name }} {{ $job->model_name ?? '' }}</td>
             <td class="lbl">VIN</td>
-            <td class="val" style="font-family: monospace;">{{ $job->vin ?? '—' }}</td>
+            <td class="val">{{ $job->vin ?? '—' }}</td>
         </tr>
         <tr>
             <td class="lbl">Reg No.</td>
-            <td class="val" style="font-family: monospace;">{{ $job->registration ?? '—' }}</td>
+            <td class="val">{{ $job->registration ?? '—' }}</td>
             <td class="lbl">Job No.</td>
             <td class="val">{{ $job->job_number }}</td>
         </tr>

@@ -54,8 +54,8 @@
             <div class="section-title">Vehicle</div>
             <table class="detail">
                 <tr><td class="label">Brand / Model</td><td class="value">{{ $job->brand?->name }} {{ $job->model_name ?? '' }}</td></tr>
-                <tr><td class="label">VIN</td><td class="value" style="font-family: monospace;">{{ $job->vin ?? '—' }}</td></tr>
-                <tr><td class="label">Registration</td><td class="value" style="font-family: monospace;">{{ $job->registration ?? '—' }}</td></tr>
+                <tr><td class="label">VIN</td><td class="value">{{ $job->vin ?? '—' }}</td></tr>
+                <tr><td class="label">Registration</td><td class="value">{{ $job->registration ?? '—' }}</td></tr>
             </table>
         </td>
     </tr>

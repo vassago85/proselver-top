@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Traits\Auditable;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -296,15 +297,38 @@ class Job extends Model
                 $job->uuid = (string) Str::uuid();
             }
         });
+    }
 
-        static::saving(function (Job $job) {
-            if ($job->vin) {
-                $job->vin = strtoupper($job->vin);
-            }
-            if ($job->original_vin) {
-                $job->original_vin = strtoupper($job->original_vin);
-            }
-        });
+    /**
+     * VIN, original VIN and registration are stored AND read as uppercase.
+     * VINs have no lowercase form (ISO 3779) and number plates are universally
+     * written in caps on vehicle paperwork, so this keeps search, display and
+     * printing consistent regardless of how the operator typed them in. Uses
+     * accessors (not a saving hook) so existing records that predate this
+     * change also render uppercase on reads.
+     */
+    protected function vin(): Attribute
+    {
+        return Attribute::make(
+            get: fn($v) => $v ? strtoupper($v) : $v,
+            set: fn($v) => $v ? strtoupper(trim($v)) : $v,
+        );
+    }
+
+    protected function originalVin(): Attribute
+    {
+        return Attribute::make(
+            get: fn($v) => $v ? strtoupper($v) : $v,
+            set: fn($v) => $v ? strtoupper(trim($v)) : $v,
+        );
+    }
+
+    protected function registration(): Attribute
+    {
+        return Attribute::make(
+            get: fn($v) => $v ? strtoupper($v) : $v,
+            set: fn($v) => $v ? strtoupper(trim($v)) : $v,
+        );
     }
 
     public function canTransitionTo(string $newStatus): bool

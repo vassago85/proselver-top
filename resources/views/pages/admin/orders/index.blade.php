@@ -172,7 +172,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                             </div>
                         </td>
                         <td class="px-4 py-3.5 text-sm text-slate-700">{{ trim(($job->brand?->name ?? '') . ' ' . ($job->model_name ?? '')) ?: '—' }}</td>
-                        <td class="px-4 py-3.5 text-xs font-mono uppercase text-slate-500 tracking-tight">{{ $job->vin ? strtoupper($job->vin) : '—' }}</td>
+                        <td class="px-4 py-3.5 text-xs text-slate-500">{{ $job->vin ?: '—' }}</td>
                         <td class="px-4 py-3.5">
                             <div class="flex items-center gap-1.5 text-xs text-slate-600">
                                 <span class="truncate max-w-[100px]">{{ $job->pickupLocation?->shortDisplay() ?? '—' }}</span>

@@ -7,7 +7,7 @@
     {{-- Tab title: pages can set $title for per-page context (e.g. "Orders"),
          otherwise fall back to the product name. Hardcoded so the rebrand
          can't regress if the APP_NAME env var is left on an old value. --}}
-    <title>{{ $title ? $title . ' · TRIDENT' : 'TRIDENT — Control & Dispatch Center' }}</title>
+    <title>{{ !empty($title) ? $title . ' · TRIDENT' : 'TRIDENT — Control & Dispatch Center' }}</title>
 
     {{-- PWA + iOS standalone: allows owner/ops to add to Home Screen on iPhone
          and launch into a chromeless app. Without these iOS will refuse to

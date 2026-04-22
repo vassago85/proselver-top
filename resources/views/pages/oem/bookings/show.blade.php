@@ -458,12 +458,12 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <dl class="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
                     <div><dt class="text-gray-500">Brand</dt><dd class="font-medium">{{ $job->brand?->name ?? '—' }}</dd></div>
                     <div><dt class="text-gray-500">Model</dt><dd class="font-medium">{{ $job->model_name ?? '—' }}</dd></div>
-                    <div><dt class="text-gray-500">VIN</dt><dd class="font-medium font-mono uppercase">{{ strtoupper($job->vin ?? '') ?: '—' }}</dd></div>
+                    <div><dt class="text-gray-500">VIN</dt><dd class="font-medium">{{ $job->vin ?: '—' }}</dd></div>
                     <div><dt class="text-gray-500">Registration</dt><dd class="font-medium">{{ $job->registration ?? '—' }}</dd></div>
                 </dl>
                 @if($job->original_vin && $job->original_vin !== $job->vin)
                     <p class="mt-3 text-xs text-amber-600 bg-amber-50 rounded-lg px-3 py-2">
-                        Vehicle reassigned on {{ $job->vehicle_reassigned_at->format('d M Y H:i') }}. Original VIN: <span class="font-mono uppercase">{{ strtoupper($job->original_vin) }}</span>
+                        Vehicle reassigned on {{ $job->vehicle_reassigned_at->format('d M Y H:i') }}. Original VIN: <span class="font-semibold">{{ $job->original_vin }}</span>
                     </p>
                 @endif
 
