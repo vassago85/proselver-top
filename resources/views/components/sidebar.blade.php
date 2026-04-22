@@ -109,6 +109,10 @@
                             <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a8 8 0 0 1 8 8c0 4.5-6 12-8 12S4 14.5 4 10a8 8 0 0 1 8-8z"/><circle cx="12" cy="10" r="3"/></svg></x-slot:icon>
                             Active Movements
                         </x-sidebar-link>
+                        <x-sidebar-link :href="route('admin.deliveries')" :active="request()->routeIs('admin.deliveries')">
+                            <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></x-slot:icon>
+                            Deliveries
+                        </x-sidebar-link>
                     </ul>
                 </li>
 

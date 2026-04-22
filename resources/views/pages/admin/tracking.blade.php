@@ -57,10 +57,16 @@ new #[Layout('components.layouts.app')] class extends Component {
             $counts[$s] = Job::where('status', $s)->count();
         }
 
+        // Local tile labels. We override only the "delivered" tile so ops understand
+        // it counts vehicles the driver has marked delivered but that ops has not
+        // ticked "complete" on yet — once completed, they move to the Deliveries page.
+        $tileLabels = array_intersect_key(Job::PHASE1_STATUS_LABELS, array_flip(self::IN_FLIGHT_STATUSES));
+        $tileLabels[Job::STATUS_DELIVERED] = 'Delivered (awaiting completion)';
+
         return [
             'jobs' => $query->paginate(25),
             'counts' => $counts,
-            'statuses' => array_intersect_key(Job::PHASE1_STATUS_LABELS, array_flip(self::IN_FLIGHT_STATUSES)),
+            'statuses' => $tileLabels,
         ];
     }
 

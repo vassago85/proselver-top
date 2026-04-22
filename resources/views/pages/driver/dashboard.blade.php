@@ -104,6 +104,12 @@ new #[Layout('components.layouts.driver')] class extends Component {
                     <span class="font-mono">VIN {{ substr($job->vin, -8) }}</span>
                     @endif
                 </div>
+                @if(trim($job->customer_notes ?? '') !== '')
+                <div class="mt-2 inline-flex items-center gap-1.5 rounded-md bg-amber-100 px-2 py-1 text-[11px] font-semibold text-amber-800">
+                    <svg class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/><line x1="12" x2="12" y1="9" y2="13"/><line x1="12" x2="12.01" y1="17" y2="17"/></svg>
+                    Special instructions
+                </div>
+                @endif
             </a>
             @empty
             <div class="rounded-xl bg-white border border-slate-200 p-8 text-center text-sm text-slate-500">

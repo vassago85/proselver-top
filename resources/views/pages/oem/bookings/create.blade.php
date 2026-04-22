@@ -546,10 +546,11 @@ new #[Layout('components.layouts.app')] class extends Component {
             </div>
         </div>
 
-        {{-- ============ COMMENTS ============ --}}
+        {{-- ============ SPECIAL INSTRUCTIONS ============ --}}
         <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
-            <label class="block text-sm font-medium text-gray-700 mb-1">Comments <span class="text-gray-400 font-normal">(optional)</span></label>
-            <textarea wire:model="customerNotes" rows="2" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" placeholder='e.g. "collect Friday", "driver must bring hi-vis"...'></textarea>
+            <label class="block text-sm font-medium text-gray-700 mb-1">Special Instructions <span class="text-gray-400 font-normal">(optional)</span></label>
+            <p class="text-xs text-gray-500 mb-2">Anything the driver or carrier needs to know before collection &mdash; printed on the collection note.</p>
+            <textarea wire:model="customerNotes" rows="3" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" placeholder='e.g. "Deliver with a full tank", "Bring spare keys for unit AA123", "Collect Friday only"...'></textarea>
 
             <div class="mt-4">
                 <label class="flex items-center gap-2 cursor-pointer">

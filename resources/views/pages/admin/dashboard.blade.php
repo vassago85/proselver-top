@@ -133,7 +133,8 @@ new #[Layout('components.layouts.app')] class extends Component {
         <x-stat-card
             label="Delivered Today"
             :value="$deliveredToday"
-            color="emerald" />
+            color="emerald"
+            :href="route('admin.deliveries', ['range' => 'today'])" />
 
         @php
             // Driver Compliance tile surfaces everything that needs action:

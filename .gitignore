@@ -7,6 +7,10 @@
 /storage/framework/views/*.php
 /storage/framework/views/*.blade.php
 /storage/pail
+/storage/test-*.pdf
+/storage/app/test-*.pdf
+/tmp-*.php
+/tmp-*.pdf
 /vendor
 .env
 .env.backup

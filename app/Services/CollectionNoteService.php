@@ -21,6 +21,7 @@ class CollectionNoteService
         $verificationUrl = $this->buildVerificationUrl($job);
         $qrDataUri = $this->buildQrDataUri($verificationUrl);
         $carrierLogoUri = $this->buildCarrierLogoDataUri();
+        $inspectionDiagramUri = $this->buildImageDataUri(public_path('inspection-diagram.png'));
 
         $html = view('documents.collection-note', [
             'job' => $job,
@@ -29,6 +30,7 @@ class CollectionNoteService
             'qrUrl' => $qrDataUri,
             'verificationUrl' => $verificationUrl,
             'carrierLogoUri' => $carrierLogoUri,
+            'inspectionDiagramUri' => $inspectionDiagramUri,
         ])->render();
 
         $options = new Options();
@@ -84,11 +86,34 @@ class CollectionNoteService
      */
     protected function buildCarrierLogoDataUri(): ?string
     {
-        $path = public_path('proselverlogo-2.png');
+        return $this->buildImageDataUri(public_path('proselverlogo-2.png'));
+    }
+
+    /**
+     * Read any local PNG/JPEG as a base64 data URI for inline embedding in
+     * the PDF. Dompdf's SVG renderer is patchy, so we prefer raster assets
+     * embedded this way for anything beyond the simplest shapes. Returns
+     * null if the file is missing or can't be read, so the view can fall
+     * back cleanly.
+     */
+    protected function buildImageDataUri(string $path): ?string
+    {
         if (!is_file($path)) {
             return null;
         }
 
-        return 'data:image/png;base64,' . base64_encode((string) file_get_contents($path));
+        $contents = @file_get_contents($path);
+        if ($contents === false) {
+            return null;
+        }
+
+        $mime = match (strtolower(pathinfo($path, PATHINFO_EXTENSION))) {
+            'jpg', 'jpeg' => 'image/jpeg',
+            'png'         => 'image/png',
+            'gif'         => 'image/gif',
+            default       => 'image/png',
+        };
+
+        return 'data:' . $mime . ';base64,' . base64_encode($contents);
     }
 }
