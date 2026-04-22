@@ -48,14 +48,21 @@ class Location extends Model
         });
 
         static::saving(function (Location $location) {
-            if ($location->latitude === '' || $location->latitude === null) {
+            // Read raw attributes so the decimal:8 cast doesn't choke on ''
+            // (BigNumber::of('') throws). Normalise blanks/zero-ish to null.
+            $rawLat = $location->getAttributes()['latitude'] ?? null;
+            $rawLng = $location->getAttributes()['longitude'] ?? null;
+
+            if ($rawLat === '' || $rawLat === null) {
                 $location->latitude = null;
+                $rawLat = null;
             }
-            if ($location->longitude === '' || $location->longitude === null) {
+            if ($rawLng === '' || $rawLng === null) {
                 $location->longitude = null;
+                $rawLng = null;
             }
 
-            if ($location->address && $location->latitude === null && $location->longitude === null) {
+            if ($location->address && $rawLat === null && $rawLng === null) {
                 try {
                     $coords = GeocodingService::geocode($location->address);
                     if ($coords) {

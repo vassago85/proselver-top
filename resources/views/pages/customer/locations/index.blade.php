@@ -55,6 +55,10 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         $validated['company_id'] = $this->company->id;
 
+        // Eloquent's decimal cast can't handle '' from the form — normalise.
+        $validated['latitude'] = $validated['latitude'] === '' ? null : $validated['latitude'];
+        $validated['longitude'] = $validated['longitude'] === '' ? null : $validated['longitude'];
+
         if ($this->editingId) {
             $location = Location::where('company_id', $this->company->id)->findOrFail($this->editingId);
             $location->update($validated);

@@ -21,6 +21,23 @@ echo "Setting permissions..."
 chown -R www-data:www-data /var/www/html/storage /var/www/html/bootstrap/cache
 chmod -R 775 /var/www/html/storage /var/www/html/bootstrap/cache
 
+# Wait for Postgres so migrations don't fail on a cold start if the DB is
+# still coming up (service_healthy handles most cases; this is belt-and-braces).
+DB_HOST="${DB_HOST:-db}"
+DB_PORT="${DB_PORT:-5432}"
+echo "Waiting for database at ${DB_HOST}:${DB_PORT}..."
+for i in $(seq 1 30); do
+    if nc -z "$DB_HOST" "$DB_PORT" 2>/dev/null; then
+        echo "Database reachable."
+        break
+    fi
+    if [ "$i" = "30" ]; then
+        echo "Database not reachable after 30s; aborting boot." >&2
+        exit 1
+    fi
+    sleep 1
+done
+
 echo "Running migrations..."
 php artisan migrate --force
 

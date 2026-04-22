@@ -1,53 +1,83 @@
 # ============================================================================
-# LOCAL DEVELOPMENT ONLY.
+# PRODUCTION compose file. This is the default picked up by `docker compose`
+# on the server. It builds a self-contained image (assets baked in at build
+# time via Dockerfile) -- no bind mounts, no Vite dev server.
 #
-# This compose file bind-mounts the host into the container and uses the
-# dev Dockerfile (no `npm run build` step, no compiled assets baked in).
-# Running this on the server will break CSS/JS because there is no
-# public/build manifest inside the container.
+# Required .env keys (next to this file on the server):
+#   APP_KEY=base64:...                 # generate once with `php artisan key:generate --show`
+#   APP_URL=https://your.domain
+#   DB_PASSWORD=...                    # must match what Postgres was init'd with
 #
-# For production deploys ALWAYS pass the prod file explicitly:
+# Optional .env keys (defaults applied if unset):
+#   APP_PORT=8091
+#   DB_DATABASE=proselver  DB_USERNAME=proselver
+#   MAIL_*, R2_*, R2_BACKUP_*
 #
-#     docker compose -f docker-compose.prod.yml build --no-cache app
-#     docker compose -f docker-compose.prod.yml up -d --force-recreate app scheduler queue
+# Deploy:
+#   git pull
+#   docker compose build --no-cache app
+#   docker compose up -d --force-recreate app scheduler queue
 #
+# For LOCAL development use docker-compose.dev.yml instead:
+#   docker compose -f docker-compose.dev.yml up -d
 # ============================================================================
 
 services:
   app:
     build:
       context: .
-      dockerfile: docker/Dockerfile.dev
+      dockerfile: Dockerfile
+    image: proselver-app:latest
     container_name: proselver-app
     restart: unless-stopped
     environment:
-      APP_NAME: "Proselver Trident"
-      APP_ENV: local
-      APP_DEBUG: "true"
-      APP_URL: ${APP_URL:-http://localhost:8091}
-      APP_KEY: base64:z1VxCp+P9XYd4gTPMK1VuZp6vBXeRnFuQH7xtpbkj5Q=
-      DB_CONNECTION: pgsql
-      DB_HOST: db
-      DB_PORT: 5432
-      DB_DATABASE: proselver
-      DB_USERNAME: proselver
-      DB_PASSWORD: proselver
-      REDIS_CLIENT: phpredis
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
-      CACHE_STORE: redis
-      SESSION_DRIVER: redis
-      QUEUE_CONNECTION: redis
-      FILESYSTEM_DISK: local
-      MAIL_MAILER: log
-      LIVEWIRE_TEMPORARY_FILE_UPLOAD_DISK: public
+      - APP_NAME=Proselver Trident
+      - APP_ENV=production
+      - APP_DEBUG=false
+      - APP_URL=${APP_URL:-https://proselver.charsleydigital.co.za}
+      - APP_KEY=${APP_KEY}
+      - LOG_CHANNEL=stack
+      - LOG_STACK=single
+      - LOG_LEVEL=warning
+      - DB_CONNECTION=pgsql
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_DATABASE=${DB_DATABASE:-proselver}
+      - DB_USERNAME=${DB_USERNAME:-proselver}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - REDIS_CLIENT=phpredis
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - CACHE_STORE=redis
+      - SESSION_DRIVER=redis
+      - QUEUE_CONNECTION=redis
+      - BROADCAST_CONNECTION=log
+      - MAIL_MAILER=${MAIL_MAILER:-smtp}
+      - MAIL_HOST=${MAIL_HOST:-}
+      - MAIL_PORT=${MAIL_PORT:-587}
+      - MAIL_USERNAME=${MAIL_USERNAME:-}
+      - MAIL_PASSWORD=${MAIL_PASSWORD:-}
+      - MAIL_ENCRYPTION=${MAIL_ENCRYPTION:-tls}
+      - MAIL_FROM_ADDRESS=${MAIL_FROM_ADDRESS:-noreply@proselver.co.za}
+      - MAIL_FROM_NAME=${MAIL_FROM_NAME:-Proselver Trident}
+      - FILESYSTEM_DISK=${FILESYSTEM_DISK:-r2}
+      - R2_ACCESS_KEY_ID=${R2_ACCESS_KEY_ID:-}
+      - R2_SECRET_ACCESS_KEY=${R2_SECRET_ACCESS_KEY:-}
+      - R2_BUCKET=${R2_BUCKET:-}
+      - R2_ENDPOINT=${R2_ENDPOINT:-}
+      - R2_REGION=${R2_REGION:-auto}
+      - R2_BACKUP_ACCESS_KEY_ID=${R2_BACKUP_ACCESS_KEY_ID:-}
+      - R2_BACKUP_SECRET_ACCESS_KEY=${R2_BACKUP_SECRET_ACCESS_KEY:-}
+      - R2_BACKUP_BUCKET=${R2_BACKUP_BUCKET:-}
+      - R2_BACKUP_ENDPOINT=${R2_BACKUP_ENDPOINT:-}
+      - R2_BACKUP_REGION=${R2_BACKUP_REGION:-auto}
+      - GOOGLE_MAPS_API_KEY=${GOOGLE_MAPS_API_KEY:-}
+      - LIVEWIRE_TEMPORARY_FILE_UPLOAD_DISK=public
     volumes:
-      - .:/var/www/html
-      - vendor-data:/var/www/html/vendor
-      - node-modules:/var/www/html/node_modules
+      - app-logs:/var/www/html/storage/logs
+      - app-storage:/var/www/html/storage/app
     ports:
       - "${APP_PORT:-8091}:80"
-      - "5173:5173"
     networks:
       - proselver-network
     depends_on:
@@ -61,20 +91,18 @@ services:
     container_name: proselver-db
     restart: unless-stopped
     environment:
-      POSTGRES_DB: proselver
-      POSTGRES_USER: proselver
-      POSTGRES_PASSWORD: proselver
+      - POSTGRES_DB=${DB_DATABASE:-proselver}
+      - POSTGRES_USER=${DB_USERNAME:-proselver}
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
     volumes:
       - db-data:/var/lib/postgresql/data
-    ports:
-      - "5433:5432"
     networks:
       - proselver-network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U proselver"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-proselver}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   redis:
     image: redis:alpine
@@ -82,83 +110,118 @@ services:
     restart: unless-stopped
     volumes:
       - redis-data:/data
-    ports:
-      - "6380:6379"
     networks:
       - proselver-network
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-
-  queue:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.dev
-    container_name: proselver-queue
-    restart: unless-stopped
-    entrypoint: ["sh", "-c", "sleep 15 && php artisan queue:work redis --sleep=3 --tries=3 --timeout=90"]
-    environment:
-      APP_ENV: local
-      APP_DEBUG: "true"
-      APP_KEY: base64:z1VxCp+P9XYd4gTPMK1VuZp6vBXeRnFuQH7xtpbkj5Q=
-      DB_CONNECTION: pgsql
-      DB_HOST: db
-      DB_PORT: 5432
-      DB_DATABASE: proselver
-      DB_USERNAME: proselver
-      DB_PASSWORD: proselver
-      REDIS_CLIENT: phpredis
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
-      QUEUE_CONNECTION: redis
-      MAIL_MAILER: log
-    volumes:
-      - .:/var/www/html
-      - vendor-data:/var/www/html/vendor
-      - node-modules:/var/www/html/node_modules
-    networks:
-      - proselver-network
-    depends_on:
-      - app
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   scheduler:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.dev
+    image: proselver-app:latest
     container_name: proselver-scheduler
     restart: unless-stopped
-    entrypoint: ["sh", "-c", "sleep 15 && while true; do php artisan schedule:run --verbose --no-interaction; sleep 60; done"]
+    entrypoint: []
+    command: sh -c "while true; do php /var/www/html/artisan schedule:run --verbose --no-interaction; sleep 60; done"
     environment:
-      APP_ENV: local
-      APP_DEBUG: "true"
-      APP_KEY: base64:z1VxCp+P9XYd4gTPMK1VuZp6vBXeRnFuQH7xtpbkj5Q=
-      DB_CONNECTION: pgsql
-      DB_HOST: db
-      DB_PORT: 5432
-      DB_DATABASE: proselver
-      DB_USERNAME: proselver
-      DB_PASSWORD: proselver
-      REDIS_CLIENT: phpredis
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
-      QUEUE_CONNECTION: redis
+      - APP_NAME=Proselver Trident
+      - APP_ENV=production
+      - APP_DEBUG=false
+      - APP_URL=${APP_URL:-https://proselver.charsleydigital.co.za}
+      - APP_KEY=${APP_KEY}
+      - LOG_CHANNEL=stack
+      - LOG_STACK=single
+      - LOG_LEVEL=warning
+      - DB_CONNECTION=pgsql
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_DATABASE=${DB_DATABASE:-proselver}
+      - DB_USERNAME=${DB_USERNAME:-proselver}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - REDIS_CLIENT=phpredis
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - CACHE_STORE=redis
+      - QUEUE_CONNECTION=redis
+      - R2_BACKUP_ACCESS_KEY_ID=${R2_BACKUP_ACCESS_KEY_ID:-}
+      - R2_BACKUP_SECRET_ACCESS_KEY=${R2_BACKUP_SECRET_ACCESS_KEY:-}
+      - R2_BACKUP_BUCKET=${R2_BACKUP_BUCKET:-}
+      - R2_BACKUP_ENDPOINT=${R2_BACKUP_ENDPOINT:-}
+      - R2_BACKUP_REGION=${R2_BACKUP_REGION:-auto}
     volumes:
-      - .:/var/www/html
-      - vendor-data:/var/www/html/vendor
-      - node-modules:/var/www/html/node_modules
+      - app-logs:/var/www/html/storage/logs
+      - app-storage:/var/www/html/storage/app
     networks:
       - proselver-network
     depends_on:
-      - app
+      app:
+        condition: service_started
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  queue:
+    image: proselver-app:latest
+    container_name: proselver-queue
+    restart: unless-stopped
+    entrypoint: []
+    command: php /var/www/html/artisan queue:work redis --sleep=3 --tries=3 --max-time=3600
+    environment:
+      - APP_NAME=Proselver Trident
+      - APP_ENV=production
+      - APP_DEBUG=false
+      - APP_URL=${APP_URL:-https://proselver.charsleydigital.co.za}
+      - APP_KEY=${APP_KEY}
+      - LOG_CHANNEL=stack
+      - LOG_STACK=single
+      - LOG_LEVEL=warning
+      - DB_CONNECTION=pgsql
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_DATABASE=${DB_DATABASE:-proselver}
+      - DB_USERNAME=${DB_USERNAME:-proselver}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - REDIS_CLIENT=phpredis
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - CACHE_STORE=redis
+      - QUEUE_CONNECTION=redis
+      - MAIL_MAILER=${MAIL_MAILER:-smtp}
+      - MAIL_HOST=${MAIL_HOST:-}
+      - MAIL_PORT=${MAIL_PORT:-587}
+      - MAIL_USERNAME=${MAIL_USERNAME:-}
+      - MAIL_PASSWORD=${MAIL_PASSWORD:-}
+      - MAIL_ENCRYPTION=${MAIL_ENCRYPTION:-tls}
+      - MAIL_FROM_ADDRESS=${MAIL_FROM_ADDRESS:-noreply@proselver.co.za}
+      - MAIL_FROM_NAME=${MAIL_FROM_NAME:-Proselver Trident}
+      - FILESYSTEM_DISK=${FILESYSTEM_DISK:-r2}
+      - R2_ACCESS_KEY_ID=${R2_ACCESS_KEY_ID:-}
+      - R2_SECRET_ACCESS_KEY=${R2_SECRET_ACCESS_KEY:-}
+      - R2_BUCKET=${R2_BUCKET:-}
+      - R2_ENDPOINT=${R2_ENDPOINT:-}
+      - R2_REGION=${R2_REGION:-auto}
+      - LIVEWIRE_TEMPORARY_FILE_UPLOAD_DISK=public
+    volumes:
+      - app-logs:/var/www/html/storage/logs
+      - app-storage:/var/www/html/storage/app
+    networks:
+      - proselver-network
+    depends_on:
+      app:
+        condition: service_started
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
 networks:
   proselver-network:
     driver: bridge
 
 volumes:
+  app-logs:
+  app-storage:
   db-data:
   redis-data:
-  vendor-data:
-  node-modules:

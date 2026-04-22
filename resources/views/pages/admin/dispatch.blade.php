@@ -82,7 +82,8 @@ new #[Layout('components.layouts.app')] class extends Component {
                       ->orWhereHas('driver', fn($c) => $c->where('name', 'like', "%{$this->search}%"));
                 });
             })
-            ->orderByRaw("FIELD(status, ?, ?) ASC", [Job::STATUS_PLANNED, Job::STATUS_DRIVER_ASSIGNED])
+            // Portable status ordering (MySQL's FIELD() doesn't exist on Postgres).
+            ->orderByRaw("CASE status WHEN ? THEN 1 WHEN ? THEN 2 ELSE 3 END ASC", [Job::STATUS_PLANNED, Job::STATUS_DRIVER_ASSIGNED])
             ->orderBy('scheduled_date')
             ->paginate(25);
 
