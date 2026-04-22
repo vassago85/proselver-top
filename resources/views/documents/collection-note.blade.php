@@ -45,6 +45,7 @@
         .released-grid td.stamp { width: 60%; padding-left: 14px; }
 
         .sig-line { border-bottom: 1px solid #9ca3af; height: 16px; margin-top: 12px; }
+        .sig-line.filled { font-size: 10px; color: #111827; padding-bottom: 1px; line-height: 16px; }
         .sig-label { font-size: 8px; color: #6b7280; margin-top: 1px; }
 
         .stamp-box-lg { border: 1px dashed #9ca3af; height: 130px; display: block; }
@@ -152,8 +153,10 @@
         /* Motorvia-style signature rows */
         .mi-sig { width: 100%; border-collapse: collapse; font-size: 9px; margin-top: 8px; }
         .mi-sig td { padding: 4px 6px; vertical-align: bottom; border: none; }
-        .mi-sig td.lbl { font-size: 8px; color: #6b7280; font-weight: bold; text-transform: uppercase; width: 10%; padding-right: 4px; }
+        .mi-sig td.lbl { font-size: 8px; color: #6b7280; font-weight: bold; text-transform: uppercase; width: 8%; padding-right: 4px; }
+        .mi-sig td.role { font-size: 9px; color: #111827; font-weight: bold; text-transform: uppercase; letter-spacing: 0.5px; width: 11%; padding-right: 4px; }
         .mi-sig td.line { border-bottom: 1px solid #9ca3af; height: 14px; }
+        .mi-sig td.line.filled { font-size: 9px; color: #111827; padding-bottom: 1px; }
 
         /* ========================================================
            PAGES 3 & 4 — Proof of Delivery (Customer / Office copies)
@@ -340,11 +343,13 @@
     {{-- ===== Released By (full width — signature 40% / stamp 60%) ===== --}}
     <div class="released-full">
         <div class="sig-title">Released By</div>
-        <div class="sig-sub">Dispatching Agent &amp; Dispatcher's Stamp &mdash; authority to release the unit.</div>
+        <div class="sig-sub">Releasing party at the pickup site (dealer / plant / yard) &mdash; authority to release the unit.</div>
         <table class="released-grid">
             <tr>
                 <td class="lines">
                     <div class="sig-line"></div>
+                    <div class="sig-label">Firm (releasing party)</div>
+                    <div class="sig-line" style="margin-top: 12px;"></div>
                     <div class="sig-label">Agent print name</div>
                     <div class="sig-line" style="margin-top: 12px;"></div>
                     <div class="sig-label">Agent signature</div>
@@ -373,7 +378,7 @@
                             <strong>Manual Inspection Report</strong> on page&nbsp;2.
                         </div>
                     </div>
-                    <div class="sig-line" style="margin-top: 10px;"></div>
+                    <div class="sig-line filled" style="margin-top: 10px;">{{ $driver?->name ?? '' }}</div>
                     <div class="sig-label">Driver print name</div>
                     <div class="sig-line" style="margin-top: 10px;"></div>
                     <div class="sig-label">Driver signature &amp; date</div>
@@ -435,7 +440,7 @@
             <td class="lbl">Driver</td>
             <td class="val">{{ $driver?->name ?? '—' }}</td>
             <td class="lbl">Date</td>
-            <td class="val">{{ $job->scheduled_date?->format('d M Y') ?? '—' }}</td>
+            <td class="val">{{ ($job->scheduled_date ?? now())->format('d M Y') }}</td>
         </tr>
     </table>
 
@@ -481,12 +486,8 @@
                     </table>
                     <table style="width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 9.5px;">
                         <tr>
-                            <td style="border: none; padding: 2px 0; color: #6b7280; font-size: 8.5px; width: 30%;">KM's</td>
+                            <td style="border: none; padding: 2px 0; color: #6b7280; font-size: 8.5px; width: 30%;">Odometer (km)</td>
                             <td style="border: none; padding: 2px 0; border-bottom: 1px solid #9ca3af; height: 12px;"></td>
-                        </tr>
-                        <tr>
-                            <td style="border: none; padding: 6px 0 2px; color: #6b7280; font-size: 8.5px;">Mileage</td>
-                            <td style="border: none; padding: 6px 0 2px; border-bottom: 1px solid #9ca3af; height: 12px;"></td>
                         </tr>
                     </table>
                 </td>
@@ -505,10 +506,10 @@
                 'Exterior Mirrors', 'Wheel Covers / Hub Caps', 'Radio Antenna',
                 'Wipers (Windscreen / Lights)', 'Keys / No. of Keys',
                 'Interior Mirror', 'Sun Visors', 'Head Rests',
-                'Seat Belts', 'Cig. Lighter', 'Ash Tray', "Owner's Manual",
+                'Seat Belts', 'Cig. Lighter', "Owner's Manual",
             ];
             $accCol2 = [
-                'Radio / Tape', 'Speakers', 'Carpets', 'Floor Mats',
+                'Radio / Tape', 'Speakers', 'Carpets',
                 'Interior Condition (C = Clean / S = Soiled)',
                 'Spare Wheel', 'Jack', 'Wheel Spanner',
                 'Tools (No. of items)', 'Warning Triangle',
@@ -573,29 +574,37 @@
         </table>
     </div>
 
-    {{-- ---- Motorvia-style signatures (3 rows) ---- --}}
+    {{-- ---- Signatures — Dispatch (releasing party at the pickup site) and Driver.
+         Dispatch row is fully blank because we don't know who is releasing the unit
+         until they sign; the driver row pre-populates Name / Firm / Date since the
+         driver and carrier are known at print time and the date is the scheduled
+         collection date. ---- --}}
     <div class="mi-section">
         <div class="mi-section-title">Signatures</div>
+        @php($_sigDate = ($job->scheduled_date ?? now())->format('d M Y'))
+        @php($_carrierName = 'Proselver Technologies')
         <table class="mi-sig">
             <tr>
+                <td class="role">Dispatch</td>
                 <td class="lbl">Sign</td>
                 <td class="line"></td>
                 <td class="lbl">Name</td>
                 <td class="line"></td>
                 <td class="lbl">Firm</td>
-                <td class="line" style="width: 18%;"></td>
+                <td class="line" style="width: 16%;"></td>
                 <td class="lbl">Date</td>
-                <td class="line" style="width: 14%;"></td>
+                <td class="line" style="width: 12%;"></td>
             </tr>
             <tr>
+                <td class="role">Driver</td>
                 <td class="lbl">Sign</td>
                 <td class="line"></td>
                 <td class="lbl">Name</td>
-                <td class="line"></td>
+                <td class="line filled">{{ $driver?->name ?? '' }}</td>
                 <td class="lbl">Firm</td>
-                <td class="line" style="width: 18%;"></td>
+                <td class="line filled" style="width: 16%;">{{ $_carrierName }}</td>
                 <td class="lbl">Date</td>
-                <td class="line" style="width: 14%;"></td>
+                <td class="line filled" style="width: 12%;">{{ $_sigDate }}</td>
             </tr>
         </table>
     </div>

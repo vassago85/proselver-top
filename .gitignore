@@ -11,6 +11,7 @@
 /storage/app/test-*.pdf
 /tmp-*.php
 /tmp-*.pdf
+/.commit-msg.txt
 /vendor
 .env
 .env.backup

@@ -86,7 +86,9 @@
     </tr>
 </table>
 
-{{-- Delivery values (driver fills on arrival) — KMs, Fuel, Date/Time --}}
+{{-- Delivery values — left: driver fills on arrival (odometer / fuel / date / time);
+     right: pre-filled driver contact card so the receiving customer knows who is
+     delivering without the driver having to rewrite any of it. --}}
 <table class="pod-values">
     <tr>
         <td>
@@ -94,16 +96,11 @@
                 <div class="lbl">Delivery &mdash; captured by driver on arrival</div>
                 <table class="pod-line-row">
                     <tr><td class="name">Odometer on delivery (km)</td><td class="line"></td></tr>
-                    <tr><td class="name">Fuel level (eighths, e.g. 4/8)</td><td class="line"></td></tr>
-                    <tr><td class="name">Arrival date</td><td class="line"></td></tr>
-                    <tr><td class="name">Arrival time</td><td class="line"></td></tr>
                 </table>
-            </div>
-        </td>
-        <td>
-            <div class="pod-box">
-                <div class="lbl">Fuel Level &mdash; circle one (for audit)</div>
-                <table class="fuel-scale" style="margin-top: 4px;">
+                <div style="font-size: 8px; color: #6b7280; text-transform: uppercase; font-weight: bold; margin: 6px 0 2px 0;">
+                    Fuel Level &mdash; circle one (1=empty, 10=full)
+                </div>
+                <table class="fuel-scale" style="margin-bottom: 4px;">
                     <tr>
                         @for($f = 1; $f <= 10; $f++)
                             <td>{{ $f }}</td>
@@ -115,8 +112,25 @@
                         @endfor
                     </tr>
                 </table>
+                <table class="pod-line-row" style="margin-top: 4px;">
+                    <tr><td class="name">Arrival date</td><td class="line"></td></tr>
+                    <tr><td class="name">Arrival time</td><td class="line"></td></tr>
+                </table>
+            </div>
+        </td>
+        <td>
+            <div class="pod-box">
+                <div class="lbl">Delivering Driver</div>
+                <table class="detail" style="margin-top: 2px;">
+                    <tr><td class="label">Name</td><td class="value">{{ $driver?->name ?? '—' }}</td></tr>
+                    <tr><td class="label">Licence</td><td class="value">{{ $profile?->drivers_licence_number ?? '—' }}</td></tr>
+                    <tr><td class="label">Cellphone</td><td class="value">{{ $profile?->cellphone ?? $driver?->phone ?? '—' }}</td></tr>
+                    <tr><td class="label">Carrier</td><td class="value">Proselver Technologies</td></tr>
+                </table>
                 <div style="font-size: 8px; color: #6b7280; margin-top: 6px; line-height: 1.3;">
-                    1 = empty, 10 = full. This is the fuel level at the point of delivery.
+                    Tick each line on the Condition on Delivery list below. Anything
+                    unacceptable or different from the collection sheet must be noted in
+                    the Damage &amp; Missing Items box.
                 </div>
             </div>
         </td>
@@ -144,7 +158,6 @@
                 <tr><td class="check"><span class="fb-box"></span></td><td class="name">Spare key handed over (if applicable)</td></tr>
                 <tr><td class="check"><span class="fb-box"></span></td><td class="name">Spare wheel, jack &amp; tools present</td></tr>
                 <tr><td class="check"><span class="fb-box"></span></td><td class="name">Owner's manual / service book present</td></tr>
-                <tr><td class="check"><span class="fb-box"></span></td><td class="name">Floor mats present</td></tr>
                 <tr><td class="check"><span class="fb-box"></span></td><td class="name">No active dash warning lights</td></tr>
             </table>
         </td>
@@ -167,7 +180,7 @@
             <div class="pod-sig-box">
                 <div class="sig-title">Delivered By (Driver)</div>
                 <div class="sig-sub">I confirm the vehicle was delivered to the site and contact above.</div>
-                <div class="sig-line" style="margin-top: 14px;"></div>
+                <div class="sig-line filled" style="margin-top: 14px;">{{ $driver?->name ?? '' }}</div>
                 <div class="sig-label">Driver print name</div>
                 <div class="sig-line" style="margin-top: 12px;"></div>
                 <div class="sig-label">Driver signature</div>
