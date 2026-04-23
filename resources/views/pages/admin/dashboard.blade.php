@@ -97,6 +97,13 @@ new #[Layout('components.layouts.app')] class extends Component {
         $openDamageCount = Job::whereIn('id', $damageJobIds)
             ->whereNotIn('status', [Job::STATUS_COMPLETED, Job::STATUS_CANCELLED])
             ->count();
+        // Jobs where damage exists but no operator has released the
+        // report to the customer yet. This is the number ops should
+        // drive to zero — every row here is a customer who is waiting
+        // for sign-off.
+        $pendingReleaseCount = Job::whereIn('id', $damageJobIds)
+            ->whereNull('damage_report_released_at')
+            ->count();
         $damageLast7d = JobDocument::where('category', JobDocument::CATEGORY_DAMAGE_PHOTO)
             ->where('created_at', '>=', now()->subDays(7))
             ->count();
@@ -145,6 +152,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             'passportHolders',
             'saIdAnomalies',
             'openDamageCount',
+            'pendingReleaseCount',
             'damageLast7d',
             'recentDamageJobs',
         );
@@ -249,23 +257,35 @@ new #[Layout('components.layouts.app')] class extends Component {
             :href="route('admin.drivers.index')" />
 
         @php
-            // Damage Reports tile. Headline is the number of *open* jobs
-            // (i.e. not yet completed / cancelled) that have damage photos
-            // against them — these are the ones ops still need to action.
-            // The helper shows photo volume in the last 7 days so a sudden
-            // spike is visible at a glance.
-            $damageHelper = $damageLast7d > 0
-                ? $damageLast7d . ' new ' . ($damageLast7d === 1 ? 'photo' : 'photos') . ' · 7d'
-                : 'No new photos · 7d';
-            $damageColor = $openDamageCount > 0 ? 'red' : 'slate';
+            // Damage Reports tile. Headline is the number of incidents
+            // still awaiting operator sign-off — these are the customers
+            // currently blocked from seeing their report, so it's the
+            // number ops should drive to zero. Helper line surfaces
+            // overall open-damage volume so a quiet release queue doesn't
+            // hide a stack of older incidents.
+            $damageHelper = match (true) {
+                $pendingReleaseCount > 0 && $openDamageCount > 0
+                    => $pendingReleaseCount . ' awaiting release · ' . $openDamageCount . ' open',
+                $pendingReleaseCount > 0
+                    => $pendingReleaseCount . ' awaiting release',
+                $openDamageCount > 0
+                    => $openDamageCount . ' open incidents',
+                default
+                    => 'All reports released',
+            };
+            $damageColor = match (true) {
+                $pendingReleaseCount > 0 => 'red',
+                $openDamageCount > 0     => 'amber',
+                default                  => 'slate',
+            };
         @endphp
         <x-stat-card
             label="Damage Reports"
-            :value="$openDamageCount"
+            :value="$pendingReleaseCount"
             :color="$damageColor"
             :helper="$damageHelper"
             :helperColor="$damageColor"
-            :href="route('admin.damage')">
+            :href="route('admin.damage', ['bucket' => 'pending_release'])">
             <x-slot:icon>
                 <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
             </x-slot:icon>

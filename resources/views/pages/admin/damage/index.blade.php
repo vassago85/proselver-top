@@ -27,7 +27,7 @@ new #[Layout('components.layouts.app')] class extends Component {
     public string $bucket = 'open';
 
     public const ALLOWED_RANGES  = ['last_7_days', 'last_30_days', 'this_month', 'all'];
-    public const ALLOWED_BUCKETS = ['open', 'all'];
+    public const ALLOWED_BUCKETS = ['open', 'pending_release', 'all'];
 
     public function mount(): void
     {
@@ -39,6 +39,27 @@ new #[Layout('components.layouts.app')] class extends Component {
         if (!in_array($this->bucket, self::ALLOWED_BUCKETS, true)) {
             $this->bucket = 'open';
         }
+    }
+
+    /**
+     * Operator-driven release directly from the incidents list.
+     * Policy-gated so junior users can't bulk-release without review.
+     */
+    public function releaseDamageReport(int $jobId): void
+    {
+        $job = Job::findOrFail($jobId);
+        $this->authorize('releaseDamageReport', $job);
+
+        $job->damage_report_released_at = now();
+        $job->damage_report_released_by = auth()->id();
+        $job->save();
+
+        \App\Services\AuditService::log('damage_report_released', 'job', $job->id, null, [
+            'released_to_company_id' => $job->company_id,
+            'source' => 'damage_index',
+        ]);
+
+        session()->flash('success', "Damage report released for {$job->job_number}.");
     }
 
     public function setRange(string $range): void
@@ -112,6 +133,8 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         if ($this->bucket === 'open') {
             $jobs->whereNotIn('status', [Job::STATUS_COMPLETED, Job::STATUS_CANCELLED]);
+        } elseif ($this->bucket === 'pending_release') {
+            $jobs->whereNull('damage_report_released_at');
         }
 
         if (trim($this->search) !== '') {
@@ -143,13 +166,15 @@ new #[Layout('components.layouts.app')] class extends Component {
         });
 
         // Headline metrics for the page header strip.
+        $allDamageJobIds = JobDocument::where('category', JobDocument::CATEGORY_DAMAGE_PHOTO)->distinct()->pluck('job_id');
         $metrics = [
             'open_jobs' => Job::query()
-                ->whereIn('id', JobDocument::where('category', JobDocument::CATEGORY_DAMAGE_PHOTO)->distinct()->pluck('job_id'))
+                ->whereIn('id', $allDamageJobIds)
                 ->whereNotIn('status', [Job::STATUS_COMPLETED, Job::STATUS_CANCELLED])
                 ->count(),
-            'photos_7d' => JobDocument::where('category', JobDocument::CATEGORY_DAMAGE_PHOTO)
-                ->where('created_at', '>=', now()->subDays(7))
+            'pending_release' => Job::query()
+                ->whereIn('id', $allDamageJobIds)
+                ->whereNull('damage_report_released_at')
                 ->count(),
             'photos_30d' => JobDocument::where('category', JobDocument::CATEGORY_DAMAGE_PHOTO)
                 ->where('created_at', '>=', now()->subDays(30))
@@ -168,17 +193,21 @@ new #[Layout('components.layouts.app')] class extends Component {
 <div>
     <x-slot:header>Damage Reports</x-slot:header>
 
+    @if(session('success'))
+        <div class="mb-4 rounded-lg bg-emerald-50 border border-emerald-200 p-3 text-sm text-emerald-800">{{ session('success') }}</div>
+    @endif
+
     {{-- Headline metric strip --}}
     <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6">
         <div class="rounded-xl bg-white border border-rose-200 p-4 shadow-sm">
             <p class="text-[11px] uppercase tracking-wider font-semibold text-rose-700">Open incidents</p>
             <p class="mt-1 text-2xl font-semibold text-slate-900 tabular-nums">{{ $metrics['open_jobs'] }}</p>
-            <p class="text-xs text-slate-500 mt-0.5">Jobs with damage that are still in flight</p>
+            <p class="text-xs text-slate-500 mt-0.5">Jobs with damage still in flight</p>
         </div>
-        <div class="rounded-xl bg-white border border-slate-200 p-4 shadow-sm">
-            <p class="text-[11px] uppercase tracking-wider font-semibold text-slate-600">New photos (7d)</p>
-            <p class="mt-1 text-2xl font-semibold text-slate-900 tabular-nums">{{ $metrics['photos_7d'] }}</p>
-            <p class="text-xs text-slate-500 mt-0.5">Damage photos uploaded in the last week</p>
+        <div class="rounded-xl bg-white border border-amber-200 p-4 shadow-sm">
+            <p class="text-[11px] uppercase tracking-wider font-semibold text-amber-700">Pending release</p>
+            <p class="mt-1 text-2xl font-semibold text-slate-900 tabular-nums">{{ $metrics['pending_release'] }}</p>
+            <p class="text-xs text-slate-500 mt-0.5">Awaiting operator sign-off before customer can download</p>
         </div>
         <div class="rounded-xl bg-white border border-slate-200 p-4 shadow-sm">
             <p class="text-[11px] uppercase tracking-wider font-semibold text-slate-600">New photos (30d)</p>
@@ -213,8 +242,9 @@ new #[Layout('components.layouts.app')] class extends Component {
             <div class="flex flex-col sm:flex-row gap-2">
                 <div class="inline-flex rounded-lg bg-gray-100 p-1 text-xs font-semibold">
                     @foreach([
-                        'open' => 'Open only',
-                        'all'  => 'All incidents',
+                        'open'            => 'Open only',
+                        'pending_release' => 'Pending release',
+                        'all'             => 'All incidents',
                     ] as $key => $label)
                         <button wire:click="setBucket('{{ $key }}')"
                             class="px-3 py-1.5 rounded-md transition-colors
@@ -263,6 +293,17 @@ new #[Layout('components.layouts.app')] class extends Component {
                                 {{ $job->damage_photos_count }} {{ $job->damage_photos_count === 1 ? 'photo' : 'photos' }}
                             </span>
                             <x-status-badge :status="$job->status" />
+                            @if($job->damage_report_released_at)
+                                <span class="inline-flex items-center gap-1 rounded-full bg-emerald-50 border border-emerald-200 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">
+                                    <svg class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+                                    Released
+                                </span>
+                            @else
+                                <span class="inline-flex items-center gap-1 rounded-full bg-amber-50 border border-amber-200 px-2 py-0.5 text-[11px] font-semibold text-amber-800">
+                                    <svg class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                                    Pending review
+                                </span>
+                            @endif
                         </div>
                         <p class="text-sm text-slate-600">
                             <span class="font-medium">{{ $job->company?->name ?? '—' }}</span>
@@ -314,18 +355,27 @@ new #[Layout('components.layouts.app')] class extends Component {
                     </div>
 
                     {{-- Right: actions --}}
-                    <div class="flex flex-col gap-2 shrink-0 lg:w-44">
+                    <div class="flex flex-col gap-2 shrink-0 lg:w-48">
                         <a href="{{ route('admin.orders.show', $job) }}#damage-section"
                            class="inline-flex items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50">
                             Review incident
                             <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
                         </a>
-                        @can('generateDamageReport', $job)
                         <a href="{{ route('damage-report.download', $job) }}" target="_blank" rel="noopener"
                            class="inline-flex items-center justify-center gap-1.5 rounded-lg bg-rose-600 px-3 py-2 text-xs font-semibold text-white hover:bg-rose-500">
                             <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
-                            PDF Report
+                            {{ $job->damage_report_released_at ? 'PDF Report' : 'Preview (ops)' }}
                         </a>
+                        @can('releaseDamageReport', $job)
+                            @if(!$job->damage_report_released_at)
+                                <button wire:click="releaseDamageReport({{ $job->id }})"
+                                        wire:confirm="Release this damage report to the customer?"
+                                        class="inline-flex items-center justify-center gap-1.5 rounded-lg border border-emerald-600 bg-white px-3 py-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-50">
+                                    <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+                                    <span wire:loading.remove wire:target="releaseDamageReport({{ $job->id }})">Release to customer</span>
+                                    <span wire:loading wire:target="releaseDamageReport({{ $job->id }})">Releasing…</span>
+                                </button>
+                            @endif
                         @endcan
                     </div>
                 </div>

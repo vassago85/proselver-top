@@ -25,6 +25,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             'events',
             'brand',
             'createdBy.companies',
+            'damageReportReleasedBy:id,name',
         ]);
     }
 
@@ -184,6 +185,54 @@ new #[Layout('components.layouts.app')] class extends Component {
         session()->flash('success', "Order {$this->job->job_number} cancelled.");
     }
 
+    /**
+     * Release the damage report to the customer. Gated by
+     * JobPolicy::releaseDamageReport so only ops/owner/super can sign
+     * it off — junior users see a disabled button (and the policy
+     * check here also blocks a direct request).
+     */
+    public function releaseDamageReport(): void
+    {
+        $this->authorize('releaseDamageReport', $this->job);
+
+        $this->job->damage_report_released_at = now();
+        $this->job->damage_report_released_by = auth()->id();
+        $this->job->save();
+
+        AuditService::log('damage_report_released', 'job', $this->job->id, null, [
+            'released_to_company_id' => $this->job->company_id,
+            'photo_count' => $this->job->documents->where('category', \App\Models\JobDocument::CATEGORY_DAMAGE_PHOTO)->count(),
+        ]);
+
+        $this->job->refresh()->load(['damageReportReleasedBy', 'documents']);
+        session()->flash('success', 'Damage report released to customer.');
+    }
+
+    /**
+     * Revoke the release. Useful when an operator ticks "release" by
+     * mistake or a new photo needs to be reviewed before the customer
+     * downloads the updated report.
+     */
+    public function revokeDamageReport(): void
+    {
+        $this->authorize('releaseDamageReport', $this->job);
+
+        $previousReleaser = $this->job->damage_report_released_by;
+        $previousAt       = $this->job->damage_report_released_at?->toIso8601String();
+
+        $this->job->damage_report_released_at = null;
+        $this->job->damage_report_released_by = null;
+        $this->job->save();
+
+        AuditService::log('damage_report_revoked', 'job', $this->job->id, null, [
+            'previous_released_by' => $previousReleaser,
+            'previous_released_at' => $previousAt,
+        ]);
+
+        $this->job->refresh()->load(['damageReportReleasedBy', 'documents']);
+        session()->flash('success', 'Damage report access revoked from customer.');
+    }
+
     public function with(): array
     {
         $drivers = User::whereHas('roles', fn($q) => $q->where('slug', 'driver'))
@@ -304,13 +353,70 @@ new #[Layout('components.layouts.app')] class extends Component {
                         </div>
                         @endif
 
-                        <div class="mt-5 flex flex-wrap items-center gap-2">
-                            @can('generateDamageReport', $job)
+                        {{-- Release-to-customer block.
+                             Damage reports are ops-only until an authorised
+                             operator clicks "Release". Only then can the
+                             customer see the PDF. Internal staff can still
+                             download + review at any time. --}}
+                        @php
+                            $isReleased = $job->damage_report_released_at !== null;
+                        @endphp
+                        <div class="mt-5 rounded-lg border {{ $isReleased ? 'border-emerald-200 bg-emerald-50' : 'border-amber-200 bg-amber-50' }} p-3">
+                            <div class="flex items-start gap-2.5">
+                                @if($isReleased)
+                                    <svg class="h-4 w-4 mt-0.5 text-emerald-600 shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+                                    <div class="text-xs text-emerald-900 leading-relaxed min-w-0 flex-1">
+                                        <strong class="text-emerald-900">Released to customer</strong>
+                                        on {{ $job->damage_report_released_at->format('d M Y · H:i') }}
+                                        @if($job->damageReportReleasedBy)
+                                            by {{ $job->damageReportReleasedBy->name }}
+                                        @endif.
+                                        The customer can now download this report.
+                                    </div>
+                                @else
+                                    <svg class="h-4 w-4 mt-0.5 text-amber-600 shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>
+                                    <div class="text-xs text-amber-900 leading-relaxed min-w-0 flex-1">
+                                        <strong class="text-amber-900">Pending operator review.</strong>
+                                        The customer will not see this report until you release it.
+                                        Review the photographs and driver notes above, then release below.
+                                    </div>
+                                @endif
+                            </div>
+                        </div>
+
+                        <div class="mt-4 flex flex-wrap items-center gap-2">
+                            {{-- Internal users always see the download button — they need
+                                 to review before releasing. --}}
                             <a href="{{ route('damage-report.download', $job) }}" target="_blank" rel="noopener"
                                class="inline-flex items-center gap-2 rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-500 transition-colors">
                                 <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
-                                Download Damage Report (PDF)
+                                {{ $isReleased ? 'Download report' : 'Preview report (ops)' }}
                             </a>
+
+                            @can('releaseDamageReport', $job)
+                                @if(!$isReleased)
+                                    <button wire:click="releaseDamageReport"
+                                            wire:confirm="Release this damage report to the customer? They will be able to download the PDF immediately."
+                                            class="inline-flex items-center gap-2 rounded-lg border border-emerald-600 bg-white px-4 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-50 transition-colors">
+                                        <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+                                        <span wire:loading.remove wire:target="releaseDamageReport">Release to customer</span>
+                                        <span wire:loading wire:target="releaseDamageReport">Releasing…</span>
+                                    </button>
+                                @else
+                                    <button wire:click="revokeDamageReport"
+                                            wire:confirm="Revoke customer access to this damage report? They will no longer be able to download it until you release it again."
+                                            class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-colors">
+                                        <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="m4.93 4.93 14.14 14.14"/><circle cx="12" cy="12" r="10"/></svg>
+                                        <span wire:loading.remove wire:target="revokeDamageReport">Revoke access</span>
+                                        <span wire:loading wire:target="revokeDamageReport">Revoking…</span>
+                                    </button>
+                                @endif
+                            @else
+                                @if(!$isReleased)
+                                    <span class="inline-flex items-center gap-2 rounded-lg border border-dashed border-slate-300 bg-white px-4 py-2 text-xs text-slate-500">
+                                        Release requires ops manager or owner
+                                    </span>
+                                @endif
                             @endcan
                         </div>
                     </div>

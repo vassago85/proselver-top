@@ -380,24 +380,46 @@ new #[Layout('components.layouts.app')] class extends Component {
                 $damageDocCount = $job->documents->where('category', \App\Models\JobDocument::CATEGORY_DAMAGE_PHOTO)->count();
             @endphp
             @if($damageDocCount > 0)
-            <div class="bg-rose-50 rounded-xl shadow-sm border border-rose-200 p-6">
-                <div class="flex items-start gap-3">
-                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-rose-100 text-rose-700 shrink-0">
-                        <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+                @php $damageReleased = $job->damage_report_released_at !== null; @endphp
+                @if($damageReleased)
+                    {{-- Released: customer sees the CTA. --}}
+                    <div class="bg-rose-50 rounded-xl shadow-sm border border-rose-200 p-6">
+                        <div class="flex items-start gap-3">
+                            <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-rose-100 text-rose-700 shrink-0">
+                                <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+                            </div>
+                            <div class="min-w-0 flex-1">
+                                <h3 class="text-base font-semibold text-rose-900">Damage report available</h3>
+                                <p class="mt-1 text-sm text-rose-900/80">{{ $damageDocCount }} {{ $damageDocCount === 1 ? 'photograph was' : 'photographs were' }} captured against this movement. The report has been reviewed and released by our operations team.</p>
+                                @can('generateDamageReport', $job)
+                                <a href="{{ route('damage-report.download', $job) }}" target="_blank" rel="noopener"
+                                   class="mt-3 inline-flex items-center gap-2 rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-500">
+                                    <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+                                    Download Damage Report (PDF)
+                                </a>
+                                @endcan
+                            </div>
+                        </div>
                     </div>
-                    <div class="min-w-0 flex-1">
-                        <h3 class="text-base font-semibold text-rose-900">Damage on record</h3>
-                        <p class="mt-1 text-sm text-rose-900/80">{{ $damageDocCount }} {{ $damageDocCount === 1 ? 'photograph was' : 'photographs were' }} captured against this movement. Download the full report with vehicle details and evidence.</p>
-                        @can('generateDamageReport', $job)
-                        <a href="{{ route('damage-report.download', $job) }}" target="_blank" rel="noopener"
-                           class="mt-3 inline-flex items-center gap-2 rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-500">
-                            <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
-                            Download Damage Report (PDF)
-                        </a>
-                        @endcan
+                @else
+                    {{-- Pending review: no download link, soft "under review" notice.
+                         We deliberately do not show photo thumbnails or counts here
+                         either — the customer gets the full picture once ops has
+                         reviewed and released the report. --}}
+                    <div class="bg-amber-50 rounded-xl shadow-sm border border-amber-200 p-6">
+                        <div class="flex items-start gap-3">
+                            <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-amber-100 text-amber-700 shrink-0">
+                                <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                            </div>
+                            <div class="min-w-0 flex-1">
+                                <h3 class="text-base font-semibold text-amber-900">Damage report under review</h3>
+                                <p class="mt-1 text-sm text-amber-900/80 leading-relaxed">
+                                    The driver has flagged possible damage against this movement. Our operations team is reviewing the evidence and will release the full report to you once it has been verified. We'll notify you the moment it's available.
+                                </p>
+                            </div>
+                        </div>
                     </div>
-                </div>
-            </div>
+                @endif
             @endif
 
             <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">

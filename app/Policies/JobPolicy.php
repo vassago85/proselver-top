@@ -236,15 +236,46 @@ class JobPolicy
     }
 
     /**
-     * Damage report is a customer-facing document — anyone who can view
-     * the job itself can download it. That covers internal staff, the
-     * booking company, the executing company (future 3PL), and the
-     * assigned driver. We deliberately don't gate on status: damage
-     * reports are often needed long after a job is completed when an
-     * insurance claim or credit note is being prepared.
+     * Damage report download gate. Internal staff (ops, owner, super
+     * admin, developer, assigned driver) can always pull the report so
+     * they can review it before releasing it. External users
+     * (customer / dealer / OEM) can only download the report once ops
+     * has explicitly released it — i.e. `damage_report_released_at` is
+     * set. This prevents the customer seeing a raw "driver flagged a
+     * scratch" photo the moment it lands in the system, before ops have
+     * had a chance to verify what actually happened.
      */
     public function generateDamageReport(User $user, Job $job): bool
     {
-        return $this->view($user, $job);
+        if (!$this->view($user, $job)) {
+            return false;
+        }
+
+        if ($user->isInternal()) {
+            return true;
+        }
+
+        // External users (customer / dealer / OEM) must wait for ops
+        // to release the report before they can pull it.
+        return $job->damage_report_released_at !== null;
+    }
+
+    /**
+     * Only trusted operators can release (or revoke the release of)
+     * the damage report to the customer. We deliberately restrict this
+     * to the same internal floor that guards cancellations — damage
+     * claims have financial consequences so junior ops shouldn't be
+     * able to silently release a report without a more senior pair of
+     * eyes in the loop.
+     */
+    public function releaseDamageReport(User $user, Job $job): bool
+    {
+        return $user->hasAnyRole([
+            'developer',
+            'super_admin',
+            'owner',
+            'ops_manager',
+            'operations_controller',
+        ]);
     }
 }
