@@ -142,9 +142,8 @@ new #[Layout('components.layouts.app')] class extends Component
         $inTransitList  = $this->pgStatusList(self::G_IN_TRANSIT);
         $inTransitStale = now()->subDays($th['in_transit_days'])->toDateTimeString();
 
-        // ── Per-destination aggregate ─────────────────────────────────
-        // One query feeds both the map and the scoreboard. Cheap on a
-        // 100-dealer network, hot-joins an index on delivery_location_id.
+        // ── Per-destination aggregate (jobs → locations) ────────────────
+        // Aggregates job activity grouped by delivery destination.
         $perDestination = (clone $this->baseJobsQuery())
             ->whereNotNull('transport_jobs.delivery_location_id')
             ->join('locations', 'transport_jobs.delivery_location_id', '=', 'locations.id')
@@ -191,33 +190,89 @@ new #[Layout('components.layouts.app')] class extends Component
                 'locations.id', 'locations.company_name', 'locations.city',
                 'locations.province', 'locations.latitude', 'locations.longitude'
             )
-            ->get();
+            ->get()
+            ->keyBy('location_id');
 
-        // ── Points payload for the map (only rows with lat/lng) ───────
-        $points = $perDestination
-            ->filter(fn ($r) => $r->latitude !== null && $r->longitude !== null)
-            ->map(function ($r) {
-                $state = match (true) {
-                    (int) $r->at_risk_count   > 0 => 'at_risk',
-                    (int) $r->damaged_count   > 0 => 'damaged',
-                    (int) $r->inbound_count   > 0 => 'inbound',
-                    (int) $r->delivered_count > 0 => 'delivered',
-                    default                       => 'idle',
-                };
-                return [
-                    'id'        => (int) $r->location_id,
-                    'name'      => $r->company_name ?: ($r->city ?: 'Unknown'),
-                    'city'      => $r->city,
-                    'province'  => $r->province,
-                    'lat'       => (float) $r->latitude,
-                    'lng'       => (float) $r->longitude,
-                    'inbound'   => (int) $r->inbound_count,
-                    'delivered' => (int) $r->delivered_count,
-                    'damaged'   => (int) $r->damaged_count,
-                    'at_risk'   => (int) $r->at_risk_count,
-                    'state'     => $state,
-                ];
-            })
+        // ── Full address book — every location in the customer's
+        //    address book shows on the map, even with no current
+        //    deliveries. Dealers, body builders, plants — everything.
+        $addressBook = Location::where('company_id', $this->company->id)
+            ->whereNotNull('latitude')
+            ->whereNotNull('longitude')
+            ->where('is_active', true)
+            ->get(['id', 'company_name', 'city', 'province', 'latitude', 'longitude', 'type']);
+
+        // Merge: address-book locations + any delivery destinations
+        // that belong to a different company (Proselver's own yards,
+        // for instance) so we never lose a marker.
+        $points = collect();
+        $seenIds = [];
+
+        // 1. Address-book locations (always shown)
+        foreach ($addressBook as $loc) {
+            $act = $perDestination->get($loc->id);
+            $inbound   = $act ? (int) $act->inbound_count   : 0;
+            $delivered  = $act ? (int) $act->delivered_count : 0;
+            $damaged    = $act ? (int) $act->damaged_count   : 0;
+            $atRisk     = $act ? (int) $act->at_risk_count   : 0;
+            $state = match (true) {
+                $atRisk   > 0 => 'at_risk',
+                $damaged  > 0 => 'damaged',
+                $inbound  > 0 => 'inbound',
+                $delivered > 0 => 'delivered',
+                default       => 'idle',
+            };
+            $points->push([
+                'id'        => (int) $loc->id,
+                'name'      => $loc->company_name ?: ($loc->city ?: 'Unknown'),
+                'city'      => $loc->city,
+                'province'  => $loc->province,
+                'lat'       => (float) $loc->latitude,
+                'lng'       => (float) $loc->longitude,
+                'inbound'   => $inbound,
+                'delivered' => $delivered,
+                'damaged'   => $damaged,
+                'at_risk'   => $atRisk,
+                'state'     => $state,
+                'type'      => $loc->type,
+            ]);
+            $seenIds[$loc->id] = true;
+        }
+
+        // 2. Delivery destinations NOT in the address book (e.g.
+        //    transporter-owned yards) — still show activity.
+        foreach ($perDestination as $r) {
+            $lid = (int) $r->location_id;
+            if (isset($seenIds[$lid])) continue;
+            if ($r->latitude === null || $r->longitude === null) continue;
+            $inbound  = (int) $r->inbound_count;
+            $delivered = (int) $r->delivered_count;
+            $damaged   = (int) $r->damaged_count;
+            $atRisk    = (int) $r->at_risk_count;
+            $state = match (true) {
+                $atRisk   > 0 => 'at_risk',
+                $damaged  > 0 => 'damaged',
+                $inbound  > 0 => 'inbound',
+                $delivered > 0 => 'delivered',
+                default       => 'idle',
+            };
+            $points->push([
+                'id'        => $lid,
+                'name'      => $r->company_name ?: ($r->city ?: 'Unknown'),
+                'city'      => $r->city,
+                'province'  => $r->province,
+                'lat'       => (float) $r->latitude,
+                'lng'       => (float) $r->longitude,
+                'inbound'   => $inbound,
+                'delivered' => $delivered,
+                'damaged'   => $damaged,
+                'at_risk'   => $atRisk,
+                'state'     => $state,
+                'type'      => null,
+            ]);
+        }
+
+        $points = $points
             ->sortByDesc(fn ($p) => $p['inbound'] + $p['delivered'])
             ->values()
             ->all();
@@ -240,7 +295,7 @@ new #[Layout('components.layouts.app')] class extends Component
         $kpis = [
             [
                 'key'   => 'inbound',
-                'label' => 'Inbound to dealers',
+                'label' => 'Inbound',
                 'value' => $totalInbound,
                 'color' => 'blue',
                 'helper'=> 'Assigned · collected · in transit',
@@ -480,7 +535,7 @@ new #[Layout('components.layouts.app')] class extends Component
             @endforeach
         </x-dash.filter-select>
         <x-dash.filter-select label="Destination" wire:model.live="destinationId" minWidth="220px">
-            <option value="">All dealers</option>
+            <option value="">All destinations</option>
             @foreach($destinationOptions as $d)
                 <option value="{{ $d->id }}">{{ $d->company_name }}{{ $d->city ? ' · ' . $d->city : '' }}</option>
             @endforeach
@@ -506,7 +561,7 @@ new #[Layout('components.layouts.app')] class extends Component
         <x-dash.panel
             class="xl:col-span-2"
             title="Live destination map"
-            :subtitle="count($points) . ' ' . \Illuminate\Support\Str::plural('dealer', count($points)) . ' with activity in this window'"
+            :subtitle="count($points) . ' ' . \Illuminate\Support\Str::plural('location', count($points)) . ' in your network'"
             :tight="true">
             <x-slot:actions>
                 <div class="hidden md:flex items-center gap-3 text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-500">
@@ -514,6 +569,7 @@ new #[Layout('components.layouts.app')] class extends Component
                     <span class="inline-flex items-center gap-1.5"><span class="h-2 w-2 rounded-full bg-emerald-500"></span>Delivered</span>
                     <span class="inline-flex items-center gap-1.5"><span class="h-2 w-2 rounded-full bg-amber-500"></span>At risk</span>
                     <span class="inline-flex items-center gap-1.5"><span class="h-2 w-2 rounded-full bg-rose-500"></span>Damaged</span>
+                    <span class="inline-flex items-center gap-1.5"><span class="h-2 w-2 rounded-full bg-slate-300"></span>Idle</span>
                 </div>
             </x-slot:actions>
 
@@ -539,7 +595,7 @@ new #[Layout('components.layouts.app')] class extends Component
                 <template x-if="ready && points.length === 0">
                     <div class="absolute inset-0 flex items-center justify-center pointer-events-none">
                         <div class="rounded-lg border border-slate-200 bg-white/95 px-4 py-3 text-sm text-slate-500 shadow-sm">
-                            No destinations in this window
+                            No locations with coordinates in your address book
                         </div>
                     </div>
                 </template>
@@ -551,7 +607,7 @@ new #[Layout('components.layouts.app')] class extends Component
             subtitle="Click to focus · sorted by activity"
             :tight="true">
             <template x-if="points.length === 0">
-                <p class="px-5 py-10 text-center text-sm text-slate-400">No destinations in range</p>
+                <p class="px-5 py-10 text-center text-sm text-slate-400">No locations in your address book</p>
             </template>
             <ul class="divide-y divide-slate-100 max-h-[520px] overflow-y-auto">
                 <template x-for="p in points" :key="p.id">
@@ -608,8 +664,8 @@ new #[Layout('components.layouts.app')] class extends Component
     {{-- DEALER SCOREBOARD (collapsed)                                  --}}
     {{-- ══════════════════════════════════════════════════════════════ --}}
     <x-dash.panel
-        title="Dealer scoreboard"
-        subtitle="Top 10 destinations in this window"
+        title="Destination scoreboard"
+        subtitle="Top 10 locations in this window"
         :tight="true">
         @if($scoreboard->isEmpty())
             <p class="px-5 py-10 text-center text-sm text-slate-400">No destinations in range</p>
@@ -618,7 +674,7 @@ new #[Layout('components.layouts.app')] class extends Component
                 <table class="min-w-full text-sm">
                     <thead>
                         <tr class="bg-slate-50/70 text-[10px] uppercase tracking-[0.15em] text-slate-500">
-                            <th class="px-4 py-2 text-left font-semibold">Dealer</th>
+                            <th class="px-4 py-2 text-left font-semibold">Destination</th>
                             <th class="px-4 py-2 text-left font-semibold">Location</th>
                             <th class="px-4 py-2 text-right font-semibold">Inbound</th>
                             <th class="px-4 py-2 text-right font-semibold">Delivered</th>
@@ -861,8 +917,11 @@ new #[Layout('components.layouts.app')] class extends Component
                 const bounds = new google.maps.LatLngBounds();
 
                 this.points.forEach(p => {
+                    const isIdle = p.state === 'idle';
                     const color = (STATE_COLORS[p.state] || STATE_COLORS.idle).fill;
-                    const scale = Math.min(16, 8 + Math.sqrt(Math.max(0, p.inbound + p.delivered)) * 1.6);
+                    const scale = isIdle
+                        ? 5
+                        : Math.min(16, 8 + Math.sqrt(Math.max(0, p.inbound + p.delivered)) * 1.6);
 
                     const marker = new google.maps.Marker({
                         position: { lat: p.lat, lng: p.lng },
@@ -872,10 +931,11 @@ new #[Layout('components.layouts.app')] class extends Component
                             path: google.maps.SymbolPath.CIRCLE,
                             scale,
                             fillColor: color,
-                            fillOpacity: 0.9,
+                            fillOpacity: isIdle ? 0.45 : 0.9,
                             strokeColor: '#ffffff',
-                            strokeWeight: 2,
+                            strokeWeight: isIdle ? 1 : 2,
                         },
+                        zIndex: isIdle ? 1 : 10,
                     });
 
                     marker.addListener('click', () => this.openInfo(p, marker));
