@@ -1,11 +1,11 @@
 <?php
 
-use App\Models\Brand;
 use App\Models\Company;
 use App\Models\Job;
 use App\Models\Location;
 use App\Models\SystemSetting;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\Url;
 use Livewire\Volt\Component;
@@ -14,17 +14,21 @@ new #[Layout('components.layouts.app')] class extends Component
 {
     /**
      * ╔══════════════════════════════════════════════════════════════════╗
-     * ║  CUSTOMER / OEM DASHBOARD                                        ║
+     * ║  CUSTOMER (OEM) DASHBOARD                                        ║
      * ╠══════════════════════════════════════════════════════════════════╣
-     * ║  Same command-centre shell as /admin/dashboard (the executive    ║
-     * ║  overview), but:                                                 ║
-     * ║    • scoped to the logged-in customer's company_id only         ║
-     * ║    • no invoice / financial metrics                              ║
-     * ║    • no driver / transporter columns or panels                   ║
-     * ║    • "New Order" button pinned to the header                     ║
+     * ║  Proselver moves vehicles on behalf of one OEM customer at a     ║
+     * ║  time (currently FAW). The hero is a live South-Africa Google    ║
+     * ║  Map of destination dealers, coloured by delivery state, with a  ║
+     * ║  side-list that pan/zooms its marker on click.                   ║
      * ║                                                                  ║
-     * ║  Same pipeline focus:                                            ║
-     * ║     Received → Confirmed → Dispatched → In transit → Delivered   ║
+     * ║  KPI strip below:                                                ║
+     * ║     Inbound  ·  Delivered (range)  ·  On-time %  ·  Damage-free %║
+     * ║                                                                  ║
+     * ║  Quiet detail panels: dealer scoreboard, recent POD deliveries,  ║
+     * ║  exceptions (long-transit + damage reports released in range).   ║
+     * ║                                                                  ║
+     * ║  No brand filter (single-brand OEM), no driver metrics,          ║
+     * ║  no invoice metrics.                                             ║
      * ╚══════════════════════════════════════════════════════════════════╝
      */
 
@@ -34,20 +38,11 @@ new #[Layout('components.layouts.app')] class extends Component
     // ─── Filter state (URL-persistent) ──────────────────────────────
     #[Url] public ?string $dateFrom = null;
     #[Url] public ?string $dateTo = null;
-    #[Url] public ?int $brandId = null;
-    #[Url] public ?string $region = null;   // pickup or delivery province
-    #[Url] public ?string $status = null;   // pipeline stage
+    #[Url] public ?string $region = null;         // delivery province
+    #[Url] public ?int $destinationId = null;     // a specific dealer
+    #[Url] public ?string $status = null;         // pipeline stage
 
-    // ─── Phase 1 logical groupings (mirrors admin dashboard) ────────
-    protected const G_INTAKE = [
-        Job::STATUS_PENDING_VERIFICATION,
-        Job::STATUS_RECEIVED,
-        Job::STATUS_AWAITING_CUSTOMER_CONFIRMATION,
-        Job::STATUS_CONFIRMATION_ISSUE,
-    ];
-    protected const G_TO_DISPATCH = [
-        Job::STATUS_CONFIRMED,
-    ];
+    // ─── Status groups ────────────────────────────────────────────
     protected const G_DISPATCHED = [
         Job::STATUS_PLANNED,
         Job::STATUS_DRIVER_ASSIGNED,
@@ -57,9 +52,14 @@ new #[Layout('components.layouts.app')] class extends Component
         Job::STATUS_COLLECTED,
         Job::STATUS_IN_TRANSIT,
     ];
-    protected const G_DELIVERED = [
-        Job::STATUS_DELIVERED,
-        Job::STATUS_COMPLETED,
+    // "Inbound to a dealer" for OEM map/KPI view — anything booked,
+    // planned, collected or rolling.
+    protected const G_INBOUND = [
+        Job::STATUS_PLANNED,
+        Job::STATUS_DRIVER_ASSIGNED,
+        Job::STATUS_READY_FOR_COLLECTION,
+        Job::STATUS_COLLECTED,
+        Job::STATUS_IN_TRANSIT,
     ];
     protected const ACTIVE_PHASE1 = [
         Job::STATUS_PENDING_VERIFICATION,
@@ -86,27 +86,28 @@ new #[Layout('components.layouts.app')] class extends Component
 
     public function resetFilters(): void
     {
-        $this->reset(['brandId', 'region', 'status']);
+        $this->reset(['region', 'destinationId', 'status']);
         $this->dateFrom = now()->subDays(29)->toDateString();
         $this->dateTo   = now()->toDateString();
     }
 
-    // Company-scoped base query — every panel starts from here so we
-    // can never leak another customer's data into this dashboard.
+    // Company-scoped base query. Every derived query goes through here so
+    // a stray WHERE can never leak another customer's data. Columns are
+    // fully qualified because some callers join `locations` (which has
+    // its own company_id / status / updated_at) and Postgres rejects
+    // ambiguous refs with SQLSTATE 42702.
     protected function baseJobsQuery(bool $applyStatusFilter = false)
     {
-        // Fully-qualify every column we touch here. Some callers of this
-        // helper join `locations` (which also has company_id / brand_id /
-        // status / updated_at columns), so an unqualified WHERE triggers
-        // SQLSTATE 42702 "column reference is ambiguous" in Postgres.
         $q = Job::where('transport_jobs.company_id', $this->company->id);
 
-        if ($this->brandId) { $q->where('transport_jobs.brand_id', $this->brandId); }
         if ($this->region) {
             $q->where(function ($w) {
                 $w->whereHas('pickupLocation',    fn ($l) => $l->where('province', $this->region))
                   ->orWhereHas('deliveryLocation', fn ($l) => $l->where('province', $this->region));
             });
+        }
+        if ($this->destinationId) {
+            $q->where('transport_jobs.delivery_location_id', $this->destinationId);
         }
         if ($applyStatusFilter && $this->status) {
             $q->where('transport_jobs.status', $this->status);
@@ -117,11 +118,14 @@ new #[Layout('components.layouts.app')] class extends Component
     protected function thresholds(): array
     {
         return [
-            'awaiting_confirm_days' => (int) SystemSetting::get('ops.alert.awaiting_confirm_days', 2),
-            'to_dispatch_hours'     => (int) SystemSetting::get('ops.alert.to_dispatch_hours', 24),
-            'dispatched_days'       => (int) SystemSetting::get('ops.alert.dispatched_days', 2),
-            'in_transit_days'       => (int) SystemSetting::get('ops.alert.in_transit_days', 3),
+            'dispatched_days' => (int) SystemSetting::get('ops.alert.dispatched_days', 2),
+            'in_transit_days' => (int) SystemSetting::get('ops.alert.in_transit_days', 3),
         ];
+    }
+
+    protected function onTimeDays(): int
+    {
+        return (int) SystemSetting::get('ops.oem.on_time_days', 3);
     }
 
     public function with(): array
@@ -132,325 +136,265 @@ new #[Layout('components.layouts.app')] class extends Component
         $prevTo   = (clone $from)->subDay()->endOfDay();
         $prevFrom = (clone $prevTo)->subDays($span - 1)->startOfDay();
 
-        $th = $this->thresholds();
+        $th      = $this->thresholds();
+        $onTime  = $this->onTimeDays();
+        $inboundList    = $this->pgStatusList(self::G_INBOUND);
+        $inTransitList  = $this->pgStatusList(self::G_IN_TRANSIT);
+        $inTransitStale = now()->subDays($th['in_transit_days'])->toDateTimeString();
 
-        // ─── KPIs ────────────────────────────────────────────────────
-        $intake       = (clone $this->baseJobsQuery())->whereIn('status', self::G_INTAKE)->count();
-        $awaitingMine = $this->requiresConfirmation
-            ? (clone $this->baseJobsQuery())->where('status', Job::STATUS_AWAITING_CUSTOMER_CONFIRMATION)->count()
-            : 0;
-        $toDispatch   = (clone $this->baseJobsQuery())->whereIn('status', self::G_TO_DISPATCH)->count();
-        $onRoad       = (clone $this->baseJobsQuery())->whereIn('status', self::G_IN_TRANSIT)->count();
+        // ── Per-destination aggregate ─────────────────────────────────
+        // One query feeds both the map and the scoreboard. Cheap on a
+        // 100-dealer network, hot-joins an index on delivery_location_id.
+        $perDestination = (clone $this->baseJobsQuery())
+            ->whereNotNull('transport_jobs.delivery_location_id')
+            ->join('locations', 'transport_jobs.delivery_location_id', '=', 'locations.id')
+            ->selectRaw("
+                locations.id as location_id,
+                locations.company_name as company_name,
+                locations.city as city,
+                locations.province as province,
+                locations.latitude as latitude,
+                locations.longitude as longitude,
+                count(*) filter (where transport_jobs.status in ($inboundList)) as inbound_count,
+                count(*) filter (where transport_jobs.delivered_at between ? and ?) as delivered_count,
+                count(*) filter (
+                    where transport_jobs.delivered_at between ? and ?
+                      and transport_jobs.collected_at is not null
+                      and transport_jobs.delivered_at - transport_jobs.collected_at <= (? || ' days')::interval
+                ) as on_time_count,
+                count(*) filter (
+                    where transport_jobs.delivered_at between ? and ?
+                      and transport_jobs.damage_report_released_at is null
+                ) as damage_free_count,
+                count(*) filter (
+                    where transport_jobs.delivered_at between ? and ?
+                      and transport_jobs.damage_report_released_at is not null
+                ) as damaged_count,
+                count(*) filter (
+                    where transport_jobs.status in ($inTransitList)
+                      and transport_jobs.updated_at <= ?
+                ) as at_risk_count,
+                avg(extract(epoch from (transport_jobs.delivered_at - transport_jobs.collected_at)) / 86400)
+                    filter (
+                        where transport_jobs.delivered_at between ? and ?
+                          and transport_jobs.collected_at is not null
+                    ) as avg_transit_days
+            ", [
+                $from, $to,
+                $from, $to, (string) $onTime,
+                $from, $to,
+                $from, $to,
+                $inTransitStale,
+                $from, $to,
+            ])
+            ->groupBy(
+                'locations.id', 'locations.company_name', 'locations.city',
+                'locations.province', 'locations.latitude', 'locations.longitude'
+            )
+            ->get();
 
-        $deliveredRange = (clone $this->baseJobsQuery())
-            ->whereNotNull('delivered_at')
-            ->whereBetween('delivered_at', [$from, $to])
-            ->count();
-        $deliveredPrev = (clone $this->baseJobsQuery())
+        // ── Points payload for the map (only rows with lat/lng) ───────
+        $points = $perDestination
+            ->filter(fn ($r) => $r->latitude !== null && $r->longitude !== null)
+            ->map(function ($r) {
+                $state = match (true) {
+                    (int) $r->at_risk_count   > 0 => 'at_risk',
+                    (int) $r->damaged_count   > 0 => 'damaged',
+                    (int) $r->inbound_count   > 0 => 'inbound',
+                    (int) $r->delivered_count > 0 => 'delivered',
+                    default                       => 'idle',
+                };
+                return [
+                    'id'        => (int) $r->location_id,
+                    'name'      => $r->company_name ?: ($r->city ?: 'Unknown'),
+                    'city'      => $r->city,
+                    'province'  => $r->province,
+                    'lat'       => (float) $r->latitude,
+                    'lng'       => (float) $r->longitude,
+                    'inbound'   => (int) $r->inbound_count,
+                    'delivered' => (int) $r->delivered_count,
+                    'damaged'   => (int) $r->damaged_count,
+                    'at_risk'   => (int) $r->at_risk_count,
+                    'state'     => $state,
+                ];
+            })
+            ->sortByDesc(fn ($p) => $p['inbound'] + $p['delivered'])
+            ->values()
+            ->all();
+
+        // ── KPI totals ────────────────────────────────────────────────
+        $totalInbound   = (int) $perDestination->sum('inbound_count');
+        $totalDelivered = (int) $perDestination->sum('delivered_count');
+        $totalOnTime    = (int) $perDestination->sum('on_time_count');
+        $totalDmgFree   = (int) $perDestination->sum('damage_free_count');
+        $totalDamaged   = (int) $perDestination->sum('damaged_count');
+
+        $prevDelivered = (clone $this->baseJobsQuery())
             ->whereNotNull('delivered_at')
             ->whereBetween('delivered_at', [$prevFrom, $prevTo])
             ->count();
 
-        // "Needs attention" — your orders sitting in their stage too long.
-        $atRisk = (clone $this->baseJobsQuery())
-            ->where(function ($w) use ($th) {
-                $w->where(function ($a) use ($th) {
-                    $a->whereIn('status', [Job::STATUS_AWAITING_CUSTOMER_CONFIRMATION, Job::STATUS_CONFIRMATION_ISSUE])
-                      ->where('updated_at', '<=', now()->subDays($th['awaiting_confirm_days']));
-                })->orWhere(function ($a) use ($th) {
-                    $a->where('status', Job::STATUS_CONFIRMED)
-                      ->where('updated_at', '<=', now()->subHours($th['to_dispatch_hours']));
-                })->orWhere(function ($a) use ($th) {
-                    $a->whereIn('status', self::G_DISPATCHED)
-                      ->where('updated_at', '<=', now()->subDays($th['dispatched_days']));
-                })->orWhere(function ($a) use ($th) {
-                    $a->whereIn('status', self::G_IN_TRANSIT)
-                      ->where('updated_at', '<=', now()->subDays($th['in_transit_days']));
-                });
-            })
-            ->count();
+        $onTimePct  = $totalDelivered > 0 ? (int) round(($totalOnTime  / $totalDelivered) * 100) : null;
+        $dmgFreePct = $totalDelivered > 0 ? (int) round(($totalDmgFree / $totalDelivered) * 100) : null;
 
-        // Prev-period in-status proxies for trend arrows.
-        $prevIntake     = (clone $this->baseJobsQuery())->whereIn('status', self::G_INTAKE)->whereBetween('updated_at', [$prevFrom, $prevTo])->count();
-        $prevToDispatch = (clone $this->baseJobsQuery())->whereIn('status', self::G_TO_DISPATCH)->whereBetween('updated_at', [$prevFrom, $prevTo])->count();
-        $prevOnRoad     = (clone $this->baseJobsQuery())->whereIn('status', self::G_IN_TRANSIT)->whereBetween('updated_at', [$prevFrom, $prevTo])->count();
-
-        $kpis = [];
-
-        $kpis[] = [
-            'key' => 'intake',
-            'label' => 'New orders',
-            'value' => $intake,
-            'color' => 'amber',
-            'href' => route('customer.orders.index'),
-            'trend' => $this->trend($intake, $prevIntake),
-            'helper' => 'Received · awaiting review / confirmation',
-            'iconPath' => '<path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.29 1.51 4.04 3 5.5l7 7Z"/>',
-        ];
-
-        if ($this->requiresConfirmation) {
-            $kpis[] = [
-                'key' => 'awaiting_mine',
-                'label' => 'Awaiting my confirmation',
-                'value' => $awaitingMine,
-                'color' => $awaitingMine > 0 ? 'amber' : 'slate',
-                'href' => route('customer.orders.index', ['statusFilter' => Job::STATUS_AWAITING_CUSTOMER_CONFIRMATION]),
+        $kpis = [
+            [
+                'key'   => 'inbound',
+                'label' => 'Inbound to dealers',
+                'value' => $totalInbound,
+                'color' => 'blue',
+                'helper'=> 'Assigned · collected · in transit',
+                'iconPath' => '<path d="M14 16H9m10 0h3v-3.15a1 1 0 0 0-.84-.99L16 11l-2.7-3.6a1 1 0 0 0-.8-.4H5.24a2 2 0 0 0-1.8 1.1l-.8 1.63A6 6 0 0 0 2 12.42V16h2"/><circle cx="6.5" cy="16.5" r="2.5"/><circle cx="16.5" cy="16.5" r="2.5"/>',
+                'href'  => route('customer.orders.index', ['statusFilter' => Job::STATUS_IN_TRANSIT]),
                 'trend' => null,
-                'helper' => 'Confirm so dispatch can proceed',
-                'iconPath' => '<path d="M12 22s-8-4.5-8-11.8A8 8 0 0 1 12 2a8 8 0 0 1 8 8.2c0 7.3-8 11.8-8 11.8Z"/><path d="m9 11 2 2 4-4"/>',
-            ];
-        }
-
-        $kpis[] = [
-            'key' => 'to_dispatch',
-            'label' => 'Ready to dispatch',
-            'value' => $toDispatch,
-            'color' => 'indigo',
-            'href' => route('customer.orders.index', ['statusFilter' => Job::STATUS_CONFIRMED]),
-            'trend' => $this->trend($toDispatch, $prevToDispatch),
-            'helper' => 'Confirmed · scheduling in progress',
-            'iconPath' => '<path d="M8 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-3"/><path d="M16 3h5v5"/><path d="M21 3 9 15"/>',
+            ],
+            [
+                'key'   => 'delivered',
+                'label' => 'Delivered (range)',
+                'value' => $totalDelivered,
+                'color' => 'green',
+                'helper'=> $from->format('d M') . ' – ' . $to->format('d M'),
+                'iconPath' => '<path d="M20 6 9 17l-5-5"/>',
+                'href'  => null,
+                'trend' => $this->trend($totalDelivered, (int) $prevDelivered),
+            ],
+            [
+                'key'   => 'on_time',
+                'label' => 'On-time %',
+                'value' => $onTimePct !== null ? ($onTimePct . '%') : '—',
+                'color' => $onTimePct === null
+                    ? 'slate'
+                    : ($onTimePct >= 90 ? 'green' : ($onTimePct >= 70 ? 'amber' : 'red')),
+                'helper'=> $totalDelivered > 0
+                    ? "{$totalOnTime} of {$totalDelivered} within {$onTime}d of collection"
+                    : 'No deliveries in range',
+                'iconPath' => '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+                'href'  => null,
+                'trend' => null,
+            ],
+            [
+                'key'   => 'damage_free',
+                'label' => 'Damage-free %',
+                'value' => $dmgFreePct !== null ? ($dmgFreePct . '%') : '—',
+                'color' => $dmgFreePct === null
+                    ? 'slate'
+                    : ($dmgFreePct >= 98 ? 'green' : ($dmgFreePct >= 90 ? 'amber' : 'red')),
+                'helper'=> $totalDamaged > 0
+                    ? "{$totalDamaged} delivered with damage reported"
+                    : ($totalDelivered > 0 ? 'No damage reports in range' : 'No deliveries in range'),
+                'iconPath' => '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
+                'href'  => null,
+                'trend' => null,
+            ],
         ];
 
-        $kpis[] = [
-            'key' => 'on_road',
-            'label' => 'On the road',
-            'value' => $onRoad,
-            'color' => 'blue',
-            'href' => route('customer.orders.index', ['statusFilter' => Job::STATUS_IN_TRANSIT]),
-            'trend' => $this->trend($onRoad, $prevOnRoad),
-            'helper' => 'Collected · in transit',
-            'iconPath' => '<path d="M14 16H9m10 0h3v-3.15a1 1 0 0 0-.84-.99L16 11l-2.7-3.6a1 1 0 0 0-.8-.4H5.24a2 2 0 0 0-1.8 1.1l-.8 1.63A6 6 0 0 0 2 12.42V16h2"/><circle cx="6.5" cy="16.5" r="2.5"/><circle cx="16.5" cy="16.5" r="2.5"/>',
-        ];
-
-        $kpis[] = [
-            'key' => 'delivered',
-            'label' => 'Delivered (range)',
-            'value' => $deliveredRange,
-            'color' => 'green',
-            'href' => null,
-            'trend' => $this->trend($deliveredRange, $deliveredPrev),
-            'helper' => $from->format('d M') . ' – ' . $to->format('d M'),
-            'iconPath' => '<path d="M20 6 9 17l-5-5"/>',
-        ];
-
-        $kpis[] = [
-            'key' => 'at_risk',
-            'label' => 'Needs attention',
-            'value' => $atRisk,
-            'color' => $atRisk > 0 ? 'red' : 'slate',
-            'href' => null,
-            'trend' => null,
-            'helper' => "Confirm >{$th['awaiting_confirm_days']}d · Transit >{$th['in_transit_days']}d",
-            'iconPath' => '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
-        ];
-
-        // ─── Pipeline activity chart (dispatched / in_transit / delivered daily) ─
-        $days = [];
-        $cursor = $from->copy();
-        while ($cursor->lte($to)) {
-            $days[$cursor->toDateString()] = [
-                'date'       => $cursor->copy(),
-                'dispatched' => 0,
-                'in_transit' => 0,
-                'delivered'  => 0,
-            ];
-            $cursor->addDay();
-        }
-        $jobActivity = (clone $this->baseJobsQuery())
-            ->where(function ($w) use ($from, $to) {
-                $w->whereBetween('assigned_at',   [$from, $to])
-                  ->orWhereBetween('in_transit_at', [$from, $to])
-                  ->orWhereBetween('delivered_at',  [$from, $to]);
+        // ── Scoreboard (top 10 destinations by combined activity) ─────
+        $scoreboard = $perDestination
+            ->sortByDesc(fn ($r) => (int) $r->inbound_count + (int) $r->delivered_count)
+            ->take(10)
+            ->map(function ($r) {
+                $delivered = (int) $r->delivered_count;
+                return (object) [
+                    'id'               => (int) $r->location_id,
+                    'name'             => $r->company_name ?: ($r->city ?: '—'),
+                    'city'             => $r->city,
+                    'province'         => $r->province,
+                    'inbound'          => (int) $r->inbound_count,
+                    'delivered'        => $delivered,
+                    'on_time'          => (int) $r->on_time_count,
+                    'damaged'          => (int) $r->damaged_count,
+                    'on_time_pct'      => $delivered > 0
+                        ? (int) round(((int) $r->on_time_count / $delivered) * 100)
+                        : null,
+                    'damage_free_pct'  => $delivered > 0
+                        ? (int) round(((($delivered - (int) $r->damaged_count)) / $delivered) * 100)
+                        : null,
+                    'avg_transit_days' => $r->avg_transit_days !== null
+                        ? round((float) $r->avg_transit_days, 1)
+                        : null,
+                    'at_risk'          => (int) $r->at_risk_count,
+                ];
             })
-            ->get(['id', 'assigned_at', 'in_transit_at', 'delivered_at']);
-        foreach ($jobActivity as $j) {
-            foreach (['assigned_at' => 'dispatched', 'in_transit_at' => 'in_transit', 'delivered_at' => 'delivered'] as $col => $bucket) {
-                if ($j->$col && $j->$col->between($from, $to)) {
-                    $k = $j->$col->toDateString();
-                    if (isset($days[$k])) { $days[$k][$bucket]++; }
-                }
-            }
-        }
-        $activitySeries = array_values($days);
-        $activityPeak   = max(array_merge([1], array_map(fn ($d) => max($d['dispatched'], $d['in_transit'], $d['delivered']), $activitySeries)));
+            ->values();
 
-        // ─── Pipeline distribution ───────────────────────────────────
-        $stageGroups = [
-            'intake'      => ['label' => 'Intake',            'statuses' => self::G_INTAKE,      'hex' => '#f59e0b'],
-            'to_dispatch' => ['label' => 'Ready to dispatch', 'statuses' => self::G_TO_DISPATCH, 'hex' => '#6366f1'],
-            'dispatched'  => ['label' => 'Dispatched',        'statuses' => self::G_DISPATCHED,  'hex' => '#a855f7'],
-            'in_transit'  => ['label' => 'On the road',       'statuses' => self::G_IN_TRANSIT,  'hex' => '#3b82f6'],
-        ];
-        $stageCounts = (clone $this->baseJobsQuery())
-            ->whereIn('status', self::ACTIVE_PHASE1)
-            ->selectRaw('status, count(*) as n')
-            ->groupBy('status')
-            ->pluck('n', 'status')
-            ->toArray();
-        foreach ($stageGroups as $key => &$grp) {
-            $grp['count'] = (int) collect($grp['statuses'])->sum(fn ($s) => (int) ($stageCounts[$s] ?? 0));
-        }
-        unset($grp);
-        $pipelineTotal = array_sum(array_column($stageGroups, 'count'));
+        // ── Awaiting-confirmation banner count (only if the customer
+        //    workflow demands it) ───────────────────────────────────────
+        $awaitingMine = $this->requiresConfirmation
+            ? (clone $this->baseJobsQuery())
+                ->where('transport_jobs.status', Job::STATUS_AWAITING_CUSTOMER_CONFIRMATION)
+                ->count()
+            : 0;
 
-        // ─── Throughput (scheduled vs delivered in range) ───────────
-        $scheduled = (clone $this->baseJobsQuery())
-            ->whereBetween('scheduled_date', [$from->toDateString(), $to->toDateString()])
-            ->count();
-        $delivered = (clone $this->baseJobsQuery())
-            ->whereNotNull('delivered_at')
-            ->whereBetween('delivered_at', [$from, $to])
-            ->count();
-        $throughputPct = $scheduled > 0 ? (int) round(($delivered / $scheduled) * 100) : 0;
-
-        // ─── Exceptions ──────────────────────────────────────────────
-        // Customer version: pipeline-level only. We still flag "Awaiting
-        // my confirmation" so the customer knows *they* are the blocker.
-        $exceptions = [];
-        if ($this->requiresConfirmation) {
-            $exceptions[] = [
-                'key'      => 'awaiting_mine',
-                'label'    => 'Awaiting your confirmation',
-                'sublabel' => 'Confirm to let us start',
-                'count'    => (clone $this->baseJobsQuery())
-                    ->where('status', Job::STATUS_AWAITING_CUSTOMER_CONFIRMATION)
-                    ->count(),
-                'severity' => 'amber',
-            ];
-        }
-        $exceptions = array_merge($exceptions, [
-            [
-                'key' => 'confirmation_issue',
-                'label' => 'Confirmation issue',
-                'sublabel' => 'Awaiting resolution',
-                'count' => (clone $this->baseJobsQuery())
-                    ->where('status', Job::STATUS_CONFIRMATION_ISSUE)
-                    ->count(),
-                'severity' => 'red',
-            ],
-            [
-                'key' => 'dispatched_stale',
-                'label' => 'Dispatched · not collected',
-                'sublabel' => "> {$th['dispatched_days']}d",
-                'count' => (clone $this->baseJobsQuery())
-                    ->whereIn('status', self::G_DISPATCHED)
-                    ->where('updated_at', '<=', now()->subDays($th['dispatched_days']))
-                    ->count(),
-                'severity' => 'amber',
-            ],
-            [
-                'key' => 'long_transit',
-                'label' => 'Long in transit',
-                'sublabel' => "> {$th['in_transit_days']}d",
-                'count' => (clone $this->baseJobsQuery())
-                    ->whereIn('status', self::G_IN_TRANSIT)
-                    ->where('updated_at', '<=', now()->subDays($th['in_transit_days']))
-                    ->count(),
-                'severity' => 'red',
-            ],
-            [
-                'key' => 'delivered_open',
-                'label' => 'Delivered · not signed off',
-                'sublabel' => 'POD / paperwork pending',
-                'count' => (clone $this->baseJobsQuery())
-                    ->where('status', Job::STATUS_DELIVERED)
-                    ->whereNull('completed_at')
-                    ->count(),
-                'severity' => 'amber',
-            ],
-        ]);
-
-        // ─── Priority orders (longest in current stage, top 12) ──────
-        // No driver column — customers don't need to see or care about
-        // the executing driver. Only the stage + dwell time matter.
-        $priority = (clone $this->baseJobsQuery(applyStatusFilter: true))
-            ->whereIn('status', self::ACTIVE_PHASE1)
-            ->with([
-                'pickupLocation:id,city,province',
-                'deliveryLocation:id,city,province',
-                'brand:id,name',
-                'inventory:id,chassis_number,vin',
-            ])
-            ->orderBy('updated_at', 'asc')
-            ->limit(12)
-            ->get();
-
-        foreach ($priority as $row) {
-            $daysInStage = $row->updated_at ? (int) $row->updated_at->diffInDays(now()) : null;
-            $hrsInStage  = $row->updated_at ? (int) $row->updated_at->diffInHours(now()) : null;
-            $row->setAttribute('days_in_stage', $daysInStage);
-            $row->setAttribute('hours_in_stage', $hrsInStage);
-            $row->setAttribute('risk_level', $this->riskFor($row->status, $daysInStage, $hrsInStage, $th));
-        }
-
-        // ─── Insight row: Brands + Destinations (replaces customer/OEM + transporter panels) ──
-        // Top brands this customer is moving, by active + delivered count.
-        $brandRows = (clone $this->baseJobsQuery())
-            ->selectRaw('brand_id, '
-                . 'count(*) filter (where status in (' . $this->pgStatusList(self::ACTIVE_PHASE1) . ')) as active_count, '
-                . 'count(*) filter (where delivered_at between ? and ?) as delivered_count', [$from, $to])
-            ->whereNotNull('brand_id')
-            ->groupBy('brand_id')
-            ->orderByDesc('active_count')
-            ->orderByDesc('delivered_count')
-            ->limit(8)
-            ->get();
-        $brandIds = $brandRows->pluck('brand_id')->all();
-        $brandMap = !empty($brandIds)
-            ? Brand::whereIn('id', $brandIds)->pluck('name', 'id')
-            : collect();
-        $brandRows->each(fn ($r) => $r->setAttribute('brand_name', $brandMap->get($r->brand_id) ?? 'Unknown'));
-
-        // Top delivery destinations (city / province pairs).
-        $destinationRows = (clone $this->baseJobsQuery())
-            ->whereNotNull('delivered_at')
-            ->whereBetween('delivered_at', [$from, $to])
-            ->join('locations', 'transport_jobs.delivery_location_id', '=', 'locations.id')
-            ->selectRaw('locations.city as city, locations.province as province, count(*) as n')
-            ->groupBy('locations.city', 'locations.province')
-            ->orderByDesc('n')
-            ->limit(8)
-            ->get();
-
-        // Recent deliveries with POD — gives customer a signed-off feel.
+        // ── Recent deliveries with POD (top 5) ────────────────────────
         $recentDeliveries = (clone $this->baseJobsQuery())
-            ->whereIn('status', [Job::STATUS_DELIVERED, Job::STATUS_COMPLETED])
+            ->whereIn('transport_jobs.status', [Job::STATUS_DELIVERED, Job::STATUS_COMPLETED])
             ->with([
                 'deliveryLocation:id,city,province,company_name',
                 'brand:id,name',
                 'documents',
             ])
-            ->orderByDesc(\Illuminate\Support\Facades\DB::raw('coalesce(completed_at, delivered_at)'))
-            ->limit(8)
+            ->orderByDesc(DB::raw('coalesce(completed_at, delivered_at)'))
+            ->limit(5)
             ->get();
 
-        // ─── Filter option lists ─────────────────────────────────────
-        $brandOptions = Brand::where('is_active', true)->orderBy('name')->get(['id', 'name']);
-        // Regions — only the ones touched by this customer's jobs.
+        // ── Exceptions (long transit + damage in range) ───────────────
+        $exceptions = (clone $this->baseJobsQuery())
+            ->where(function ($w) use ($th, $from, $to) {
+                $w->where(function ($a) use ($th) {
+                    $a->whereIn('transport_jobs.status', self::G_IN_TRANSIT)
+                      ->where('transport_jobs.updated_at', '<=', now()->subDays($th['in_transit_days']));
+                })->orWhere(function ($a) use ($th) {
+                    $a->whereIn('transport_jobs.status', self::G_DISPATCHED)
+                      ->where('transport_jobs.updated_at', '<=', now()->subDays($th['dispatched_days']));
+                })->orWhere(function ($a) use ($from, $to) {
+                    $a->whereNotNull('transport_jobs.damage_report_released_at')
+                      ->whereBetween('transport_jobs.damage_report_released_at', [$from, $to]);
+                });
+            })
+            ->with([
+                'pickupLocation:id,city,province',
+                'deliveryLocation:id,city,province,company_name',
+            ])
+            ->orderBy('transport_jobs.updated_at')
+            ->limit(12)
+            ->get()
+            ->each(function ($j) use ($th) {
+                $j->setAttribute('is_damaged', !is_null($j->damage_report_released_at));
+                $j->setAttribute('days_in_stage', $j->updated_at ? (int) $j->updated_at->diffInDays(now()) : 0);
+                $j->setAttribute('is_long_transit',
+                    in_array($j->status, self::G_IN_TRANSIT, true)
+                    && $j->updated_at
+                    && $j->updated_at->lte(now()->subDays($th['in_transit_days']))
+                );
+            });
+
+        // ── Filter option lists (scoped to this customer) ─────────────
         $regionOptions = Location::query()
-            ->whereNotNull('province')
-            ->where('province', '!=', '')
+            ->whereNotNull('province')->where('province', '!=', '')
             ->where(function ($q) {
                 $q->whereIn('id', Job::where('company_id', $this->company->id)->pluck('pickup_location_id'))
                   ->orWhereIn('id', Job::where('company_id', $this->company->id)->pluck('delivery_location_id'));
             })
             ->distinct()->orderBy('province')->pluck('province');
+
+        $destinationOptions = Location::query()
+            ->whereIn('id', Job::where('company_id', $this->company->id)
+                ->whereNotNull('delivery_location_id')
+                ->pluck('delivery_location_id')->unique())
+            ->orderBy('company_name')->orderBy('city')
+            ->get(['id', 'company_name', 'city', 'province']);
+
         $statusOptions = self::ACTIVE_PHASE1;
 
         return compact(
-            'from', 'to', 'span', 'kpis',
-            'activitySeries', 'activityPeak',
-            'stageGroups', 'pipelineTotal',
-            'scheduled', 'delivered', 'throughputPct',
-            'exceptions', 'priority',
-            'brandRows', 'destinationRows', 'recentDeliveries',
-            'brandOptions', 'regionOptions', 'statusOptions',
-            'th',
+            'from', 'to', 'span',
+            'kpis', 'points', 'scoreboard',
+            'awaitingMine',
+            'recentDeliveries', 'exceptions',
+            'regionOptions', 'destinationOptions', 'statusOptions',
+            'onTime', 'th',
         );
     }
-
-    // ───────── Helpers ─────────
 
     protected function trend(int $current, int $previous): ?array
     {
@@ -463,34 +407,7 @@ new #[Layout('components.layouts.app')] class extends Component
         ];
     }
 
-    protected function riskFor(string $status, ?int $days, ?int $hours, array $th): string
-    {
-        if ($days === null) { return 'low'; }
-
-        if (in_array($status, [Job::STATUS_AWAITING_CUSTOMER_CONFIRMATION, Job::STATUS_CONFIRMATION_ISSUE], true)) {
-            $hi = $th['awaiting_confirm_days'];
-            return $days >= $hi ? 'high' : ($days >= max(1, (int) round($hi / 2)) ? 'med' : 'low');
-        }
-        if (in_array($status, [Job::STATUS_PENDING_VERIFICATION, Job::STATUS_RECEIVED], true)) {
-            return $days >= 1 ? 'med' : 'low';
-        }
-        if ($status === Job::STATUS_CONFIRMED) {
-            $hi = $th['to_dispatch_hours'];
-            $h = $hours ?? 0;
-            return $h >= $hi ? 'high' : ($h >= (int) round($hi / 2) ? 'med' : 'low');
-        }
-        if (in_array($status, self::G_DISPATCHED, true)) {
-            $hi = $th['dispatched_days'];
-            return $days >= $hi ? 'high' : ($days >= max(1, (int) round($hi / 2)) ? 'med' : 'low');
-        }
-        if (in_array($status, self::G_IN_TRANSIT, true)) {
-            $hi = $th['in_transit_days'];
-            return $days >= $hi ? 'high' : ($days >= max(1, (int) round($hi / 2)) ? 'med' : 'low');
-        }
-        return 'low';
-    }
-
-    /** Safe in-operator list for Postgres FILTER clauses. */
+    /** Comma-separated quoted status list for Postgres FILTER clauses. */
     protected function pgStatusList(array $statuses): string
     {
         return collect($statuses)->map(fn ($s) => "'" . addslashes($s) . "'")->implode(',');
@@ -510,20 +427,14 @@ new #[Layout('components.layouts.app')] class extends Component
     {{-- ══════════════════════════════════════════════════════════════ --}}
     <x-page-header
         eyebrow="{{ $company->name }}"
-        title="Overview"
-        subtitle="Every order in flight · received → confirmed → dispatched → in transit → delivered.">
+        title="Vehicle movements"
+        subtitle="Where your vehicles are, which dealers are receiving them, and how they're arriving.">
         <x-slot:actions>
             <x-button variant="secondary" size="sm" :href="route('customer.orders.index')">
                 <x-slot:icon>
                     <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3h18v18H3z"/><path d="M3 9h18"/><path d="M9 21V9"/></svg>
                 </x-slot:icon>
                 All orders
-            </x-button>
-            <x-button variant="secondary" size="sm" :href="route('customer.documents')">
-                <x-slot:icon>
-                    <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/></svg>
-                </x-slot:icon>
-                Documents
             </x-button>
             @if($canOrder)
                 <x-button variant="primary" size="sm" :href="route('customer.orders.create')">
@@ -540,23 +451,41 @@ new #[Layout('components.layouts.app')] class extends Component
         <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{{ session('success') }}</div>
     @endif
 
-    {{-- Filter strip --}}
+    @if($requiresConfirmation && $awaitingMine > 0)
+        <div class="flex items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            <svg viewBox="0 0 24 24" class="h-5 w-5 shrink-0 text-amber-600" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/>
+            </svg>
+            <div class="flex-1 min-w-0">
+                <p class="font-semibold">{{ $awaitingMine }} {{ \Illuminate\Support\Str::plural('order', $awaitingMine) }} waiting for your confirmation</p>
+                <p class="text-xs text-amber-800">Confirm so Proselver can dispatch.</p>
+            </div>
+            <a href="{{ route('customer.orders.index', ['statusFilter' => \App\Models\Job::STATUS_AWAITING_CUSTOMER_CONFIRMATION]) }}"
+               class="shrink-0 rounded-md bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700">
+                Review
+            </a>
+        </div>
+    @endif
+
+    {{-- ══════════════════════════════════════════════════════════════ --}}
+    {{-- FILTER BAR                                                     --}}
+    {{-- ══════════════════════════════════════════════════════════════ --}}
     <x-dash.filter-bar>
         <x-dash.filter-date label="From" wire:model.live="dateFrom" minWidth="160px" />
         <x-dash.filter-date label="To"   wire:model.live="dateTo"   minWidth="160px" />
-        <x-dash.filter-select label="Brand" wire:model.live="brandId" minWidth="180px">
-            <option value="">All</option>
-            @foreach($brandOptions as $b)
-                <option value="{{ $b->id }}">{{ $b->name }}</option>
-            @endforeach
-        </x-dash.filter-select>
-        <x-dash.filter-select label="Region" wire:model.live="region" minWidth="160px">
+        <x-dash.filter-select label="Region" wire:model.live="region" minWidth="170px">
             <option value="">All</option>
             @foreach($regionOptions as $r)
                 <option value="{{ $r }}">{{ $r }}</option>
             @endforeach
         </x-dash.filter-select>
-        <x-dash.filter-select label="Stage" wire:model.live="status" minWidth="200px">
+        <x-dash.filter-select label="Destination" wire:model.live="destinationId" minWidth="220px">
+            <option value="">All dealers</option>
+            @foreach($destinationOptions as $d)
+                <option value="{{ $d->id }}">{{ $d->company_name }}{{ $d->city ? ' · ' . $d->city : '' }}</option>
+            @endforeach
+        </x-dash.filter-select>
+        <x-dash.filter-select label="Stage" wire:model.live="status" minWidth="190px">
             <option value="">Any</option>
             @foreach($statusOptions as $s)
                 <option value="{{ $s }}">{{ \App\Models\Job::PHASE1_STATUS_LABELS[$s] ?? ucwords(str_replace('_', ' ', $s)) }}</option>
@@ -566,24 +495,108 @@ new #[Layout('components.layouts.app')] class extends Component
     </x-dash.filter-bar>
 
     {{-- ══════════════════════════════════════════════════════════════ --}}
-    {{-- ROW 1 — KPI CARDS                                              --}}
+    {{-- HERO — MAP + DESTINATION LIST                                  --}}
     {{-- ══════════════════════════════════════════════════════════════ --}}
-    @php
-        // Keep Tailwind JIT happy — dynamic class names aren't scanned.
-        // 5 KPIs (no external confirmation) or 6 KPIs (with confirmation).
-        $kpiGridClass = count($kpis) >= 6
-            ? 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4'
-            : 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4';
-    @endphp
-    <div class="{{ $kpiGridClass }}">
+    <div
+        x-data="oemMap(@js($points))"
+        x-init="init()"
+        wire:key="oem-map-{{ md5(json_encode($points)) }}"
+        class="grid grid-cols-1 xl:grid-cols-3 gap-4"
+    >
+        <x-dash.panel
+            class="xl:col-span-2"
+            title="Live destination map"
+            :subtitle="count($points) . ' ' . \Illuminate\Support\Str::plural('dealer', count($points)) . ' with activity in this window'"
+            :tight="true">
+            <x-slot:actions>
+                <div class="hidden md:flex items-center gap-3 text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-500">
+                    <span class="inline-flex items-center gap-1.5"><span class="h-2 w-2 rounded-full bg-blue-500"></span>Inbound</span>
+                    <span class="inline-flex items-center gap-1.5"><span class="h-2 w-2 rounded-full bg-emerald-500"></span>Delivered</span>
+                    <span class="inline-flex items-center gap-1.5"><span class="h-2 w-2 rounded-full bg-amber-500"></span>At risk</span>
+                    <span class="inline-flex items-center gap-1.5"><span class="h-2 w-2 rounded-full bg-rose-500"></span>Damaged</span>
+                </div>
+            </x-slot:actions>
+
+            <div class="relative">
+                {{-- Map host. wire:ignore keeps Livewire from touching the
+                     Google-built DOM inside it; we drive marker refreshes
+                     from the Alpine component when the wire:key bumps. --}}
+                <div wire:ignore x-ref="mapEl" class="h-[520px] w-full bg-slate-50"></div>
+
+                {{-- Loading state shown until Maps JS is ready --}}
+                <div x-show="!ready" x-transition.opacity
+                     class="absolute inset-0 flex items-center justify-center bg-white/80 text-sm text-slate-500">
+                    <div class="flex items-center gap-2">
+                        <svg class="h-4 w-4 animate-spin text-slate-400" viewBox="0 0 24 24" fill="none">
+                            <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" stroke-opacity="0.25"/>
+                            <path d="M22 12a10 10 0 0 1-10 10" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+                        </svg>
+                        Loading map…
+                    </div>
+                </div>
+
+                {{-- Empty state overlay --}}
+                <template x-if="ready && points.length === 0">
+                    <div class="absolute inset-0 flex items-center justify-center pointer-events-none">
+                        <div class="rounded-lg border border-slate-200 bg-white/95 px-4 py-3 text-sm text-slate-500 shadow-sm">
+                            No destinations in this window
+                        </div>
+                    </div>
+                </template>
+            </div>
+        </x-dash.panel>
+
+        <x-dash.panel
+            title="Destinations"
+            subtitle="Click to focus · sorted by activity"
+            :tight="true">
+            <template x-if="points.length === 0">
+                <p class="px-5 py-10 text-center text-sm text-slate-400">No destinations in range</p>
+            </template>
+            <ul class="divide-y divide-slate-100 max-h-[520px] overflow-y-auto">
+                <template x-for="p in points" :key="p.id">
+                    <li
+                        class="px-5 py-3 cursor-pointer transition-colors"
+                        :class="selectedId === p.id ? 'bg-blue-50/80' : 'hover:bg-slate-50'"
+                        @click="focus(p)">
+                        <div class="flex items-center gap-3">
+                            <span class="h-2 w-2 shrink-0 rounded-full" :class="dotClass(p.state)"></span>
+                            <div class="min-w-0 flex-1">
+                                <p class="text-sm font-medium text-slate-900 truncate" x-text="p.name"></p>
+                                <p class="text-[11px] text-slate-500 truncate"
+                                   x-text="[p.city, p.province].filter(Boolean).join(', ') || '—'"></p>
+                            </div>
+                            <div class="text-right shrink-0">
+                                <p class="text-[11px] tabular-nums">
+                                    <span class="font-semibold text-blue-700" x-text="p.inbound"></span>
+                                    <span class="text-slate-400">in</span>
+                                    <span class="mx-1 text-slate-300">·</span>
+                                    <span class="font-semibold text-emerald-700" x-text="p.delivered"></span>
+                                    <span class="text-slate-400">out</span>
+                                </p>
+                                <p class="text-[10px] text-rose-600 tabular-nums" x-show="p.damaged > 0">
+                                    <span x-text="p.damaged"></span> damaged
+                                </p>
+                            </div>
+                        </div>
+                    </li>
+                </template>
+            </ul>
+        </x-dash.panel>
+    </div>
+
+    {{-- ══════════════════════════════════════════════════════════════ --}}
+    {{-- KPI STRIP                                                      --}}
+    {{-- ══════════════════════════════════════════════════════════════ --}}
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         @foreach($kpis as $k)
             <x-dash.kpi
                 :label="$k['label']"
-                :value="$num($k['value'])"
+                :value="is_string($k['value']) ? $k['value'] : $num($k['value'])"
                 :color="$k['color']"
-                :href="$k['href']"
+                :href="$k['href'] ?? null"
                 :helper="$k['helper']"
-                :trend="$k['trend']">
+                :trend="$k['trend'] ?? null">
                 <x-slot:icon>
                     <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{!! $k['iconPath'] !!}</svg>
                 </x-slot:icon>
@@ -592,302 +605,92 @@ new #[Layout('components.layouts.app')] class extends Component
     </div>
 
     {{-- ══════════════════════════════════════════════════════════════ --}}
-    {{-- ROW 2 — FLOW & PIPELINE                                        --}}
+    {{-- DEALER SCOREBOARD (collapsed)                                  --}}
     {{-- ══════════════════════════════════════════════════════════════ --}}
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
-
-        {{-- Pipeline activity chart --}}
-        <x-dash.panel
-            class="lg:col-span-2"
-            title="Order activity"
-            :subtitle="'Daily dispatch, transit start and delivery · ' . $from->format('d M') . ' – ' . $to->format('d M')">
-            <x-slot:actions>
-                <div class="flex items-center gap-3 text-[11px] font-semibold text-slate-600">
-                    <span class="inline-flex items-center gap-1.5"><span class="h-2 w-2 rounded-full bg-purple-500"></span>Dispatched</span>
-                    <span class="inline-flex items-center gap-1.5"><span class="h-2 w-2 rounded-full bg-orange-500"></span>In transit</span>
-                    <span class="inline-flex items-center gap-1.5"><span class="h-2 w-2 rounded-full bg-emerald-500"></span>Delivered</span>
-                </div>
-            </x-slot:actions>
-
-            @if(count($activitySeries) === 0 || $activityPeak === 0)
-                <div class="h-56 flex items-center justify-center text-sm text-slate-400">
-                    No activity in this range
-                </div>
-            @else
-                @php
-                    $count = count($activitySeries);
-                    $barGap = 2;
-                    $chartH = 180;
-                    $chartW = max(600, $count * 22);
-                    $groupW = $chartW / max($count, 1);
-                    $innerW = max(1, $groupW - 6);
-                    $barW   = max(1, ($innerW / 3) - $barGap);
-                @endphp
-                <div class="overflow-x-auto">
-                    <svg viewBox="0 0 {{ $chartW }} {{ $chartH + 30 }}" class="w-full h-60 min-w-[600px]" preserveAspectRatio="none">
-                        @for($i = 1; $i <= 4; $i++)
-                            <line x1="0" x2="{{ $chartW }}" y1="{{ $chartH - ($chartH / 4) * $i }}" y2="{{ $chartH - ($chartH / 4) * $i }}" stroke="#f1f5f9" stroke-width="1"/>
-                        @endfor
-                        @foreach($activitySeries as $i => $d)
-                            @php
-                                $gx = $i * $groupW + 3;
-                                $dh = $activityPeak > 0 ? ($d['dispatched'] / $activityPeak) * ($chartH - 6) : 0;
-                                $th_ = $activityPeak > 0 ? ($d['in_transit'] / $activityPeak) * ($chartH - 6) : 0;
-                                $vh = $activityPeak > 0 ? ($d['delivered']  / $activityPeak) * ($chartH - 6) : 0;
-                            @endphp
-                            <g>
-                                <rect x="{{ $gx }}"                     y="{{ $chartH - $dh }}"  width="{{ $barW }}" height="{{ $dh }}"  fill="#a855f7" rx="1.5"/>
-                                <rect x="{{ $gx + $barW + $barGap }}"   y="{{ $chartH - $th_ }}" width="{{ $barW }}" height="{{ $th_ }}" fill="#f97316" rx="1.5"/>
-                                <rect x="{{ $gx + 2*($barW + $barGap) }}" y="{{ $chartH - $vh }}"  width="{{ $barW }}" height="{{ $vh }}"  fill="#10b981" rx="1.5"/>
-                            </g>
-                            @if($count <= 30 || $i % (int) ceil($count / 15) === 0)
-                                <text x="{{ $gx + ($innerW / 2) }}" y="{{ $chartH + 16 }}" text-anchor="middle" font-size="9" fill="#64748b" font-family="ui-sans-serif,system-ui">{{ $d['date']->format('d/m') }}</text>
-                            @endif
-                        @endforeach
-                    </svg>
-                </div>
-            @endif
-        </x-dash.panel>
-
-        {{-- Pipeline distribution --}}
-        <x-dash.panel title="Pipeline distribution" subtitle="Active orders by stage">
-            @if($pipelineTotal === 0)
-                <p class="text-sm text-slate-400 text-center py-8">No active orders</p>
-            @else
-                <ul class="space-y-3">
-                    @foreach($stageGroups as $grp)
-                        @php $pct = $pipelineTotal > 0 ? ($grp['count'] / $pipelineTotal) * 100 : 0; @endphp
-                        <li>
-                            <div class="flex items-center justify-between text-xs mb-1">
-                                <span class="font-medium text-slate-700">{{ $grp['label'] }}</span>
-                                <span class="tabular-nums text-slate-500"><strong class="text-slate-900">{{ $num($grp['count']) }}</strong> · {{ number_format($pct, 0) }}%</span>
-                            </div>
-                            <div class="h-2 bg-slate-100 rounded-full overflow-hidden">
-                                <div class="h-full rounded-full" style="width: {{ max(2, $pct) }}%; background-color: {{ $grp['hex'] }};"></div>
-                            </div>
-                        </li>
-                    @endforeach
-                </ul>
-            @endif
-        </x-dash.panel>
-    </div>
-
-    {{-- Throughput vs scheduled --}}
     <x-dash.panel
-        title="Throughput vs scheduled"
-        subtitle="Deliveries completed vs orders scheduled for the same window">
-        <x-slot:actions>
-            <x-dash.pill size="md" :variant="$throughputPct >= 90 ? 'green' : ($throughputPct >= 70 ? 'amber' : 'red')">
-                {{ $throughputPct }}% throughput
-            </x-dash.pill>
-        </x-slot:actions>
-
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <div>
-                <p class="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">Scheduled</p>
-                <p class="mt-2 text-3xl font-semibold text-slate-900 tabular-nums">{{ $num($scheduled) }}</p>
-                <p class="mt-1 text-xs text-slate-500">Orders with a scheduled date in the window</p>
+        title="Dealer scoreboard"
+        subtitle="Top 10 destinations in this window"
+        :tight="true">
+        @if($scoreboard->isEmpty())
+            <p class="px-5 py-10 text-center text-sm text-slate-400">No destinations in range</p>
+        @else
+            <div class="overflow-x-auto">
+                <table class="min-w-full text-sm">
+                    <thead>
+                        <tr class="bg-slate-50/70 text-[10px] uppercase tracking-[0.15em] text-slate-500">
+                            <th class="px-4 py-2 text-left font-semibold">Dealer</th>
+                            <th class="px-4 py-2 text-left font-semibold">Location</th>
+                            <th class="px-4 py-2 text-right font-semibold">Inbound</th>
+                            <th class="px-4 py-2 text-right font-semibold">Delivered</th>
+                            <th class="px-4 py-2 text-right font-semibold">On-time</th>
+                            <th class="px-4 py-2 text-right font-semibold">Damage-free</th>
+                            <th class="px-4 py-2 text-right font-semibold">Avg transit</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100">
+                        @foreach($scoreboard as $s)
+                            <tr class="hover:bg-slate-50/60 transition-colors cursor-pointer"
+                                wire:click="$set('destinationId', {{ $s->id }})">
+                                <td class="px-4 py-2.5">
+                                    <div class="text-[13px] font-medium text-slate-900 truncate max-w-[260px]">{{ $s->name }}</div>
+                                    @if($s->at_risk > 0)
+                                        <div class="mt-0.5"><x-dash.pill variant="amber" size="sm">{{ $s->at_risk }} at risk</x-dash.pill></div>
+                                    @endif
+                                </td>
+                                <td class="px-4 py-2.5 text-[12px] text-slate-600 truncate max-w-[180px]">
+                                    {{ $s->city ?: '—' }}{{ $s->province ? ', ' . $s->province : '' }}
+                                </td>
+                                <td class="px-4 py-2.5 text-right tabular-nums">
+                                    <span class="text-[13px] font-semibold text-blue-700">{{ $num($s->inbound) }}</span>
+                                </td>
+                                <td class="px-4 py-2.5 text-right tabular-nums">
+                                    <span class="text-[13px] font-semibold text-emerald-700">{{ $num($s->delivered) }}</span>
+                                </td>
+                                <td class="px-4 py-2.5 text-right tabular-nums">
+                                    @if($s->on_time_pct === null)
+                                        <span class="text-[11px] text-slate-400">—</span>
+                                    @else
+                                        <x-dash.pill size="sm" :variant="$s->on_time_pct >= 90 ? 'green' : ($s->on_time_pct >= 70 ? 'amber' : 'red')">
+                                            {{ $s->on_time_pct }}%
+                                        </x-dash.pill>
+                                    @endif
+                                </td>
+                                <td class="px-4 py-2.5 text-right tabular-nums">
+                                    @if($s->damage_free_pct === null)
+                                        <span class="text-[11px] text-slate-400">—</span>
+                                    @else
+                                        <x-dash.pill size="sm" :variant="$s->damage_free_pct >= 98 ? 'green' : ($s->damage_free_pct >= 90 ? 'amber' : 'red')">
+                                            {{ $s->damage_free_pct }}%
+                                        </x-dash.pill>
+                                    @endif
+                                </td>
+                                <td class="px-4 py-2.5 text-right text-[12px] tabular-nums text-slate-700">
+                                    {{ $s->avg_transit_days !== null ? $s->avg_transit_days . 'd' : '—' }}
+                                </td>
+                            </tr>
+                        @endforeach
+                    </tbody>
+                </table>
             </div>
-            <div>
-                <p class="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">Delivered</p>
-                <p class="mt-2 text-3xl font-semibold text-emerald-700 tabular-nums">{{ $num($delivered) }}</p>
-                <p class="mt-1 text-xs text-slate-500">Vehicles delivered in the window</p>
-            </div>
-            <div>
-                <p class="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">Gap</p>
-                <p class="mt-2 text-3xl font-semibold {{ $scheduled - $delivered > 0 ? 'text-amber-700' : 'text-slate-900' }} tabular-nums">{{ $num(max(0, $scheduled - $delivered)) }}</p>
-                <p class="mt-1 text-xs text-slate-500">Scheduled but not yet delivered</p>
-            </div>
-        </div>
-        <div class="mt-5 h-3 bg-slate-100 rounded-full overflow-hidden">
-            <div class="h-full {{ $throughputPct >= 90 ? 'bg-emerald-500' : ($throughputPct >= 70 ? 'bg-amber-500' : 'bg-rose-500') }} rounded-full transition-all"
-                 style="width: {{ min(100, $throughputPct) }}%"></div>
-        </div>
+        @endif
     </x-dash.panel>
 
     {{-- ══════════════════════════════════════════════════════════════ --}}
-    {{-- ROW 3 — EXCEPTIONS & PRIORITY ORDERS                           --}}
+    {{-- RECENT DELIVERIES + EXCEPTIONS                                 --}}
     {{-- ══════════════════════════════════════════════════════════════ --}}
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
-
-        {{-- Exceptions --}}
-        <x-dash.panel title="Exceptions" subtitle="Orders blocking the pipeline" :tight="true">
-            <ul class="divide-y divide-slate-100">
-                @foreach($exceptions as $e)
-                    @php
-                        $pillVariant = $e['count'] === 0
-                            ? 'slate'
-                            : ($e['severity'] === 'red' ? 'red' : 'amber');
-                        $dotClass = match(true) {
-                            $e['count'] === 0           => 'bg-slate-300',
-                            $e['severity'] === 'red'    => 'bg-rose-500 node-pulse',
-                            $e['severity'] === 'amber'  => 'bg-amber-500 node-pulse',
-                            default                     => 'bg-slate-400',
-                        };
-                    @endphp
-                    <li class="flex items-center gap-3 px-5 py-3">
-                        <span class="h-1.5 w-1.5 shrink-0 rounded-full {{ $dotClass }}"></span>
-                        <div class="flex-1 min-w-0">
-                            <p class="text-sm font-medium text-slate-900 truncate">{{ $e['label'] }}</p>
-                            <p class="text-[11px] text-slate-500 truncate">{{ $e['sublabel'] }}</p>
-                        </div>
-                        <x-dash.pill size="md" :variant="$pillVariant">{{ $num($e['count']) }}</x-dash.pill>
-                    </li>
-                @endforeach
-            </ul>
-        </x-dash.panel>
-
-        {{-- Priority orders --}}
-        <x-dash.panel
-            class="lg:col-span-2"
-            title="Orders needing attention"
-            subtitle="Longest dwell in current stage · top 12"
-            :tight="true">
-            <x-slot:actions>
-                <a href="{{ route('customer.orders.index') }}" class="text-xs font-semibold text-slate-600 hover:text-slate-900 inline-flex items-center gap-1">
-                    View all orders
-                    <svg viewBox="0 0 24 24" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
-                </a>
-            </x-slot:actions>
-
-            @if($priority->isEmpty())
-                <p class="px-5 py-10 text-sm text-slate-400 text-center">No active orders match the current filters</p>
-            @else
-                <div class="overflow-x-auto">
-                    <table class="min-w-full text-sm">
-                        <thead>
-                            <tr class="bg-slate-50/70 text-[10px] uppercase tracking-[0.15em] text-slate-500">
-                                <th class="px-4 py-2 text-left font-semibold">Order #</th>
-                                <th class="px-4 py-2 text-left font-semibold">Stage</th>
-                                <th class="px-4 py-2 text-left font-semibold">Vehicle</th>
-                                <th class="px-4 py-2 text-left font-semibold">Origin → Destination</th>
-                                <th class="px-4 py-2 text-right font-semibold">In stage</th>
-                                <th class="px-4 py-2 text-center font-semibold">Risk</th>
-                            </tr>
-                        </thead>
-                        <tbody class="divide-y divide-slate-100">
-                            @foreach($priority as $r)
-                                @php
-                                    $riskVariant = match($r->getAttribute('risk_level')) {
-                                        'high' => 'red',
-                                        'med'  => 'amber',
-                                        default=> 'slate',
-                                    };
-                                    $riskLabel = match($r->getAttribute('risk_level')) {
-                                        'high' => 'High',
-                                        'med'  => 'Med',
-                                        default=> 'Low',
-                                    };
-                                    $daysIn = $r->getAttribute('days_in_stage');
-                                    $hrsIn  = $r->getAttribute('hours_in_stage');
-                                    $dwellLabel = $daysIn >= 1 ? ($daysIn . 'd') : (($hrsIn ?? 0) . 'h');
-                                    $chassis = $r->inventory?->chassis_number;
-                                    $vin = $r->inventory?->vin;
-                                @endphp
-                                <tr class="hover:bg-slate-50/60 transition-colors cursor-pointer"
-                                    onclick="window.location='{{ route('customer.orders.show', $r) }}'">
-                                    <td class="px-4 py-2.5">
-                                        <div class="font-mono text-[12px] text-slate-900">{{ $r->job_number ?? ('JOB-' . $r->id) }}</div>
-                                        @if($chassis)
-                                            <div class="font-mono text-[10px] text-slate-400">{{ $chassis }}{{ $vin && $vin !== $chassis ? ' · ' . $vin : '' }}</div>
-                                        @endif
-                                    </td>
-                                    <td class="px-4 py-2.5"><x-status-badge :status="$r->status" size="sm"/></td>
-                                    <td class="px-4 py-2.5">
-                                        <div class="text-[12px] text-slate-700 truncate max-w-[160px]">
-                                            {{ $r->brand?->name }} {{ $r->model_name }}
-                                        </div>
-                                    </td>
-                                    <td class="px-4 py-2.5">
-                                        <div class="text-[12px] text-slate-700 flex items-center gap-1">
-                                            <span>{{ $r->pickupLocation?->city ?? '—' }}</span>
-                                            <svg viewBox="0 0 24 24" class="h-3 w-3 text-slate-300" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
-                                            <span>{{ $r->deliveryLocation?->city ?? '—' }}</span>
-                                        </div>
-                                    </td>
-                                    <td class="px-4 py-2.5 text-right text-[12px] tabular-nums text-slate-700">{{ $dwellLabel }}</td>
-                                    <td class="px-4 py-2.5 text-center">
-                                        <x-dash.pill :variant="$riskVariant">{{ $riskLabel }}</x-dash.pill>
-                                    </td>
-                                </tr>
-                            @endforeach
-                        </tbody>
-                    </table>
-                </div>
-            @endif
-        </x-dash.panel>
-    </div>
-
-    {{-- ══════════════════════════════════════════════════════════════ --}}
-    {{-- ROW 4 — CUSTOMER INSIGHT                                       --}}
-    {{-- ══════════════════════════════════════════════════════════════ --}}
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
-
-        {{-- Brand mix --}}
-        <x-dash.panel title="Vehicles by brand" subtitle="Top 8 active + delivered in range" :tight="true">
-            @if($brandRows->isEmpty())
-                <p class="px-5 py-10 text-sm text-slate-400 text-center">No orders in scope</p>
-            @else
-                @php $topActive = $brandRows->max('active_count') ?: 1; @endphp
-                <ul class="divide-y divide-slate-100">
-                    @foreach($brandRows as $r)
-                        <li class="px-5 py-3">
-                            <div class="flex items-center justify-between gap-3 mb-1">
-                                <span class="text-sm font-medium text-slate-900 truncate">{{ $r->getAttribute('brand_name') }}</span>
-                                <span class="text-[11px] tabular-nums shrink-0">
-                                    <span class="font-semibold text-slate-900">{{ $num($r->active_count) }}</span>
-                                    <span class="text-slate-400">active</span>
-                                    <span class="mx-1.5 text-slate-300">·</span>
-                                    <span class="font-semibold text-emerald-700">{{ $num($r->delivered_count) }}</span>
-                                    <span class="text-slate-400">delivered</span>
-                                </span>
-                            </div>
-                            <div class="h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                                <div class="h-full bg-blue-500 rounded-full" style="width: {{ ($r->active_count / $topActive) * 100 }}%"></div>
-                            </div>
-                        </li>
-                    @endforeach
-                </ul>
-            @endif
-        </x-dash.panel>
-
-        {{-- Top destinations --}}
-        <x-dash.panel title="Top destinations" subtitle="Deliveries in range · by city" :tight="true">
-            @if($destinationRows->isEmpty())
-                <p class="px-5 py-10 text-sm text-slate-400 text-center">No deliveries in this range</p>
-            @else
-                @php $topN = $destinationRows->max('n') ?: 1; @endphp
-                <ul class="divide-y divide-slate-100">
-                    @foreach($destinationRows as $r)
-                        <li class="px-5 py-3">
-                            <div class="flex items-center justify-between gap-3 mb-1">
-                                <span class="text-sm font-medium text-slate-900 truncate">
-                                    {{ $r->city ?: '—' }}<span class="text-slate-400">{{ $r->province ? ', ' . $r->province : '' }}</span>
-                                </span>
-                                <span class="text-[11px] tabular-nums shrink-0">
-                                    <span class="font-semibold text-emerald-700">{{ $num($r->n) }}</span>
-                                    <span class="text-slate-400">{{ \Illuminate\Support\Str::plural('delivery', $r->n) }}</span>
-                                </span>
-                            </div>
-                            <div class="h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                                <div class="h-full bg-emerald-500 rounded-full" style="width: {{ ($r->n / $topN) * 100 }}%"></div>
-                            </div>
-                        </li>
-                    @endforeach
-                </ul>
-            @endif
-        </x-dash.panel>
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
 
         {{-- Recent deliveries --}}
-        <x-dash.panel title="Recent deliveries" subtitle="Latest 8 · POD status" :tight="true">
+        <x-dash.panel title="Recent deliveries" subtitle="Latest 5 · POD status" :tight="true">
             @if($recentDeliveries->isEmpty())
                 <p class="px-5 py-10 text-sm text-slate-400 text-center">No recent deliveries</p>
             @else
                 <ul class="divide-y divide-slate-100">
                     @foreach($recentDeliveries as $d)
                         @php
-                            $hasPod = $d->documents->where('category', 'proof_of_delivery')->isNotEmpty();
-                            $completedOn = $d->completed_at ?? $d->delivered_at;
+                            $hasPod       = $d->documents->where('category', 'proof_of_delivery')->isNotEmpty();
+                            $completedOn  = $d->completed_at ?? $d->delivered_at;
+                            $hasDamage    = !is_null($d->damage_report_released_at);
                         @endphp
                         <li class="px-5 py-3">
                             <a href="{{ route('customer.orders.show', $d) }}" class="block group">
@@ -895,7 +698,7 @@ new #[Layout('components.layouts.app')] class extends Component
                                     <div class="flex-1 min-w-0">
                                         <p class="text-sm font-medium text-slate-900 truncate group-hover:text-blue-700">
                                             {{ $d->job_number ?? ('JOB-' . $d->id) }}
-                                            <span class="font-normal text-slate-500">· {{ $d->brand?->name }} {{ $d->model_name }}</span>
+                                            <span class="font-normal text-slate-500">· {{ $d->model_name ?: ($d->brand?->name ?: 'Vehicle') }}</span>
                                         </p>
                                         <p class="text-[11px] text-slate-500 truncate">
                                             {{ $d->deliveryLocation?->shortDisplay() ?? ($d->deliveryLocation?->city ?? '—') }}
@@ -904,11 +707,16 @@ new #[Layout('components.layouts.app')] class extends Component
                                             @endif
                                         </p>
                                     </div>
-                                    @if($hasPod)
-                                        <x-dash.pill variant="green">POD</x-dash.pill>
-                                    @else
-                                        <x-dash.pill variant="slate">Pending</x-dash.pill>
-                                    @endif
+                                    <div class="flex items-center gap-1.5 shrink-0">
+                                        @if($hasDamage)
+                                            <x-dash.pill variant="red" size="sm">Damage</x-dash.pill>
+                                        @endif
+                                        @if($hasPod)
+                                            <x-dash.pill variant="green" size="sm">POD</x-dash.pill>
+                                        @else
+                                            <x-dash.pill variant="slate" size="sm">Pending</x-dash.pill>
+                                        @endif
+                                    </div>
                                 </div>
                             </a>
                         </li>
@@ -925,9 +733,212 @@ new #[Layout('components.layouts.app')] class extends Component
                 </div>
             </x-slot:footer>
         </x-dash.panel>
+
+        {{-- Exceptions --}}
+        <x-dash.panel
+            :title="'Exceptions' . ($exceptions->isEmpty() ? '' : ' · ' . $exceptions->count())"
+            :subtitle="'Long in transit (>' . $th['in_transit_days'] . 'd) or damage released in range'"
+            :tight="true">
+            @if($exceptions->isEmpty())
+                <div class="px-5 py-10 text-center">
+                    <div class="inline-flex h-10 w-10 items-center justify-center rounded-full bg-emerald-50 text-emerald-600 mb-2">
+                        <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+                    </div>
+                    <p class="text-sm text-slate-500">Nothing needs attention right now</p>
+                </div>
+            @else
+                <ul class="divide-y divide-slate-100 max-h-[400px] overflow-y-auto">
+                    @foreach($exceptions as $e)
+                        @php
+                            $isDamaged = (bool) $e->getAttribute('is_damaged');
+                            $isLong    = (bool) $e->getAttribute('is_long_transit');
+                            $label     = $isDamaged ? 'Damage report released' : ($isLong ? 'Long in transit' : 'Stuck in dispatch');
+                            $variant   = $isDamaged ? 'red' : ($isLong ? 'amber' : 'amber');
+                        @endphp
+                        <li class="px-5 py-3">
+                            <a href="{{ route('customer.orders.show', $e) }}" class="block group">
+                                <div class="flex items-center justify-between gap-3">
+                                    <div class="flex-1 min-w-0">
+                                        <p class="text-sm font-medium text-slate-900 truncate group-hover:text-blue-700">
+                                            {{ $e->job_number ?? ('JOB-' . $e->id) }}
+                                            <span class="font-normal text-slate-500">·
+                                                {{ $e->pickupLocation?->city ?? '—' }} → {{ $e->deliveryLocation?->city ?? '—' }}
+                                            </span>
+                                        </p>
+                                        <p class="text-[11px] text-slate-500">
+                                            {{ $label }} · in stage {{ $e->getAttribute('days_in_stage') }}d
+                                        </p>
+                                    </div>
+                                    <x-dash.pill size="sm" :variant="$variant">{{ $isDamaged ? 'Damage' : 'At risk' }}</x-dash.pill>
+                                </div>
+                            </a>
+                        </li>
+                    @endforeach
+                </ul>
+            @endif
+        </x-dash.panel>
     </div>
 
     <p class="text-center text-[10px] text-slate-400 tracking-[0.2em] uppercase pt-2">
-        Trident · {{ $company->name }} · Received → Confirmed → Dispatched → In transit → Delivered
+        Trident · {{ $company->name }} · Proselver vehicle movements
     </p>
 </div>
+
+{{-- ══════════════════════════════════════════════════════════════════ --}}
+{{-- ALPINE COMPONENT — Google Maps binding                             --}}
+{{-- ══════════════════════════════════════════════════════════════════ --}}
+@once
+<script>
+(() => {
+    const register = () => {
+        if (window.Alpine && window.Alpine._oemMapRegistered) return;
+
+        const STATE_COLORS = {
+            at_risk:   { fill: '#d97706', dot: 'bg-amber-500' },
+            damaged:   { fill: '#e11d48', dot: 'bg-rose-500'  },
+            inbound:   { fill: '#2563eb', dot: 'bg-blue-500'  },
+            delivered: { fill: '#16a34a', dot: 'bg-emerald-500' },
+            idle:      { fill: '#94a3b8', dot: 'bg-slate-400' },
+        };
+
+        window.Alpine.data('oemMap', (initialPoints) => ({
+            points: Array.isArray(initialPoints) ? initialPoints : [],
+            map: null,
+            markers: [],
+            infoWindow: null,
+            ready: false,
+            selectedId: null,
+
+            init() {
+                this.waitForGoogle().then(() => this.render()).catch(() => { this.ready = true; });
+            },
+
+            // Google Maps is loaded with callback=initGooglePlaces in the
+            // app layout. By the time the dashboard renders it's often
+            // already in window.google; if not, poll briefly.
+            waitForGoogle() {
+                return new Promise((resolve, reject) => {
+                    if (window.google && window.google.maps) return resolve();
+                    let tries = 0;
+                    const iv = setInterval(() => {
+                        if (window.google && window.google.maps) {
+                            clearInterval(iv); resolve();
+                        } else if (++tries > 80) {  // ~8s
+                            clearInterval(iv); reject(new Error('google.maps never loaded'));
+                        }
+                    }, 100);
+                });
+            },
+
+            render() {
+                const el = this.$refs.mapEl;
+                if (!el) { this.ready = true; return; }
+
+                this.map = new google.maps.Map(el, {
+                    center: { lat: -28.8, lng: 24.7 },  // rough centre of SA
+                    zoom: 6,
+                    mapTypeControl: false,
+                    streetViewControl: false,
+                    fullscreenControl: true,
+                    styles: [
+                        { featureType: 'poi',             stylers: [{ visibility: 'off' }] },
+                        { featureType: 'transit',         stylers: [{ visibility: 'off' }] },
+                        { featureType: 'road.local',      elementType: 'labels', stylers: [{ visibility: 'off' }] },
+                        { featureType: 'administrative.land_parcel', stylers: [{ visibility: 'off' }] },
+                    ],
+                });
+                this.infoWindow = new google.maps.InfoWindow();
+                this.dropMarkers();
+                this.ready = true;
+            },
+
+            dropMarkers() {
+                if (!this.map) return;
+                this.markers.forEach(m => m.setMap(null));
+                this.markers = [];
+                if (this.points.length === 0) return;
+
+                const bounds = new google.maps.LatLngBounds();
+
+                this.points.forEach(p => {
+                    const color = (STATE_COLORS[p.state] || STATE_COLORS.idle).fill;
+                    const scale = Math.min(16, 8 + Math.sqrt(Math.max(0, p.inbound + p.delivered)) * 1.6);
+
+                    const marker = new google.maps.Marker({
+                        position: { lat: p.lat, lng: p.lng },
+                        map: this.map,
+                        title: p.name,
+                        icon: {
+                            path: google.maps.SymbolPath.CIRCLE,
+                            scale,
+                            fillColor: color,
+                            fillOpacity: 0.9,
+                            strokeColor: '#ffffff',
+                            strokeWeight: 2,
+                        },
+                    });
+
+                    marker.addListener('click', () => this.openInfo(p, marker));
+                    this.markers.push(marker);
+                    bounds.extend(marker.getPosition());
+                });
+
+                // Fit nicely, but don't over-zoom on a single point.
+                if (this.markers.length === 1) {
+                    this.map.setCenter(this.markers[0].getPosition());
+                    this.map.setZoom(8);
+                } else if (this.markers.length > 1) {
+                    this.map.fitBounds(bounds, 48);
+                }
+            },
+
+            openInfo(p, marker) {
+                if (!this.infoWindow) return;
+                this.selectedId = p.id;
+                const prov = [p.city, p.province].filter(Boolean).join(', ') || '—';
+                const orderLink = '/customer/orders?destination=' + encodeURIComponent(p.id);
+                const html = `
+                    <div style="min-width:220px;font:500 13px/1.4 ui-sans-serif,system-ui;color:#0f172a">
+                        <div style="font-weight:700;margin-bottom:2px">${escapeHtml(p.name)}</div>
+                        <div style="color:#64748b;font-size:11px;margin-bottom:8px">${escapeHtml(prov)}</div>
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 12px;font-size:12px">
+                            <div><span style="color:#64748b">Inbound</span> <strong style="color:#1d4ed8">${p.inbound}</strong></div>
+                            <div><span style="color:#64748b">Delivered</span> <strong style="color:#15803d">${p.delivered}</strong></div>
+                            ${p.at_risk > 0 ? `<div><span style="color:#64748b">At risk</span> <strong style="color:#b45309">${p.at_risk}</strong></div>` : ''}
+                            ${p.damaged > 0 ? `<div><span style="color:#64748b">Damaged</span> <strong style="color:#be123c">${p.damaged}</strong></div>` : ''}
+                        </div>
+                        <a href="${orderLink}" style="display:inline-block;margin-top:10px;font-size:11px;font-weight:600;color:#1d4ed8;text-decoration:none">View orders →</a>
+                    </div>`;
+                this.infoWindow.setContent(html);
+                this.infoWindow.open({ anchor: marker, map: this.map });
+            },
+
+            focus(p) {
+                if (!this.map) return;
+                const idx = this.points.findIndex(x => x.id === p.id);
+                if (idx < 0) return;
+                const marker = this.markers[idx];
+                this.map.panTo({ lat: p.lat, lng: p.lng });
+                if (this.map.getZoom() < 9) this.map.setZoom(9);
+                if (marker) this.openInfo(p, marker);
+            },
+
+            dotClass(state) {
+                return (STATE_COLORS[state] || STATE_COLORS.idle).dot;
+            },
+        }));
+
+        window.Alpine._oemMapRegistered = true;
+    };
+
+    function escapeHtml(s) {
+        return String(s ?? '').replace(/[&<>"']/g, c => ({
+            '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+        })[c]);
+    }
+
+    if (window.Alpine) { register(); }
+    else { document.addEventListener('alpine:init', register); }
+})();
+</script>
+@endonce
