@@ -24,7 +24,7 @@
         // Legacy: older orders may still be in ready_for_collection; surface them
         // under the same "Collection Confirmed" label so the ops board reads cleanly.
         'ready_for_collection' => ['label' => 'Collection Confirmed', 'color' => 'cyan'],
-        'collected' => ['label' => 'Arrived at Pickup', 'color' => 'teal'],
+        'collected' => ['label' => 'Driver Arrived at Pickup Location', 'color' => 'teal'],
         'in_transit' => ['label' => 'In Transit', 'color' => 'orange'],
         'delivered' => ['label' => 'Delivered', 'color' => 'emerald'],
     ];

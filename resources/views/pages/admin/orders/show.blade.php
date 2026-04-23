@@ -469,7 +469,7 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         {{-- Right column: Actions — priority is driven by status. When a driver has
              been assigned, Printing the Delivery Paperwork becomes the most important
-             next step and sits above "Mark Arrived at Pickup". Once the driver has
+             next step and sits above "Mark Driver Arrived at Pickup". Once the driver has
              arrived and taken possession, the "Mark In Transit" button takes over as
              primary and the Collection Note demotes to a reprint-style secondary
              button below it. Cancel is only allowed while the vehicle is still on
@@ -594,7 +594,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                              only presses it once the paperwork is out and signed. --}}
                         <button wire:click="markCollected" wire:confirm="Has the driver arrived at the pickup location with the paperwork signed?"
                             class="w-full rounded-lg border border-teal-600 bg-white px-4 py-3 text-sm font-semibold text-teal-700 hover:bg-teal-50 transition-colors">
-                            Mark Arrived at Pickup
+                            Mark Driver Arrived at Pickup
                         </button>
                     @elseif($job->status === Job::STATUS_COLLECTED)
                         <button wire:click="markInTransit" wire:confirm="Has the driver departed with the vehicle? Mark as in transit?"

@@ -416,7 +416,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                     @endif
                     @if($job->collected_at)
                     <div class="flex justify-between">
-                        <dt class="text-gray-500">Arrived at Pickup</dt>
+                        <dt class="text-gray-500">Driver Arrived at Pickup</dt>
                         <dd class="text-gray-900">{{ $job->collected_at->format('d M Y') }}</dd>
                     </div>
                     @endif

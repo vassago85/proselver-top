@@ -196,11 +196,11 @@ new #[Layout('components.layouts.driver')] class extends Component {
             @if(!in_array(JobEvent::TYPE_ARRIVED_PICKUP, $loggedTypes))
                 <button type="button"
                         wire:click="logEvent('arrived_pickup')"
-                        wire:confirm="Mark as Arrived at Pickup?"
+                        wire:confirm="Mark as Driver Arrived at Pickup Location?"
                         :disabled="!canArrivePickup()"
                         :class="canArrivePickup() ? 'bg-blue-600 hover:bg-blue-500' : 'bg-slate-300'"
                         class="col-span-2 rounded-lg text-white text-sm font-semibold py-3 transition">
-                    Arrived at pickup
+                    Arrived at pickup location
                 </button>
             @elseif(!in_array(JobEvent::TYPE_DEPARTED_PICKUP, $loggedTypes))
                 <button type="button"
