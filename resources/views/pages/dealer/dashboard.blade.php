@@ -66,7 +66,10 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         $addressCount = Location::where('company_id', $companyId)->count();
 
-        $teamCount = \App\Models\User::where('company_id', $companyId)->count();
+        // users ↔ companies is a many-to-many via the company_users pivot —
+        // there's no users.company_id column, so we have to go through the
+        // relationship. Matches the pattern used in customer/team/index.
+        $teamCount = \App\Models\User::whereHas('companies', fn($q) => $q->where('companies.id', $companyId))->count();
 
         return [
             'hasCompany' => true,
