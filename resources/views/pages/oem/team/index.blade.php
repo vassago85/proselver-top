@@ -74,9 +74,20 @@ new #[Layout('components.layouts.app')] class extends Component {
         session()->flash('success', "{$user->name} added to team.");
     }
 
+    /**
+     * Scope a user lookup to the current OEM's company to stop cross-tenant
+     * IDOR via a tampered user id.
+     */
+    private function findTeamMember(int $userId): User
+    {
+        $company = auth()->user()->company();
+        abort_unless($company, 403);
+        return $company->users()->findOrFail($userId);
+    }
+
     public function startEdit(int $userId): void
     {
-        $user = User::findOrFail($userId);
+        $user = $this->findTeamMember($userId);
         $this->editingUserId = $userId;
         $this->editName = $user->name;
         $this->editEmail = $user->email ?? '';
@@ -87,7 +98,7 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     public function saveEdit(): void
     {
-        $user = User::findOrFail($this->editingUserId);
+        $user = $this->findTeamMember((int) $this->editingUserId);
         $this->validate([
             'editName' => 'required|string|max:255',
             'editEmail' => "required|email|unique:users,email,{$user->id}",
@@ -116,7 +127,7 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     public function toggleActive(int $userId): void
     {
-        $user = User::findOrFail($userId);
+        $user = $this->findTeamMember($userId);
         $user->update(['is_active' => !$user->is_active]);
     }
 

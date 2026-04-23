@@ -38,8 +38,13 @@ Route::get('/verify/{job:uuid}', function (\App\Models\Job $job) {
     return view('verify.collection-note', compact('job'));
 })->name('verify.collection-note');
 
-// Collection Note PDF download (authenticated)
+// Collection Note PDF download. Guarded by JobPolicy::generateCollectionNote
+// to block cross-tenant IDOR — without this, any authenticated user could
+// iterate numeric Job ids and pull another company's PDF (which contains
+// driver SA ID, VIN, customer phone and notes).
 Route::get('/collection-note/{job}/download', function (\App\Models\Job $job) {
+    \Illuminate\Support\Facades\Gate::authorize('generateCollectionNote', $job);
+
     $service = app(\App\Services\CollectionNoteService::class);
     $pdf = $service->generate($job);
     return response($pdf, 200, [

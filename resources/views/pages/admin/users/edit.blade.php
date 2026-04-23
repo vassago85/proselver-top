@@ -19,6 +19,16 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     public function mount(User $user): void
     {
+        $actor = auth()->user();
+        abort_unless($actor?->canManageInternalUsers(), 403, 'You may not edit users.');
+
+        // You cannot edit a user whose highest role outranks yours (or equals
+        // yours, unless you're a developer). This stops a super_admin being
+        // demoted or poached by an ops_manager via the edit form.
+        if (!$actor->isDeveloper() && $user->highestRoleLevel() >= $actor->highestRoleLevel()) {
+            abort(403, 'You may not edit a user at or above your own role level.');
+        }
+
         $this->user = $user;
         $this->name = $user->name;
         $this->email = $user->email ?? '';
@@ -35,6 +45,15 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     public function save(): void
     {
+        $actor = auth()->user();
+        abort_unless($actor?->canManageInternalUsers(), 403);
+
+        // Re-check rank: same guard as mount() to prevent a tampered wire id
+        // from editing someone senior.
+        if (!$actor->isDeveloper() && $this->user->highestRoleLevel() >= $actor->highestRoleLevel()) {
+            abort(403);
+        }
+
         $rules = [
             'name' => 'required|string|max:255',
             'email' => "required|email|unique:users,email,{$this->user->id}",
@@ -55,6 +74,21 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         $this->validate($rules);
 
+        // Server-side role allowlist (see create.blade.php for rationale).
+        // An additional constraint here: if the user already had a role the
+        // actor cannot grant (e.g. a super_admin editing another super_admin
+        // with dev-tier access is blocked above), those existing role ids
+        // are allowed to remain; we only block NEW elevated grants.
+        $existingIds = $this->user->roles->pluck('id')->map(fn($id) => (string)$id)->all();
+        $newRoleIds = array_diff($this->selectedRoles, $existingIds);
+        if (!empty($newRoleIds)) {
+            foreach (Role::whereIn('id', $newRoleIds)->get() as $role) {
+                if (!$actor->canAssignRole($role->slug)) {
+                    abort(403, "You may not assign the {$role->name} role.");
+                }
+            }
+        }
+
         $data = [
             'name' => $this->name,
             'email' => $this->email,
@@ -64,6 +98,11 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         if ($this->resetPassword && $this->newPassword) {
             $data['password'] = $this->newPassword;
+            // Admin-initiated password reset → force the target to rotate
+            // before doing anything else. Prevents a rogue admin from
+            // silently taking over an account by "resetting" its password.
+            $data['must_change_password'] = true;
+            $data['password_changed_at'] = null;
         }
 
         $this->user->update($data);
@@ -81,8 +120,20 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     public function with(): array
     {
+        $actor = auth()->user();
+        $allRoles = Role::where('slug', '!=', 'driver')->orderBy('tier')->orderBy('name')->get();
+
+        // Show only roles the actor can assign, PLUS any role the edited user
+        // already holds (read-only for the actor) so high-rank roles aren't
+        // silently stripped when a lower-rank manager saves the form. Those
+        // existing roles are excluded from the new-grant check in save().
+        $existingIds = $this->user->roles->pluck('id')->all();
+        $assignable = $allRoles->filter(
+            fn ($r) => $actor->canAssignRole($r->slug) || in_array($r->id, $existingIds, true)
+        )->values();
+
         return [
-            'roles' => Role::where('slug', '!=', 'driver')->orderBy('tier')->orderBy('name')->get(),
+            'roles' => $assignable,
             'companies' => Company::where('is_active', true)->orderBy('name')->get(),
         ];
     }

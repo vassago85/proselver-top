@@ -82,9 +82,22 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         $user->forceFill([
             'password' => Hash::make($data['newPassword']),
+            // Clear the force-change flag and record the rotation time.
+            // ForceChangePassword middleware blocks the rest of the app until
+            // this happens.
+            'must_change_password' => false,
+            'password_changed_at' => now(),
         ])->save();
 
         $this->reset('currentPassword', 'newPassword', 'newPasswordConfirmation');
+
+        // If the middleware sent them here, bounce them back to their normal
+        // home page so they aren't stranded on the profile page.
+        if (request()->boolean('must_change')) {
+            session()->flash('passwordStatus', 'Password updated. Welcome back.');
+            $this->redirect(resolveUserHomePath($user), navigate: false);
+            return;
+        }
 
         session()->flash('passwordStatus', 'Password updated.');
     }
@@ -95,6 +108,20 @@ new #[Layout('components.layouts.app')] class extends Component {
     <x-slot:header>Profile &amp; security</x-slot:header>
 
     <div class="mx-auto max-w-3xl space-y-6">
+
+        @if(request()->boolean('must_change') || auth()->user()->must_change_password)
+            <div class="rounded-2xl border border-amber-300 bg-amber-50 p-5 shadow-sm">
+                <div class="flex items-start gap-3">
+                    <svg class="h-5 w-5 text-amber-600 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
+                    </svg>
+                    <div class="text-sm">
+                        <p class="font-semibold text-amber-900">Password change required</p>
+                        <p class="mt-1 text-amber-800">Your account is currently using a temporary password set by an administrator. Please choose a new password below before continuing.</p>
+                    </div>
+                </div>
+            </div>
+        @endif
 
         {{-- Identity card --}}
         <div class="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">

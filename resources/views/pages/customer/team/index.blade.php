@@ -74,7 +74,12 @@ class extends Component
         $this->validate($rules);
 
         if ($this->editingId) {
-            $user = User::findOrFail($this->editingId);
+            // Re-scope to the current customer's company so a tampered
+            // editingId cannot be used to edit a user at another customer.
+            // edit() already does this lookup safely, but save() is reachable
+            // independently via the Livewire wire payload.
+            $user = User::whereHas('companies', fn($q) => $q->where('companies.id', $this->company->id))
+                ->findOrFail($this->editingId);
             $user->update([
                 'name' => $this->userName,
                 'email' => $this->userEmail,

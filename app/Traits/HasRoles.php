@@ -227,36 +227,55 @@ trait HasRoles
         return $this->roles->pluck('name')->toArray();
     }
 
+    /**
+     * Role hierarchy used by highestRole(), canAssignRole(), etc. Higher
+     * numbers outrank lower. Unknown slugs collapse to a floor of 10 so
+     * future roles default to the bottom of the pile until explicitly placed.
+     */
+    public const ROLE_HIERARCHY = [
+        'developer' => 110,
+        'super_admin' => 100,
+        'owner' => 95,
+        'operations_controller' => 90,
+        'ops_manager' => 90,
+        'dispatcher' => 80,
+        'accounts' => 70,
+        'customer_owner' => 65,
+        'oem_admin' => 65,
+        'customer_admin' => 62,
+        'oem_planner' => 62,
+        'customer_dispatcher' => 60,
+        'dealer_principal' => 60,
+        'customer_user' => 55,
+        'sales_manager_new' => 55,
+        'sales_manager_used' => 55,
+        'stock_controller' => 50,
+        'sales_person_new' => 40,
+        'sales_person_used' => 40,
+        'driver' => 20,
+    ];
+
+    public static function roleLevel(string $slug): int
+    {
+        return self::ROLE_HIERARCHY[$slug] ?? 10;
+    }
+
+    public function highestRoleLevel(): int
+    {
+        $highest = -1;
+        foreach ($this->roles as $role) {
+            $highest = max($highest, self::roleLevel($role->slug));
+        }
+        return $highest;
+    }
+
     public function highestRole(): ?string
     {
-        $hierarchy = [
-            'developer' => 110,
-            'super_admin' => 100,
-            'owner' => 95,
-            'operations_controller' => 90,
-            'ops_manager' => 90,
-            'dispatcher' => 80,
-            'accounts' => 70,
-            'customer_owner' => 65,
-            'oem_admin' => 65,
-            'customer_admin' => 62,
-            'oem_planner' => 62,
-            'customer_dispatcher' => 60,
-            'dealer_principal' => 60,
-            'customer_user' => 55,
-            'sales_manager_new' => 55,
-            'sales_manager_used' => 55,
-            'stock_controller' => 50,
-            'sales_person_new' => 40,
-            'sales_person_used' => 40,
-            'driver' => 20,
-        ];
-
         $highest = null;
         $highestLevel = -1;
 
         foreach ($this->roles as $role) {
-            $level = $hierarchy[$role->slug] ?? 10;
+            $level = self::roleLevel($role->slug);
             if ($level > $highestLevel) {
                 $highestLevel = $level;
                 $highest = $role->slug;
@@ -264,5 +283,55 @@ trait HasRoles
         }
 
         return $highest;
+    }
+
+    /**
+     * Can this user assign the given role to someone else?
+     *
+     * Prevents privilege escalation via the admin user form: a user can only
+     * grant roles strictly below their own level (with developer as a special
+     * case that may grant any role, including peer developers, because the
+     * developer role is reserved for implementation support).
+     *
+     * Examples, given the hierarchy above:
+     *  - developer (110)        → may grant any role
+     *  - super_admin (100)      → may grant anything < 100 (NOT developer, NOT another super_admin)
+     *  - ops_manager (90)       → may grant anything < 90 (NOT super_admin or developer)
+     *  - dispatcher (80)        → cannot grant internal-tier roles above dispatcher
+     *  - anything below ops tier should not reach the admin user form at all
+     */
+    public function canAssignRole(string $roleSlug): bool
+    {
+        if ($this->isDeveloper()) {
+            return true;
+        }
+
+        $actorLevel = $this->highestRoleLevel();
+        $targetLevel = self::roleLevel($roleSlug);
+
+        return $targetLevel < $actorLevel;
+    }
+
+    /**
+     * Filter an iterable of Role models (or role ids / slugs) down to only
+     * those the current user is allowed to assign. Used to build the role
+     * picker on admin/users/{create,edit}.
+     *
+     * @param  \Illuminate\Support\Collection|array $roles  Collection<Role>
+     * @return \Illuminate\Support\Collection
+     */
+    public function assignableRoles($roles)
+    {
+        return collect($roles)->filter(fn ($role) => $this->canAssignRole($role->slug));
+    }
+
+    /**
+     * May this user even reach the "manage users" form? This is stricter than
+     * canManageUsers(): dispatchers can help ops run the board but should NOT
+     * be creating or editing user accounts on the admin side.
+     */
+    public function canManageInternalUsers(): bool
+    {
+        return $this->hasAnyRole(['super_admin', 'developer', 'ops_manager', 'operations_controller']);
     }
 }

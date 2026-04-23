@@ -18,6 +18,7 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     public function mount(): void
     {
+        abort_unless(auth()->user()?->canManageInternalUsers(), 403, 'You may not create users.');
         $this->password = Str::random(12);
     }
 
@@ -32,6 +33,9 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     public function save(): void
     {
+        $actor = auth()->user();
+        abort_unless($actor?->canManageInternalUsers(), 403);
+
         $rules = [
             'name' => 'required|string|max:255',
             'email' => 'required|email|unique:users,email',
@@ -49,6 +53,18 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         $this->validate($rules);
 
+        // Server-side role allowlist — the UI already hides roles the actor
+        // cannot grant, but Livewire properties can be tampered with so we
+        // must re-check every submitted role id here. Without this, a
+        // dispatcher (or any user who reaches this form) could promote
+        // themselves or someone else to super_admin.
+        $submittedRoles = Role::whereIn('id', $this->selectedRoles)->get();
+        foreach ($submittedRoles as $role) {
+            if (!$actor->canAssignRole($role->slug)) {
+                abort(403, "You may not assign the {$role->name} role.");
+            }
+        }
+
         $username = $this->username ?: Str::before($this->email, '@');
         $suffix = 0;
         $base = $username;
@@ -63,6 +79,10 @@ new #[Layout('components.layouts.app')] class extends Component {
             'phone' => $this->phone ?: null,
             'username' => Str::lower($username),
             'password' => $this->password,
+            // Admin-issued passwords are shared over voice/chat — force the
+            // new user to rotate on first sign-in so the admin's copy goes
+            // stale immediately.
+            'must_change_password' => true,
         ]);
 
         $user->roles()->sync($this->selectedRoles);
@@ -77,8 +97,14 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     public function with(): array
     {
+        $actor = auth()->user();
+        $allRoles = Role::where('slug', '!=', 'driver')->orderBy('tier')->orderBy('name')->get();
+
         return [
-            'roles' => Role::where('slug', '!=', 'driver')->orderBy('tier')->orderBy('name')->get(),
+            // Filter to only roles the actor is permitted to grant. Prevents
+            // a lower-tier internal user from seeing (let alone assigning)
+            // super_admin or developer.
+            'roles' => $allRoles->filter(fn ($r) => $actor->canAssignRole($r->slug))->values(),
             'companies' => Company::where('is_active', true)->orderBy('name')->get(),
         ];
     }

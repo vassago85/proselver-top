@@ -24,6 +24,10 @@ class ResetUserPassword implements ResetsUserPasswords
 
         $user->forceFill([
             'password' => Hash::make($input['password']),
+            // The user completed a legitimate email-token password reset, so
+            // clear the force-change flag and record the rotation time.
+            'must_change_password' => false,
+            'password_changed_at' => now(),
         ])->save();
     }
 }

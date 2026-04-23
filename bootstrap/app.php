@@ -40,6 +40,17 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withMiddleware(function (Middleware $middleware) {
         $middleware->trustProxies(at: '*');
 
+        // Apply to the `web` group so it sits in front of Fortify's
+        // guest-scoped password reset routes without needing to fork Fortify.
+        // The middleware is a no-op on non-password-reset paths.
+        $middleware->appendToGroup('web', \App\Http\Middleware\ThrottlePasswordReset::class);
+
+        // After auth, bounce anyone with `must_change_password=true` to the
+        // profile page until they've rotated their password. The middleware
+        // itself allows-lists /profile and /logout so the user can actually
+        // complete (or bail out of) the flow.
+        $middleware->appendToGroup('web', \App\Http\Middleware\ForceChangePassword::class);
+
         $middleware->alias([
             'role' => \App\Http\Middleware\RoleMiddleware::class,
             'internal' => \App\Http\Middleware\EnsureInternalAccess::class,

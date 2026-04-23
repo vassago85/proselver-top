@@ -52,11 +52,16 @@ class FleetDriverSeeder extends Seeder
 
                 if ($profile) {
                     $user = $profile->user;
+                    // Force every (re-)seeded driver to rotate their password
+                    // on next PWA login. The ForceChangePassword middleware
+                    // routes them to /profile until the rotation happens.
                     $user->update([
-                        'name'      => $row['name'],
-                        'phone'     => $row['cellphone'],
-                        'password'  => $password,
-                        'is_active' => true,
+                        'name'                  => $row['name'],
+                        'phone'                 => $row['cellphone'],
+                        'password'              => $password,
+                        'must_change_password'  => true,
+                        'password_changed_at'   => null,
+                        'is_active'             => true,
                     ]);
                     $profile->update([
                         'id_type'            => $row['id_type'],
@@ -76,12 +81,13 @@ class FleetDriverSeeder extends Seeder
 
                 $username = $this->pickUsername($row['name']);
                 $user = User::create([
-                    'uuid'      => (string) Str::uuid(),
-                    'username'  => $username,
-                    'name'      => $row['name'],
-                    'phone'     => $row['cellphone'],
-                    'password'  => $password,
-                    'is_active' => true,
+                    'uuid'                 => (string) Str::uuid(),
+                    'username'             => $username,
+                    'name'                 => $row['name'],
+                    'phone'                => $row['cellphone'],
+                    'password'             => $password,
+                    'must_change_password' => true,
+                    'is_active'            => true,
                 ]);
                 $user->assignRole('driver');
 
@@ -105,7 +111,7 @@ class FleetDriverSeeder extends Seeder
         });
 
         $this->command->info(sprintf('Fleet driver seed complete: %d created, %d updated.', $created, $updated));
-        $this->command->line(sprintf('Default password set to: <fg=yellow>%s</> (change ASAP).', $this->defaultPassword()));
+        $this->command->line(sprintf('Default password set to: <fg=yellow>%s</> — all drivers will be forced to change it on their next login.', $this->defaultPassword()));
         $this->command->newLine();
 
         $this->command->table(['Action', 'Name', 'Username'], array_map(

@@ -23,6 +23,8 @@ class User extends Authenticatable
         'phone',
         'password',
         'is_active',
+        'must_change_password',
+        'password_changed_at',
     ];
 
     protected $hidden = [
@@ -35,6 +37,8 @@ class User extends Authenticatable
         return [
             'password' => 'hashed',
             'is_active' => 'boolean',
+            'must_change_password' => 'boolean',
+            'password_changed_at' => 'datetime',
         ];
     }
 
