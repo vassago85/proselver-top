@@ -423,31 +423,40 @@ new #[Layout('components.layouts.app')] class extends Component {
             @endif
 
             <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-                <h3 class="text-lg font-semibold text-gray-900 mb-4">Documents</h3>
-                @if($allDocuments->isNotEmpty())
-                    <ul class="space-y-3">
-                        @foreach($allDocuments as $doc)
-                        <li class="flex items-start justify-between gap-3 rounded-lg border border-gray-100 bg-gray-50 px-3 py-2.5">
-                            <div class="min-w-0 flex-1">
-                                <p class="text-sm font-medium text-gray-900 truncate">{{ $doc->original_filename }}</p>
-                                <p class="text-xs text-gray-500">{{ ucfirst(str_replace('_', ' ', $doc->category)) }}</p>
-                                <p class="text-xs text-gray-400">{{ $doc->created_at?->format('d M Y') }}</p>
-                            </div>
-                            @if(!empty($doc->is_po) && $doc->is_po)
-                                <a href="{{ route('po.preview', $doc->id) }}" target="_blank" class="shrink-0 rounded-md bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700 hover:bg-blue-100">
-                                    View
-                                </a>
-                            @elseif($doc->path)
-                                <a href="{{ Storage::url($doc->path) }}" target="_blank" class="shrink-0 rounded-md bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700 hover:bg-blue-100">
-                                    Download
-                                </a>
-                            @endif
-                        </li>
+                {{-- Purchase orders live on their own route (signed uploads
+                     have a different preview endpoint), so they're rendered
+                     above the driver-captured paperwork. --}}
+                @if($job->purchaseOrders->isNotEmpty())
+                    <h3 class="text-lg font-semibold text-gray-900 mb-3">Purchase orders</h3>
+                    <ul class="space-y-2 mb-5">
+                        @foreach($job->purchaseOrders as $po)
+                            <li class="flex items-center gap-3 rounded-lg border border-gray-100 bg-gray-50 hover:bg-white hover:border-gray-300 px-3 py-2.5 transition-colors">
+                                <div class="flex h-11 w-11 items-center justify-center rounded-md bg-white border border-gray-200 text-gray-500 shrink-0">
+                                    <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                                </div>
+                                <div class="min-w-0 flex-1">
+                                    <p class="text-sm font-medium text-gray-900 truncate">{{ $po->po_number }}</p>
+                                    <p class="text-xs text-gray-500 truncate">
+                                        R{{ number_format((float) $po->po_amount, 2) }}
+                                        @if($po->created_at)
+                                            &middot; {{ $po->created_at->format('d M Y') }}
+                                        @endif
+                                    </p>
+                                </div>
+                                @if($po->document_path)
+                                    <a href="{{ route('po.preview', $po->id) }}"
+                                       target="_blank" rel="noopener"
+                                       class="inline-flex items-center gap-1 rounded-md bg-white border border-gray-200 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 shrink-0">
+                                        <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>
+                                        View
+                                    </a>
+                                @endif
+                            </li>
                         @endforeach
                     </ul>
-                @else
-                    <p class="text-sm text-gray-500">No documents uploaded yet.</p>
                 @endif
+
+                <x-documents-list :documents="$job->documents" title="Documents" />
             </div>
 
             {{-- Key Dates --}}

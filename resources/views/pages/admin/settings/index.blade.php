@@ -163,6 +163,18 @@ new #[Layout('components.layouts.app')] class extends Component {
                 </div>
             </div>
         </a>
+
+        <a href="{{ route('admin.settings.document-retention') }}" class="group bg-white rounded-xl shadow-sm border border-gray-200 p-6 hover:border-amber-300 hover:shadow-md transition-all">
+            <div class="flex items-center gap-4">
+                <div class="flex h-12 w-12 items-center justify-center rounded-lg bg-amber-50 text-amber-600 group-hover:bg-amber-100">
+                    <svg class="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="M8 13h8"/><path d="M8 17h5"/></svg>
+                </div>
+                <div>
+                    <h3 class="text-sm font-semibold text-gray-900">Document Retention</h3>
+                    <p class="text-xs text-gray-500">How long to keep paperwork and photos</p>
+                </div>
+            </div>
+        </a>
         @endif
 
         <a href="{{ route('admin.settings.toll-plazas') }}" class="group bg-white rounded-xl shadow-sm border border-gray-200 p-6 hover:border-blue-300 hover:shadow-md transition-all">

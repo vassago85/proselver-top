@@ -48,7 +48,7 @@ Route::get('/verify/{job:uuid}', function (\App\Models\Job $job) {
 // was unconfigured at upload time) OR `r2`, and we don't want the URL
 // scheme to change on consumers. The file size cap on uploads is 10MB
 // which is fine to proxy.
-Route::get('/documents/{document}/view', function (\App\Models\JobDocument $document) {
+Route::get('/documents/{document}/view', function (\App\Models\JobDocument $document, \Illuminate\Http\Request $request) {
     \Illuminate\Support\Facades\Gate::authorize('view', $document);
 
     $disk = \Illuminate\Support\Facades\Storage::disk($document->disk);
@@ -56,12 +56,31 @@ Route::get('/documents/{document}/view', function (\App\Models\JobDocument $docu
         abort(404, 'Document file not found on disk.');
     }
 
+    // ?download=1 forces the browser "Save As" dialog. Without the flag the
+    // file is streamed inline so images preview in-tab and PDFs open in the
+    // browser viewer — dealers + customers then choose whether to keep a
+    // local copy. The policy check above is identical either way.
+    $forceDownload = $request->boolean('download');
+    $disposition = $forceDownload ? 'attachment' : 'inline';
+    $filename = $document->original_filename ?: 'document';
+
+    if ($forceDownload) {
+        return $disk->download(
+            $document->path,
+            $filename,
+            [
+                'Content-Type' => $document->mime_type ?: $disk->mimeType($document->path),
+                'Cache-Control' => 'private, max-age=60',
+            ]
+        );
+    }
+
     return $disk->response(
         $document->path,
         $document->original_filename ?: basename($document->path),
         [
             'Content-Type' => $document->mime_type ?: $disk->mimeType($document->path),
-            'Content-Disposition' => 'inline; filename="' . ($document->original_filename ?: 'document') . '"',
+            'Content-Disposition' => $disposition . '; filename="' . $filename . '"',
             // Short cache so reloads are snappy but permission changes take
             // effect quickly. Don't mark public — these are auth-gated.
             'Cache-Control' => 'private, max-age=60',

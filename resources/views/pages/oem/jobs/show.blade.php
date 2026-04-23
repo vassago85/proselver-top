@@ -64,19 +64,7 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         <div>
             <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-                <h3 class="text-lg font-semibold text-gray-900 mb-4">Documents</h3>
-                @if($job->documents->isNotEmpty())
-                    <ul class="space-y-2">
-                        @foreach($job->documents as $doc)
-                        <li class="text-sm">
-                            <span class="font-medium">{{ $doc->original_filename }}</span>
-                            <br><span class="text-xs text-gray-500">{{ ucfirst(str_replace('_', ' ', $doc->category)) }}</span>
-                        </li>
-                        @endforeach
-                    </ul>
-                @else
-                    <p class="text-sm text-gray-500">No documents uploaded yet.</p>
-                @endif
+                <x-documents-list :documents="$job->documents" title="Documents" />
             </div>
         </div>
     </div>
