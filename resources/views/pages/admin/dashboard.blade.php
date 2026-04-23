@@ -80,33 +80,57 @@ new #[Layout('components.layouts.app')] class extends Component {
                   ->orWhere('prdp_expiry', '<', now());
             })->count();
 
-        // Fleet Health — trade plates, equipment coverage, identity flags.
-        // Deliberately scoped to drivers whose user account is active so ops
-        // are not chasing retired drivers about an expired plate.
-        $activeDriverProfiles = DriverProfile::whereHas('user', fn($q) => $q->where('is_active', true));
-        $activeDriverCount = (clone $activeDriverProfiles)->count();
+        // Attention list — a single unified feed of every driver credential
+        // that is EXPIRED or expiring inside the 60-day window. Licence,
+        // PrDP, Trade Plate all land in the same list, sorted by urgency
+        // (expired first, then soonest expiry). Replaces the old three-
+        // column Fleet Health grid — ops wanted one focused list, not a
+        // chip showroom. Equipment / identity flags live on /admin/drivers
+        // where they belong.
+        $today = now()->startOfDay();
+        $attentionWindowEnd = $today->copy()->addDays(60)->endOfDay();
 
-        $tradePlateHeld       = (clone $activeDriverProfiles)->whereNotNull('trade_plate')->where('trade_plate', '!=', '')->count();
-        $tradePlateExpired    = (clone $activeDriverProfiles)->whereNotNull('trade_plate_expiry')->whereDate('trade_plate_expiry', '<', now())->count();
-        $tradePlateExpiring   = (clone $activeDriverProfiles)->whereNotNull('trade_plate_expiry')->whereBetween('trade_plate_expiry', [now(), $driverThreshold])->count();
+        $attentionProfiles = DriverProfile::with('user:id,name,is_active')
+            ->whereHas('user', fn($q) => $q->where('is_active', true))
+            ->where(function ($q) use ($attentionWindowEnd) {
+                $q->where('license_expiry', '<=', $attentionWindowEnd)
+                  ->orWhere('prdp_expiry', '<=', $attentionWindowEnd)
+                  ->orWhere('trade_plate_expiry', '<=', $attentionWindowEnd);
+            })
+            ->get();
 
-        // "Missing" only counts drivers who actually *have* a plate issued but
-        // no expiry recorded — a data-quality prompt for ops, not a compliance
-        // flag on the driver himself.
-        $tradePlateMissingExpiry = (clone $activeDriverProfiles)
-            ->whereNotNull('trade_plate')->where('trade_plate', '!=', '')
-            ->whereNull('trade_plate_expiry')->count();
+        $attentionItems = [];
+        foreach ($attentionProfiles as $p) {
+            $fields = [
+                ['date' => $p->license_expiry,     'label' => 'Licence',     'filter' => 'license'],
+                ['date' => $p->prdp_expiry,        'label' => 'PrDP',        'filter' => 'prdp'],
+                ['date' => $p->trade_plate_expiry, 'label' => 'Trade plate', 'filter' => 'trade_plate'],
+            ];
+            foreach ($fields as $f) {
+                $d = $f['date'];
+                if (!$d || $d->gt($attentionWindowEnd)) {
+                    continue;
+                }
+                $daysLeft = (int) floor($today->diffInDays($d, false));
+                $attentionItems[] = [
+                    'user_id'     => $p->user_id,
+                    'driver_name' => $p->user?->name ?? 'Unknown',
+                    'label'       => $f['label'],
+                    'filter'      => $f['filter'],
+                    'date'        => $d,
+                    'days_left'   => $daysLeft,
+                    'expired'     => $daysLeft < 0,
+                ];
+            }
+        }
+        // Sort: expired first (by how long ago, worst at top), then
+        // upcoming (soonest first). Keeps the loudest alarm at the top.
+        usort($attentionItems, fn($a, $b) => $a['date'] <=> $b['date']);
 
-        $missingTracker  = (clone $activeDriverProfiles)->where(fn($q) => $q->whereNull('tracker_id')->orWhere('tracker_id', ''))->count();
-        $missingCamera   = (clone $activeDriverProfiles)->where(fn($q) => $q->whereNull('camera_id')->orWhere('camera_id', ''))->count();
-        $missingTollCard = (clone $activeDriverProfiles)->where(fn($q) => $q->whereNull('toll_card_number')->orWhere('toll_card_number', ''))->count();
-
-        $passportHolders = (clone $activeDriverProfiles)->where('id_type', DriverProfile::ID_TYPE_PASSPORT)->count();
-        // SA ID sanity: 13-digit-only; anything else flagged for verification.
-        $saIdAnomalies = (clone $activeDriverProfiles)
-            ->where('id_type', DriverProfile::ID_TYPE_SA_ID)
-            ->whereRaw("length(regexp_replace(id_number, '\\D', '', 'g')) <> 13")
-            ->count();
+        $attentionExpiredCount  = count(array_filter($attentionItems, fn($i) => $i['expired']));
+        $attentionExpiringCount = count($attentionItems) - $attentionExpiredCount;
+        $attentionVisible = array_slice($attentionItems, 0, 10);
+        $attentionOverflow = max(0, count($attentionItems) - count($attentionVisible));
 
         $recentOrders = Job::with(['company:id,name,workflow_type', 'pickupLocation:id,company_name,city', 'deliveryLocation:id,company_name,city', 'brand:id,name'])
             ->whereIn('status', Job::PHASE1_STATUSES)
@@ -156,12 +180,6 @@ new #[Layout('components.layouts.app')] class extends Component {
             ->limit(6)
             ->get();
 
-        $activeMovements = Job::with(['company:id,name', 'pickupLocation:id,company_name,city', 'deliveryLocation:id,company_name,city', 'brand:id,name', 'driver:id,name'])
-            ->whereIn('status', [Job::STATUS_DRIVER_ASSIGNED, Job::STATUS_READY_FOR_COLLECTION, Job::STATUS_COLLECTED, Job::STATUS_IN_TRANSIT])
-            ->orderByDesc('updated_at')
-            ->limit(6)
-            ->get();
-
         return compact(
             'newOrders',
             'pendingVerification',
@@ -174,17 +192,11 @@ new #[Layout('components.layouts.app')] class extends Component {
             'driversExpiringSoon',
             'driversExpired',
             'recentOrders',
-            'activeMovements',
-            'activeDriverCount',
-            'tradePlateHeld',
-            'tradePlateExpired',
-            'tradePlateExpiring',
-            'tradePlateMissingExpiry',
-            'missingTracker',
-            'missingCamera',
-            'missingTollCard',
-            'passportHolders',
-            'saIdAnomalies',
+            'attentionItems',
+            'attentionVisible',
+            'attentionOverflow',
+            'attentionExpiredCount',
+            'attentionExpiringCount',
             'openDamageCount',
             'pendingReleaseCount',
             'damageLast7d',
@@ -219,8 +231,10 @@ new #[Layout('components.layouts.app')] class extends Component {
         </x-slot:actions>
     </x-page-header>
 
-    {{-- Stat cards --}}
-    <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-7 mb-6">
+    {{-- Stat cards
+         4-up on laptops, 7-up on wide monitors. Avoids the "too many
+         tiny tiles in one row" look that hid the numbers before. --}}
+    <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-7 mb-6">
         <x-stat-card
             label="New Bookings"
             :value="$newOrders"
@@ -417,121 +431,95 @@ new #[Layout('components.layouts.app')] class extends Component {
     </div>
     @endif
 
-    {{-- Fleet Health strip --}}
-    {{-- Three horizontal clusters: Trade Plates, Equipment coverage, Identity.
-         Each chip deep-links into /admin/drivers with the matching filter so
-         ops can triage expired plates / missing trackers / passport holders
-         without opening a second tab. Counts are scoped to ACTIVE drivers
-         only so retired staff never inflate the "needs action" number. --}}
+    {{-- Action required — unified expiry list
+         Single focused feed: every driver credential (Licence, PrDP,
+         Trade Plate) that is expired or expiring inside 60 days,
+         sorted by urgency. No chips, no equipment noise — just the
+         things ops has to do something about, grouped by driver.
+         Renders nothing when there's nothing to action. --}}
+    @if(!empty($attentionItems))
     @php
         $driversRoute = route('admin.drivers.index');
-        $fleetChipBase = 'inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold transition-colors';
-        $fleetChipSlate = $fleetChipBase . ' bg-slate-100 text-slate-700 hover:bg-slate-200';
-        $fleetChipAmber = $fleetChipBase . ' bg-amber-100 text-amber-800 hover:bg-amber-200';
-        $fleetChipRed   = $fleetChipBase . ' bg-red-100 text-red-800 hover:bg-red-200';
-        $fleetChipBlue  = $fleetChipBase . ' bg-blue-50 text-blue-700 hover:bg-blue-100';
+        $headlineColor = $attentionExpiredCount > 0 ? 'amber' : 'amber';
+        $ring = $attentionExpiredCount > 0 ? 'border-amber-200' : 'border-slate-200';
+        $headBg = $attentionExpiredCount > 0 ? 'bg-amber-50/60' : 'bg-slate-50/60';
     @endphp
-    <div class="mb-6 rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-        <div class="flex items-center justify-between gap-3 border-b border-slate-100 px-6 py-4">
+    <div class="mb-6 rounded-2xl border {{ $ring }} bg-white shadow-sm overflow-hidden">
+        <div class="flex items-center justify-between gap-3 border-b border-slate-100 {{ $headBg }} px-6 py-4">
             <div class="flex items-center gap-3">
-                <span class="inline-flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.25em] text-emerald-600">
-                    <span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
-                    Fleet health
+                <span class="inline-flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.25em] {{ $attentionExpiredCount > 0 ? 'text-amber-700' : 'text-slate-600' }}">
+                    <span class="h-1.5 w-1.5 rounded-full {{ $attentionExpiredCount > 0 ? 'bg-amber-500 node-pulse' : 'bg-slate-400' }}"></span>
+                    Action required
                 </span>
-                <span class="text-[11px] text-slate-400">{{ $activeDriverCount }} active driver{{ $activeDriverCount === 1 ? '' : 's' }}</span>
+                <span class="text-[11px] text-slate-500 tabular-nums">
+                    @if($attentionExpiredCount > 0){{ $attentionExpiredCount }} expired@endif
+                    @if($attentionExpiredCount > 0 && $attentionExpiringCount > 0) · @endif
+                    @if($attentionExpiringCount > 0){{ $attentionExpiringCount }} expiring &lt;60d@endif
+                </span>
             </div>
             <a href="{{ $driversRoute }}" class="text-xs font-semibold text-slate-600 hover:text-slate-900 inline-flex items-center gap-1 transition-colors">
-                Open drivers
+                All drivers
                 <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></svg>
             </a>
         </div>
-        <div class="grid grid-cols-1 md:grid-cols-3 divide-y md:divide-y-0 md:divide-x divide-slate-100">
-
-            {{-- Trade plates --}}
-            <div class="px-6 py-4">
-                <div class="flex items-center justify-between gap-3 mb-2">
-                    <span class="text-xs font-semibold text-slate-700">Trade Plates</span>
-                    <span class="text-lg font-semibold tabular-nums text-slate-900">{{ $tradePlateHeld }}</span>
-                </div>
-                <div class="flex flex-wrap gap-1.5">
-                    @if($tradePlateExpired > 0)
-                        <a href="{{ $driversRoute }}?trade_plate=expired" class="{{ $fleetChipRed }}">
-                            <span class="h-1.5 w-1.5 rounded-full bg-red-500"></span>
-                            {{ $tradePlateExpired }} expired
-                        </a>
-                    @endif
-                    @if($tradePlateExpiring > 0)
-                        <a href="{{ $driversRoute }}?trade_plate=expiring" class="{{ $fleetChipAmber }}">
-                            <span class="h-1.5 w-1.5 rounded-full bg-amber-500"></span>
-                            {{ $tradePlateExpiring }} expiring 60d
-                        </a>
-                    @endif
-                    @if($tradePlateMissingExpiry > 0)
-                        <a href="{{ $driversRoute }}?trade_plate=missing_expiry" class="{{ $fleetChipSlate }}">
-                            {{ $tradePlateMissingExpiry }} missing expiry date
-                        </a>
-                    @endif
-                    @if($tradePlateExpired === 0 && $tradePlateExpiring === 0 && $tradePlateMissingExpiry === 0)
-                        <span class="text-[11px] text-slate-400">All plates current</span>
-                    @endif
-                </div>
-            </div>
-
-            {{-- Equipment --}}
-            <div class="px-6 py-4">
-                <div class="flex items-center justify-between gap-3 mb-2">
-                    <span class="text-xs font-semibold text-slate-700">Equipment</span>
-                    <span class="text-[11px] text-slate-400">tracker · camera · toll card</span>
-                </div>
-                <div class="flex flex-wrap gap-1.5">
-                    <a href="{{ $driversRoute }}?missing=tracker" class="{{ $missingTracker > 0 ? $fleetChipAmber : $fleetChipSlate }}">
-                        <span class="h-1.5 w-1.5 rounded-full {{ $missingTracker > 0 ? 'bg-amber-500' : 'bg-slate-400' }}"></span>
-                        {{ $missingTracker }} no tracker
+        <ul class="divide-y divide-slate-100">
+            @foreach($attentionVisible as $item)
+                @php
+                    $expired = $item['expired'];
+                    $days = $item['days_left'];
+                    // Urgency pill: expired in red, <=14d in amber, else slate.
+                    if ($expired) {
+                        $pillClass = 'bg-red-100 text-red-700 border-red-200';
+                        $pillText  = $days === -1 ? 'Expired yesterday' : 'Expired ' . abs($days) . 'd ago';
+                        $dotClass  = 'bg-red-500';
+                    } elseif ($days <= 14) {
+                        $pillClass = 'bg-amber-100 text-amber-800 border-amber-200';
+                        $pillText  = $days === 0 ? 'Expires today' : ($days === 1 ? '1 day left' : $days . ' days left');
+                        $dotClass  = 'bg-amber-500';
+                    } else {
+                        $pillClass = 'bg-slate-100 text-slate-700 border-slate-200';
+                        $pillText  = $days . ' days left';
+                        $dotClass  = 'bg-slate-400';
+                    }
+                @endphp
+                <li>
+                    <a href="{{ route('admin.drivers.edit', $item['user_id']) }}"
+                       class="flex items-center gap-4 px-6 py-2.5 hover:bg-slate-50/70 transition-colors">
+                        <span class="h-1.5 w-1.5 shrink-0 rounded-full {{ $dotClass }}"></span>
+                        <div class="min-w-0 flex-1 flex items-center gap-3">
+                            <span class="text-sm font-medium text-slate-900 truncate">{{ $item['driver_name'] }}</span>
+                            <span class="inline-flex items-center rounded-md bg-slate-50 border border-slate-200 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                                {{ $item['label'] }}
+                            </span>
+                        </div>
+                        <span class="hidden sm:inline text-[11px] text-slate-400 tabular-nums shrink-0">
+                            {{ $item['date']->format('d M Y') }}
+                        </span>
+                        <span class="inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold tabular-nums shrink-0 {{ $pillClass }}">
+                            {{ $pillText }}
+                        </span>
                     </a>
-                    <a href="{{ $driversRoute }}?missing=camera" class="{{ $missingCamera > 0 ? $fleetChipAmber : $fleetChipSlate }}">
-                        <span class="h-1.5 w-1.5 rounded-full {{ $missingCamera > 0 ? 'bg-amber-500' : 'bg-slate-400' }}"></span>
-                        {{ $missingCamera }} no camera
-                    </a>
-                    <a href="{{ $driversRoute }}?missing=toll_card" class="{{ $missingTollCard > 0 ? $fleetChipAmber : $fleetChipSlate }}">
-                        <span class="h-1.5 w-1.5 rounded-full {{ $missingTollCard > 0 ? 'bg-amber-500' : 'bg-slate-400' }}"></span>
-                        {{ $missingTollCard }} no toll card
-                    </a>
-                </div>
+                </li>
+            @endforeach
+        </ul>
+        @if($attentionOverflow > 0)
+            <div class="border-t border-slate-100 bg-slate-50/60 px-6 py-2.5 text-center">
+                <a href="{{ $driversRoute }}?expiring=1" class="text-[11px] font-semibold text-slate-600 hover:text-slate-900 inline-flex items-center gap-1">
+                    View {{ $attentionOverflow }} more
+                    <svg viewBox="0 0 24 24" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+                </a>
             </div>
-
-            {{-- Identity --}}
-            <div class="px-6 py-4">
-                <div class="flex items-center justify-between gap-3 mb-2">
-                    <span class="text-xs font-semibold text-slate-700">Identity</span>
-                    <span class="text-[11px] text-slate-400">SA ID vs passport</span>
-                </div>
-                <div class="flex flex-wrap gap-1.5">
-                    @if($passportHolders > 0)
-                        <a href="{{ $driversRoute }}?id_type=passport" class="{{ $fleetChipBlue }}">
-                            <span class="h-1.5 w-1.5 rounded-full bg-blue-500"></span>
-                            {{ $passportHolders }} passport
-                        </a>
-                    @endif
-                    @if($saIdAnomalies > 0)
-                        <a href="{{ $driversRoute }}?id_anomaly=1" class="{{ $fleetChipAmber }}">
-                            <span class="h-1.5 w-1.5 rounded-full bg-amber-500"></span>
-                            {{ $saIdAnomalies }} SA ID to verify
-                        </a>
-                    @endif
-                    @if($passportHolders === 0 && $saIdAnomalies === 0)
-                        <span class="text-[11px] text-slate-400">All SA IDs valid</span>
-                    @endif
-                </div>
-            </div>
-
-        </div>
+        @endif
     </div>
+    @endif
 
-    {{-- Content grid: Recent orders + Active movements --}}
-    <div class="grid grid-cols-1 xl:grid-cols-3 gap-6">
-
-        {{-- Recent orders (main) --}}
-        <div class="xl:col-span-2">
+    {{-- Recent orders — full width.
+         The old Active Movements side panel was redundant with the Live
+         pipeline strip at the top; keeping the dashboard to one focused
+         column makes the whole page read top-to-bottom without the eye
+         having to juggle two stacks of information. --}}
+    <div>
+        <div>
             <x-card title="Recent Orders" subtitle="Latest bookings across all customers" :padding="false">
                 <x-slot:actions>
                     <a href="{{ route('admin.orders.index') }}" class="text-xs font-semibold text-slate-600 hover:text-slate-900 inline-flex items-center gap-1 transition-colors">
@@ -595,51 +583,6 @@ new #[Layout('components.layouts.app')] class extends Component {
                         </tbody>
                     </table>
                 </div>
-                @endif
-            </x-card>
-        </div>
-
-        {{-- Active movements panel --}}
-        <div class="xl:col-span-1">
-            <x-card title="Active Movements" subtitle="Currently in the field" :padding="false">
-                <x-slot:actions>
-                    <span class="inline-flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">
-                        <span class="h-1.5 w-1.5 rounded-full bg-emerald-500 node-pulse"></span>
-                        Live
-                    </span>
-                </x-slot:actions>
-
-                @if($activeMovements->isEmpty())
-                    <x-empty-state
-                        title="No active movements"
-                        description="Dispatched drivers and in-transit vehicles appear here in real time.">
-                        <x-slot:icon>
-                            <svg viewBox="0 0 24 24" class="h-6 w-6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2"/><path d="M15 18H9"/><path d="M19 18h2a1 1 0 0 0 1-1v-3.65a1 1 0 0 0-.22-.624l-3.48-4.35A1 1 0 0 0 17.52 8H14"/><circle cx="17" cy="18" r="2"/><circle cx="7" cy="18" r="2"/></svg>
-                        </x-slot:icon>
-                    </x-empty-state>
-                @else
-                    <ul class="divide-y divide-slate-100">
-                        @foreach($activeMovements as $job)
-                        <li class="px-5 py-3.5 hover:bg-slate-50/60 transition-colors">
-                            <a href="{{ route('admin.orders.show', $job) }}" class="flex items-start gap-3">
-                                <span class="mt-1.5 h-2 w-2 shrink-0 rounded-full {{ $job->status === 'in_transit' ? 'bg-orange-500 node-pulse' : ($job->status === 'collected' ? 'bg-teal-500' : ($job->status === 'ready_for_collection' ? 'bg-cyan-500' : 'bg-purple-500')) }}"></span>
-                                <div class="min-w-0 flex-1">
-                                    <div class="flex items-center justify-between gap-2">
-                                        <span class="text-sm font-semibold text-slate-900 truncate">{{ $job->job_number ?? '—' }}</span>
-                                        <x-status-badge :status="$job->status" size="sm" />
-                                    </div>
-                                    <p class="mt-0.5 text-xs text-slate-500 truncate">
-                                        {{ $job->brand?->name }} {{ $job->model_name }}
-                                        @if($job->driver) · {{ $job->driver->name }} @endif
-                                    </p>
-                                    <p class="mt-0.5 text-[11px] text-slate-400 truncate">
-                                        {{ $job->pickupLocation?->city ?? '—' }} → {{ $job->deliveryLocation?->city ?? '—' }}
-                                    </p>
-                                </div>
-                            </a>
-                        </li>
-                        @endforeach
-                    </ul>
                 @endif
             </x-card>
         </div>
