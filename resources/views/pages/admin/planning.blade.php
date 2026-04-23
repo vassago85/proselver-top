@@ -69,7 +69,9 @@ new #[Layout('components.layouts.app')] class extends Component {
         // one go. We eager-load the two location names because the card
         // needs both ends of the leg; driverProfile supplies base_location
         // and tracker_id for the green pill.
-        $drivers = User::role('driver')
+        $drivers = User::query()
+            ->whereHas('roles', fn ($r) => $r->where('slug', 'driver'))
+            ->where('is_active', true)
             ->with([
                 'driverProfile:user_id,base_location,tracker_id,cellphone,trade_plate',
                 'assignedJobs' => function ($q) use ($activeStatuses) {

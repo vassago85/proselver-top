@@ -182,7 +182,11 @@ new #[Layout('components.layouts.app')] class extends Component
             $d->setAttribute('delays',        (int) ($win->delays ?? 0));
             $d->setAttribute('on_time',       (int) ($win->on_time ?? 0));
             $d->setAttribute('avg_seconds',   $win?->avg_delivery_seconds !== null ? (float) $win->avg_delivery_seconds : null);
-            $d->setAttribute('last_activity', $lastActivity[$d->id] ?? null);
+            // selectRaw('max(...) as last_activity') returns a raw string
+            // from Postgres (it bypasses Eloquent casts). Parse explicitly
+            // so the view can call ->diffForHumans() on a Carbon instance.
+            $raw = $lastActivity[$d->id] ?? null;
+            $d->setAttribute('last_activity', $raw ? Carbon::parse($raw) : null);
 
             // Live status bucket
             if (!$cur) {
