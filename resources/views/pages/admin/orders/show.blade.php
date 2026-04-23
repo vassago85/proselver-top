@@ -1,4 +1,4 @@
-﻿<?php
+<?php
 
 use App\Models\Job;
 use App\Models\User;
@@ -135,7 +135,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             return;
         }
         AuditService::log('collected', 'job', $this->job->id);
-        session()->flash('success', "Order {$this->job->job_number} â€” driver arrived at pickup.");
+        session()->flash('success', "Order {$this->job->job_number} — driver arrived at pickup.");
     }
 
     public function markInTransit(): void
@@ -207,7 +207,7 @@ new #[Layout('components.layouts.app')] class extends Component {
     /**
      * Release the damage report to the customer. Gated by
      * JobPolicy::releaseDamageReport so only ops/owner/super can sign
-     * it off â€” junior users see a disabled button (and the policy
+     * it off — junior users see a disabled button (and the policy
      * check here also blocks a direct request).
      */
     public function releaseDamageReport(): void
@@ -216,7 +216,7 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         $this->job->damage_report_released_at = now();
         $this->job->damage_report_released_by = auth()->id();
-        // Release implies review â€” stamp ack at the same time so the
+        // Release implies review — stamp ack at the same time so the
         // dashboard strip clears even if the operator skipped the
         // view-the-order step and went straight to release.
         if ($this->job->damage_acknowledged_at === null) {
@@ -288,7 +288,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         // -------------------------------------------------------------
         // Single source of truth for the hero. Each entry maps a status
         // to (title, description, variant). The actual buttons are
-        // rendered below â€” this table is purely the wording ops sees so
+        // rendered below — this table is purely the wording ops sees so
         // they never have to guess what's next.
         // -------------------------------------------------------------
         $isTerminal    = in_array($job->status, [Job::STATUS_COMPLETED, Job::STATUS_CANCELLED], true);
@@ -382,7 +382,7 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     <div class="space-y-6">
 
-        {{-- Status & Next Step â€” the page's single source of directive.
+        {{-- Status & Next Step — the page's single source of directive.
              Merges the old "header card" and the old right-hand Actions
              panel into one hero so ops never has to choose between two
              primary buttons; the next move is always one click from the
@@ -395,7 +395,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                         <x-status-badge :status="$job->status" />
                     </div>
                     <p class="mt-1 text-sm text-gray-500 truncate">
-                        {{ $job->company?->name ?? 'â€”' }}
+                        {{ $job->company?->name ?? '—' }}
                         @if($job->brand || $job->model_name)
                             &middot; {{ trim(($job->brand?->name ?? '') . ' ' . ($job->model_name ?? '')) }}
                         @endif
@@ -422,7 +422,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                     </div>
                 </div>
 
-                {{-- Primary CTA â€” resolves per status. Only one primary
+                {{-- Primary CTA — resolves per status. Only one primary
                      button is ever shown; secondary actions are rendered
                      in the row below to keep the focal point clean. --}}
                 <div class="mt-4 flex flex-wrap items-center gap-2">
@@ -456,7 +456,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                     @elseif($job->status === Job::STATUS_PLANNED)
                         <div class="flex flex-wrap items-center gap-2 w-full sm:w-auto">
                             <select wire:model="driverId" class="rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-purple-500 focus:ring-purple-500">
-                                <option value="">Select driverâ€¦</option>
+                                <option value="">Select driver…</option>
                                 @foreach($drivers as $d)
                                     <option value="{{ $d->id }}">{{ $d->name }}</option>
                                 @endforeach
@@ -529,156 +529,140 @@ new #[Layout('components.layouts.app')] class extends Component {
             </div>
         </div>
 
-            {{-- Damage banner
-                 If any damage photo has been uploaded against this job we surface
-                 a high-visibility red banner so ops / customer can't miss it.
-                 The banner also hosts the direct "Download damage report" CTA
-                 so admins don't have to hunt through the paperwork grid.
-            --}}
+            {{-- Damage banner — compact single-card layout.
+                 Header row carries title, photo count and release
+                 status all inline. A horizontal thumbnail strip
+                 replaces the old grid so the card never dominates
+                 the page, and notes + action buttons sit directly
+                 below without their own sub-panels. --}}
             @php
                 $damageDocs = $job->documents->where('category', \App\Models\JobDocument::CATEGORY_DAMAGE_PHOTO)->values();
             @endphp
             @if($damageDocs->isNotEmpty())
-            <div class="bg-rose-50 rounded-xl shadow-sm border border-rose-200 p-6" id="damage-section">
-                <div class="flex items-start gap-3 mb-4">
-                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-rose-100 text-rose-700 shrink-0">
-                        <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+                @php
+                    $isReleased = $job->damage_report_released_at !== null;
+                    $damageNotes = $damageDocs
+                        ->map(fn($d) => [
+                            'text' => (is_string($d->notes) && !str_starts_with($d->notes, 'slot:')) ? trim($d->notes) : null,
+                            'at'   => $d->captured_at ?? $d->created_at,
+                        ])
+                        ->filter(fn($row) => !empty($row['text']))
+                        ->values();
+                @endphp
+                <details class="group rounded-xl border border-rose-200 bg-rose-50 shadow-sm overflow-hidden" id="damage-section" open>
+                    <style>.damage-summary::-webkit-details-marker { display: none; } .damage-summary { list-style: none; }</style>
+                    <summary class="damage-summary flex items-center gap-3 px-4 py-3 cursor-pointer select-none">
+                        <svg class="h-5 w-5 shrink-0 text-rose-600" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
                             <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/>
                             <path d="M12 9v4"/><path d="M12 17h.01"/>
                         </svg>
-                    </div>
-                    <div class="min-w-0 flex-1">
-                        <div class="flex items-center gap-2 flex-wrap">
-                            <h3 class="text-base font-semibold text-rose-900">Damage reported</h3>
-                            <span class="inline-flex items-center rounded-full bg-rose-100 border border-rose-200 px-2 py-0.5 text-[11px] font-semibold text-rose-800">
+                        <div class="min-w-0 flex-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+                            <span class="font-semibold text-rose-900">Damage reported</span>
+                            <span class="inline-flex items-center rounded-full bg-rose-100 border border-rose-200 px-1.5 py-0.5 text-[10px] font-semibold text-rose-800">
                                 {{ $damageDocs->count() }} {{ $damageDocs->count() === 1 ? 'photo' : 'photos' }}
                             </span>
+                            @if($isReleased)
+                                <span class="inline-flex items-center gap-1 rounded-full bg-emerald-100 border border-emerald-200 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-800">
+                                    <svg class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+                                    Released {{ $job->damage_report_released_at->format('d M') }}
+                                </span>
+                            @else
+                                <span class="inline-flex items-center gap-1 rounded-full bg-amber-100 border border-amber-200 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">
+                                    Pending review
+                                </span>
+                            @endif
                         </div>
-                        <p class="mt-1 text-sm text-rose-900/80 leading-relaxed">
-                            The driver flagged damage against this vehicle. Review the photographs and notes below, then download the customer-ready damage report.
-                        </p>
+                        <svg class="h-4 w-4 shrink-0 text-rose-400 transition-transform group-open:rotate-180"
+                             fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="m6 9 6 6 6-6"/>
+                        </svg>
+                    </summary>
 
-                        {{-- Thumbnail strip --}}
-                        <div class="mt-4 grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2">
+                    <div class="px-4 pb-4 pt-1 space-y-3">
+                        {{-- Horizontal thumbnail strip — fixed height so a
+                             single photo doesn't balloon to a half screen. --}}
+                        <div class="flex gap-2 overflow-x-auto pb-1 -mx-0.5 px-0.5">
                             @foreach($damageDocs as $dmg)
                                 @can('view', $dmg)
                                 <a href="{{ route('documents.view', $dmg) }}" target="_blank" rel="noopener"
-                                   class="group relative block rounded-md overflow-hidden border border-rose-200 bg-white hover:border-rose-400 hover:shadow transition">
+                                   class="group/thumb relative block h-20 w-20 shrink-0 rounded-md overflow-hidden border border-rose-200 bg-white hover:border-rose-400 hover:shadow transition">
                                     @if(str_starts_with((string) $dmg->mime_type, 'image/'))
-                                        <div class="aspect-square overflow-hidden bg-rose-50">
-                                            <img src="{{ route('documents.view', $dmg) }}"
-                                                 alt="Damage photo"
-                                                 class="h-full w-full object-cover group-hover:scale-105 transition-transform"
-                                                 loading="lazy">
-                                        </div>
+                                        <img src="{{ route('documents.view', $dmg) }}"
+                                             alt="Damage photo"
+                                             class="h-full w-full object-cover group-hover/thumb:scale-105 transition-transform"
+                                             loading="lazy">
                                     @else
-                                        <div class="aspect-square flex items-center justify-center bg-rose-50 text-rose-400 text-[10px] text-center p-2">
-                                            non-image<br>attachment
-                                        </div>
+                                        <div class="h-full w-full flex items-center justify-center bg-rose-50 text-rose-400 text-[9px] text-center p-1">file</div>
                                     @endif
                                     @if($dmg->captured_at)
-                                        <div class="px-1.5 py-1 text-[10px] bg-white border-t border-rose-100 text-rose-800 truncate">
-                                            {{ $dmg->captured_at->format('d M Â· H:i') }}
-                                        </div>
+                                        <span class="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/70 to-transparent px-1 py-0.5 text-[9px] font-medium text-white">
+                                            {{ $dmg->captured_at->format('d M H:i') }}
+                                        </span>
                                     @endif
                                 </a>
                                 @endcan
                             @endforeach
                         </div>
 
-                        {{-- Driver notes (if any were attached to a damage photo) --}}
-                        @php
-                            $damageNotes = $damageDocs
-                                ->map(fn($d) => [
-                                    'text' => (is_string($d->notes) && !str_starts_with($d->notes, 'slot:')) ? trim($d->notes) : null,
-                                    'at'   => $d->captured_at ?? $d->created_at,
-                                ])
-                                ->filter(fn($row) => !empty($row['text']))
-                                ->values();
-                        @endphp
                         @if($damageNotes->isNotEmpty())
-                        <div class="mt-4 space-y-2">
-                            <h4 class="text-xs font-semibold uppercase tracking-wider text-rose-900/70">Driver notes</h4>
-                            @foreach($damageNotes as $note)
-                                <div class="rounded-md bg-white border border-rose-200 px-3 py-2 text-sm text-rose-900">
-                                    <p class="whitespace-pre-line">{{ $note['text'] }}</p>
-                                    @if($note['at'])
-                                        <p class="mt-1 text-[11px] text-rose-700/70">{{ $note['at']->format('d M Y Â· H:i') }}</p>
-                                    @endif
-                                </div>
-                            @endforeach
-                        </div>
+                            <div class="text-sm text-rose-900 space-y-1">
+                                @foreach($damageNotes as $note)
+                                    <p class="flex gap-2">
+                                        <span class="text-rose-400 shrink-0">&ldquo;</span>
+                                        <span class="min-w-0 flex-1">
+                                            <span class="italic">{{ $note['text'] }}</span>
+                                            @if($note['at'])
+                                                <span class="text-[11px] text-rose-700/70 not-italic ml-1">— {{ $note['at']->format('d M H:i') }}</span>
+                                            @endif
+                                        </span>
+                                    </p>
+                                @endforeach
+                            </div>
                         @endif
 
-                        {{-- Release-to-customer block.
-                             Damage reports are ops-only until an authorised
-                             operator clicks "Release". Only then can the
-                             customer see the PDF. Internal staff can still
-                             download + review at any time. --}}
-                        @php
-                            $isReleased = $job->damage_report_released_at !== null;
-                        @endphp
-                        <div class="mt-5 rounded-lg border {{ $isReleased ? 'border-emerald-200 bg-emerald-50' : 'border-amber-200 bg-amber-50' }} p-3">
-                            <div class="flex items-start gap-2.5">
-                                @if($isReleased)
-                                    <svg class="h-4 w-4 mt-0.5 text-emerald-600 shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
-                                    <div class="text-xs text-emerald-900 leading-relaxed min-w-0 flex-1">
-                                        <strong class="text-emerald-900">Released to customer</strong>
-                                        on {{ $job->damage_report_released_at->format('d M Y Â· H:i') }}
-                                        @if($job->damageReportReleasedBy)
-                                            by {{ $job->damageReportReleasedBy->name }}
-                                        @endif.
-                                        The customer can now download this report.
-                                    </div>
-                                @else
-                                    <svg class="h-4 w-4 mt-0.5 text-amber-600 shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>
-                                    <div class="text-xs text-amber-900 leading-relaxed min-w-0 flex-1">
-                                        <strong class="text-amber-900">Pending operator review.</strong>
-                                        The customer will not see this report until you release it.
-                                        Review the photographs and driver notes above, then release below.
-                                    </div>
-                                @endif
-                            </div>
-                        </div>
+                        @if($isReleased && $job->damageReportReleasedBy)
+                            <p class="text-[11px] text-emerald-800/80">
+                                Released to customer by {{ $job->damageReportReleasedBy->name }} on {{ $job->damage_report_released_at->format('d M Y · H:i') }}.
+                            </p>
+                        @elseif(!$isReleased)
+                            <p class="text-[11px] text-amber-800/90">
+                                The customer won't see this report until you release it.
+                            </p>
+                        @endif
 
-                        <div class="mt-4 flex flex-wrap items-center gap-2">
-                            {{-- Internal users always see the download button â€” they need
-                                 to review before releasing. --}}
+                        <div class="flex flex-wrap items-center gap-2 pt-1">
                             <a href="{{ route('damage-report.download', $job) }}" target="_blank" rel="noopener"
-                               class="inline-flex items-center gap-2 rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-500 transition-colors">
-                                <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
-                                {{ $isReleased ? 'Download report' : 'Preview report (ops)' }}
+                               class="inline-flex items-center gap-1.5 rounded-lg bg-rose-600 px-3 py-2 text-xs font-semibold text-white hover:bg-rose-500 transition-colors">
+                                <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+                                {{ $isReleased ? 'Download report' : 'Preview (ops)' }}
                             </a>
 
                             @can('releaseDamageReport', $job)
                                 @if(!$isReleased)
                                     <button wire:click="releaseDamageReport"
                                             wire:confirm="Release this damage report to the customer? They will be able to download the PDF immediately."
-                                            class="inline-flex items-center gap-2 rounded-lg border border-emerald-600 bg-white px-4 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-50 transition-colors">
-                                        <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+                                            class="inline-flex items-center gap-1.5 rounded-lg border border-emerald-600 bg-white px-3 py-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 transition-colors">
+                                        <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
                                         <span wire:loading.remove wire:target="releaseDamageReport">Release to customer</span>
-                                        <span wire:loading wire:target="releaseDamageReport">Releasingâ€¦</span>
+                                        <span wire:loading wire:target="releaseDamageReport">Releasing…</span>
                                     </button>
                                 @else
                                     <button wire:click="revokeDamageReport"
                                             wire:confirm="Revoke customer access to this damage report? They will no longer be able to download it until you release it again."
-                                            class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-colors">
-                                        <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="m4.93 4.93 14.14 14.14"/><circle cx="12" cy="12" r="10"/></svg>
-                                        <span wire:loading.remove wire:target="revokeDamageReport">Revoke access</span>
-                                        <span wire:loading wire:target="revokeDamageReport">Revokingâ€¦</span>
+                                            class="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-colors">
+                                        Revoke access
                                     </button>
                                 @endif
                             @else
                                 @if(!$isReleased)
-                                    <span class="inline-flex items-center gap-2 rounded-lg border border-dashed border-slate-300 bg-white px-4 py-2 text-xs text-slate-500">
-                                        Release requires ops manager or owner
+                                    <span class="text-[11px] text-slate-500">
+                                        Release requires ops manager or owner.
                                     </span>
                                 @endif
                             @endcan
                         </div>
                     </div>
-                </div>
-            </div>
+                </details>
             @endif
 
             {{-- Order details --}}
@@ -686,18 +670,18 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <h3 class="text-lg font-semibold text-gray-900 mb-4">Order Details</h3>
                 <dl class="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
                     <div><dt class="text-gray-500">Type</dt><dd class="font-medium">{{ $job->isTransport() ? 'Transport' : 'Yard Work' }}</dd></div>
-                    <div><dt class="text-gray-500">Company</dt><dd class="font-medium">{{ $job->company?->name ?? 'â€”' }}</dd></div>
+                    <div><dt class="text-gray-500">Company</dt><dd class="font-medium">{{ $job->company?->name ?? '—' }}</dd></div>
                     @if($job->brand)
                     <div><dt class="text-gray-500">Brand</dt><dd class="font-medium">{{ $job->brand->name }}</dd></div>
                     @endif
                     @if($job->model_name)
                     <div><dt class="text-gray-500">Model</dt><dd class="font-medium">{{ $job->model_name }}</dd></div>
                     @endif
-                    <div><dt class="text-gray-500">VIN</dt><dd class="font-medium">{{ $job->vin ?: 'â€”' }}</dd></div>
+                    <div><dt class="text-gray-500">VIN</dt><dd class="font-medium">{{ $job->vin ?: '—' }}</dd></div>
                     @if($job->registration)
                     <div><dt class="text-gray-500">Registration</dt><dd class="font-medium">{{ $job->registration }}</dd></div>
                     @endif
-                    <div><dt class="text-gray-500">Scheduled Date</dt><dd class="font-medium">{{ $job->scheduled_date?->format('d M Y') ?? 'â€”' }}</dd></div>
+                    <div><dt class="text-gray-500">Scheduled Date</dt><dd class="font-medium">{{ $job->scheduled_date?->format('d M Y') ?? '—' }}</dd></div>
                 </dl>
             </div>
 
@@ -722,7 +706,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                         <svg class="h-4 w-4 text-green-600" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>
                         Pickup
                     </h4>
-                    <p class="text-sm font-medium text-gray-900">{{ $job->pickupLocation?->shortDisplay() ?? 'â€”' }}</p>
+                    <p class="text-sm font-medium text-gray-900">{{ $job->pickupLocation?->shortDisplay() ?? '—' }}</p>
                     @if($job->pickup_contact_name)
                         <p class="text-sm text-gray-600 mt-2">{{ $job->pickup_contact_name }}</p>
                     @endif
@@ -735,7 +719,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                         <svg class="h-4 w-4 text-red-600" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>
                         Delivery
                     </h4>
-                    <p class="text-sm font-medium text-gray-900">{{ $job->deliveryLocation?->shortDisplay() ?? 'â€”' }}</p>
+                    <p class="text-sm font-medium text-gray-900">{{ $job->deliveryLocation?->shortDisplay() ?? '—' }}</p>
                     @if($job->delivery_contact_name)
                         <p class="text-sm text-gray-600 mt-2">{{ $job->delivery_contact_name }}</p>
                     @endif
@@ -751,7 +735,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             @php
                 $dp = $job->driver->driverProfile;
                 // When a vehicle is collected or in transit, the tracker ID is
-                // the single most useful piece of info on this page â€” ops needs
+                // the single most useful piece of info on this page — ops needs
                 // it to pull a live location. Pin it to the top of the driver
                 // card in that window so nobody has to hunt for it.
                 $isInFlight = in_array($job->status, [
@@ -805,7 +789,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                  The documents list itself is collapsed by default (via the
                  <x-documents-list> component) so a busy job doesn't bury
                  the rest of the page under a wall of thumbnails. Purchase
-                 orders get their own small panel above the list â€” they're
+                 orders get their own small panel above the list — they're
                  the one piece of paperwork ops reaches for first.
                  Internal-only categories (fuel/food/toll/parking slips)
                  stay visible to admins via hideInternalOnly=false.
@@ -845,7 +829,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             </div>
             @endif
 
-            {{-- Timeline â€” collapsed by default. On a long-running job
+            {{-- Timeline — collapsed by default. On a long-running job
                  this list grows and buries the rest of the page; clicking
                  the summary expands it in place. --}}
             @if($job->events->isNotEmpty())
@@ -861,7 +845,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                                 </span>
                             </h3>
                             <p class="text-xs text-gray-500 mt-0.5">
-                                {{ $job->events->last()?->event_at?->diffForHumans() ?? 'â€”' }} Â· latest event
+                                {{ $job->events->last()?->event_at?->diffForHumans() ?? '—' }} · latest event
                             </p>
                         </div>
                         <svg class="h-5 w-5 shrink-0 text-gray-400 transition-transform group-open:rotate-180"
@@ -887,13 +871,13 @@ new #[Layout('components.layouts.app')] class extends Component {
 
             {{-- Compact meta strip. Anything ops might occasionally want
                  (UUID, booked-by, created timestamp) lives down here as a
-                 quiet footer rather than as its own panel â€” that info is
+                 quiet footer rather than as its own panel — that info is
                  rarely the thing they actually came here for. --}}
             <div class="rounded-xl border border-gray-200 bg-gray-50/60 px-5 py-3">
                 <dl class="flex flex-wrap gap-x-6 gap-y-2 text-xs text-gray-600">
                     <div class="flex items-center gap-1.5">
                         <dt class="text-gray-400">Order</dt>
-                        <dd class="font-mono font-medium text-gray-700">{{ $job->job_number ?? 'â€”' }}</dd>
+                        <dd class="font-mono font-medium text-gray-700">{{ $job->job_number ?? '—' }}</dd>
                     </div>
                     <div class="flex items-center gap-1.5">
                         <dt class="text-gray-400">Created</dt>
@@ -906,7 +890,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                             <dd class="text-gray-700">
                                 <span class="font-medium">{{ $job->createdBy->name }}</span>
                                 @if($bookerCompany)
-                                    <span class="text-gray-400"> Â· {{ $bookerCompany->name }}</span>
+                                    <span class="text-gray-400"> · {{ $bookerCompany->name }}</span>
                                 @endif
                             </dd>
                         </div>
