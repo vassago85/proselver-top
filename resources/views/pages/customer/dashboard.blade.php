@@ -567,7 +567,7 @@ new #[Layout('components.layouts.app')] class extends Component
                 <div class="hidden md:flex items-center gap-3 text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-500">
                     <span class="inline-flex items-center gap-1.5"><span class="h-2 w-2 rounded-full bg-blue-500"></span>Inbound</span>
                     <span class="inline-flex items-center gap-1.5"><span class="h-2 w-2 rounded-full bg-emerald-500"></span>Delivered</span>
-                    <span class="inline-flex items-center gap-1.5"><span class="h-2 w-2 rounded-full bg-amber-500"></span>At risk</span>
+                    <span class="inline-flex items-center gap-1.5"><span class="h-2 w-2 rounded-full bg-amber-500"></span>Overdue</span>
                     <span class="inline-flex items-center gap-1.5"><span class="h-2 w-2 rounded-full bg-rose-500"></span>Damaged</span>
                     <span class="inline-flex items-center gap-1.5"><span class="h-2 w-2 rounded-full bg-slate-300"></span>Idle</span>
                 </div>
@@ -690,7 +690,7 @@ new #[Layout('components.layouts.app')] class extends Component
                                 <td class="px-4 py-2.5">
                                     <div class="text-[13px] font-medium text-slate-900 truncate max-w-[260px]">{{ $s->name }}</div>
                                     @if($s->at_risk > 0)
-                                        <div class="mt-0.5"><x-dash.pill variant="amber" size="sm">{{ $s->at_risk }} at risk</x-dash.pill></div>
+                                        <div class="mt-0.5"><x-dash.pill variant="amber" size="sm">{{ $s->at_risk }} overdue</x-dash.pill></div>
                                     @endif
                                 </td>
                                 <td class="px-4 py-2.5 text-[12px] text-slate-600 truncate max-w-[180px]">
@@ -793,7 +793,7 @@ new #[Layout('components.layouts.app')] class extends Component
         {{-- Exceptions --}}
         <x-dash.panel
             :title="'Exceptions' . ($exceptions->isEmpty() ? '' : ' · ' . $exceptions->count())"
-            :subtitle="'Long in transit (>' . $th['in_transit_days'] . 'd) or damage released in range'"
+            :subtitle="'Overdue: in a stage longer than ' . $th['in_transit_days'] . ' days, or damage reported'"
             :tight="true">
             @if($exceptions->isEmpty())
                 <div class="px-5 py-10 text-center">
@@ -825,7 +825,7 @@ new #[Layout('components.layouts.app')] class extends Component
                                             {{ $label }} · in stage {{ $e->getAttribute('days_in_stage') }}d
                                         </p>
                                     </div>
-                                    <x-dash.pill size="sm" :variant="$variant">{{ $isDamaged ? 'Damage' : 'At risk' }}</x-dash.pill>
+                                    <x-dash.pill size="sm" :variant="$variant">{{ $isDamaged ? 'Damage' : 'Overdue' }}</x-dash.pill>
                                 </div>
                             </a>
                         </li>
@@ -964,7 +964,7 @@ new #[Layout('components.layouts.app')] class extends Component
                         <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 12px;font-size:12px">
                             <div><span style="color:#64748b">Inbound</span> <strong style="color:#1d4ed8">${p.inbound}</strong></div>
                             <div><span style="color:#64748b">Delivered</span> <strong style="color:#15803d">${p.delivered}</strong></div>
-                            ${p.at_risk > 0 ? `<div><span style="color:#64748b">At risk</span> <strong style="color:#b45309">${p.at_risk}</strong></div>` : ''}
+                            ${p.at_risk > 0 ? `<div><span style="color:#64748b">Overdue</span> <strong style="color:#b45309">${p.at_risk}</strong></div>` : ''}
                             ${p.damaged > 0 ? `<div><span style="color:#64748b">Damaged</span> <strong style="color:#be123c">${p.damaged}</strong></div>` : ''}
                         </div>
                         <a href="${orderLink}" style="display:inline-block;margin-top:10px;font-size:11px;font-weight:600;color:#1d4ed8;text-decoration:none">View orders →</a>
