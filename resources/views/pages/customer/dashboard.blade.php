@@ -193,24 +193,21 @@ new #[Layout('components.layouts.app')] class extends Component
             ->get()
             ->keyBy('location_id');
 
-        // ── Full address book — every location in the customer's
-        //    address book shows on the map, even with no current
-        //    deliveries. Dealers, body builders, plants — everything.
+        // ── Full address book + all delivery destinations ───────────────
+        // Every location in the customer's address book appears, plus
+        // every delivery destination from jobs (even if it belongs to
+        // the transporter). Locations without lat/lng still show in
+        // the side-list but won't get a map marker.
         $addressBook = Location::where('company_id', $this->company->id)
-            ->whereNotNull('latitude')
-            ->whereNotNull('longitude')
             ->where('is_active', true)
-            ->get(['id', 'company_name', 'city', 'province', 'latitude', 'longitude', 'type']);
+            ->get(['id', 'company_name', 'city', 'province', 'latitude', 'longitude', 'type'])
+            ->keyBy('id');
 
-        // Merge: address-book locations + any delivery destinations
-        // that belong to a different company (Proselver's own yards,
-        // for instance) so we never lose a marker.
-        $points = collect();
+        $points  = collect();
         $seenIds = [];
 
-        // 1. Address-book locations (always shown)
-        foreach ($addressBook as $loc) {
-            $act = $perDestination->get($loc->id);
+        // Helper to build a point entry
+        $makePoint = function ($id, $name, $city, $province, $lat, $lng, $type, $act) {
             $inbound   = $act ? (int) $act->inbound_count   : 0;
             $delivered  = $act ? (int) $act->delivered_count : 0;
             $damaged    = $act ? (int) $act->damaged_count   : 0;
@@ -222,54 +219,44 @@ new #[Layout('components.layouts.app')] class extends Component
                 $delivered > 0 => 'delivered',
                 default       => 'idle',
             };
-            $points->push([
-                'id'        => (int) $loc->id,
-                'name'      => $loc->company_name ?: ($loc->city ?: 'Unknown'),
-                'city'      => $loc->city,
-                'province'  => $loc->province,
-                'lat'       => (float) $loc->latitude,
-                'lng'       => (float) $loc->longitude,
+            $hasCoords = $lat !== null && $lng !== null && (float) $lat != 0;
+            return [
+                'id'        => (int) $id,
+                'name'      => $name ?: ($city ?: 'Unknown'),
+                'city'      => $city,
+                'province'  => $province,
+                'lat'       => $hasCoords ? (float) $lat : null,
+                'lng'       => $hasCoords ? (float) $lng : null,
                 'inbound'   => $inbound,
                 'delivered' => $delivered,
                 'damaged'   => $damaged,
                 'at_risk'   => $atRisk,
                 'state'     => $state,
-                'type'      => $loc->type,
-            ]);
+                'type'      => $type,
+            ];
+        };
+
+        // 1. Address-book locations (always present in the side-list)
+        foreach ($addressBook as $loc) {
+            $points->push($makePoint(
+                $loc->id, $loc->company_name, $loc->city, $loc->province,
+                $loc->latitude, $loc->longitude, $loc->type,
+                $perDestination->get($loc->id),
+            ));
             $seenIds[$loc->id] = true;
         }
 
-        // 2. Delivery destinations NOT in the address book (e.g.
-        //    transporter-owned yards) — still show activity.
+        // 2. Every delivery destination from jobs that isn't already
+        //    in the address book (e.g. FAW Johannesburg Depot owned
+        //    by a different company).
         foreach ($perDestination as $r) {
             $lid = (int) $r->location_id;
             if (isset($seenIds[$lid])) continue;
-            if ($r->latitude === null || $r->longitude === null) continue;
-            $inbound  = (int) $r->inbound_count;
-            $delivered = (int) $r->delivered_count;
-            $damaged   = (int) $r->damaged_count;
-            $atRisk    = (int) $r->at_risk_count;
-            $state = match (true) {
-                $atRisk   > 0 => 'at_risk',
-                $damaged  > 0 => 'damaged',
-                $inbound  > 0 => 'inbound',
-                $delivered > 0 => 'delivered',
-                default       => 'idle',
-            };
-            $points->push([
-                'id'        => $lid,
-                'name'      => $r->company_name ?: ($r->city ?: 'Unknown'),
-                'city'      => $r->city,
-                'province'  => $r->province,
-                'lat'       => (float) $r->latitude,
-                'lng'       => (float) $r->longitude,
-                'inbound'   => $inbound,
-                'delivered' => $delivered,
-                'damaged'   => $damaged,
-                'at_risk'   => $atRisk,
-                'state'     => $state,
-                'type'      => null,
-            ]);
+            $points->push($makePoint(
+                $lid, $r->company_name, $r->city, $r->province,
+                $r->latitude, $r->longitude, null, $r,
+            ));
+            $seenIds[$lid] = true;
         }
 
         $points = $points
@@ -661,8 +648,10 @@ new #[Layout('components.layouts.app')] class extends Component
                             <span class="h-2 w-2 shrink-0 rounded-full" :class="dotClass(p.state)"></span>
                             <div class="min-w-0 flex-1">
                                 <p class="text-sm font-medium text-slate-900 truncate" x-text="p.name"></p>
-                                <p class="text-[11px] text-slate-500 truncate"
-                                   x-text="[p.city, p.province].filter(Boolean).join(', ') || '—'"></p>
+                                <p class="text-[11px] text-slate-500 truncate">
+                                    <span x-text="[p.city, p.province].filter(Boolean).join(', ') || '—'"></span>
+                                    <span x-show="p.lat === null" class="text-[10px] text-amber-500 ml-1">· no pin</span>
+                                </p>
                             </div>
                             <div class="text-right shrink-0 space-y-0.5">
                                 <p class="text-[11px] tabular-nums" x-show="p.inbound > 0">
@@ -967,6 +956,10 @@ new #[Layout('components.layouts.app')] class extends Component
                 const bounds = new google.maps.LatLngBounds();
 
                 this.points.forEach(p => {
+                    if (p.lat === null || p.lng === null) {
+                        this.markers.push(null);
+                        return;
+                    }
                     const isIdle = p.state === 'idle';
                     const color = (STATE_COLORS[p.state] || STATE_COLORS.idle).fill;
                     const scale = isIdle
@@ -1087,7 +1080,8 @@ new #[Layout('components.layouts.app')] class extends Component
             },
 
             focus(p) {
-                if (!this.map) return;
+                this.selectedId = p.id;
+                if (!this.map || p.lat === null || p.lng === null) return;
                 const idx = this.points.findIndex(x => x.id === p.id);
                 if (idx < 0) return;
                 const marker = this.markers[idx];
