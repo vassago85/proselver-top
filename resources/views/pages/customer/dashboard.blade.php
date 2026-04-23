@@ -1010,12 +1010,13 @@ new #[Layout('components.layouts.app')] class extends Component
 
             drawRoutes() {
                 if (!this.map) return;
-                this.routeLines.forEach(l => l.setMap(null));
+                this.routeLines.forEach(l => {
+                    if (l.setMap) l.setMap(null);
+                    if (l.remove) l.remove();
+                });
                 this.routeLines = [];
                 if (this.routes.length === 0) return;
 
-                // SA province centroids as fallback when a location
-                // has no coordinates. Better than not drawing at all.
                 const provinceFallback = {
                     'Gauteng':        { lat: -26.27, lng: 28.11 },
                     'Western Cape':   { lat: -33.93, lng: 18.42 },
@@ -1027,69 +1028,130 @@ new #[Layout('components.layouts.app')] class extends Component
                     'North West':     { lat: -26.66, lng: 25.29 },
                     'Northern Cape':  { lat: -29.05, lng: 21.86 },
                 };
-                const fallback = (prov) => provinceFallback[prov] || { lat: -33.80, lng: 25.80 };
+                const fb = (prov) => provinceFallback[prov] || { lat: -33.80, lng: 25.80 };
 
+                // Group routes by origin→destination so 7 vehicles on
+                // the same lane become one line with a count badge.
+                const grouped = {};
                 this.routes.forEach(r => {
                     const from = (r.from_lat != null && r.from_lng != null)
                         ? { lat: r.from_lat, lng: r.from_lng }
-                        : fallback(r.from_province);
+                        : fb(r.from_province);
                     const to = (r.to_lat != null && r.to_lng != null)
                         ? { lat: r.to_lat, lng: r.to_lng }
-                        : fallback(r.to_province);
-
-                    // Don't draw if both ends resolved to the same fallback
+                        : fb(r.to_province);
                     if (from.lat === to.lat && from.lng === to.lng) return;
 
-                    const path = [from, to];
+                    const key = from.lat.toFixed(4) + ',' + from.lng.toFixed(4)
+                              + '>' + to.lat.toFixed(4) + ',' + to.lng.toFixed(4);
+                    if (!grouped[key]) {
+                        grouped[key] = {
+                            from, to, count: 0, jobs: [],
+                            from_city: r.from_city, to_city: r.to_city, to_name: r.to_name,
+                        };
+                    }
+                    grouped[key].count++;
+                    grouped[key].jobs.push({ id: r.id, number: r.number });
+                });
 
+                Object.values(grouped).forEach(g => {
+                    // ── Dashed line with repeated arrows: ------>------>-------->
                     const line = new google.maps.Polyline({
-                        path,
+                        path: [g.from, g.to],
                         map: this.map,
                         geodesic: true,
                         strokeColor: '#2563eb',
                         strokeOpacity: 0,
-                        strokeWeight: 2,
+                        strokeWeight: 0,
                         icons: [
                             {
-                                icon: { path: 'M 0,-1 0,1', strokeOpacity: 0.6, strokeWeight: 2, scale: 2 },
+                                icon: { path: 'M 0,-1 0,1', strokeOpacity: 0.5, strokeColor: '#2563eb', strokeWeight: 2.5, scale: 2 },
                                 offset: '0',
-                                repeat: '12px',
+                                repeat: '16px',
                             },
                             {
                                 icon: {
                                     path: google.maps.SymbolPath.FORWARD_CLOSED_ARROW,
-                                    scale: 3,
-                                    fillColor: '#2563eb',
-                                    fillOpacity: 0.9,
-                                    strokeColor: '#ffffff',
-                                    strokeWeight: 1,
+                                    scale: 3.5, fillColor: '#2563eb', fillOpacity: 0.85,
+                                    strokeColor: '#fff', strokeWeight: 1,
                                 },
-                                offset: '100%',
+                                offset: '20%',
+                            },
+                            {
+                                icon: {
+                                    path: google.maps.SymbolPath.FORWARD_CLOSED_ARROW,
+                                    scale: 3.5, fillColor: '#2563eb', fillOpacity: 0.85,
+                                    strokeColor: '#fff', strokeWeight: 1,
+                                },
+                                offset: '50%',
+                            },
+                            {
+                                icon: {
+                                    path: google.maps.SymbolPath.FORWARD_CLOSED_ARROW,
+                                    scale: 3.5, fillColor: '#2563eb', fillOpacity: 0.85,
+                                    strokeColor: '#fff', strokeWeight: 1,
+                                },
+                                offset: '80%',
                             },
                         ],
                         zIndex: 5,
                     });
 
-                    line.addListener('click', () => {
-                        const mid = {
-                            lat: (r.from_lat + r.to_lat) / 2,
-                            lng: (r.from_lng + r.to_lng) / 2,
+                    // Click the line → info window with all jobs on this lane
+                    line.addListener('click', (e) => {
+                        const pos = e.latLng || {
+                            lat: (g.from.lat + g.to.lat) / 2,
+                            lng: (g.from.lng + g.to.lng) / 2,
                         };
+                        const jobLinks = g.jobs.map(j =>
+                            `<a href="/customer/orders/${j.id}" style="color:#1d4ed8;text-decoration:none;font-weight:600">${escapeHtml(j.number)}</a>`
+                        ).join(', ');
                         const html = `
-                            <div style="min-width:180px;font:500 13px/1.4 ui-sans-serif,system-ui;color:#0f172a">
-                                <div style="font-weight:700;margin-bottom:4px;color:#2563eb">${escapeHtml(r.number)}</div>
-                                <div style="font-size:12px">
-                                    <span style="color:#64748b">From</span> ${escapeHtml(r.from_city || '—')}<br>
-                                    <span style="color:#64748b">To</span> ${escapeHtml(r.to_name || r.to_city || '—')}
+                            <div style="min-width:200px;font:500 13px/1.5 ui-sans-serif,system-ui;color:#0f172a">
+                                <div style="font-weight:700;font-size:14px;color:#2563eb;margin-bottom:2px">${g.count} vehicle${g.count > 1 ? 's' : ''} in transit</div>
+                                <div style="font-size:12px;margin-bottom:6px">
+                                    ${escapeHtml(g.from_city || '—')} → ${escapeHtml(g.to_name || g.to_city || '—')}
                                 </div>
-                                <a href="/customer/orders/${r.id}" style="display:inline-block;margin-top:8px;font-size:11px;font-weight:600;color:#1d4ed8;text-decoration:none">View order →</a>
+                                <div style="font-size:11px">${jobLinks}</div>
                             </div>`;
                         this.infoWindow.setContent(html);
-                        this.infoWindow.setPosition(mid);
+                        this.infoWindow.setPosition(pos);
                         this.infoWindow.open(this.map);
                     });
 
                     this.routeLines.push(line);
+
+                    // ── Count badge at the midpoint of the line ──
+                    const mid = {
+                        lat: (g.from.lat + g.to.lat) / 2,
+                        lng: (g.from.lng + g.to.lng) / 2,
+                    };
+                    const badge = new google.maps.Marker({
+                        position: mid,
+                        map: this.map,
+                        icon: {
+                            path: google.maps.SymbolPath.CIRCLE,
+                            scale: g.count >= 10 ? 14 : 11,
+                            fillColor: '#2563eb',
+                            fillOpacity: 1,
+                            strokeColor: '#ffffff',
+                            strokeWeight: 2,
+                        },
+                        label: {
+                            text: String(g.count),
+                            color: '#ffffff',
+                            fontWeight: '700',
+                            fontSize: '11px',
+                        },
+                        zIndex: 15,
+                        title: g.count + ' vehicle' + (g.count > 1 ? 's' : '') + ' in transit',
+                    });
+
+                    badge.addListener('click', () => {
+                        google.maps.event.trigger(line, 'click', { latLng: new google.maps.LatLng(mid) });
+                    });
+
+                    this.routeLines.push(badge);
                 });
             },
 
