@@ -5,12 +5,16 @@ namespace App\Providers;
 use App\Models\Company;
 use App\Models\Job;
 use App\Models\JobDocument;
+use App\Models\SystemSetting;
 use App\Observers\JobObserver;
 use App\Policies\CompanyPolicy;
 use App\Policies\JobDocumentPolicy;
 use App\Policies\JobPolicy;
+use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\ServiceProvider;
+use Throwable;
 
 class AppServiceProvider extends ServiceProvider
 {
@@ -31,5 +35,55 @@ class AppServiceProvider extends ServiceProvider
         if (config('features.inventory_link')) {
             Job::observe(JobObserver::class);
         }
+
+        $this->hydrateStorageConfigFromDatabase();
+    }
+
+    /**
+     * Let the Admin → Settings → Storage page override what's in
+     * config/filesystems.php (which is sourced from env) without requiring
+     * a container rebuild. Values are read from system_settings if present
+     * and non-empty; otherwise the env-provided defaults remain.
+     *
+     * This runs very early during boot, before any Storage::disk() call,
+     * so the filesystem manager builds its disks with the right creds.
+     *
+     * Wrapped in try/catch + Schema::hasTable so the app still boots
+     * cleanly on a fresh container before the first migration runs.
+     */
+    protected function hydrateStorageConfigFromDatabase(): void
+    {
+        try {
+            if (!Schema::hasTable('system_settings')) {
+                return;
+            }
+        } catch (Throwable) {
+            return;
+        }
+
+        $apply = function (string $settingKey, string $configKey) {
+            $value = SystemSetting::get($settingKey, null);
+            if ($value !== null && $value !== '') {
+                Config::set($configKey, $value);
+            }
+        };
+
+        // Default upload disk (local | r2 | s3) — lets an operator flip
+        // between local Docker volume and cloud storage without touching .env.
+        $apply('storage_default_disk', 'filesystems.default');
+
+        // Primary R2 credentials
+        $apply('r2_access_key_id',     'filesystems.disks.r2.key');
+        $apply('r2_secret_access_key', 'filesystems.disks.r2.secret');
+        $apply('r2_region',            'filesystems.disks.r2.region');
+        $apply('r2_bucket',            'filesystems.disks.r2.bucket');
+        $apply('r2_endpoint',          'filesystems.disks.r2.endpoint');
+
+        // Backup bucket credentials (separate Cloudflare account / bucket)
+        $apply('r2_backup_access_key_id',     'filesystems.disks.r2-backup.key');
+        $apply('r2_backup_secret_access_key', 'filesystems.disks.r2-backup.secret');
+        $apply('r2_backup_region',            'filesystems.disks.r2-backup.region');
+        $apply('r2_backup_bucket',            'filesystems.disks.r2-backup.bucket');
+        $apply('r2_backup_endpoint',          'filesystems.disks.r2-backup.endpoint');
     }
 }
