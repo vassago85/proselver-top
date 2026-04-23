@@ -4,6 +4,7 @@ use App\Models\Brand;
 use App\Models\Company;
 use App\Models\Job;
 use App\Models\User;
+use Illuminate\Support\Str;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\Url;
 use Livewire\Volt\Component;
@@ -38,10 +39,28 @@ new #[Layout('components.layouts.app')] class extends Component {
     // Status buckets roll a dozen raw statuses into 4 human-sized groups
     // so the filter strip fits on one row without lying about what it
     // actually filters on. `all` bypasses the bucket filter entirely.
-    private const BUCKET_OPEN      = 'open';       // not yet collected
-    private const BUCKET_IN_TRANSIT = 'in_transit'; // collected, moving
-    private const BUCKET_DELIVERED = 'delivered';  // delivered or completed
+    //
+    // BUCKET_LIVE is intentionally wide: everything from the moment a
+    // driver is assigned up to the point ops ticks "complete". It's the
+    // single view a dispatcher needs open all day — replaces the old
+    // /admin/tracking page.
+    private const BUCKET_OPEN      = 'open';      // pre-driver: queue
+    private const BUCKET_LIVE      = 'live';      // in-flight keys
+    private const BUCKET_COMPLETED = 'completed'; // ops has signed off
     private const BUCKET_CANCELLED = 'cancelled';
+
+    public function mount(): void
+    {
+        // Preserve bookmarks from before the /tracking merge. The old
+        // names 'in_transit' and 'delivered' still show up in saved URLs
+        // and emailed deep-links — silently remap them to the new
+        // semantics instead of bouncing the user to "All".
+        $this->bucket = match ($this->bucket) {
+            'in_transit' => self::BUCKET_LIVE,
+            'delivered'  => self::BUCKET_COMPLETED,
+            default      => $this->bucket,
+        };
+    }
 
     public function updated($property): void
     {
@@ -59,24 +78,42 @@ new #[Layout('components.layouts.app')] class extends Component {
     private function bucketStatuses(string $bucket): array
     {
         return match ($bucket) {
+            // Everything before a driver takes responsibility — the
+            // planner's queue. Deliberately excludes driver_assigned;
+            // once a driver has the job, it belongs to Live.
             self::BUCKET_OPEN => [
                 Job::STATUS_PENDING_VERIFICATION, Job::STATUS_RECEIVED,
                 Job::STATUS_AWAITING_CUSTOMER_CONFIRMATION, Job::STATUS_CONFIRMATION_ISSUE,
                 Job::STATUS_VERIFIED, Job::STATUS_APPROVED, Job::STATUS_CONFIRMED,
-                Job::STATUS_PLANNED, Job::STATUS_ASSIGNED, Job::STATUS_DRIVER_ASSIGNED,
-                Job::STATUS_READY_FOR_COLLECTION,
+                Job::STATUS_PLANNED, Job::STATUS_ASSIGNED,
             ],
-            self::BUCKET_IN_TRANSIT => [
-                Job::STATUS_COLLECTED, Job::STATUS_IN_TRANSIT, Job::STATUS_IN_PROGRESS,
-            ],
-            self::BUCKET_DELIVERED => [
-                Job::STATUS_DELIVERED, Job::STATUS_COMPLETED,
-                Job::STATUS_READY_FOR_INVOICING, Job::STATUS_INVOICED,
+            // Keys are out. Covers driver assigned all the way through
+            // "delivered" (because delivered-but-ops-hasn't-closed-out
+            // is still dispatch's problem, not accounting's).
+            self::BUCKET_LIVE => self::LIVE_STATUSES,
+            // Ops has signed off / invoiced. Archive view.
+            self::BUCKET_COMPLETED => [
+                Job::STATUS_COMPLETED, Job::STATUS_READY_FOR_INVOICING, Job::STATUS_INVOICED,
             ],
             self::BUCKET_CANCELLED => [Job::STATUS_CANCELLED, Job::STATUS_REJECTED],
             default => [],
         };
     }
+
+    /**
+     * In-flight statuses — kept as a constant so the sub-tile strip and
+     * the bucket filter stay in lockstep. The "Delivered" status sits
+     * here intentionally until ops completes the job; the delivered
+     * tile label makes that explicit.
+     */
+    public const LIVE_STATUSES = [
+        Job::STATUS_DRIVER_ASSIGNED,
+        Job::STATUS_READY_FOR_COLLECTION,
+        Job::STATUS_COLLECTED,
+        Job::STATUS_IN_TRANSIT,
+        Job::STATUS_IN_PROGRESS,
+        Job::STATUS_DELIVERED,
+    ];
 
     public function with(): array
     {
@@ -177,9 +214,19 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         $total = (clone $countsBase)->count();
         $openCount      = (clone $countsBase)->whereIn('status', $this->bucketStatuses(self::BUCKET_OPEN))->count();
-        $transitCount   = (clone $countsBase)->whereIn('status', $this->bucketStatuses(self::BUCKET_IN_TRANSIT))->count();
-        $deliveredCount = (clone $countsBase)->whereIn('status', $this->bucketStatuses(self::BUCKET_DELIVERED))->count();
+        $liveCount      = (clone $countsBase)->whereIn('status', $this->bucketStatuses(self::BUCKET_LIVE))->count();
+        $completedCount = (clone $countsBase)->whereIn('status', $this->bucketStatuses(self::BUCKET_COMPLETED))->count();
         $cancelledCount = (clone $countsBase)->whereIn('status', $this->bucketStatuses(self::BUCKET_CANCELLED))->count();
+
+        // When bucket=live, break the count down by exact status so ops
+        // still see the "how many keys are stuck at pickup vs moving"
+        // breakdown they had on the old /tracking page.
+        $liveStatusCounts = [];
+        if ($this->bucket === self::BUCKET_LIVE) {
+            foreach (self::LIVE_STATUSES as $s) {
+                $liveStatusCounts[$s] = (clone $countsBase)->where('status', $s)->count();
+            }
+        }
 
         // Lookups for the filter dropdowns. Brands are global; companies
         // are only shown to ops/owner because OEMs don't need to (and
@@ -196,15 +243,27 @@ new #[Layout('components.layouts.app')] class extends Component {
             ? 'admin.orders.show'
             : 'oem.bookings.show';
 
+        // Tile labels for the Live sub-strip. Override "Delivered" so
+        // ops understand the tile counts vehicles the driver has
+        // dropped off but that ops hasn't closed out yet — finished
+        // jobs move to the Completed bucket.
+        $liveTileLabels = [];
+        foreach (self::LIVE_STATUSES as $s) {
+            $liveTileLabels[$s] = Job::PHASE1_STATUS_LABELS[$s] ?? Str::title(str_replace('_', ' ', $s));
+        }
+        $liveTileLabels[Job::STATUS_DELIVERED] = 'Delivered (awaiting completion)';
+
         return [
             'jobs'            => $base->paginate(24),
             'brands'          => $brands,
             'companies'       => $companies,
             'total'           => $total,
             'openCount'       => $openCount,
-            'transitCount'    => $transitCount,
-            'deliveredCount'  => $deliveredCount,
+            'liveCount'       => $liveCount,
+            'completedCount'  => $completedCount,
             'cancelledCount'  => $cancelledCount,
+            'liveStatusCounts' => $liveStatusCounts,
+            'liveTileLabels'  => $liveTileLabels,
             'statusLabels'    => Job::PHASE1_STATUS_LABELS,
             'detailRoute'     => $detailRoute,
             'canFilterCompany' => $user->isInternal() || $user->belongsToPlatformOwner(),
@@ -244,7 +303,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <div>
                     <p class="text-[11px] font-semibold uppercase tracking-[0.2em] text-indigo-200/80">Fleet Overview</p>
                     <h2 class="mt-1 text-xl sm:text-2xl font-semibold">{{ number_format($total) }} {{ Str::plural('vehicle', $total) }}</h2>
-                    <p class="mt-0.5 text-xs text-slate-300">Every movement you can see, filterable in one place.</p>
+                    <p class="mt-0.5 text-xs text-slate-300">Live movements and full fleet history &mdash; filter by status, brand or date.</p>
                 </div>
                 <div class="flex items-center gap-2">
                     <button wire:click="$set('viewMode', 'cards')" type="button"
@@ -262,21 +321,29 @@ new #[Layout('components.layouts.app')] class extends Component {
                 </div>
             </div>
 
-            {{-- Bucket pills --}}
+            {{-- Bucket pills. "Live" has a pulse dot to echo the old
+                 /tracking page and draw the eye — it's the bucket
+                 dispatch lives in.                                    --}}
             <div class="flex flex-wrap gap-2">
                 @php
                     $bucketPills = [
-                        ['k' => 'all',        'label' => 'All',          'count' => $total,           'accent' => 'bg-white/15 ring-white/25'],
-                        ['k' => 'open',       'label' => 'Open',         'count' => $openCount,       'accent' => 'bg-amber-500/25 ring-amber-300/50'],
-                        ['k' => 'in_transit', 'label' => 'In Transit',   'count' => $transitCount,    'accent' => 'bg-blue-500/25 ring-blue-300/50'],
-                        ['k' => 'delivered',  'label' => 'Delivered',    'count' => $deliveredCount,  'accent' => 'bg-emerald-500/25 ring-emerald-300/50'],
-                        ['k' => 'cancelled',  'label' => 'Cancelled',    'count' => $cancelledCount,  'accent' => 'bg-slate-500/25 ring-slate-300/40'],
+                        ['k' => 'all',       'label' => 'All',        'count' => $total,          'accent' => 'bg-white/15 ring-white/25',            'pulse' => false],
+                        ['k' => 'open',      'label' => 'Open',       'count' => $openCount,      'accent' => 'bg-amber-500/25 ring-amber-300/50',    'pulse' => false],
+                        ['k' => 'live',      'label' => 'Live',       'count' => $liveCount,      'accent' => 'bg-blue-500/25 ring-blue-300/50',      'pulse' => true],
+                        ['k' => 'completed', 'label' => 'Completed',  'count' => $completedCount, 'accent' => 'bg-emerald-500/25 ring-emerald-300/50','pulse' => false],
+                        ['k' => 'cancelled', 'label' => 'Cancelled',  'count' => $cancelledCount, 'accent' => 'bg-slate-500/25 ring-slate-300/40',    'pulse' => false],
                     ];
                 @endphp
                 @foreach($bucketPills as $b)
                     <button wire:click="$set('bucket', '{{ $b['k'] }}')" type="button"
                         class="inline-flex items-center gap-2 rounded-full px-3.5 py-1.5 text-xs font-semibold ring-1 transition
                         {{ $bucket === $b['k'] ? 'bg-white text-slate-900 ring-white' : $b['accent'] . ' text-white hover:bg-white/25' }}">
+                        @if($b['pulse'])
+                            <span class="relative flex h-1.5 w-1.5">
+                                <span class="absolute inline-flex h-full w-full animate-ping rounded-full {{ $bucket === $b['k'] ? 'bg-blue-400' : 'bg-white' }} opacity-75"></span>
+                                <span class="relative inline-flex h-1.5 w-1.5 rounded-full {{ $bucket === $b['k'] ? 'bg-blue-500' : 'bg-white' }}"></span>
+                            </span>
+                        @endif
                         {{ $b['label'] }}
                         <span class="rounded-full bg-white/30 px-1.5 py-0.5 text-[10px] tabular-nums
                             {{ $bucket === $b['k'] ? '!bg-slate-900 !text-white' : '' }}">{{ number_format($b['count']) }}</span>
@@ -285,6 +352,25 @@ new #[Layout('components.layouts.app')] class extends Component {
             </div>
         </div>
     </div>
+
+    {{-- ============================================================ --}}
+    {{-- Live sub-tiles — per-status breakdown when bucket=live.       --}}
+    {{-- Replaces the old /admin/tracking page. Ops uses these to      --}}
+    {{-- tell at a glance how many keys are stuck at pickup vs moving  --}}
+    {{-- vs delivered-but-not-closed.                                   --}}
+    {{-- ============================================================ --}}
+    @if($bucket === 'live' && !empty($liveStatusCounts))
+        <div class="mb-5 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+            @foreach($liveStatusCounts as $status => $count)
+                <button wire:click="$set('statusFilter', '{{ $statusFilter === $status ? '' : $status }}')" type="button"
+                    class="text-left rounded-lg border px-3 py-2.5 transition-colors
+                    {{ $statusFilter === $status ? 'border-blue-500 bg-blue-50 ring-2 ring-blue-100' : 'border-slate-200 bg-white hover:border-slate-300' }}">
+                    <p class="text-[10px] font-semibold uppercase tracking-wide text-slate-500 leading-tight">{{ $liveTileLabels[$status] ?? $status }}</p>
+                    <p class="mt-1 text-xl font-bold text-slate-900 tabular-nums">{{ number_format($count) }}</p>
+                </button>
+            @endforeach
+        </div>
+    @endif
 
     {{-- ============================================================ --}}
     {{-- Filters                                                       --}}

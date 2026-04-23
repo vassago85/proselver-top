@@ -10,7 +10,10 @@ Volt::route('planning', 'admin.planning')->name('planning');
 Volt::route('orders', 'admin.orders.index')->name('orders.index');
 Volt::route('orders/{job}', 'admin.orders.show')->name('orders.show');
 Volt::route('dispatch', 'admin.dispatch')->name('dispatch');
-Volt::route('tracking', 'admin.tracking')->name('tracking');
+// /admin/tracking has been merged into /admin/vehicles under the
+// "Live" bucket. Keep the route name so dashboard links and old
+// bookmarks still resolve — just 302 to the merged page.
+Route::redirect('tracking', '/admin/vehicles?bucket=live')->name('tracking');
 Volt::route('deliveries', 'admin.deliveries')->name('deliveries');
 Volt::route('vehicles', 'vehicles.index')->name('vehicles.index');
 Volt::route('documents', 'admin.documents.index')->name('documents.index');

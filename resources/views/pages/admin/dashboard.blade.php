@@ -166,7 +166,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             label="In Transit"
             :value="$inFlight"
             color="orange"
-            :href="route('admin.tracking')" />
+            :href="route('admin.vehicles.index', ['bucket' => 'live'])" />
 
         <x-stat-card
             label="Delivered Today"
@@ -215,8 +215,8 @@ new #[Layout('components.layouts.app')] class extends Component {
                     Live pipeline
                 </span>
             </div>
-            <a href="{{ route('admin.tracking') }}" class="text-xs font-semibold text-slate-600 hover:text-slate-900 inline-flex items-center gap-1 transition-colors">
-                Open tracking
+            <a href="{{ route('admin.vehicles.index', ['bucket' => 'live']) }}" class="text-xs font-semibold text-slate-600 hover:text-slate-900 inline-flex items-center gap-1 transition-colors">
+                Open live fleet
                 <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></svg>
             </a>
         </div>
