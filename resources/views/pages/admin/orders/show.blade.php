@@ -27,6 +27,25 @@ new #[Layout('components.layouts.app')] class extends Component {
             'createdBy.companies',
             'damageReportReleasedBy:id,name',
         ]);
+
+        // Auto-acknowledge damage for the dashboard strip the first time an
+        // internal operator opens this order while there's damage recorded.
+        // They've seen it with their own eyes now; the dashboard nag can
+        // stop. Release is still a separate, explicit action. External
+        // users (dealer/customer on a shared link) never ack.
+        $user = auth()->user();
+        if ($user
+            && $user->isInternal()
+            && $this->job->damage_acknowledged_at === null
+            && $this->job->documents
+                ->where('category', \App\Models\JobDocument::CATEGORY_DAMAGE_PHOTO)
+                ->isNotEmpty()
+        ) {
+            $this->job->forceFill([
+                'damage_acknowledged_at' => now(),
+                'damage_acknowledged_by' => $user->id,
+            ])->saveQuietly();
+        }
     }
 
     public function confirmOrder(): void
@@ -197,6 +216,13 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         $this->job->damage_report_released_at = now();
         $this->job->damage_report_released_by = auth()->id();
+        // Release implies review — stamp ack at the same time so the
+        // dashboard strip clears even if the operator skipped the
+        // view-the-order step and went straight to release.
+        if ($this->job->damage_acknowledged_at === null) {
+            $this->job->damage_acknowledged_at = now();
+            $this->job->damage_acknowledged_by = auth()->id();
+        }
         $this->job->save();
 
         AuditService::log('damage_report_released', 'job', $this->job->id, null, [

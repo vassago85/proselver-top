@@ -8,6 +8,33 @@ use Livewire\Volt\Component;
 use Livewire\Attributes\Layout;
 
 new #[Layout('components.layouts.app')] class extends Component {
+    /**
+     * One-click dismiss for a damage incident on the dashboard strip.
+     * Stamps damage_acknowledged_at so the incident drops off both the
+     * "Damage Reports" stat tile and the "Recent damage incidents" list
+     * without forcing the operator through the full release-to-customer
+     * flow. Release implies ack elsewhere; this is the lighter-weight
+     * "yes I've seen it" action ops needed to stop the dashboard
+     * repeatedly nagging about incidents they're already working.
+     */
+    public function dismissDamage(int $jobId): void
+    {
+        $user = auth()->user();
+        abort_unless($user && $user->isInternal(), 403);
+
+        $job = Job::find($jobId);
+        if (!$job) {
+            return;
+        }
+
+        $job->forceFill([
+            'damage_acknowledged_at' => now(),
+            'damage_acknowledged_by' => $user->id,
+        ])->save();
+
+        session()->flash('dashboard_ack', "Damage incident for #{$job->job_number} dismissed.");
+    }
+
     public function with(): array
     {
         // "New" from ops' point of view = anything that just landed and hasn't
@@ -87,40 +114,41 @@ new #[Layout('components.layouts.app')] class extends Component {
             ->limit(8)
             ->get();
 
-        // Damage pulse — counts + the latest incidents so ops can click
-        // straight into the offending order without going via the bookings
-        // list. We count distinct jobs (not photos) because two pictures
-        // of the same scuff is still one incident for ops' purposes.
-        //
-        // Dashboard only shows UNRELEASED damage. Once an operator has
-        // reviewed + released the report (damage_report_released_at is
-        // set) it drops off the dashboard — the full history still lives
-        // on /admin/damage for audit purposes.
+        // Damage pulse — only shows jobs with damage that ops has NOT
+        // acknowledged yet. Ack happens:
+        //   1. automatically on admin order page view (they've seen it),
+        //   2. via the inline Dismiss button on this strip, or
+        //   3. when ops explicitly releases the report to the customer.
+        // Once acked, the incident disappears from the dashboard. It
+        // stays in /admin/damage for audit / release workflow.
         $damageJobIds = JobDocument::where('category', JobDocument::CATEGORY_DAMAGE_PHOTO)
             ->distinct()
             ->pluck('job_id');
-        $pendingReleaseCount = Job::whereIn('id', $damageJobIds)
+
+        $unackedBase = Job::whereIn('id', $damageJobIds)
+            ->whereNull('damage_acknowledged_at');
+
+        // Headline is unreleased-to-customer incidents — this is still the
+        // number ops should drive to zero for customer sign-off.
+        $pendingReleaseCount = (clone $unackedBase)
             ->whereNull('damage_report_released_at')
             ->count();
-        // "Open" here means still operationally live (not completed / not
-        // cancelled) AND not yet signed off by ops. Released incidents
-        // are considered handled and no longer shown here.
-        $openDamageCount = Job::whereIn('id', $damageJobIds)
+        // "Open" = still operationally live (not completed / cancelled) AND
+        // not yet acknowledged by ops.
+        $openDamageCount = (clone $unackedBase)
             ->whereNotIn('status', [Job::STATUS_COMPLETED, Job::STATUS_CANCELLED])
-            ->whereNull('damage_report_released_at')
             ->count();
         $damageLast7d = JobDocument::where('category', JobDocument::CATEGORY_DAMAGE_PHOTO)
             ->where('created_at', '>=', now()->subDays(7))
             ->count();
 
-        $recentDamageJobs = Job::with([
+        $recentDamageJobs = (clone $unackedBase)
+            ->with([
                 'company:id,name',
                 'pickupLocation:id,company_name,city',
                 'deliveryLocation:id,company_name,city',
                 'brand:id,name',
             ])
-            ->whereIn('id', $damageJobIds)
-            ->whereNull('damage_report_released_at')
             ->withCount(['documents as damage_photos_count' => function ($q) {
                 $q->where('category', JobDocument::CATEGORY_DAMAGE_PHOTO);
             }])
@@ -263,24 +291,18 @@ new #[Layout('components.layouts.app')] class extends Component {
             :href="route('admin.drivers.index')" />
 
         @php
-            // Damage Reports tile. Headline is the number of incidents
-            // still awaiting operator sign-off — these are the customers
-            // currently blocked from seeing their report, so it's the
-            // number ops should drive to zero. Once a report is reviewed
-            // and released, the job drops off the dashboard entirely;
-            // only the full /admin/damage page retains the archive.
+            // Damage Reports tile. Counts unacknowledged incidents —
+            // everything ops has either opened, dismissed, or formally
+            // released has already dropped off this number.
             $damageHelper = match (true) {
-                $pendingReleaseCount > 0 && $openDamageCount > 0 && $openDamageCount !== $pendingReleaseCount
-                    => $pendingReleaseCount . ' awaiting review · ' . $openDamageCount . ' still active',
-                $pendingReleaseCount > 0
-                    => $pendingReleaseCount . ' awaiting review',
+                $openDamageCount > 0 && $pendingReleaseCount > 0 && $openDamageCount !== $pendingReleaseCount
+                    => $openDamageCount . ' new · ' . $pendingReleaseCount . ' still to release',
+                $openDamageCount > 0
+                    => $openDamageCount . ' awaiting review',
                 default
-                    => 'All reports reviewed',
+                    => 'No new damage',
             };
-            $damageColor = match (true) {
-                $pendingReleaseCount > 0 => 'red',
-                default                  => 'slate',
-            };
+            $damageColor = $openDamageCount > 0 ? 'red' : 'slate';
         @endphp
         <x-stat-card
             label="Damage Reports"
@@ -347,11 +369,16 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></svg>
             </a>
         </div>
+        @if(session('dashboard_ack'))
+            <div class="px-6 py-2 text-[11px] text-emerald-700 bg-emerald-50 border-b border-emerald-100">
+                {{ session('dashboard_ack') }}
+            </div>
+        @endif
         <ul class="divide-y divide-rose-100">
             @foreach($recentDamageJobs as $dmgJob)
-            <li>
+            <li class="flex items-center gap-4 px-6 py-3 hover:bg-rose-50/60 transition-colors">
                 <a href="{{ route('admin.orders.show', $dmgJob) }}#damage-section"
-                   class="flex items-center gap-4 px-6 py-3 hover:bg-rose-50/60 transition-colors">
+                   class="flex items-center gap-4 min-w-0 flex-1">
                     <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-rose-100 text-rose-700 shrink-0">
                         <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
                     </div>
@@ -376,8 +403,14 @@ new #[Layout('components.layouts.app')] class extends Component {
                     <div class="hidden sm:block text-right text-[11px] text-slate-400 shrink-0">
                         {{ $dmgJob->updated_at?->diffForHumans() }}
                     </div>
-                    <svg class="h-4 w-4 text-slate-300 shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
                 </a>
+                <button type="button"
+                        wire:click="dismissDamage({{ $dmgJob->id }})"
+                        wire:confirm="Dismiss this incident from the dashboard? It stays available in /admin/damage."
+                        title="Dismiss from dashboard"
+                        class="shrink-0 inline-flex items-center justify-center h-7 w-7 rounded-md text-slate-400 hover:text-rose-700 hover:bg-rose-100 transition-colors">
+                    <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+                </button>
             </li>
             @endforeach
         </ul>

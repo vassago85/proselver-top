@@ -255,6 +255,8 @@ class Job extends Model
         'customer_notes',
         'damage_report_released_at',
         'damage_report_released_by',
+        'damage_acknowledged_at',
+        'damage_acknowledged_by',
     ];
 
     protected function casts(): array
@@ -293,6 +295,7 @@ class Job extends Model
             'completed_at' => 'datetime',
             'invoiced_at' => 'datetime',
             'damage_report_released_at' => 'datetime',
+            'damage_acknowledged_at' => 'datetime',
             'cancelled_at' => 'datetime',
             'distance_km' => 'decimal:2',
             'estimated_duration_minutes' => 'integer',
@@ -488,6 +491,11 @@ class Job extends Model
     public function createdBy(): BelongsTo
     {
         return $this->belongsTo(User::class, 'created_by_user_id');
+    }
+
+    public function damageAcknowledgedBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'damage_acknowledged_by');
     }
 
     public function damageReportReleasedBy(): BelongsTo
