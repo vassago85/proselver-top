@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 
 use App\Models\Job;
 use App\Models\User;
@@ -61,7 +61,7 @@ new #[Layout('components.layouts.app')] class extends Component {
     /**
      * One-click verification bridge out of the legacy PENDING_VERIFICATION
      * state into the Phase 1 chain at RECEIVED. Ops would previously have
-     * had to walk the job through verified → approved → awaiting confirmation
+     * had to walk the job through verified â†’ approved â†’ awaiting confirmation
      * on /admin/bookings; this collapses all of that into a single action
      * on the order detail page where they're already looking at the PO.
      */
@@ -135,7 +135,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             return;
         }
         AuditService::log('collected', 'job', $this->job->id);
-        session()->flash('success', "Order {$this->job->job_number} — driver arrived at pickup.");
+        session()->flash('success', "Order {$this->job->job_number} â€” driver arrived at pickup.");
     }
 
     public function markInTransit(): void
@@ -207,7 +207,7 @@ new #[Layout('components.layouts.app')] class extends Component {
     /**
      * Release the damage report to the customer. Gated by
      * JobPolicy::releaseDamageReport so only ops/owner/super can sign
-     * it off — junior users see a disabled button (and the policy
+     * it off â€” junior users see a disabled button (and the policy
      * check here also blocks a direct request).
      */
     public function releaseDamageReport(): void
@@ -216,7 +216,7 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         $this->job->damage_report_released_at = now();
         $this->job->damage_report_released_by = auth()->id();
-        // Release implies review — stamp ack at the same time so the
+        // Release implies review â€” stamp ack at the same time so the
         // dashboard strip clears even if the operator skipped the
         // view-the-order step and went straight to release.
         if ($this->job->damage_acknowledged_at === null) {
@@ -282,21 +282,252 @@ new #[Layout('components.layouts.app')] class extends Component {
         </div>
     </x-slot:header>
 
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {{-- Left column --}}
-        <div class="lg:col-span-2 space-y-6">
+    @php
+        // -------------------------------------------------------------
+        // Next-step resolver
+        // -------------------------------------------------------------
+        // Single source of truth for the hero. Each entry maps a status
+        // to (title, description, variant). The actual buttons are
+        // rendered below â€” this table is purely the wording ops sees so
+        // they never have to guess what's next.
+        // -------------------------------------------------------------
+        $isTerminal    = in_array($job->status, [Job::STATUS_COMPLETED, Job::STATUS_CANCELLED], true);
+        $isPreRelease  = in_array($job->status, [Job::STATUS_DRIVER_ASSIGNED, Job::STATUS_READY_FOR_COLLECTION], true);
+        $isInFlight    = in_array($job->status, [Job::STATUS_COLLECTED, Job::STATUS_IN_TRANSIT, Job::STATUS_IN_PROGRESS], true);
+        $isCancellable = in_array($job->status, [
+            Job::STATUS_RECEIVED,
+            Job::STATUS_AWAITING_CUSTOMER_CONFIRMATION,
+            Job::STATUS_CONFIRMED,
+            Job::STATUS_PLANNED,
+            Job::STATUS_DRIVER_ASSIGNED,
+            Job::STATUS_READY_FOR_COLLECTION,
+        ], true);
 
-            {{-- Header card --}}
-            <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-                <div class="flex items-center justify-between mb-4">
-                    <div>
-                        <h3 class="text-lg font-semibold text-gray-900">{{ $job->job_number }}</h3>
-                        <p class="text-sm text-gray-500">{{ $job->company?->name }}</p>
+        $nextStep = match ($job->status) {
+            Job::STATUS_PENDING_VERIFICATION => [
+                'title'   => 'Verify this booking',
+                'body'    => 'Confirm the PO and vehicle details are correct. Verification releases the booking into the active queue.',
+                'variant' => 'amber',
+            ],
+            Job::STATUS_RECEIVED => $job->company?->requiresExternalConfirmation()
+                ? ['title' => 'Send to customer for confirmation', 'body' => 'The customer will receive a confirmation link to review the booking.', 'variant' => 'amber']
+                : ['title' => 'Confirm the order',                   'body' => 'Lock in the booking so it can be scheduled for dispatch.',               'variant' => 'blue'],
+            Job::STATUS_AWAITING_CUSTOMER_CONFIRMATION => [
+                'title'   => 'Waiting for the customer',
+                'body'    => 'We\'ve emailed the confirmation link. Nothing for you to do until they respond.',
+                'variant' => 'slate',
+            ],
+            Job::STATUS_CONFIRMED => [
+                'title'   => 'Plan the order',
+                'body'    => 'Mark the order as planned so it appears on the planning queue.',
+                'variant' => 'indigo',
+            ],
+            Job::STATUS_PLANNED => [
+                'title'   => 'Assign a driver',
+                'body'    => 'Pick the driver who\'ll collect this vehicle and assign the job.',
+                'variant' => 'purple',
+            ],
+            Job::STATUS_DRIVER_ASSIGNED, Job::STATUS_READY_FOR_COLLECTION => [
+                'title'   => 'Print the delivery paperwork',
+                'body'    => 'Collection Note + Manual Inspection + POD (5 pages). Print double-sided and hand to the driver before the vehicle leaves. Then mark the driver arrived at pickup.',
+                'variant' => 'green',
+            ],
+            Job::STATUS_COLLECTED => [
+                'title'   => 'Mark in transit once the driver departs',
+                'body'    => 'Driver has taken possession. Flip to In Transit the moment they pull out.',
+                'variant' => 'orange',
+            ],
+            Job::STATUS_IN_TRANSIT => [
+                'title'   => 'Mark as delivered when the driver arrives',
+                'body'    => 'Update the status the moment the vehicle is handed over at the destination.',
+                'variant' => 'emerald',
+            ],
+            Job::STATUS_DELIVERED => [
+                'title'   => 'Complete the order',
+                'body'    => 'Final confirmation that the customer has signed for the vehicle.',
+                'variant' => 'green',
+            ],
+            Job::STATUS_COMPLETED => [
+                'title'   => 'Order complete',
+                'body'    => 'No further action needed. Paperwork and photos are archived below.',
+                'variant' => 'done',
+            ],
+            Job::STATUS_CANCELLED => [
+                'title'   => 'Order cancelled',
+                'body'    => 'This order was cancelled. No further action needed.',
+                'variant' => 'cancelled',
+            ],
+            default => [
+                'title'   => 'Review and progress this order',
+                'body'    => 'No automated next step defined for this status.',
+                'variant' => 'slate',
+            ],
+        };
+
+        // Tailwind class bank keyed by variant so the hero stays tidy.
+        $variantClasses = [
+            'amber'     => ['ring' => 'border-amber-200',   'bg' => 'bg-amber-50/60',     'pill' => 'bg-amber-100 text-amber-800',     'dot' => 'bg-amber-500'],
+            'blue'      => ['ring' => 'border-blue-200',    'bg' => 'bg-blue-50/60',      'pill' => 'bg-blue-100 text-blue-800',       'dot' => 'bg-blue-500'],
+            'indigo'    => ['ring' => 'border-indigo-200',  'bg' => 'bg-indigo-50/60',    'pill' => 'bg-indigo-100 text-indigo-800',   'dot' => 'bg-indigo-500'],
+            'purple'    => ['ring' => 'border-purple-200',  'bg' => 'bg-purple-50/60',    'pill' => 'bg-purple-100 text-purple-800',   'dot' => 'bg-purple-500'],
+            'green'     => ['ring' => 'border-green-200',   'bg' => 'bg-green-50/60',     'pill' => 'bg-green-100 text-green-800',     'dot' => 'bg-green-500'],
+            'orange'    => ['ring' => 'border-orange-200',  'bg' => 'bg-orange-50/60',    'pill' => 'bg-orange-100 text-orange-800',   'dot' => 'bg-orange-500'],
+            'emerald'   => ['ring' => 'border-emerald-200', 'bg' => 'bg-emerald-50/60',   'pill' => 'bg-emerald-100 text-emerald-800', 'dot' => 'bg-emerald-500'],
+            'slate'     => ['ring' => 'border-slate-200',   'bg' => 'bg-slate-50/60',     'pill' => 'bg-slate-100 text-slate-700',     'dot' => 'bg-slate-400'],
+            'done'      => ['ring' => 'border-emerald-200', 'bg' => 'bg-emerald-50/40',   'pill' => 'bg-emerald-100 text-emerald-800', 'dot' => 'bg-emerald-500'],
+            'cancelled' => ['ring' => 'border-slate-200',   'bg' => 'bg-slate-50/60',     'pill' => 'bg-slate-100 text-slate-700',     'dot' => 'bg-slate-400'],
+        ];
+        $v = $variantClasses[$nextStep['variant']];
+    @endphp
+
+    <div class="space-y-6">
+
+        {{-- Status & Next Step â€” the page's single source of directive.
+             Merges the old "header card" and the old right-hand Actions
+             panel into one hero so ops never has to choose between two
+             primary buttons; the next move is always one click from the
+             top of the page. --}}
+        <div class="rounded-2xl border {{ $v['ring'] }} bg-white shadow-sm overflow-hidden">
+            <div class="flex flex-wrap items-start justify-between gap-4 px-6 py-5 border-b border-gray-100">
+                <div class="min-w-0">
+                    <div class="flex items-center gap-2 flex-wrap">
+                        <h2 class="text-xl font-semibold text-gray-900 tracking-tight">{{ $job->job_number ?? $job->uuid }}</h2>
+                        <x-status-badge :status="$job->status" />
                     </div>
-                    <x-status-badge :status="$job->status" />
+                    <p class="mt-1 text-sm text-gray-500 truncate">
+                        {{ $job->company?->name ?? 'â€”' }}
+                        @if($job->brand || $job->model_name)
+                            &middot; {{ trim(($job->brand?->name ?? '') . ' ' . ($job->model_name ?? '')) }}
+                        @endif
+                        @if($job->scheduled_date)
+                            &middot; {{ $job->scheduled_date->format('d M Y') }}
+                        @endif
+                    </p>
                 </div>
-                <p class="text-sm text-gray-600">{{ $job->phase1StatusLabel() }}</p>
+                @if($job->driver)
+                    <div class="text-right">
+                        <p class="text-[10px] font-semibold uppercase tracking-[0.15em] text-gray-400">Driver</p>
+                        <p class="text-sm font-medium text-gray-900">{{ $job->driver->name }}</p>
+                    </div>
+                @endif
             </div>
+
+            <div class="{{ $v['bg'] }} px-6 py-5">
+                <div class="flex items-start gap-3">
+                    <span class="mt-1 inline-flex h-2 w-2 shrink-0 rounded-full {{ $v['dot'] }} {{ !$isTerminal ? 'node-pulse' : '' }}"></span>
+                    <div class="min-w-0 flex-1">
+                        <p class="text-[10px] font-semibold uppercase tracking-[0.2em] text-gray-500">Next step</p>
+                        <h3 class="mt-0.5 text-base font-semibold text-gray-900">{{ $nextStep['title'] }}</h3>
+                        <p class="mt-1 text-sm text-gray-600 leading-relaxed">{{ $nextStep['body'] }}</p>
+                    </div>
+                </div>
+
+                {{-- Primary CTA â€” resolves per status. Only one primary
+                     button is ever shown; secondary actions are rendered
+                     in the row below to keep the focal point clean. --}}
+                <div class="mt-4 flex flex-wrap items-center gap-2">
+                    @if($job->status === Job::STATUS_PENDING_VERIFICATION)
+                        @can('verify', $job)
+                            <button wire:click="verifyBooking" wire:confirm="Verify this booking?"
+                                class="inline-flex items-center gap-2 rounded-lg bg-amber-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-amber-500 shadow-sm transition-colors">
+                                <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2.25" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="m9 11 3 3L22 4"/></svg>
+                                Verify &amp; Release to Queue
+                            </button>
+                        @else
+                            <span class="text-xs text-gray-500">Waiting for ops to verify.</span>
+                        @endcan
+                    @elseif($job->status === Job::STATUS_RECEIVED)
+                        @if($job->company?->requiresExternalConfirmation())
+                            <button wire:click="sendToCustomer" wire:confirm="Send to customer for confirmation?"
+                                class="inline-flex items-center gap-2 rounded-lg bg-amber-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-amber-500 shadow-sm transition-colors">
+                                Send to Customer for Confirmation
+                            </button>
+                        @else
+                            <button wire:click="confirmOrder" wire:confirm="Confirm this order?"
+                                class="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-500 shadow-sm transition-colors">
+                                Confirm Order
+                            </button>
+                        @endif
+                    @elseif($job->status === Job::STATUS_CONFIRMED)
+                        <button wire:click="planOrder" wire:confirm="Mark as planned?"
+                            class="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-500 shadow-sm transition-colors">
+                            Plan Order
+                        </button>
+                    @elseif($job->status === Job::STATUS_PLANNED)
+                        <div class="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+                            <select wire:model="driverId" class="rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-purple-500 focus:ring-purple-500">
+                                <option value="">Select driverâ€¦</option>
+                                @foreach($drivers as $d)
+                                    <option value="{{ $d->id }}">{{ $d->name }}</option>
+                                @endforeach
+                            </select>
+                            <button wire:click="assignDriver"
+                                class="inline-flex items-center gap-2 rounded-lg bg-purple-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-purple-500 shadow-sm transition-colors">
+                                Assign Driver
+                            </button>
+                        </div>
+                    @elseif($isPreRelease)
+                        {{-- Paperwork-then-collect is a two-step operation; the
+                             hero shows both as peers, Print first (literal next
+                             step) then Mark Arrived as a secondary CTA once the
+                             paper has been handed over. --}}
+                        @can('generateCollectionNote', $job)
+                            <a href="{{ route('collection-note.download', $job) }}" target="_blank"
+                                class="inline-flex items-center gap-2 rounded-lg bg-green-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-green-500 shadow-sm transition-colors">
+                                <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+                                Print Paperwork
+                            </a>
+                        @endcan
+                        <button wire:click="markCollected" wire:confirm="Has the driver arrived at the pickup location with the paperwork signed?"
+                            class="inline-flex items-center gap-2 rounded-lg border border-teal-600 bg-white px-4 py-2.5 text-sm font-semibold text-teal-700 hover:bg-teal-50 transition-colors">
+                            Mark Driver Arrived at Pickup
+                        </button>
+                    @elseif($job->status === Job::STATUS_COLLECTED)
+                        <button wire:click="markInTransit" wire:confirm="Has the driver departed with the vehicle? Mark as in transit?"
+                            class="inline-flex items-center gap-2 rounded-lg bg-orange-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-orange-500 shadow-sm transition-colors">
+                            Mark In Transit (Departed)
+                        </button>
+                    @elseif($job->status === Job::STATUS_IN_TRANSIT)
+                        <button wire:click="markDelivered" wire:confirm="Mark as delivered?"
+                            class="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-500 shadow-sm transition-colors">
+                            Mark Delivered
+                        </button>
+                    @elseif($job->status === Job::STATUS_DELIVERED)
+                        <button wire:click="completeOrder" wire:confirm="Complete this order?"
+                            class="inline-flex items-center gap-2 rounded-lg bg-green-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-green-500 shadow-sm transition-colors">
+                            Complete Order
+                        </button>
+                    @elseif($isTerminal)
+                        <span class="inline-flex items-center gap-2 text-sm font-medium text-emerald-700">
+                            <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+                            {{ $job->status === Job::STATUS_CANCELLED ? 'Cancelled' : 'All done' }}
+                        </span>
+                    @endif
+
+                    {{-- Subtle secondary actions on the same row; kept
+                         visually quieter than the primary CTA by using
+                         outline + ghost treatments. --}}
+                    @can('generateCollectionNote', $job)
+                        @if(!$isPreRelease)
+                            <a href="{{ route('collection-note.download', $job) }}" target="_blank"
+                                class="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3.5 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">
+                                <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+                                Collection Note
+                            </a>
+                        @endif
+                    @endcan
+
+                    @if($isCancellable)
+                        @can('cancel', $job)
+                            <button wire:click="openCancelModal"
+                                class="inline-flex items-center gap-2 rounded-lg border border-red-200 bg-white px-3.5 py-2.5 text-sm font-medium text-red-700 hover:bg-red-50 transition-colors">
+                                Cancel Order
+                            </button>
+                        @endcan
+                    @endif
+                </div>
+            </div>
+        </div>
 
             {{-- Damage banner
                  If any damage photo has been uploaded against this job we surface
@@ -347,7 +578,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                                     @endif
                                     @if($dmg->captured_at)
                                         <div class="px-1.5 py-1 text-[10px] bg-white border-t border-rose-100 text-rose-800 truncate">
-                                            {{ $dmg->captured_at->format('d M · H:i') }}
+                                            {{ $dmg->captured_at->format('d M Â· H:i') }}
                                         </div>
                                     @endif
                                 </a>
@@ -372,7 +603,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                                 <div class="rounded-md bg-white border border-rose-200 px-3 py-2 text-sm text-rose-900">
                                     <p class="whitespace-pre-line">{{ $note['text'] }}</p>
                                     @if($note['at'])
-                                        <p class="mt-1 text-[11px] text-rose-700/70">{{ $note['at']->format('d M Y · H:i') }}</p>
+                                        <p class="mt-1 text-[11px] text-rose-700/70">{{ $note['at']->format('d M Y Â· H:i') }}</p>
                                     @endif
                                 </div>
                             @endforeach
@@ -393,7 +624,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                                     <svg class="h-4 w-4 mt-0.5 text-emerald-600 shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
                                     <div class="text-xs text-emerald-900 leading-relaxed min-w-0 flex-1">
                                         <strong class="text-emerald-900">Released to customer</strong>
-                                        on {{ $job->damage_report_released_at->format('d M Y · H:i') }}
+                                        on {{ $job->damage_report_released_at->format('d M Y Â· H:i') }}
                                         @if($job->damageReportReleasedBy)
                                             by {{ $job->damageReportReleasedBy->name }}
                                         @endif.
@@ -411,7 +642,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                         </div>
 
                         <div class="mt-4 flex flex-wrap items-center gap-2">
-                            {{-- Internal users always see the download button — they need
+                            {{-- Internal users always see the download button â€” they need
                                  to review before releasing. --}}
                             <a href="{{ route('damage-report.download', $job) }}" target="_blank" rel="noopener"
                                class="inline-flex items-center gap-2 rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-500 transition-colors">
@@ -426,7 +657,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                                             class="inline-flex items-center gap-2 rounded-lg border border-emerald-600 bg-white px-4 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-50 transition-colors">
                                         <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
                                         <span wire:loading.remove wire:target="releaseDamageReport">Release to customer</span>
-                                        <span wire:loading wire:target="releaseDamageReport">Releasing…</span>
+                                        <span wire:loading wire:target="releaseDamageReport">Releasingâ€¦</span>
                                     </button>
                                 @else
                                     <button wire:click="revokeDamageReport"
@@ -434,7 +665,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                                             class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-colors">
                                         <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="m4.93 4.93 14.14 14.14"/><circle cx="12" cy="12" r="10"/></svg>
                                         <span wire:loading.remove wire:target="revokeDamageReport">Revoke access</span>
-                                        <span wire:loading wire:target="revokeDamageReport">Revoking…</span>
+                                        <span wire:loading wire:target="revokeDamageReport">Revokingâ€¦</span>
                                     </button>
                                 @endif
                             @else
@@ -455,18 +686,18 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <h3 class="text-lg font-semibold text-gray-900 mb-4">Order Details</h3>
                 <dl class="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
                     <div><dt class="text-gray-500">Type</dt><dd class="font-medium">{{ $job->isTransport() ? 'Transport' : 'Yard Work' }}</dd></div>
-                    <div><dt class="text-gray-500">Company</dt><dd class="font-medium">{{ $job->company?->name ?? '—' }}</dd></div>
+                    <div><dt class="text-gray-500">Company</dt><dd class="font-medium">{{ $job->company?->name ?? 'â€”' }}</dd></div>
                     @if($job->brand)
                     <div><dt class="text-gray-500">Brand</dt><dd class="font-medium">{{ $job->brand->name }}</dd></div>
                     @endif
                     @if($job->model_name)
                     <div><dt class="text-gray-500">Model</dt><dd class="font-medium">{{ $job->model_name }}</dd></div>
                     @endif
-                    <div><dt class="text-gray-500">VIN</dt><dd class="font-medium">{{ $job->vin ?: '—' }}</dd></div>
+                    <div><dt class="text-gray-500">VIN</dt><dd class="font-medium">{{ $job->vin ?: 'â€”' }}</dd></div>
                     @if($job->registration)
                     <div><dt class="text-gray-500">Registration</dt><dd class="font-medium">{{ $job->registration }}</dd></div>
                     @endif
-                    <div><dt class="text-gray-500">Scheduled Date</dt><dd class="font-medium">{{ $job->scheduled_date?->format('d M Y') ?? '—' }}</dd></div>
+                    <div><dt class="text-gray-500">Scheduled Date</dt><dd class="font-medium">{{ $job->scheduled_date?->format('d M Y') ?? 'â€”' }}</dd></div>
                 </dl>
             </div>
 
@@ -491,7 +722,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                         <svg class="h-4 w-4 text-green-600" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>
                         Pickup
                     </h4>
-                    <p class="text-sm font-medium text-gray-900">{{ $job->pickupLocation?->shortDisplay() ?? '—' }}</p>
+                    <p class="text-sm font-medium text-gray-900">{{ $job->pickupLocation?->shortDisplay() ?? 'â€”' }}</p>
                     @if($job->pickup_contact_name)
                         <p class="text-sm text-gray-600 mt-2">{{ $job->pickup_contact_name }}</p>
                     @endif
@@ -504,7 +735,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                         <svg class="h-4 w-4 text-red-600" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>
                         Delivery
                     </h4>
-                    <p class="text-sm font-medium text-gray-900">{{ $job->deliveryLocation?->shortDisplay() ?? '—' }}</p>
+                    <p class="text-sm font-medium text-gray-900">{{ $job->deliveryLocation?->shortDisplay() ?? 'â€”' }}</p>
                     @if($job->delivery_contact_name)
                         <p class="text-sm text-gray-600 mt-2">{{ $job->delivery_contact_name }}</p>
                     @endif
@@ -520,7 +751,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             @php
                 $dp = $job->driver->driverProfile;
                 // When a vehicle is collected or in transit, the tracker ID is
-                // the single most useful piece of info on this page — ops needs
+                // the single most useful piece of info on this page â€” ops needs
                 // it to pull a live location. Pin it to the top of the driver
                 // card in that window so nobody has to hunt for it.
                 $isInFlight = in_array($job->status, [
@@ -571,42 +802,32 @@ new #[Layout('components.layouts.app')] class extends Component {
             @endif
 
             {{-- Documents & Purchase Orders
-                 Documents split into two buckets so ops can scan paperwork and
-                 petty cash separately:
-                   * Paperwork / vehicle photos — POD, collection note, damage
-                     photos, generic photos. Anyone on the job can see these
-                     via JobDocumentPolicy, so the same block is rendered on
-                     customer/dealer views too.
-                   * Petty cash — fuel/food/toll/parking slips. Ops + owner
-                     only. The policy check enforces this server-side even if
-                     the template drops its guard.
-                 Images get a thumbnail; non-images fall back to a paper-clip
-                 + original filename link. Both use the auth-gated
-                 documents.view route so the disk (r2 or local) is abstracted.
+                 The documents list itself is collapsed by default (via the
+                 <x-documents-list> component) so a busy job doesn't bury
+                 the rest of the page under a wall of thumbnails. Purchase
+                 orders get their own small panel above the list â€” they're
+                 the one piece of paperwork ops reaches for first.
+                 Internal-only categories (fuel/food/toll/parking slips)
+                 stay visible to admins via hideInternalOnly=false.
             --}}
-            @php
-                $paperwork = $job->documents->reject(fn($d) => in_array($d->category, \App\Models\JobDocument::pettyCashCategories(), true));
-                $pettyCash = $job->documents->filter(fn($d) => in_array($d->category, \App\Models\JobDocument::pettyCashCategories(), true));
-                $isImage = fn($d) => str_starts_with((string) $d->mime_type, 'image/');
-                $kb = fn($d) => number_format(max($d->size_bytes, 0) / 1024, 1);
-            @endphp
-
             @if($job->documents->isNotEmpty() || $job->purchaseOrders->isNotEmpty())
-            <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-                <h3 class="text-lg font-semibold text-gray-900 mb-4">Documents</h3>
+            <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 space-y-5">
 
                 @if($job->purchaseOrders->isNotEmpty())
-                <div class="mb-6">
+                <div>
                     <h4 class="text-sm font-semibold text-gray-700 mb-2">Purchase Orders</h4>
-                    <ul class="divide-y divide-gray-100">
+                    <ul class="divide-y divide-gray-100 rounded-lg border border-gray-100">
                         @foreach($job->purchaseOrders as $po)
-                        <li class="py-2 flex items-center justify-between">
+                        <li class="py-2 px-3 flex items-center justify-between">
                             <div class="text-sm">
                                 <span class="font-medium text-gray-900">{{ $po->po_number }}</span>
                                 <span class="text-gray-500 ml-2">R{{ number_format($po->po_amount, 2) }}</span>
                             </div>
                             @if($po->document_path)
-                            <a href="{{ route('po.preview', $po->id) }}" target="_blank" class="text-xs font-medium text-blue-600 hover:text-blue-800">Download</a>
+                            <div class="flex items-center gap-3 text-xs font-medium">
+                                <a href="{{ route('po.preview', $po->id) }}" target="_blank" rel="noopener" class="text-blue-600 hover:text-blue-800">View</a>
+                                <a href="{{ route('po.preview', $po->id) }}?download=1" class="text-gray-600 hover:text-gray-900">Download</a>
+                            </div>
                             @endif
                         </li>
                         @endforeach
@@ -614,312 +835,96 @@ new #[Layout('components.layouts.app')] class extends Component {
                 </div>
                 @endif
 
-                @if($paperwork->isNotEmpty())
-                <div class="mb-6">
-                    <h4 class="text-sm font-semibold text-gray-700 mb-3">Vehicle photos &amp; paperwork</h4>
-                    <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-                        @foreach($paperwork as $doc)
-                        @can('view', $doc)
-                        <a href="{{ route('documents.view', $doc) }}" target="_blank" rel="noopener"
-                           class="group relative block rounded-lg border border-gray-200 hover:border-blue-400 hover:shadow-sm overflow-hidden bg-gray-50 transition">
-                            @if($isImage($doc))
-                                <div class="aspect-square overflow-hidden bg-gray-100">
-                                    <img src="{{ route('documents.view', $doc) }}" alt="{{ $doc->positionLabel() }}"
-                                         class="h-full w-full object-cover group-hover:scale-105 transition-transform" loading="lazy">
-                                </div>
-                            @else
-                                <div class="aspect-square flex items-center justify-center bg-gray-100 text-gray-400">
-                                    <svg class="h-10 w-10" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-                                        <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
-                                    </svg>
-                                </div>
-                            @endif
-                            <span class="absolute top-1.5 left-1.5 inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-semibold leading-none {{ $doc->positionBadgeClasses() }}">
-                                {{ $doc->positionLabel() }}
-                            </span>
-                            <div class="px-2 py-1.5 text-[11px] bg-white border-t border-gray-100">
-                                <p class="text-gray-500 truncate" title="{{ $doc->original_filename }}">{{ $kb($doc) }} KB</p>
-                                @if($doc->captured_at)
-                                <p class="text-gray-400">{{ $doc->captured_at->format('d M H:i') }}</p>
-                                @endif
-                            </div>
-                        </a>
-                        @endcan
-                        @endforeach
-                    </div>
-                </div>
-                @endif
-
-                @if($pettyCash->isNotEmpty() && (auth()->user()->isInternal() || auth()->user()->belongsToPlatformOwner()))
-                <div>
-                    <div class="flex items-center gap-2 mb-2">
-                        <h4 class="text-sm font-semibold text-gray-700">Driver expenses</h4>
-                        <span class="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700 border border-amber-200">
-                            Ops only
-                        </span>
-                    </div>
-                    <ul class="divide-y divide-gray-100 border border-gray-100 rounded-lg">
-                        @foreach($pettyCash as $doc)
-                        @can('view', $doc)
-                        <li class="py-2 px-3 flex items-center justify-between text-sm">
-                            <div>
-                                <p class="font-medium text-gray-900">{{ ucfirst(str_replace('_', ' ', $doc->category)) }}</p>
-                                <p class="text-xs text-gray-500">
-                                    {{ $doc->original_filename }} &middot; {{ $kb($doc) }} KB
-                                    @if($doc->captured_at) &middot; {{ $doc->captured_at->format('d M H:i') }} @endif
-                                </p>
-                            </div>
-                            <a href="{{ route('documents.view', $doc) }}" target="_blank" rel="noopener"
-                               class="text-xs font-medium text-blue-600 hover:text-blue-800">View</a>
-                        </li>
-                        @endcan
-                        @endforeach
-                    </ul>
-                </div>
+                @if($job->documents->isNotEmpty())
+                    <x-documents-list
+                        :documents="$job->documents"
+                        :hideInternalOnly="false"
+                        title="Documents"
+                        :recentDays="3" />
                 @endif
             </div>
             @endif
 
-            {{-- Timeline --}}
+            {{-- Timeline â€” collapsed by default. On a long-running job
+                 this list grows and buries the rest of the page; clicking
+                 the summary expands it in place. --}}
             @if($job->events->isNotEmpty())
             <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-                <h3 class="text-lg font-semibold text-gray-900 mb-4">Timeline</h3>
-                <ol class="relative border-l border-gray-200 ml-3 space-y-6">
-                    @foreach($job->events as $event)
-                    <li class="ml-6">
-                        <span class="absolute -left-2 flex h-4 w-4 items-center justify-center rounded-full bg-blue-100 ring-4 ring-white">
-                            <span class="h-2 w-2 rounded-full bg-blue-600"></span>
-                        </span>
-                        <h4 class="text-sm font-medium text-gray-900">{{ ucfirst(str_replace('_', ' ', $event->event_type)) }}</h4>
-                        <time class="text-xs text-gray-500">{{ $event->event_at->format('d M Y H:i') }}</time>
-                        @if($event->notes)<p class="mt-1 text-sm text-gray-600">{{ $event->notes }}</p>@endif
-                    </li>
-                    @endforeach
-                </ol>
+                <style>.timeline-summary::-webkit-details-marker { display: none; } .timeline-summary { list-style: none; }</style>
+                <details class="group">
+                    <summary class="timeline-summary flex cursor-pointer items-center justify-between gap-3 select-none">
+                        <div class="min-w-0">
+                            <h3 class="text-lg font-semibold text-gray-900 flex items-center gap-2">
+                                Timeline
+                                <span class="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs font-semibold text-gray-600">
+                                    {{ $job->events->count() }}
+                                </span>
+                            </h3>
+                            <p class="text-xs text-gray-500 mt-0.5">
+                                {{ $job->events->last()?->event_at?->diffForHumans() ?? 'â€”' }} Â· latest event
+                            </p>
+                        </div>
+                        <svg class="h-5 w-5 shrink-0 text-gray-400 transition-transform group-open:rotate-180"
+                             fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="m6 9 6 6 6-6"/>
+                        </svg>
+                    </summary>
+                    <ol class="relative border-l border-gray-200 ml-3 space-y-6 mt-4">
+                        @foreach($job->events as $event)
+                        <li class="ml-6">
+                            <span class="absolute -left-2 flex h-4 w-4 items-center justify-center rounded-full bg-blue-100 ring-4 ring-white">
+                                <span class="h-2 w-2 rounded-full bg-blue-600"></span>
+                            </span>
+                            <h4 class="text-sm font-medium text-gray-900">{{ ucfirst(str_replace('_', ' ', $event->event_type)) }}</h4>
+                            <time class="text-xs text-gray-500">{{ $event->event_at->format('d M Y H:i') }}</time>
+                            @if($event->notes)<p class="mt-1 text-sm text-gray-600">{{ $event->notes }}</p>@endif
+                        </li>
+                        @endforeach
+                    </ol>
+                </details>
             </div>
             @endif
-        </div>
 
-        {{-- Right column: Actions — priority is driven by status. When a driver has
-             been assigned, Printing the Delivery Paperwork becomes the most important
-             next step and sits above "Mark Driver Arrived at Pickup". Once the driver has
-             arrived and taken possession, the "Mark In Transit" button takes over as
-             primary and the Collection Note demotes to a reprint-style secondary
-             button below it. Cancel is only allowed while the vehicle is still on
-             the depot. --}}
-        @php
-            $preReleaseStatuses = [
-                Job::STATUS_DRIVER_ASSIGNED,
-                Job::STATUS_READY_FOR_COLLECTION,
-            ];
-            $inFlightStatuses = [
-                Job::STATUS_COLLECTED,
-                Job::STATUS_IN_TRANSIT,
-                Job::STATUS_DELIVERED,
-            ];
-            $cancellableStatuses = [
-                Job::STATUS_RECEIVED,
-                Job::STATUS_AWAITING_CUSTOMER_CONFIRMATION,
-                Job::STATUS_CONFIRMED,
-                Job::STATUS_PLANNED,
-                Job::STATUS_DRIVER_ASSIGNED,
-                Job::STATUS_READY_FOR_COLLECTION,
-            ];
-            $isPreRelease = in_array($job->status, $preReleaseStatuses, true);
-            $isInFlight = in_array($job->status, $inFlightStatuses, true);
-            $isCancellable = in_array($job->status, $cancellableStatuses, true);
-            $isTerminal = in_array($job->status, [Job::STATUS_COMPLETED, Job::STATUS_CANCELLED], true);
-        @endphp
-        <div class="space-y-6">
-            <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-                <h3 class="text-lg font-semibold text-gray-900 mb-4">Actions</h3>
-                <div class="space-y-3">
-
-                    {{-- =========================================================
-                         1. PAPERWORK PROMPT (top priority when driver assigned)
-                         ========================================================= --}}
-                    @can('generateCollectionNote', $job)
-                        @if($isPreRelease)
-                            <div class="rounded-lg border border-green-300 bg-green-50 p-3.5">
-                                <div class="flex items-start gap-2.5 mb-3">
-                                    <svg class="h-5 w-5 text-green-600 mt-0.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
-                                    <div class="min-w-0">
-                                        <h4 class="text-sm font-semibold text-green-900">Print Delivery Paperwork</h4>
-                                        <p class="mt-0.5 text-xs text-green-800 leading-snug">Collection Note, Manual Inspection &amp; POD (Customer + Office) &mdash; 5 pages. Print double-sided and hand to the driver before the vehicle leaves.</p>
-                                    </div>
-                                </div>
-                                <a href="{{ route('collection-note.download', $job) }}" target="_blank"
-                                    class="flex w-full items-center justify-center gap-2 rounded-lg bg-green-600 px-4 py-3 text-sm font-semibold text-white hover:bg-green-500 transition-colors shadow-sm">
-                                    <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
-                                    Print Paperwork
-                                </a>
-                            </div>
-                        @endif
-                    @endcan
-
-                    {{-- =========================================================
-                         2. STATUS TRANSITION BUTTON
-                         ========================================================= --}}
-                    @if($job->status === Job::STATUS_PENDING_VERIFICATION)
-                        @can('verify', $job)
-                            <div class="rounded-lg border border-amber-300 bg-amber-50 p-3.5">
-                                <div class="flex items-start gap-2.5 mb-3">
-                                    <svg class="h-5 w-5 text-amber-600 mt-0.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg>
-                                    <div class="min-w-0">
-                                        <h4 class="text-sm font-semibold text-amber-900">Verify this booking</h4>
-                                        <p class="mt-0.5 text-xs text-amber-800 leading-snug">Confirm the PO and the vehicle details are correct. Once verified the booking moves into the active queue and the customer flow begins.</p>
-                                    </div>
-                                </div>
-                                <button wire:click="verifyBooking" wire:confirm="Verify this booking?"
-                                    class="flex w-full items-center justify-center gap-2 rounded-lg bg-amber-600 px-4 py-3 text-sm font-semibold text-white hover:bg-amber-500 transition-colors shadow-sm">
-                                    <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2.25" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="m9 11 3 3L22 4"/></svg>
-                                    Verify &amp; Release to Queue
-                                </button>
-                            </div>
-                        @else
-                            <div class="rounded-lg bg-amber-50 border border-amber-200 p-4 text-sm text-amber-800">
-                                <div class="flex items-start gap-2">
-                                    <svg class="h-5 w-5 text-amber-500 mt-0.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-                                    <span>Waiting for operations to verify this booking.</span>
-                                </div>
-                            </div>
-                        @endcan
-                    @elseif($job->status === Job::STATUS_RECEIVED)
-                        @if($job->company?->requiresExternalConfirmation())
-                            <button wire:click="sendToCustomer" wire:confirm="Send to customer for confirmation?"
-                                class="w-full rounded-lg bg-amber-600 px-4 py-3 text-sm font-semibold text-white hover:bg-amber-500 transition-colors">
-                                Send to Customer for Confirmation
-                            </button>
-                        @else
-                            <button wire:click="confirmOrder" wire:confirm="Confirm this order?"
-                                class="w-full rounded-lg bg-blue-600 px-4 py-3 text-sm font-semibold text-white hover:bg-blue-500 transition-colors">
-                                Confirm Order
-                            </button>
-                        @endif
-                    @elseif($job->status === Job::STATUS_AWAITING_CUSTOMER_CONFIRMATION)
-                        <div class="rounded-lg bg-amber-50 border border-amber-200 p-4 text-sm text-amber-800">
-                            <div class="flex items-start gap-2">
-                                <svg class="h-5 w-5 text-amber-500 mt-0.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-                                <span>Waiting for customer confirmation.</span>
-                            </div>
-                        </div>
-                    @elseif($job->status === Job::STATUS_CONFIRMED)
-                        <button wire:click="planOrder" wire:confirm="Mark as planned?"
-                            class="w-full rounded-lg bg-indigo-600 px-4 py-3 text-sm font-semibold text-white hover:bg-indigo-500 transition-colors">
-                            Plan Order
-                        </button>
-                    @elseif($job->status === Job::STATUS_PLANNED)
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700 mb-1.5">Assign Driver</label>
-                            <select wire:model="driverId" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-purple-500 focus:ring-purple-500 mb-2">
-                                <option value="">Select driver...</option>
-                                @foreach($drivers as $d)
-                                    <option value="{{ $d->id }}">{{ $d->name }}</option>
-                                @endforeach
-                            </select>
-                            <button wire:click="assignDriver"
-                                class="w-full rounded-lg bg-purple-600 px-4 py-3 text-sm font-semibold text-white hover:bg-purple-500 transition-colors">
-                                Assign Driver
-                            </button>
-                        </div>
-                    @elseif($isPreRelease)
-                        {{-- Secondary to the paperwork prompt above — outlined so ops
-                             only presses it once the paperwork is out and signed. --}}
-                        <button wire:click="markCollected" wire:confirm="Has the driver arrived at the pickup location with the paperwork signed?"
-                            class="w-full rounded-lg border border-teal-600 bg-white px-4 py-3 text-sm font-semibold text-teal-700 hover:bg-teal-50 transition-colors">
-                            Mark Driver Arrived at Pickup
-                        </button>
-                    @elseif($job->status === Job::STATUS_COLLECTED)
-                        <button wire:click="markInTransit" wire:confirm="Has the driver departed with the vehicle? Mark as in transit?"
-                            class="w-full rounded-lg bg-orange-600 px-4 py-3 text-sm font-semibold text-white hover:bg-orange-500 transition-colors">
-                            Mark In Transit (Departed)
-                        </button>
-                    @elseif($job->status === Job::STATUS_IN_TRANSIT)
-                        <button wire:click="markDelivered" wire:confirm="Mark as delivered?"
-                            class="w-full rounded-lg bg-emerald-600 px-4 py-3 text-sm font-semibold text-white hover:bg-emerald-500 transition-colors">
-                            Mark Delivered
-                        </button>
-                    @elseif($job->status === Job::STATUS_DELIVERED)
-                        <button wire:click="completeOrder" wire:confirm="Complete this order?"
-                            class="w-full rounded-lg bg-green-600 px-4 py-3 text-sm font-semibold text-white hover:bg-green-500 transition-colors">
-                            Complete Order
-                        </button>
-                    @endif
-
-                    {{-- =========================================================
-                         3. COLLECTION NOTE REPRINT (only after vehicle has left)
-                         ========================================================= --}}
-                    @can('generateCollectionNote', $job)
-                        @if(!$isPreRelease)
-                            <a href="{{ route('collection-note.download', $job) }}" target="_blank"
-                                class="flex w-full items-center justify-center gap-2 rounded-lg border border-blue-600 bg-white px-4 py-3 text-sm font-semibold text-blue-700 hover:bg-blue-50 transition-colors">
-                                <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
-                                Collection Note (reprint)
-                            </a>
-                        @endif
-                    @endcan
-
-                    {{-- =========================================================
-                         4. CANCEL / TERMINAL STATE
-                         --------------------------------------------------------
-                         Cancellation is authorisation-gated. The owner curates
-                         the list of internal roles that may cancel from
-                         Admin → Settings → Cancellation Permissions. Users
-                         without permission don't see the button at all, and a
-                         matching policy check sits in cancelOrder() so a
-                         crafted request can't bypass it either.
-                         ========================================================= --}}
-                    @if($isCancellable)
-                        @can('cancel', $job)
-                            <button wire:click="openCancelModal"
-                                class="w-full rounded-lg bg-red-600 px-4 py-3 text-sm font-semibold text-white hover:bg-red-500 transition-colors">
-                                Cancel Order
-                            </button>
-                        @else
-                            <div class="rounded-lg bg-gray-50 border border-gray-200 px-3 py-2.5 text-xs text-gray-600 leading-relaxed">
-                                <strong class="text-gray-800">Cancellation requires authorisation.</strong>
-                                Ask an authorised user (owner, ops manager or super admin) if this order must be cancelled.
-                            </div>
-                        @endcan
-                    @elseif($isInFlight)
-                        <div class="rounded-lg bg-gray-50 border border-gray-200 px-3 py-2.5 text-xs text-gray-600 leading-relaxed">
-                            <strong class="text-gray-800">Cannot cancel</strong> &mdash; the vehicle has left the depot. If the order needs to be reversed, record a return movement against the destination.
-                        </div>
-                    @elseif($isTerminal)
-                        <p class="text-sm text-gray-400 text-center py-2">No further actions.</p>
-                    @endif
-                </div>
-            </div>
-
-            {{-- Info card --}}
-            <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-                <h3 class="text-lg font-semibold text-gray-900 mb-4">Info</h3>
-                <dl class="space-y-3 text-sm">
-                    <div><dt class="text-gray-500">Order Number</dt><dd class="font-mono">{{ $job->job_number ?? '—' }}</dd></div>
-                    <div><dt class="text-gray-500">UUID</dt><dd class="font-mono text-xs break-all">{{ $job->uuid }}</dd></div>
-                    <div><dt class="text-gray-500">Created</dt><dd>{{ $job->created_at->format('d M Y H:i') }}</dd></div>
+            {{-- Compact meta strip. Anything ops might occasionally want
+                 (UUID, booked-by, created timestamp) lives down here as a
+                 quiet footer rather than as its own panel â€” that info is
+                 rarely the thing they actually came here for. --}}
+            <div class="rounded-xl border border-gray-200 bg-gray-50/60 px-5 py-3">
+                <dl class="flex flex-wrap gap-x-6 gap-y-2 text-xs text-gray-600">
+                    <div class="flex items-center gap-1.5">
+                        <dt class="text-gray-400">Order</dt>
+                        <dd class="font-mono font-medium text-gray-700">{{ $job->job_number ?? 'â€”' }}</dd>
+                    </div>
+                    <div class="flex items-center gap-1.5">
+                        <dt class="text-gray-400">Created</dt>
+                        <dd>{{ $job->created_at->format('d M Y H:i') }}</dd>
+                    </div>
                     @if($job->createdBy)
                         @php $bookerCompany = $job->createdBy->companies->first(); @endphp
-                        <div>
-                            <dt class="text-gray-500">Booked by</dt>
-                            <dd>
-                                <span class="font-medium text-gray-900">{{ $job->createdBy->name }}</span>
+                        <div class="flex items-center gap-1.5">
+                            <dt class="text-gray-400">Booked by</dt>
+                            <dd class="text-gray-700">
+                                <span class="font-medium">{{ $job->createdBy->name }}</span>
                                 @if($bookerCompany)
-                                    <span class="text-gray-500"> &middot; {{ $bookerCompany->name }}</span>
+                                    <span class="text-gray-400"> Â· {{ $bookerCompany->name }}</span>
                                 @endif
                             </dd>
                         </div>
                     @endif
-                    @if($job->scheduled_date)
-                    <div><dt class="text-gray-500">Scheduled</dt><dd>{{ $job->scheduled_date->format('d M Y') }}</dd></div>
-                    @endif
-                    @if($job->driver)
-                    <div><dt class="text-gray-500">Driver</dt><dd>{{ $job->driver->name }}</dd></div>
-                    @endif
+                    <div class="flex items-center gap-1.5">
+                        <dt class="text-gray-400">UUID</dt>
+                        <dd class="font-mono text-[10px] text-gray-500 break-all">{{ $job->uuid }}</dd>
+                    </div>
                 </dl>
             </div>
+
         </div>
-    </div>
+
+        {{-- Everything below is intentionally terminated; the old
+             two-column grid with a right-hand Actions panel is gone.
+             All CTAs live in the Next-step hero at the top of the
+             page and all document actions live inside
+             <x-documents-list>. --}}
 
     {{-- Cancel Order Modal --}}
     @if($showCancelModal)
