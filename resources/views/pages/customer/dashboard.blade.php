@@ -664,16 +664,21 @@ new #[Layout('components.layouts.app')] class extends Component
                                 <p class="text-[11px] text-slate-500 truncate"
                                    x-text="[p.city, p.province].filter(Boolean).join(', ') || '—'"></p>
                             </div>
-                            <div class="text-right shrink-0">
-                                <p class="text-[11px] tabular-nums">
+                            <div class="text-right shrink-0 space-y-0.5">
+                                <p class="text-[11px] tabular-nums" x-show="p.inbound > 0">
                                     <span class="font-semibold text-blue-700" x-text="p.inbound"></span>
-                                    <span class="text-slate-400">in</span>
-                                    <span class="mx-1 text-slate-300">·</span>
+                                    <span class="text-slate-400">en route</span>
+                                </p>
+                                <p class="text-[11px] tabular-nums" x-show="p.delivered > 0">
                                     <span class="font-semibold text-emerald-700" x-text="p.delivered"></span>
-                                    <span class="text-slate-400">out</span>
+                                    <span class="text-slate-400">delivered</span>
                                 </p>
                                 <p class="text-[10px] text-rose-600 tabular-nums" x-show="p.damaged > 0">
-                                    <span x-text="p.damaged"></span> damaged
+                                    <span x-text="p.damaged"></span>
+                                    <span>damaged</span>
+                                </p>
+                                <p class="text-[10px] text-slate-400" x-show="p.inbound === 0 && p.delivered === 0 && p.damaged === 0">
+                                    No activity
                                 </p>
                             </div>
                         </div>
@@ -1070,7 +1075,7 @@ new #[Layout('components.layouts.app')] class extends Component
                         <div style="font-weight:700;margin-bottom:2px">${escapeHtml(p.name)}</div>
                         <div style="color:#64748b;font-size:11px;margin-bottom:8px">${escapeHtml(prov)}</div>
                         <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 12px;font-size:12px">
-                            <div><span style="color:#64748b">Inbound</span> <strong style="color:#1d4ed8">${p.inbound}</strong></div>
+                            <div><span style="color:#64748b">En route</span> <strong style="color:#1d4ed8">${p.inbound}</strong></div>
                             <div><span style="color:#64748b">Delivered</span> <strong style="color:#15803d">${p.delivered}</strong></div>
                             ${p.at_risk > 0 ? `<div><span style="color:#64748b">Overdue</span> <strong style="color:#b45309">${p.at_risk}</strong></div>` : ''}
                             ${p.damaged > 0 ? `<div><span style="color:#64748b">Damaged</span> <strong style="color:#be123c">${p.damaged}</strong></div>` : ''}
