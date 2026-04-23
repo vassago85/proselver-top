@@ -277,6 +277,44 @@ new #[Layout('components.layouts.app')] class extends Component
             ->values()
             ->all();
 
+        // ── In-transit routes (live movement arrows on the map) ───────
+        // Each route = a job currently in transit, with origin + dest
+        // lat/lng so we can draw a directional polyline on the map.
+        $routes = (clone $this->baseJobsQuery())
+            ->whereIn('transport_jobs.status', self::G_IN_TRANSIT)
+            ->whereNotNull('transport_jobs.pickup_location_id')
+            ->whereNotNull('transport_jobs.delivery_location_id')
+            ->join('locations as pick', 'transport_jobs.pickup_location_id', '=', 'pick.id')
+            ->join('locations as drop', 'transport_jobs.delivery_location_id', '=', 'drop.id')
+            ->whereNotNull('pick.latitude')->whereNotNull('pick.longitude')
+            ->whereNotNull('drop.latitude')->whereNotNull('drop.longitude')
+            ->select([
+                'transport_jobs.id as job_id',
+                'transport_jobs.job_number',
+                'transport_jobs.status',
+                'pick.latitude  as from_lat',
+                'pick.longitude as from_lng',
+                'pick.city      as from_city',
+                'drop.latitude  as to_lat',
+                'drop.longitude as to_lng',
+                'drop.city      as to_city',
+                'drop.company_name as to_name',
+            ])
+            ->get()
+            ->map(fn ($r) => [
+                'id'        => (int) $r->job_id,
+                'number'    => $r->job_number ?: ('JOB-' . $r->job_id),
+                'from_lat'  => (float) $r->from_lat,
+                'from_lng'  => (float) $r->from_lng,
+                'from_city' => $r->from_city,
+                'to_lat'    => (float) $r->to_lat,
+                'to_lng'    => (float) $r->to_lng,
+                'to_city'   => $r->to_city,
+                'to_name'   => $r->to_name,
+            ])
+            ->values()
+            ->all();
+
         // ── KPI totals ────────────────────────────────────────────────
         $totalInbound   = (int) $perDestination->sum('inbound_count');
         $totalDelivered = (int) $perDestination->sum('delivered_count');
@@ -443,7 +481,7 @@ new #[Layout('components.layouts.app')] class extends Component
 
         return compact(
             'from', 'to', 'span',
-            'kpis', 'points', 'scoreboard',
+            'kpis', 'points', 'routes', 'scoreboard',
             'awaitingMine',
             'recentDeliveries', 'exceptions',
             'regionOptions', 'destinationOptions', 'statusOptions',
@@ -553,15 +591,15 @@ new #[Layout('components.layouts.app')] class extends Component
     {{-- HERO — MAP + DESTINATION LIST                                  --}}
     {{-- ══════════════════════════════════════════════════════════════ --}}
     <div
-        x-data="oemMap(@js($points))"
+        x-data="oemMap(@js($points), @js($routes))"
         x-init="init()"
-        wire:key="oem-map-{{ md5(json_encode($points)) }}"
+        wire:key="oem-map-{{ md5(json_encode($points) . json_encode($routes)) }}"
         class="grid grid-cols-1 xl:grid-cols-3 gap-4"
     >
         <x-dash.panel
             class="xl:col-span-2"
             title="Live destination map"
-            :subtitle="count($points) . ' ' . \Illuminate\Support\Str::plural('location', count($points)) . ' in your network'"
+            :subtitle="count($points) . ' ' . \Illuminate\Support\Str::plural('location', count($points)) . ' in your network' . (count($routes) > 0 ? ' · ' . count($routes) . ' in transit' : '')"
             :tight="true">
             <x-slot:actions>
                 <div class="hidden md:flex items-center gap-3 text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-500">
@@ -570,6 +608,10 @@ new #[Layout('components.layouts.app')] class extends Component
                     <span class="inline-flex items-center gap-1.5"><span class="h-2 w-2 rounded-full bg-amber-500"></span>Overdue</span>
                     <span class="inline-flex items-center gap-1.5"><span class="h-2 w-2 rounded-full bg-rose-500"></span>Damaged</span>
                     <span class="inline-flex items-center gap-1.5"><span class="h-2 w-2 rounded-full bg-slate-300"></span>Idle</span>
+                    <span class="inline-flex items-center gap-1.5">
+                        <svg class="h-3 w-4" viewBox="0 0 16 8"><line x1="0" y1="4" x2="12" y2="4" stroke="#2563eb" stroke-width="2" stroke-dasharray="3 2"/><polygon points="12,1 16,4 12,7" fill="#2563eb"/></svg>
+                        In transit
+                    </span>
                 </div>
             </x-slot:actions>
 
@@ -857,10 +899,12 @@ new #[Layout('components.layouts.app')] class extends Component
             idle:      { fill: '#94a3b8', dot: 'bg-slate-400' },
         };
 
-        window.Alpine.data('oemMap', (initialPoints) => ({
+        window.Alpine.data('oemMap', (initialPoints, initialRoutes) => ({
             points: Array.isArray(initialPoints) ? initialPoints : [],
+            routes: Array.isArray(initialRoutes) ? initialRoutes : [],
             map: null,
             markers: [],
+            routeLines: [],
             infoWindow: null,
             ready: false,
             selectedId: null,
@@ -905,6 +949,7 @@ new #[Layout('components.layouts.app')] class extends Component
                 });
                 this.infoWindow = new google.maps.InfoWindow();
                 this.dropMarkers();
+                this.drawRoutes();
                 this.ready = true;
             },
 
@@ -950,6 +995,69 @@ new #[Layout('components.layouts.app')] class extends Component
                 } else if (this.markers.length > 1) {
                     this.map.fitBounds(bounds, 48);
                 }
+            },
+
+            drawRoutes() {
+                if (!this.map) return;
+                this.routeLines.forEach(l => l.setMap(null));
+                this.routeLines = [];
+                if (this.routes.length === 0) return;
+
+                this.routes.forEach(r => {
+                    const path = [
+                        { lat: r.from_lat, lng: r.from_lng },
+                        { lat: r.to_lat,   lng: r.to_lng   },
+                    ];
+
+                    const line = new google.maps.Polyline({
+                        path,
+                        map: this.map,
+                        geodesic: true,
+                        strokeColor: '#2563eb',
+                        strokeOpacity: 0,
+                        strokeWeight: 2,
+                        icons: [
+                            {
+                                icon: { path: 'M 0,-1 0,1', strokeOpacity: 0.6, strokeWeight: 2, scale: 2 },
+                                offset: '0',
+                                repeat: '12px',
+                            },
+                            {
+                                icon: {
+                                    path: google.maps.SymbolPath.FORWARD_CLOSED_ARROW,
+                                    scale: 3,
+                                    fillColor: '#2563eb',
+                                    fillOpacity: 0.9,
+                                    strokeColor: '#ffffff',
+                                    strokeWeight: 1,
+                                },
+                                offset: '100%',
+                            },
+                        ],
+                        zIndex: 5,
+                    });
+
+                    line.addListener('click', () => {
+                        const mid = {
+                            lat: (r.from_lat + r.to_lat) / 2,
+                            lng: (r.from_lng + r.to_lng) / 2,
+                        };
+                        const html = `
+                            <div style="min-width:180px;font:500 13px/1.4 ui-sans-serif,system-ui;color:#0f172a">
+                                <div style="font-weight:700;margin-bottom:4px;color:#2563eb">${escapeHtml(r.number)}</div>
+                                <div style="font-size:12px">
+                                    <span style="color:#64748b">From</span> ${escapeHtml(r.from_city || '—')}<br>
+                                    <span style="color:#64748b">To</span> ${escapeHtml(r.to_name || r.to_city || '—')}
+                                </div>
+                                <a href="/customer/orders/${r.id}" style="display:inline-block;margin-top:8px;font-size:11px;font-weight:600;color:#1d4ed8;text-decoration:none">View order →</a>
+                            </div>`;
+                        this.infoWindow.setContent(html);
+                        this.infoWindow.setPosition(mid);
+                        this.infoWindow.open(this.map);
+                    });
+
+                    this.routeLines.push(line);
+                });
             },
 
             openInfo(p, marker) {
