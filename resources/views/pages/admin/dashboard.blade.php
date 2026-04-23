@@ -8,7 +8,6 @@ use App\Models\Job;
 use App\Models\Location;
 use App\Models\SystemSetting;
 use Illuminate\Support\Carbon;
-use Illuminate\Support\Facades\DB;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\Url;
 use Livewire\Volt\Component;
@@ -17,101 +16,103 @@ new #[Layout('components.layouts.app')] class extends Component
 {
     /**
      * ╔══════════════════════════════════════════════════════════════════╗
-     * ║  VEHICLE MOVEMENT — EXECUTIVE OVERVIEW                           ║
+     * ║  OPERATIONS OVERVIEW — EXECUTIVE                                 ║
      * ╠══════════════════════════════════════════════════════════════════╣
-     * ║  A high-level command centre on top of the inventory ledger.    ║
-     * ║  Does not replace /admin/dashboard. Every tile/card is backed    ║
-     * ║  by real rows in `inventory`, `transport_jobs`, `invoices`,      ║
-     * ║  `locations`, `companies` — no mock or seeded figures.           ║
+     * ║  Focused on the current live operational pipeline only:         ║
+     * ║      Received  →  Confirmed  →  Dispatched  →  In transit       ║
+     * ║      →  Delivered                                               ║
      * ║                                                                  ║
-     * ║  Inventory has no `status_changed_at` column. We treat           ║
-     * ║  `updated_at` as the "in-current-status since" timestamp. This   ║
-     * ║  is accurate so long as nothing else touches inventory rows      ║
-     * ║  between state changes; that is the current behaviour of         ║
-     * ║  InventoryLifecycleService.                                      ║
+     * ║  Yard / storage / plant lifecycle surfaces are intentionally     ║
+     * ║  absent — not in scope for current operations. If the yard       ║
+     * ║  module comes online, add a separate Yard Overview dashboard    ║
+     * ║  using the same component system, do not bloat this page.       ║
+     * ║                                                                  ║
+     * ║  Every metric is backed by real rows in `transport_jobs`,        ║
+     * ║  `invoices`, `locations`, `companies`. No mock figures.          ║
      * ╚══════════════════════════════════════════════════════════════════╝
      */
 
-    // ─── Filter state (URL-persistent so links/bookmarks reflect the view) ──
+    // ─── Filter state (URL-persistent) ──────────────────────────────
     #[Url] public ?string $dateFrom = null;
     #[Url] public ?string $dateTo = null;
     #[Url] public ?int $companyId = null;      // booking customer / OEM
     #[Url] public ?int $transporterId = null;  // executing company
     #[Url] public ?int $brandId = null;
-    #[Url] public ?string $region = null;      // province on current_location
-    #[Url] public ?string $status = null;      // inventory status
+    #[Url] public ?string $region = null;      // pickup or delivery province
+    #[Url] public ?string $status = null;      // phase 1 job status
+
+    // ─── Phase 1 logical groupings ──────────────────────────────────
+    // These are the ONLY statuses this dashboard understands. Legacy
+    // statuses (assigned, in_progress, completed, invoiced, etc.) are
+    // mapped onto the pipeline where they overlap, otherwise ignored.
+    protected const G_INTAKE = [
+        Job::STATUS_PENDING_VERIFICATION,
+        Job::STATUS_RECEIVED,
+        Job::STATUS_AWAITING_CUSTOMER_CONFIRMATION,
+        Job::STATUS_CONFIRMATION_ISSUE,
+    ];
+    protected const G_TO_DISPATCH = [
+        Job::STATUS_CONFIRMED,
+    ];
+    protected const G_DISPATCHED = [
+        Job::STATUS_PLANNED,
+        Job::STATUS_DRIVER_ASSIGNED,
+        Job::STATUS_READY_FOR_COLLECTION,
+    ];
+    protected const G_IN_TRANSIT = [
+        Job::STATUS_COLLECTED,
+        Job::STATUS_IN_TRANSIT,
+    ];
+    protected const G_DELIVERED = [
+        Job::STATUS_DELIVERED,
+        Job::STATUS_COMPLETED,
+    ];
+    protected const ACTIVE_PHASE1 = [
+        // Everything not yet delivered / completed / cancelled.
+        Job::STATUS_PENDING_VERIFICATION,
+        Job::STATUS_RECEIVED,
+        Job::STATUS_AWAITING_CUSTOMER_CONFIRMATION,
+        Job::STATUS_CONFIRMATION_ISSUE,
+        Job::STATUS_CONFIRMED,
+        Job::STATUS_PLANNED,
+        Job::STATUS_DRIVER_ASSIGNED,
+        Job::STATUS_READY_FOR_COLLECTION,
+        Job::STATUS_COLLECTED,
+        Job::STATUS_IN_TRANSIT,
+    ];
 
     public function mount(): void
     {
-        // Default window: rolling 30 days ending today. Carbon string form
-        // keeps wire:model happy on a plain <input type="date">.
-        if (!$this->dateFrom) {
-            $this->dateFrom = now()->subDays(29)->toDateString();
-        }
-        if (!$this->dateTo) {
-            $this->dateTo = now()->toDateString();
-        }
+        if (!$this->dateFrom) { $this->dateFrom = now()->subDays(29)->toDateString(); }
+        if (!$this->dateTo)   { $this->dateTo   = now()->toDateString(); }
     }
 
     public function resetFilters(): void
     {
         $this->reset(['companyId', 'transporterId', 'brandId', 'region', 'status']);
         $this->dateFrom = now()->subDays(29)->toDateString();
-        $this->dateTo = now()->toDateString();
+        $this->dateTo   = now()->toDateString();
     }
 
     // ───────────────────────────────────────────────────────────────────
-    //  Reusable query builders
+    //  Jobs query scoped by the active filters (except status — we apply
+    //  per-metric). Status filter only pre-narrows the Priority list.
     // ───────────────────────────────────────────────────────────────────
-
-    /**
-     * Inventory scoped by the active filters EXCEPT status — we want to
-     * apply status per-metric (e.g. "in transit" ignores a user-selected
-     * status filter; the status filter only pre-limits the exploratory
-     * surfaces like Status Distribution and Priority Movements).
-     */
-    protected function baseInventoryQuery(bool $applyStatusFilter = false)
-    {
-        $q = Inventory::query();
-
-        if ($this->companyId) {
-            $q->where('owner_company_id', $this->companyId);
-        }
-        if ($this->brandId) {
-            $q->where('brand_id', $this->brandId);
-        }
-        if ($this->region) {
-            $q->whereHas('currentLocation', fn ($l) => $l->where('province', $this->region));
-        }
-        if ($applyStatusFilter && $this->status) {
-            $q->where('status', $this->status);
-        }
-        // Transporter filter on inventory: join through delivered_via_job
-        // (only affects historical/delivered rows). For active rows the
-        // transporter is implicit in the latest open job → we handle that
-        // in the jobs-driven queries below.
-        if ($this->transporterId) {
-            $q->whereHas('jobs', fn ($j) => $j->where('executing_company_id', $this->transporterId));
-        }
-
-        return $q;
-    }
-
-    /**
-     * Jobs query matching the same filters. Used for throughput, on-time
-     * ratios, transporter leaderboard.
-     */
-    protected function baseJobsQuery()
+    protected function baseJobsQuery(bool $applyStatusFilter = false)
     {
         $q = Job::query();
+
         if ($this->companyId)     { $q->where('company_id', $this->companyId); }
         if ($this->transporterId) { $q->where('executing_company_id', $this->transporterId); }
         if ($this->brandId)       { $q->where('brand_id', $this->brandId); }
         if ($this->region) {
             $q->where(function ($w) {
-                $w->whereHas('pickupLocation',   fn ($l) => $l->where('province', $this->region))
+                $w->whereHas('pickupLocation',    fn ($l) => $l->where('province', $this->region))
                   ->orWhereHas('deliveryLocation', fn ($l) => $l->where('province', $this->region));
             });
+        }
+        if ($applyStatusFilter && $this->status) {
+            $q->where('status', $this->status);
         }
         return $q;
     }
@@ -119,20 +120,24 @@ new #[Layout('components.layouts.app')] class extends Component
     // ───────────────────────────────────────────────────────────────────
     //  Thresholds (config, tunable via SystemSetting)
     // ───────────────────────────────────────────────────────────────────
-
     protected function thresholds(): array
     {
         return [
-            'in_transit_days' => (int) SystemSetting::get('exec.alert.in_transit_days', 7),
-            'at_yard_days'    => (int) SystemSetting::get('exec.alert.at_yard_days', 14),
-            'at_plant_days'   => (int) SystemSetting::get('exec.alert.at_plant_days', 21),
+            // How long an intake job can sit awaiting the customer before
+            // ops needs to chase it.
+            'awaiting_confirm_days' => (int) SystemSetting::get('ops.alert.awaiting_confirm_days', 2),
+            // Confirmed jobs that still have no driver assigned.
+            'to_dispatch_hours'     => (int) SystemSetting::get('ops.alert.to_dispatch_hours', 24),
+            // Driver assigned but vehicle not yet collected.
+            'dispatched_days'       => (int) SystemSetting::get('ops.alert.dispatched_days', 2),
+            // In transit too long.
+            'in_transit_days'       => (int) SystemSetting::get('ops.alert.in_transit_days', 3),
         ];
     }
 
     // ───────────────────────────────────────────────────────────────────
     //  Data for view
     // ───────────────────────────────────────────────────────────────────
-
     public function with(): array
     {
         $from = Carbon::parse($this->dateFrom)->startOfDay();
@@ -144,92 +149,88 @@ new #[Layout('components.layouts.app')] class extends Component
         $th = $this->thresholds();
 
         // ─────────────────────────────────────────────────────────────
-        //  ROW 1 — KPI cards (all from Inventory, no fake figures)
+        //  ROW 1 — KPI cards, one per pipeline stage + risk.
+        //  All driven by transport_jobs, not inventory.
         // ─────────────────────────────────────────────────────────────
-        $inTransit = (clone $this->baseInventoryQuery())
-            ->where('status', Inventory::STATUS_IN_TRANSIT)->count();
+        $intake = (clone $this->baseJobsQuery())->whereIn('status', self::G_INTAKE)->count();
+        $toDispatch = (clone $this->baseJobsQuery())->whereIn('status', self::G_TO_DISPATCH)->count();
+        $dispatched = (clone $this->baseJobsQuery())->whereIn('status', self::G_DISPATCHED)->count();
+        $onRoad = (clone $this->baseJobsQuery())->whereIn('status', self::G_IN_TRANSIT)->count();
 
-        $atYard = (clone $this->baseInventoryQuery())
-            ->whereIn('status', [Inventory::STATUS_AT_YARD, Inventory::STATUS_AT_STORAGE])->count();
+        $deliveredRange = (clone $this->baseJobsQuery())
+            ->whereNotNull('delivered_at')
+            ->whereBetween('delivered_at', [$from, $to])
+            ->count();
+        $deliveredPrev = (clone $this->baseJobsQuery())
+            ->whereNotNull('delivered_at')
+            ->whereBetween('delivered_at', [$prevFrom, $prevTo])
+            ->count();
 
-        $atPlant = (clone $this->baseInventoryQuery())
-            ->whereIn('status', [Inventory::STATUS_PRODUCED, Inventory::STATUS_AT_PLANT])->count();
-
-        $deliveredRange = (clone $this->baseInventoryQuery())
-            ->where('status', Inventory::STATUS_DELIVERED)
-            ->whereBetween('delivered_at', [$from, $to])->count();
-
-        $deliveredPrev = (clone $this->baseInventoryQuery())
-            ->where('status', Inventory::STATUS_DELIVERED)
-            ->whereBetween('delivered_at', [$prevFrom, $prevTo])->count();
-
-        // "At risk" — stuck in a non-terminal state past the status-specific
-        // threshold. Uses `updated_at` as the in-status proxy.
-        $atRiskQ = (clone $this->baseInventoryQuery())
+        // "At risk" — anything lingering past its stage threshold.
+        $atRisk = (clone $this->baseJobsQuery())
             ->where(function ($w) use ($th) {
                 $w->where(function ($a) use ($th) {
-                    $a->where('status', Inventory::STATUS_IN_TRANSIT)
+                    $a->whereIn('status', [Job::STATUS_AWAITING_CUSTOMER_CONFIRMATION, Job::STATUS_CONFIRMATION_ISSUE])
+                      ->where('updated_at', '<=', now()->subDays($th['awaiting_confirm_days']));
+                })->orWhere(function ($a) use ($th) {
+                    $a->where('status', Job::STATUS_CONFIRMED)
+                      ->where('updated_at', '<=', now()->subHours($th['to_dispatch_hours']));
+                })->orWhere(function ($a) use ($th) {
+                    $a->whereIn('status', self::G_DISPATCHED)
+                      ->where('updated_at', '<=', now()->subDays($th['dispatched_days']));
+                })->orWhere(function ($a) use ($th) {
+                    $a->whereIn('status', self::G_IN_TRANSIT)
                       ->where('updated_at', '<=', now()->subDays($th['in_transit_days']));
-                })->orWhere(function ($a) use ($th) {
-                    $a->whereIn('status', [Inventory::STATUS_AT_YARD, Inventory::STATUS_AT_STORAGE])
-                      ->where('updated_at', '<=', now()->subDays($th['at_yard_days']));
-                })->orWhere(function ($a) use ($th) {
-                    $a->whereIn('status', [Inventory::STATUS_PRODUCED, Inventory::STATUS_AT_PLANT])
-                      ->where('updated_at', '<=', now()->subDays($th['at_plant_days']));
                 });
-            });
-        $atRisk = (clone $atRiskQ)->count();
+            })
+            ->count();
 
-        $activeInventory = (clone $this->baseInventoryQuery())
-            ->whereIn('status', Inventory::ACTIVE_STATUSES)->count();
-
-        // Previous-period comparisons for the other KPI cards. We use
-        // updated_at as a proxy for "was in this status during the
-        // previous window" — imperfect but directionally correct and the
-        // only signal available without a status-history table.
-        $prevInTransit = (clone $this->baseInventoryQuery())
-            ->where('status', Inventory::STATUS_IN_TRANSIT)
-            ->whereBetween('updated_at', [$prevFrom, $prevTo])->count();
-        $prevAtYard = (clone $this->baseInventoryQuery())
-            ->whereIn('status', [Inventory::STATUS_AT_YARD, Inventory::STATUS_AT_STORAGE])
-            ->whereBetween('updated_at', [$prevFrom, $prevTo])->count();
-        $prevAtPlant = (clone $this->baseInventoryQuery())
-            ->whereIn('status', [Inventory::STATUS_PRODUCED, Inventory::STATUS_AT_PLANT])
-            ->whereBetween('updated_at', [$prevFrom, $prevTo])->count();
-        $prevActive = (clone $this->baseInventoryQuery())
-            ->whereIn('status', Inventory::ACTIVE_STATUSES)
-            ->whereBetween('updated_at', [$prevFrom, $prevTo])->count();
+        // Prev-period baselines (using updated_at as an in-status proxy).
+        $prevIntake    = (clone $this->baseJobsQuery())->whereIn('status', self::G_INTAKE)->whereBetween('updated_at', [$prevFrom, $prevTo])->count();
+        $prevDispatch  = (clone $this->baseJobsQuery())->whereIn('status', self::G_TO_DISPATCH)->whereBetween('updated_at', [$prevFrom, $prevTo])->count();
+        $prevDispatchd = (clone $this->baseJobsQuery())->whereIn('status', self::G_DISPATCHED)->whereBetween('updated_at', [$prevFrom, $prevTo])->count();
+        $prevOnRoad    = (clone $this->baseJobsQuery())->whereIn('status', self::G_IN_TRANSIT)->whereBetween('updated_at', [$prevFrom, $prevTo])->count();
 
         $kpis = [
             [
-                'key'       => 'in_transit',
-                'label'     => 'Vehicles in Transit',
-                'value'     => $inTransit,
+                'key'       => 'intake',
+                'label'     => 'New orders',
+                'value'     => $intake,
+                'color'     => 'amber',
+                'href'      => route('admin.orders.index', ['phase' => 'intake']),
+                'trend'     => $this->trend($intake, $prevIntake),
+                'helper'    => 'Received · awaiting review / confirmation',
+                'iconPath'  => '<path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.29 1.51 4.04 3 5.5l7 7Z"/>',
+            ],
+            [
+                'key'       => 'to_dispatch',
+                'label'     => 'Ready to dispatch',
+                'value'     => $toDispatch,
+                'color'     => 'indigo',
+                'href'      => route('admin.planning'),
+                'trend'     => $this->trend($toDispatch, $prevDispatch),
+                'helper'    => 'Confirmed · no driver yet',
+                'iconPath'  => '<path d="M8 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-3"/><path d="M16 3h5v5"/><path d="M21 3 9 15"/>',
+            ],
+            [
+                'key'       => 'dispatched',
+                'label'     => 'Dispatched',
+                'value'     => $dispatched,
+                'color'     => 'purple',
+                'href'      => route('admin.planning'),
+                'trend'     => $this->trend($dispatched, $prevDispatchd),
+                'helper'    => 'Driver assigned · vehicle not yet collected',
+                'iconPath'  => '<circle cx="12" cy="8" r="5"/><path d="M20 21a8 8 0 0 0-16 0"/>',
+            ],
+            [
+                'key'       => 'on_road',
+                'label'     => 'On the road',
+                'value'     => $onRoad,
                 'color'     => 'blue',
                 'href'      => route('admin.vehicles.index', ['bucket' => 'live']),
-                'trend'     => $this->trend($inTransit, $prevInTransit),
-                'helper'    => 'Active road movements',
+                'trend'     => $this->trend($onRoad, $prevOnRoad),
+                'helper'    => 'Collected · in transit',
                 'iconPath'  => '<path d="M14 16H9m10 0h3v-3.15a1 1 0 0 0-.84-.99L16 11l-2.7-3.6a1 1 0 0 0-.8-.4H5.24a2 2 0 0 0-1.8 1.1l-.8 1.63A6 6 0 0 0 2 12.42V16h2"/><circle cx="6.5" cy="16.5" r="2.5"/><circle cx="16.5" cy="16.5" r="2.5"/>',
-            ],
-            [
-                'key'       => 'at_yard',
-                'label'     => 'At Yard / Storage',
-                'value'     => $atYard,
-                'color'     => 'amber',
-                'href'      => route('admin.vehicles.index'),
-                'trend'     => $this->trend($atYard, $prevAtYard),
-                'helper'    => 'Awaiting next hop',
-                'iconPath'  => '<path d="M3 21h18"/><path d="M5 21V7l8-4v18"/><path d="M19 21V11l-6-4"/><path d="M9 9v.01"/><path d="M9 12v.01"/><path d="M9 15v.01"/><path d="M9 18v.01"/>',
-            ],
-            [
-                'key'       => 'at_plant',
-                'label'     => 'At Plant / Produced',
-                'value'     => $atPlant,
-                'color'     => 'indigo',
-                'href'      => route('admin.vehicles.index'),
-                'trend'     => $this->trend($atPlant, $prevAtPlant),
-                'helper'    => 'Upstream, ready to release',
-                'iconPath'  => '<path d="M17 18a2 2 0 0 0-2-2H9a2 2 0 0 0-2 2"/><path d="M21 22H3"/><path d="M4 22V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v16"/><path d="M10 8h4"/><path d="M10 12h4"/><path d="M10 16h4"/>',
             ],
             [
                 'key'       => 'delivered',
@@ -243,36 +244,30 @@ new #[Layout('components.layouts.app')] class extends Component
             ],
             [
                 'key'       => 'at_risk',
-                'label'     => 'At Risk / Delayed',
+                'label'     => 'At risk / delayed',
                 'value'     => $atRisk,
                 'color'     => $atRisk > 0 ? 'red' : 'slate',
                 'href'      => null,
                 'trend'     => null,
-                'helper'    => "Transit >{$th['in_transit_days']}d · Yard >{$th['at_yard_days']}d · Plant >{$th['at_plant_days']}d",
+                'helper'    => "Awaiting confirm >{$th['awaiting_confirm_days']}d · To dispatch >{$th['to_dispatch_hours']}h · Transit >{$th['in_transit_days']}d",
                 'iconPath'  => '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
-            ],
-            [
-                'key'       => 'active',
-                'label'     => 'Active Inventory',
-                'value'     => $activeInventory,
-                'color'     => 'teal',
-                'href'      => route('admin.vehicles.index'),
-                'trend'     => $this->trend($activeInventory, $prevActive),
-                'helper'    => 'Everything not yet delivered',
-                'iconPath'  => '<circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/>',
             ],
         ];
 
         // ─────────────────────────────────────────────────────────────
-        //  ROW 2 — Flow & Distribution
+        //  ROW 2 — Pipeline activity & distribution
         // ─────────────────────────────────────────────────────────────
 
-        // Daily activity series — 3 lines: dispatched (assigned_at),
-        // departed (in_transit_at), delivered (delivered_at).
+        // Daily activity series — 3 stage-transition timestamps.
         $days = [];
         $cursor = $from->copy();
         while ($cursor->lte($to)) {
-            $days[$cursor->toDateString()] = ['date' => $cursor->copy(), 'dispatched' => 0, 'in_transit' => 0, 'delivered' => 0];
+            $days[$cursor->toDateString()] = [
+                'date'       => $cursor->copy(),
+                'dispatched' => 0, // assigned_at — driver set
+                'in_transit' => 0, // in_transit_at — rolled out
+                'delivered'  => 0, // delivered_at — completed at destination
+            ];
             $cursor->addDay();
         }
 
@@ -297,16 +292,27 @@ new #[Layout('components.layouts.app')] class extends Component
         $activitySeries = array_values($days);
         $activityPeak   = max(array_merge([1], array_map(fn ($d) => max($d['dispatched'], $d['in_transit'], $d['delivered']), $activitySeries)));
 
-        // Status distribution — inventory grouped by status (active only).
-        $statusDist = (clone $this->baseInventoryQuery())
-            ->whereIn('status', Inventory::ACTIVE_STATUSES)
+        // Pipeline distribution — active jobs grouped by their stage.
+        // Gives ops an at-a-glance read on where the bottleneck is.
+        $stageGroups = [
+            'intake'      => ['label' => 'Intake',           'statuses' => self::G_INTAKE,      'hex' => '#f59e0b'],
+            'to_dispatch' => ['label' => 'Ready to dispatch','statuses' => self::G_TO_DISPATCH, 'hex' => '#6366f1'],
+            'dispatched'  => ['label' => 'Dispatched',       'statuses' => self::G_DISPATCHED,  'hex' => '#a855f7'],
+            'in_transit'  => ['label' => 'On the road',      'statuses' => self::G_IN_TRANSIT,  'hex' => '#3b82f6'],
+        ];
+        $stageCounts = (clone $this->baseJobsQuery())
+            ->whereIn('status', self::ACTIVE_PHASE1)
             ->selectRaw('status, count(*) as n')
             ->groupBy('status')
             ->pluck('n', 'status')
             ->toArray();
+        foreach ($stageGroups as $key => &$grp) {
+            $grp['count'] = (int) collect($grp['statuses'])->sum(fn ($s) => (int) ($stageCounts[$s] ?? 0));
+        }
+        unset($grp);
+        $pipelineTotal = array_sum(array_column($stageGroups, 'count'));
 
-        // Throughput vs target — jobs scheduled inside the range vs
-        // delivered inside the range. Gap = overdue / undelivered.
+        // Throughput vs scheduled (job-level).
         $scheduled = (clone $this->baseJobsQuery())
             ->whereBetween('scheduled_date', [$from->toDateString(), $to->toDateString()])
             ->count();
@@ -314,30 +320,48 @@ new #[Layout('components.layouts.app')] class extends Component
             ->whereNotNull('delivered_at')
             ->whereBetween('delivered_at', [$from, $to])
             ->count();
-        $throughputPct = $scheduled > 0 ? round(($delivered / $scheduled) * 100) : 0;
+        $throughputPct = $scheduled > 0 ? (int) round(($delivered / $scheduled) * 100) : 0;
 
         // ─────────────────────────────────────────────────────────────
-        //  ROW 3 — Operations focus
+        //  ROW 3 — Exceptions & priority
         // ─────────────────────────────────────────────────────────────
-
         $exceptions = [
             [
-                'key'      => 'stuck_plant',
-                'label'    => 'Stuck at plant',
-                'sublabel' => "> {$th['at_plant_days']}d",
-                'count'    => (clone $this->baseInventoryQuery())
-                    ->whereIn('status', [Inventory::STATUS_PRODUCED, Inventory::STATUS_AT_PLANT])
-                    ->where('updated_at', '<=', now()->subDays($th['at_plant_days']))
+                'key'      => 'awaiting_confirm',
+                'label'    => 'Awaiting customer confirmation',
+                'sublabel' => "> {$th['awaiting_confirm_days']}d",
+                'count'    => (clone $this->baseJobsQuery())
+                    ->whereIn('status', [Job::STATUS_AWAITING_CUSTOMER_CONFIRMATION])
+                    ->where('updated_at', '<=', now()->subDays($th['awaiting_confirm_days']))
                     ->count(),
                 'severity' => 'amber',
             ],
             [
-                'key'      => 'stuck_yard',
-                'label'    => 'Stuck at yard / storage',
-                'sublabel' => "> {$th['at_yard_days']}d",
-                'count'    => (clone $this->baseInventoryQuery())
-                    ->whereIn('status', [Inventory::STATUS_AT_YARD, Inventory::STATUS_AT_STORAGE])
-                    ->where('updated_at', '<=', now()->subDays($th['at_yard_days']))
+                'key'      => 'confirmation_issue',
+                'label'    => 'Confirmation issue unresolved',
+                'sublabel' => 'customer raised a problem',
+                'count'    => (clone $this->baseJobsQuery())
+                    ->where('status', Job::STATUS_CONFIRMATION_ISSUE)
+                    ->count(),
+                'severity' => 'red',
+            ],
+            [
+                'key'      => 'no_driver',
+                'label'    => 'Confirmed · no driver',
+                'sublabel' => "> {$th['to_dispatch_hours']}h",
+                'count'    => (clone $this->baseJobsQuery())
+                    ->where('status', Job::STATUS_CONFIRMED)
+                    ->where('updated_at', '<=', now()->subHours($th['to_dispatch_hours']))
+                    ->count(),
+                'severity' => 'amber',
+            ],
+            [
+                'key'      => 'dispatched_stale',
+                'label'    => 'Dispatched · not collected',
+                'sublabel' => "> {$th['dispatched_days']}d",
+                'count'    => (clone $this->baseJobsQuery())
+                    ->whereIn('status', self::G_DISPATCHED)
+                    ->where('updated_at', '<=', now()->subDays($th['dispatched_days']))
                     ->count(),
                 'severity' => 'amber',
             ],
@@ -345,103 +369,74 @@ new #[Layout('components.layouts.app')] class extends Component
                 'key'      => 'long_transit',
                 'label'    => 'Long in transit',
                 'sublabel' => "> {$th['in_transit_days']}d",
-                'count'    => (clone $this->baseInventoryQuery())
-                    ->where('status', Inventory::STATUS_IN_TRANSIT)
+                'count'    => (clone $this->baseJobsQuery())
+                    ->whereIn('status', self::G_IN_TRANSIT)
                     ->where('updated_at', '<=', now()->subDays($th['in_transit_days']))
                     ->count(),
                 'severity' => 'red',
             ],
             [
-                'key'      => 'missing_driver',
-                'label'    => 'Jobs missing driver',
-                'sublabel' => 'planned / confirmed, no driver',
-                'count'    => (clone $this->baseJobsQuery())
-                    ->whereIn('status', [Job::STATUS_CONFIRMED, Job::STATUS_PLANNED])
-                    ->whereNull('driver_user_id')
-                    ->count(),
-                'severity' => 'amber',
-            ],
-            [
                 'key'      => 'delivered_open',
-                'label'    => 'Delivered but workflow open',
-                'sublabel' => 'inventory delivered, job not completed',
-                'count'    => Inventory::query()
-                    ->where('status', Inventory::STATUS_DELIVERED)
-                    ->whereNotNull('delivered_via_job_id')
-                    ->whereHas('deliveredViaJob', fn ($j) => $j->whereNotIn('status', [Job::STATUS_COMPLETED, Job::STATUS_INVOICED]))
+                'label'    => 'Delivered but not completed',
+                'sublabel' => 'paperwork / POD pending',
+                'count'    => (clone $this->baseJobsQuery())
+                    ->where('status', Job::STATUS_DELIVERED)
+                    ->whereNull('completed_at')
                     ->count(),
                 'severity' => 'amber',
             ],
         ];
 
-        // Priority movements — active inventory ordered by longest time
-        // in current status (= `updated_at` ascending among active rows).
-        $priority = (clone $this->baseInventoryQuery(applyStatusFilter: true))
-            ->whereIn('status', Inventory::ACTIVE_STATUSES)
+        // Priority movements — active Phase 1 jobs ordered by longest
+        // dwell in their current stage. Table shows VIN from inventory,
+        // origin → destination, driver, days in stage, risk.
+        $priority = (clone $this->baseJobsQuery(applyStatusFilter: true))
+            ->whereIn('status', self::ACTIVE_PHASE1)
             ->with([
-                'currentLocation:id,company_name,city,province,type',
-                'brand:id,name',
-                'owner:id,name',
+                'pickupLocation:id,city,province',
+                'deliveryLocation:id,city,province',
+                'driver:id,name',
+                'inventory:id,chassis_number,vin',
+                'company:id,name',
             ])
             ->orderBy('updated_at', 'asc')
             ->limit(12)
             ->get();
 
-        // Enrich priority rows with the latest open job (for origin →
-        // destination + driver). Batch-load to avoid N+1.
-        $invIds = $priority->pluck('id')->all();
-        $latestJobs = !empty($invIds)
-            ? Job::whereIn('inventory_id', $invIds)
-                ->whereNotIn('status', [Job::STATUS_COMPLETED, Job::STATUS_INVOICED, Job::STATUS_CANCELLED, Job::STATUS_REJECTED])
-                ->with(['pickupLocation:id,city', 'deliveryLocation:id,city', 'driver:id,name'])
-                ->orderByDesc('updated_at')
-                ->get()
-                ->groupBy('inventory_id')
-            : collect();
-
         foreach ($priority as $row) {
-            $row->setAttribute('latest_job', $latestJobs->get($row->id)?->first());
-            $row->setAttribute('days_in_status', $row->updated_at ? (int) $row->updated_at->diffInDays(now()) : null);
-            $row->setAttribute('risk_level', $this->riskFor($row->status, $row->getAttribute('days_in_status'), $th));
+            $days = $row->updated_at ? (int) $row->updated_at->diffInDays(now()) : null;
+            $hrs  = $row->updated_at ? (int) $row->updated_at->diffInHours(now()) : null;
+            $row->setAttribute('days_in_stage', $days);
+            $row->setAttribute('hours_in_stage', $hrs);
+            $row->setAttribute('risk_level', $this->riskFor($row->status, $days, $hrs, $th));
         }
-
-        // Location pressure — inventory grouped by location.type.
-        $locationPressure = (clone $this->baseInventoryQuery())
-            ->whereIn('status', Inventory::ACTIVE_STATUSES)
-            ->join('locations', 'inventory.current_location_id', '=', 'locations.id')
-            ->selectRaw('locations.type as type, count(*) as n')
-            ->groupBy('locations.type')
-            ->pluck('n', 'type')
-            ->toArray();
 
         // ─────────────────────────────────────────────────────────────
         //  ROW 4 — Executive insight
         // ─────────────────────────────────────────────────────────────
 
-        // Top customer / OEM breakdown — active inventory + delivered
-        // count in the selected window.
-        $companyRows = (clone $this->baseInventoryQuery())
-            ->selectRaw('owner_company_id, '
-                . 'count(*) filter (where status in (' . $this->pgStatusList(Inventory::ACTIVE_STATUSES) . ')) as active_count, '
-                . 'count(*) filter (where status = ? and delivered_at between ? and ?) as delivered_count', [
-                    Inventory::STATUS_DELIVERED, $from, $to,
-                ])
-            ->whereNotNull('owner_company_id')
-            ->groupBy('owner_company_id')
+        // Customer / OEM breakdown — active jobs + delivered-in-range.
+        $companyRows = (clone $this->baseJobsQuery())
+            ->selectRaw('company_id, '
+                . 'count(*) filter (where status in (' . $this->pgStatusList(self::ACTIVE_PHASE1) . ')) as active_count, '
+                . 'count(*) filter (where delivered_at between ? and ?) as delivered_count', [$from, $to])
+            ->whereNotNull('company_id')
+            ->groupBy('company_id')
             ->orderByDesc('active_count')
             ->limit(8)
             ->get();
 
-        $companyIds = $companyRows->pluck('owner_company_id')->all();
+        $companyIds = $companyRows->pluck('company_id')->all();
         $companies  = !empty($companyIds)
             ? Company::whereIn('id', $companyIds)->get(['id', 'name', 'type'])->keyBy('id')
             : collect();
-        $companyRows->each(fn ($r) => $r->setAttribute('company', $companies->get($r->owner_company_id)));
+        $companyRows->each(fn ($r) => $r->setAttribute('company', $companies->get($r->company_id)));
 
-        // Transporter performance — jobs per transporter in the range,
-        // plus on-time %. NULL executing_company_id = platform-owner.
+        // Transporter performance — completed jobs per transporter,
+        // on-time = delivered on/before scheduled_date with no delay.
         $transporterRows = (clone $this->baseJobsQuery())
-            ->whereBetween('completed_at', [$from, $to])
+            ->whereNotNull('delivered_at')
+            ->whereBetween('delivered_at', [$from, $to])
             ->selectRaw('executing_company_id, '
                 . 'count(*) as job_count, '
                 . 'count(*) filter (where delivered_at::date <= scheduled_date and coalesce(delay_minutes,0)=0) as on_time_count')
@@ -461,8 +456,7 @@ new #[Layout('components.layouts.app')] class extends Component
                 : null);
         });
 
-        // Revenue snapshot — invoice surface, not financial forecasts.
-        // "Outstanding" = issued invoices not yet paid.
+        // Invoice snapshot — what's invoiced, paid, outstanding.
         $invoiceIssued = Invoice::where('status', Invoice::STATUS_ISSUED)
             ->when($this->companyId, fn ($q) => $q->where('company_id', $this->companyId))
             ->selectRaw('count(*) as c, coalesce(sum(total),0) as v')
@@ -491,13 +485,15 @@ new #[Layout('components.layouts.app')] class extends Component
         $regionOptions = Location::query()
             ->whereNotNull('province')->where('province', '!=', '')
             ->distinct()->orderBy('province')->pluck('province');
-        $statusOptions = Inventory::STATUSES;
+        // Status filter — only Phase 1 statuses that are still in play.
+        $statusOptions = self::ACTIVE_PHASE1;
 
         return compact(
             'from', 'to', 'span', 'kpis',
-            'activitySeries', 'activityPeak', 'statusDist',
+            'activitySeries', 'activityPeak',
+            'stageGroups', 'pipelineTotal',
             'scheduled', 'delivered', 'throughputPct',
-            'exceptions', 'priority', 'locationPressure',
+            'exceptions', 'priority',
             'companyRows', 'transporterRows',
             'invoiceIssued', 'invoicePaid', 'invoiceDraft', 'awaitingInv',
             'companyOptions', 'transporterOptions', 'brandOptions', 'regionOptions', 'statusOptions',
@@ -518,18 +514,39 @@ new #[Layout('components.layouts.app')] class extends Component
         ];
     }
 
-    protected function riskFor(string $status, ?int $days, array $th): string
+    protected function riskFor(string $status, ?int $days, ?int $hours, array $th): string
     {
         if ($days === null) { return 'low'; }
-        return match ($status) {
-            Inventory::STATUS_IN_TRANSIT =>
-                $days >= $th['in_transit_days'] ? 'high' : ($days >= (int) round($th['in_transit_days'] / 2) ? 'med' : 'low'),
-            Inventory::STATUS_AT_YARD, Inventory::STATUS_AT_STORAGE =>
-                $days >= $th['at_yard_days'] ? 'high' : ($days >= (int) round($th['at_yard_days'] / 2) ? 'med' : 'low'),
-            Inventory::STATUS_PRODUCED, Inventory::STATUS_AT_PLANT =>
-                $days >= $th['at_plant_days'] ? 'high' : ($days >= (int) round($th['at_plant_days'] / 2) ? 'med' : 'low'),
-            default => 'low',
-        };
+
+        // Intake
+        if (in_array($status, [Job::STATUS_AWAITING_CUSTOMER_CONFIRMATION, Job::STATUS_CONFIRMATION_ISSUE], true)) {
+            $hi = $th['awaiting_confirm_days'];
+            return $days >= $hi ? 'high' : ($days >= max(1, (int) round($hi / 2)) ? 'med' : 'low');
+        }
+        if (in_array($status, [Job::STATUS_PENDING_VERIFICATION, Job::STATUS_RECEIVED], true)) {
+            return $days >= 1 ? 'med' : 'low';
+        }
+
+        // Ready to dispatch — measured in hours.
+        if ($status === Job::STATUS_CONFIRMED) {
+            $hi = $th['to_dispatch_hours'];
+            $h = $hours ?? 0;
+            return $h >= $hi ? 'high' : ($h >= (int) round($hi / 2) ? 'med' : 'low');
+        }
+
+        // Dispatched — driver set, not yet collected.
+        if (in_array($status, self::G_DISPATCHED, true)) {
+            $hi = $th['dispatched_days'];
+            return $days >= $hi ? 'high' : ($days >= max(1, (int) round($hi / 2)) ? 'med' : 'low');
+        }
+
+        // On the road.
+        if (in_array($status, self::G_IN_TRANSIT, true)) {
+            $hi = $th['in_transit_days'];
+            return $days >= $hi ? 'high' : ($days >= max(1, (int) round($hi / 2)) ? 'med' : 'low');
+        }
+
+        return 'low';
     }
 
     /** Safe in-operator list for Postgres FILTER clauses. */
@@ -552,32 +569,31 @@ new #[Layout('components.layouts.app')] class extends Component
     {{-- ══════════════════════════════════════════════════════════════ --}}
     <x-page-header
         eyebrow="Command centre"
-        title="Vehicle Movement Overview"
-        subtitle="Executive view of the inventory ledger — where every vehicle sits, how it's moving, and who's moving it.">
+        title="Operations Overview"
+        subtitle="From order received to vehicle delivered — every job currently in flight.">
         <x-slot:actions>
             <x-button variant="secondary" size="sm" :href="route('admin.planning')">
                 <x-slot:icon>
                     <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
                 </x-slot:icon>
-                New Dispatch
+                Dispatch queue
             </x-button>
             <x-button variant="secondary" size="sm" :href="route('admin.deliveries')">
                 <x-slot:icon>
                     <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
                 </x-slot:icon>
-                Log Delivery
+                Deliveries
             </x-button>
             <x-button variant="primary" size="sm" :href="route('admin.reports.index')">
                 <x-slot:icon>
                     <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m7 14 4-4 4 4 5-6"/></svg>
                 </x-slot:icon>
-                View Reports
+                Reports
             </x-button>
         </x-slot:actions>
     </x-page-header>
 
-    {{-- Filter strip — the same <x-dash.*> filter system every other
-         operations dashboard uses. --}}
+    {{-- Filter strip --}}
     <x-dash.filter-bar>
         <x-dash.filter-date label="From" wire:model.live="dateFrom" minWidth="160px" />
         <x-dash.filter-date label="To"   wire:model.live="dateTo"   minWidth="160px" />
@@ -605,17 +621,17 @@ new #[Layout('components.layouts.app')] class extends Component
                 <option value="{{ $r }}">{{ $r }}</option>
             @endforeach
         </x-dash.filter-select>
-        <x-dash.filter-select label="Status" wire:model.live="status" minWidth="180px">
+        <x-dash.filter-select label="Stage" wire:model.live="status" minWidth="180px">
             <option value="">Any</option>
             @foreach($statusOptions as $s)
-                <option value="{{ $s }}">{{ ucwords(str_replace('_', ' ', $s)) }}</option>
+                <option value="{{ $s }}">{{ \App\Models\Job::PHASE1_STATUS_LABELS[$s] ?? ucwords(str_replace('_', ' ', $s)) }}</option>
             @endforeach
         </x-dash.filter-select>
         <x-dash.filter-reset wire:click="resetFilters" />
     </x-dash.filter-bar>
 
     {{-- ══════════════════════════════════════════════════════════════ --}}
-    {{-- ROW 1 — KPI CARDS                                             --}}
+    {{-- ROW 1 — KPI CARDS (one per pipeline stage + risk)              --}}
     {{-- ══════════════════════════════════════════════════════════════ --}}
     <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
         @foreach($kpis as $k)
@@ -634,15 +650,15 @@ new #[Layout('components.layouts.app')] class extends Component
     </div>
 
     {{-- ══════════════════════════════════════════════════════════════ --}}
-    {{-- ROW 2 — FLOW & DISTRIBUTION                                   --}}
+    {{-- ROW 2 — FLOW & PIPELINE                                        --}}
     {{-- ══════════════════════════════════════════════════════════════ --}}
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
 
-        {{-- Movement activity chart --}}
+        {{-- Pipeline activity chart --}}
         <x-dash.panel
             class="lg:col-span-2"
-            title="Movement activity"
-            :subtitle="'Daily dispatch, transit start, and delivery events · ' . $from->format('d M') . ' – ' . $to->format('d M')">
+            title="Pipeline activity"
+            :subtitle="'Daily dispatch, transit start and delivery · ' . $from->format('d M') . ' – ' . $to->format('d M')">
             <x-slot:actions>
                 <div class="flex items-center gap-3 text-[11px] font-semibold text-slate-600">
                     <span class="inline-flex items-center gap-1.5"><span class="h-2 w-2 rounded-full bg-purple-500"></span>Dispatched</span>
@@ -653,7 +669,7 @@ new #[Layout('components.layouts.app')] class extends Component
 
             @if(count($activitySeries) === 0 || $activityPeak === 0)
                 <div class="h-56 flex items-center justify-center text-sm text-slate-400">
-                    No movement activity in this range
+                    No pipeline activity in this range
                 </div>
             @else
                 @php
@@ -667,7 +683,6 @@ new #[Layout('components.layouts.app')] class extends Component
                 @endphp
                 <div class="overflow-x-auto">
                     <svg viewBox="0 0 {{ $chartW }} {{ $chartH + 30 }}" class="w-full h-60 min-w-[600px]" preserveAspectRatio="none">
-                        {{-- Grid --}}
                         @for($i = 1; $i <= 4; $i++)
                             <line x1="0" x2="{{ $chartW }}" y1="{{ $chartH - ($chartH / 4) * $i }}" y2="{{ $chartH - ($chartH / 4) * $i }}" stroke="#f1f5f9" stroke-width="1"/>
                         @endfor
@@ -676,12 +691,12 @@ new #[Layout('components.layouts.app')] class extends Component
                                 $gx = $i * $groupW + 3;
                                 $dh = $activityPeak > 0 ? ($d['dispatched'] / $activityPeak) * ($chartH - 6) : 0;
                                 $th_ = $activityPeak > 0 ? ($d['in_transit'] / $activityPeak) * ($chartH - 6) : 0;
-                                $vh = $activityPeak > 0 ? ($d['delivered'] / $activityPeak) * ($chartH - 6) : 0;
+                                $vh = $activityPeak > 0 ? ($d['delivered']  / $activityPeak) * ($chartH - 6) : 0;
                             @endphp
                             <g>
-                                <rect x="{{ $gx }}"                   y="{{ $chartH - $dh }}"  width="{{ $barW }}" height="{{ $dh }}" fill="#a855f7" rx="1.5"/>
-                                <rect x="{{ $gx + $barW + $barGap }}" y="{{ $chartH - $th_ }}" width="{{ $barW }}" height="{{ $th_ }}" fill="#f97316" rx="1.5"/>
-                                <rect x="{{ $gx + 2*($barW + $barGap) }}" y="{{ $chartH - $vh }}" width="{{ $barW }}" height="{{ $vh }}" fill="#10b981" rx="1.5"/>
+                                <rect x="{{ $gx }}"                     y="{{ $chartH - $dh }}"  width="{{ $barW }}" height="{{ $dh }}"  fill="#a855f7" rx="1.5"/>
+                                <rect x="{{ $gx + $barW + $barGap }}"   y="{{ $chartH - $th_ }}" width="{{ $barW }}" height="{{ $th_ }}" fill="#f97316" rx="1.5"/>
+                                <rect x="{{ $gx + 2*($barW + $barGap) }}" y="{{ $chartH - $vh }}"  width="{{ $barW }}" height="{{ $vh }}"  fill="#10b981" rx="1.5"/>
                             </g>
                             @if($count <= 30 || $i % (int) ceil($count / 15) === 0)
                                 <text x="{{ $gx + ($innerW / 2) }}" y="{{ $chartH + 16 }}" text-anchor="middle" font-size="9" fill="#64748b" font-family="ui-sans-serif,system-ui">{{ $d['date']->format('d/m') }}</text>
@@ -692,38 +707,23 @@ new #[Layout('components.layouts.app')] class extends Component
             @endif
         </x-dash.panel>
 
-        {{-- Status distribution --}}
-        <x-dash.panel title="Status distribution" subtitle="Active inventory by lifecycle state">
-            @php
-                $distTotal = array_sum($statusDist);
-                // Hex colours used as inline style so we don't have to
-                // rely on Tailwind content-scanning interpolated classes.
-                $statusColorHex = [
-                    'produced'   => '#6366f1',
-                    'at_plant'   => '#818cf8',
-                    'at_yard'    => '#f59e0b',
-                    'at_storage' => '#fbbf24',
-                    'in_transit' => '#3b82f6',
-                    'delivered'  => '#10b981',
-                ];
-            @endphp
-            @if($distTotal === 0)
-                <p class="text-sm text-slate-400 text-center py-8">No active inventory</p>
+        {{-- Pipeline distribution --}}
+        <x-dash.panel title="Pipeline distribution" subtitle="Active jobs by stage">
+            @if($pipelineTotal === 0)
+                <p class="text-sm text-slate-400 text-center py-8">No active jobs</p>
             @else
                 <ul class="space-y-3">
-                    @foreach(\App\Models\Inventory::ACTIVE_STATUSES as $s)
+                    @foreach($stageGroups as $grp)
                         @php
-                            $n = $statusDist[$s] ?? 0;
-                            $pct = $distTotal > 0 ? ($n / $distTotal) * 100 : 0;
-                            $hex = $statusColorHex[$s] ?? '#94a3b8';
+                            $pct = $pipelineTotal > 0 ? ($grp['count'] / $pipelineTotal) * 100 : 0;
                         @endphp
                         <li>
                             <div class="flex items-center justify-between text-xs mb-1">
-                                <span class="font-medium text-slate-700">{{ ucwords(str_replace('_', ' ', $s)) }}</span>
-                                <span class="tabular-nums text-slate-500"><strong class="text-slate-900">{{ $num($n) }}</strong> · {{ number_format($pct, 0) }}%</span>
+                                <span class="font-medium text-slate-700">{{ $grp['label'] }}</span>
+                                <span class="tabular-nums text-slate-500"><strong class="text-slate-900">{{ $num($grp['count']) }}</strong> · {{ number_format($pct, 0) }}%</span>
                             </div>
                             <div class="h-2 bg-slate-100 rounded-full overflow-hidden">
-                                <div class="h-full rounded-full" style="width: {{ max(2, $pct) }}%; background-color: {{ $hex }};"></div>
+                                <div class="h-full rounded-full" style="width: {{ max(2, $pct) }}%; background-color: {{ $grp['hex'] }};"></div>
                             </div>
                         </li>
                     @endforeach
@@ -735,7 +735,7 @@ new #[Layout('components.layouts.app')] class extends Component
     {{-- Throughput vs scheduled --}}
     <x-dash.panel
         title="Throughput vs scheduled"
-        subtitle="Deliveries completed in range vs bookings scheduled for the same window">
+        subtitle="Deliveries completed vs bookings scheduled for the same window">
         <x-slot:actions>
             <x-dash.pill size="md" :variant="$throughputPct >= 90 ? 'green' : ($throughputPct >= 70 ? 'amber' : 'red')">
                 {{ $throughputPct }}% throughput
@@ -751,7 +751,7 @@ new #[Layout('components.layouts.app')] class extends Component
             <div>
                 <p class="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">Delivered</p>
                 <p class="mt-2 text-3xl font-semibold text-emerald-700 tabular-nums">{{ $num($delivered) }}</p>
-                <p class="mt-1 text-xs text-slate-500">Jobs with a delivered_at timestamp in the window</p>
+                <p class="mt-1 text-xs text-slate-500">Jobs with a delivered_at in the window</p>
             </div>
             <div>
                 <p class="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">Gap</p>
@@ -766,12 +766,12 @@ new #[Layout('components.layouts.app')] class extends Component
     </x-dash.panel>
 
     {{-- ══════════════════════════════════════════════════════════════ --}}
-    {{-- ROW 3 — OPERATIONS FOCUS                                      --}}
+    {{-- ROW 3 — EXCEPTIONS & PRIORITY                                  --}}
     {{-- ══════════════════════════════════════════════════════════════ --}}
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
 
         {{-- Exceptions --}}
-        <x-dash.panel title="Exceptions" subtitle="Movements blocking the pipeline" :tight="true">
+        <x-dash.panel title="Exceptions" subtitle="Jobs blocking the pipeline" :tight="true">
             <ul class="divide-y divide-slate-100">
                 @foreach($exceptions as $e)
                     @php
@@ -797,32 +797,32 @@ new #[Layout('components.layouts.app')] class extends Component
             </ul>
         </x-dash.panel>
 
-        {{-- Priority Movements --}}
+        {{-- Priority movements --}}
         <x-dash.panel
             class="lg:col-span-2"
             title="Priority movements"
-            subtitle="Longest dwell in current state · top 12"
+            subtitle="Longest dwell in current stage · top 12"
             :tight="true">
             <x-slot:actions>
-                <a href="{{ route('admin.vehicles.index') }}" class="text-xs font-semibold text-slate-600 hover:text-slate-900 inline-flex items-center gap-1">
-                    View all vehicles
+                <a href="{{ route('admin.orders.index') }}" class="text-xs font-semibold text-slate-600 hover:text-slate-900 inline-flex items-center gap-1">
+                    View all orders
                     <svg viewBox="0 0 24 24" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
                 </a>
             </x-slot:actions>
 
             @if($priority->isEmpty())
-                <p class="px-5 py-10 text-sm text-slate-400 text-center">No active inventory matches the current filters</p>
+                <p class="px-5 py-10 text-sm text-slate-400 text-center">No active jobs match the current filters</p>
             @else
                 <div class="overflow-x-auto">
                     <table class="min-w-full text-sm">
                         <thead>
                             <tr class="bg-slate-50/70 text-[10px] uppercase tracking-[0.15em] text-slate-500">
-                                <th class="px-4 py-2 text-left font-semibold">Chassis / VIN</th>
-                                <th class="px-4 py-2 text-left font-semibold">Status</th>
-                                <th class="px-4 py-2 text-left font-semibold">Location</th>
+                                <th class="px-4 py-2 text-left font-semibold">Reference</th>
+                                <th class="px-4 py-2 text-left font-semibold">Stage</th>
+                                <th class="px-4 py-2 text-left font-semibold">Customer</th>
                                 <th class="px-4 py-2 text-left font-semibold">Origin → Destination</th>
                                 <th class="px-4 py-2 text-left font-semibold">Driver</th>
-                                <th class="px-4 py-2 text-right font-semibold">Days</th>
+                                <th class="px-4 py-2 text-right font-semibold">In stage</th>
                                 <th class="px-4 py-2 text-center font-semibold">Risk</th>
                             </tr>
                         </thead>
@@ -839,33 +839,32 @@ new #[Layout('components.layouts.app')] class extends Component
                                         'med'  => 'Med',
                                         default=> 'Low',
                                     };
-                                    $latest = $r->getAttribute('latest_job');
+                                    $days = $r->getAttribute('days_in_stage');
+                                    $hrs  = $r->getAttribute('hours_in_stage');
+                                    $dwellLabel = $days >= 1 ? ($days . 'd') : (($hrs ?? 0) . 'h');
+                                    $chassis = $r->inventory?->chassis_number;
+                                    $vin = $r->inventory?->vin;
                                 @endphp
                                 <tr class="hover:bg-slate-50/60 transition-colors">
                                     <td class="px-4 py-2.5">
-                                        <div class="font-mono text-[12px] text-slate-900">{{ $r->chassis_number }}</div>
-                                        @if($r->vin && $r->vin !== $r->chassis_number)
-                                            <div class="font-mono text-[10px] text-slate-400">{{ $r->vin }}</div>
+                                        <div class="font-mono text-[12px] text-slate-900">{{ $r->job_number ?? ('JOB-' . $r->id) }}</div>
+                                        @if($chassis)
+                                            <div class="font-mono text-[10px] text-slate-400">{{ $chassis }}{{ $vin && $vin !== $chassis ? ' · ' . $vin : '' }}</div>
                                         @endif
                                     </td>
                                     <td class="px-4 py-2.5"><x-status-badge :status="$r->status" size="sm"/></td>
                                     <td class="px-4 py-2.5">
-                                        <div class="text-[12px] text-slate-700">{{ $r->currentLocation?->company_name ?? '—' }}</div>
-                                        <div class="text-[10px] text-slate-400">{{ $r->currentLocation?->city ?? '' }}</div>
+                                        <div class="text-[12px] text-slate-700 truncate max-w-[160px]">{{ $r->company?->name ?? '—' }}</div>
                                     </td>
                                     <td class="px-4 py-2.5">
-                                        @if($latest)
-                                            <div class="text-[12px] text-slate-700 flex items-center gap-1">
-                                                <span>{{ $latest->pickupLocation?->city ?? '—' }}</span>
-                                                <svg viewBox="0 0 24 24" class="h-3 w-3 text-slate-300" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
-                                                <span>{{ $latest->deliveryLocation?->city ?? '—' }}</span>
-                                            </div>
-                                        @else
-                                            <span class="text-[11px] text-slate-400">No open job</span>
-                                        @endif
+                                        <div class="text-[12px] text-slate-700 flex items-center gap-1">
+                                            <span>{{ $r->pickupLocation?->city ?? '—' }}</span>
+                                            <svg viewBox="0 0 24 24" class="h-3 w-3 text-slate-300" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+                                            <span>{{ $r->deliveryLocation?->city ?? '—' }}</span>
+                                        </div>
                                     </td>
-                                    <td class="px-4 py-2.5 text-[12px] text-slate-700">{{ $latest?->driver?->name ?? '—' }}</td>
-                                    <td class="px-4 py-2.5 text-right text-[12px] tabular-nums text-slate-700">{{ $r->getAttribute('days_in_status') ?? '—' }}d</td>
+                                    <td class="px-4 py-2.5 text-[12px] text-slate-700">{{ $r->driver?->name ?? '—' }}</td>
+                                    <td class="px-4 py-2.5 text-right text-[12px] tabular-nums text-slate-700">{{ $dwellLabel }}</td>
                                     <td class="px-4 py-2.5 text-center">
                                         <x-dash.pill :variant="$riskVariant">{{ $riskLabel }}</x-dash.pill>
                                     </td>
@@ -878,45 +877,15 @@ new #[Layout('components.layouts.app')] class extends Component
         </x-dash.panel>
     </div>
 
-    {{-- Location Pressure --}}
-    <x-dash.panel title="Location pressure" subtitle="Active inventory by the type of place it's sitting in">
-        <div class="grid grid-cols-2 md:grid-cols-5 gap-3">
-            @php
-                $locTypes = [
-                    'plant'        => ['Plant',        'indigo'],
-                    'yard'         => ['Yard',         'amber'],
-                    'storage'      => ['Storage',      'amber'],
-                    'dealer'       => ['Dealer',       'emerald'],
-                    'body_builder' => ['Body builder', 'blue'],
-                ];
-            @endphp
-            @foreach($locTypes as $type => [$label, $color])
-                @php
-                    $n = $locationPressure[$type] ?? 0;
-                    $tint = [
-                        'indigo'  => ['border-indigo-200 bg-indigo-50',  'text-indigo-700'],
-                        'amber'   => ['border-amber-200 bg-amber-50',    'text-amber-800'],
-                        'emerald' => ['border-emerald-200 bg-emerald-50','text-emerald-700'],
-                        'blue'    => ['border-blue-200 bg-blue-50',      'text-blue-700'],
-                    ][$color];
-                @endphp
-                <div class="rounded-xl border {{ $tint[0] }} p-4">
-                    <p class="text-[10px] font-semibold uppercase tracking-[0.2em] {{ $tint[1] }}">{{ $label }}</p>
-                    <p class="mt-2 text-2xl font-semibold tabular-nums {{ $tint[1] }}">{{ $num($n) }}</p>
-                </div>
-            @endforeach
-        </div>
-    </x-dash.panel>
-
     {{-- ══════════════════════════════════════════════════════════════ --}}
-    {{-- ROW 4 — EXECUTIVE INSIGHT                                     --}}
+    {{-- ROW 4 — EXECUTIVE INSIGHT                                      --}}
     {{-- ══════════════════════════════════════════════════════════════ --}}
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
 
-        {{-- Company / OEM Breakdown --}}
-        <x-dash.panel title="Customer / OEM breakdown" subtitle="Top 8 by active inventory" :tight="true">
+        {{-- Customer / OEM breakdown --}}
+        <x-dash.panel title="Customer / OEM breakdown" subtitle="Top 8 by active jobs" :tight="true">
             @if($companyRows->isEmpty())
-                <p class="px-5 py-10 text-sm text-slate-400 text-center">No inventory rows</p>
+                <p class="px-5 py-10 text-sm text-slate-400 text-center">No jobs in scope</p>
             @else
                 @php $topActive = $companyRows->max('active_count') ?: 1; @endphp
                 <ul class="divide-y divide-slate-100">
@@ -941,7 +910,7 @@ new #[Layout('components.layouts.app')] class extends Component
             @endif
         </x-dash.panel>
 
-        {{-- Transporter Performance --}}
+        {{-- Transporter performance --}}
         <x-dash.panel title="Transporter performance" subtitle="Completed jobs in range · on-time ratio" :tight="true">
             @if($transporterRows->isEmpty())
                 <p class="px-5 py-10 text-sm text-slate-400 text-center">No completed jobs in this range</p>
@@ -966,7 +935,7 @@ new #[Layout('components.layouts.app')] class extends Component
             @endif
         </x-dash.panel>
 
-        {{-- Invoice Snapshot (invoice-based, not forecast) --}}
+        {{-- Invoice snapshot --}}
         <x-dash.panel title="Invoice snapshot" subtitle="What's invoiced, paid and outstanding" :tight="true">
             <ul class="divide-y divide-slate-100">
                 <li class="flex items-center gap-3 px-5 py-3">
@@ -1015,6 +984,6 @@ new #[Layout('components.layouts.app')] class extends Component
     </div>
 
     <p class="text-center text-[10px] text-slate-400 tracking-[0.2em] uppercase pt-2">
-        Trident · Executive Overview · Sources: inventory · transport_jobs · invoices · locations
+        Trident · Operations Overview · Received → Confirmed → Dispatched → In transit → Delivered
     </p>
 </div>

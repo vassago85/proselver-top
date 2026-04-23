@@ -152,9 +152,22 @@ When migrating a page to this system:
    php artisan view:clear && php artisan view:cache
    ```
 
+## Operational scope
+
+The Executive Overview (`/admin/dashboard`) tracks only the **live operational pipeline**:
+
+```
+Received  →  Confirmed  →  Dispatched  →  In transit  →  Delivered
+```
+
+It does NOT surface yard, storage, plant, or inventory-lifecycle
+metrics — those modules are not in current operational scope. If/when
+they come back online, add a separate `/admin/yard` dashboard using
+this same component system; do not bloat the Overview.
+
 ## Pages already migrated
 
-- [x] `/admin/dashboard` — Executive Overview
+- [x] `/admin/dashboard` — Executive Overview (pipeline-focused)
 - [x] `/admin/drivers/operations` — Driver Ops
 
 ## Pages pending migration
