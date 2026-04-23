@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Job;
 use App\Models\JobDocument;
 use App\Models\JobEvent;
+use App\Services\ImageNormalizer;
 use App\Support\StorageDisk;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -132,8 +133,28 @@ class DriverSyncController extends Controller
         }
 
         $file = $request->file('file');
+
+        // Normalise image uploads in place BEFORE we store them:
+        //   - Apply EXIF orientation so portrait phone shots don't render
+        //     sideways in viewers that ignore the EXIF tag (Dompdf, some
+        //     Android browsers).
+        //   - Strip EXIF/GPS metadata so we don't leak the driver's
+        //     home address into a customer-facing damage report PDF.
+        //   - Downscale huge 12MP sensor shots to 2560px longest edge
+        //     — plenty for insurance claims and cuts storage by ~20×.
+        // The normaliser is defensive: on any failure it leaves the
+        // original file alone so we never block a driver's upload.
+        app(ImageNormalizer::class)->normalise($file);
+
         $disk = StorageDisk::forUploads();
         $path = $file->store('jobs/' . $job->uuid . '/documents', $disk);
+
+        // Normalisation rewrites in place, so we must re-read mime and
+        // size from disk (both may have changed — e.g. a PNG that was
+        // re-encoded as JPEG, or a 4MB shot that's now 800KB).
+        $realPath = $file->getRealPath();
+        $mime = $realPath && is_file($realPath) ? (@mime_content_type($realPath) ?: $file->getMimeType()) : $file->getMimeType();
+        $sizeBytes = $realPath && is_file($realPath) ? (@filesize($realPath) ?: $file->getSize()) : $file->getSize();
 
         $doc = JobDocument::create([
             'job_id' => $job->id,
@@ -142,8 +163,8 @@ class DriverSyncController extends Controller
             'disk' => $disk,
             'path' => $path,
             'original_filename' => $file->getClientOriginalName(),
-            'mime_type' => $file->getMimeType(),
-            'size_bytes' => $file->getSize(),
+            'mime_type' => $mime,
+            'size_bytes' => $sizeBytes,
             'file_hash' => hash_file('sha256', $file->getRealPath()),
             'client_uuid' => $validated['client_uuid'],
             'captured_at' => $validated['captured_at'] ?? null,
