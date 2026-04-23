@@ -452,9 +452,9 @@ new #[Layout('components.layouts.app')] class extends Component {
                     Action required
                 </span>
                 <span class="text-[11px] text-slate-500 tabular-nums">
-                    @if($attentionExpiredCount > 0){{ $attentionExpiredCount }} expired@endif
+                    @if($attentionExpiredCount > 0){{ $attentionExpiredCount }} expired @endif
                     @if($attentionExpiredCount > 0 && $attentionExpiringCount > 0) · @endif
-                    @if($attentionExpiringCount > 0){{ $attentionExpiringCount }} expiring &lt;60d@endif
+                    @if($attentionExpiringCount > 0){{ $attentionExpiringCount }} expiring &lt;60d @endif
                 </span>
             </div>
             <a href="{{ $driversRoute }}" class="text-xs font-semibold text-slate-600 hover:text-slate-900 inline-flex items-center gap-1 transition-colors">
