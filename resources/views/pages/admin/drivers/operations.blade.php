@@ -409,76 +409,44 @@ new #[Layout('components.layouts.app')] class extends Component
         </x-slot:actions>
     </x-page-header>
 
-    {{-- Filters --}}
-    <div class="rounded-2xl border border-slate-200 bg-white shadow-sm p-4">
-        <div class="flex flex-wrap items-end gap-3">
-            <div class="flex-1 min-w-[160px]">
-                <label class="block text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500 mb-1.5">From</label>
-                <input type="date" wire:model.live="dateFrom"
-                    class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500">
-            </div>
-            <div class="flex-1 min-w-[160px]">
-                <label class="block text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500 mb-1.5">To</label>
-                <input type="date" wire:model.live="dateTo"
-                    class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500">
-            </div>
-            <div class="flex-1 min-w-[200px]">
-                <label class="block text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500 mb-1.5">Transporter</label>
-                <select wire:model.live="companyId" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500">
-                    <option value="">All</option>
-                    @foreach($companyOptions as $c)
-                        <option value="{{ $c->id }}">{{ $c->name }}</option>
-                    @endforeach
-                </select>
-            </div>
-            <div class="flex-1 min-w-[160px]">
-                <label class="block text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500 mb-1.5">Status</label>
-                <select wire:model.live="activeFilter" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500">
-                    <option value="active">Active only</option>
-                    <option value="inactive">Inactive only</option>
-                    <option value="all">All</option>
-                </select>
-            </div>
-            <div class="flex-1 min-w-[180px]">
-                <label class="block text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500 mb-1.5">Base location</label>
-                <select wire:model.live="baseLocation" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500">
-                    <option value="">All</option>
-                    @foreach($baseOptions as $b)
-                        <option value="{{ $b }}">{{ $b }}</option>
-                    @endforeach
-                </select>
-            </div>
-            <button type="button" wire:click="resetFilters"
-                class="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition-colors">
-                <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>
-                Reset
-            </button>
-        </div>
-    </div>
+    {{-- Unified filter bar — same component system as every other dashboard. --}}
+    <x-dash.filter-bar>
+        <x-dash.filter-date label="From" wire:model.live="dateFrom" minWidth="160px" />
+        <x-dash.filter-date label="To"   wire:model.live="dateTo"   minWidth="160px" />
+        <x-dash.filter-select label="Transporter" wire:model.live="companyId" minWidth="200px">
+            <option value="">All</option>
+            @foreach($companyOptions as $c)
+                <option value="{{ $c->id }}">{{ $c->name }}</option>
+            @endforeach
+        </x-dash.filter-select>
+        <x-dash.filter-select label="Status" wire:model.live="activeFilter" minWidth="160px">
+            <option value="active">Active only</option>
+            <option value="inactive">Inactive only</option>
+            <option value="all">All</option>
+        </x-dash.filter-select>
+        <x-dash.filter-select label="Base location" wire:model.live="baseLocation" minWidth="180px">
+            <option value="">All</option>
+            @foreach($baseOptions as $b)
+                <option value="{{ $b }}">{{ $b }}</option>
+            @endforeach
+        </x-dash.filter-select>
+        <x-dash.filter-reset wire:click="resetFilters" />
+    </x-dash.filter-bar>
 
     {{-- ══════════════════════════════════════════════════════════ --}}
     {{-- ROW 1 — KPI                                                --}}
     {{-- ══════════════════════════════════════════════════════════ --}}
     <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
         @foreach($kpis as $k)
-            @php
-                $accent = ['blue'=>'text-blue-700','amber'=>'text-amber-700','teal'=>'text-teal-700','green'=>'text-emerald-700','red'=>'text-rose-700','slate'=>'text-slate-900'][$k['color']] ?? 'text-slate-900';
-                $dot    = ['blue'=>'bg-blue-500','amber'=>'bg-amber-500','teal'=>'bg-teal-500','green'=>'bg-emerald-500','red'=>'bg-rose-500','slate'=>'bg-slate-400'][$k['color']] ?? 'bg-slate-400';
-                $tint   = ['blue'=>'text-blue-400','amber'=>'text-amber-400','teal'=>'text-teal-400','green'=>'text-emerald-400','red'=>'text-rose-400','slate'=>'text-slate-300'][$k['color']] ?? 'text-slate-300';
-            @endphp
-            <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-                <div class="flex items-start justify-between gap-3">
-                    <div class="flex items-center gap-2 min-w-0">
-                        <span class="h-1.5 w-1.5 rounded-full {{ $dot }}"></span>
-                        <p class="text-[11px] font-semibold uppercase tracking-[0.15em] text-slate-500 truncate">{{ $k['label'] }}</p>
-                    </div>
-                    <span class="{{ $tint }}">
-                        <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{!! $k['icon'] !!}</svg>
-                    </span>
-                </div>
-                <p class="mt-3 text-3xl font-semibold tracking-tight tabular-nums {{ $accent }}">{{ is_string($k['value']) ? $k['value'] : $num($k['value']) }}</p>
-                <p class="mt-1.5 text-[11px] font-medium text-slate-500">{{ $k['helper'] }}</p>
-            </div>
+            <x-dash.kpi
+                :label="$k['label']"
+                :value="is_string($k['value']) ? $k['value'] : $num($k['value'])"
+                :color="$k['color']"
+                :helper="$k['helper']">
+                <x-slot:icon>
+                    <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{!! $k['icon'] !!}</svg>
+                </x-slot:icon>
+            </x-dash.kpi>
         @endforeach
     </div>
 
@@ -488,16 +456,19 @@ new #[Layout('components.layouts.app')] class extends Component
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
 
         {{-- Active Drivers Table --}}
-        <div class="lg:col-span-2 rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-            <div class="flex items-center justify-between border-b border-slate-100 px-6 py-4">
-                <div>
-                    <h2 class="text-base font-semibold tracking-tight text-slate-900">Active drivers</h2>
-                    <p class="mt-0.5 text-xs text-slate-500">Live status ordered by open workload</p>
-                </div>
-                <span class="text-[11px] text-slate-500 tabular-nums">{{ $num($driversSorted->count()) }} driver{{ $driversSorted->count() === 1 ? '' : 's' }}</span>
-            </div>
+        <x-dash.panel
+            class="lg:col-span-2"
+            title="Active drivers"
+            subtitle="Live status ordered by open workload"
+            :tight="true">
+            <x-slot:actions>
+                <x-dash.pill variant="slate">
+                    {{ $num($driversSorted->count()) }} driver{{ $driversSorted->count() === 1 ? '' : 's' }}
+                </x-dash.pill>
+            </x-slot:actions>
+
             @if($driversSorted->isEmpty())
-                <p class="px-6 py-10 text-sm text-slate-400 text-center">No drivers match the current filters</p>
+                <p class="px-5 py-10 text-sm text-slate-400 text-center">No drivers match the current filters</p>
             @else
                 <div class="overflow-x-auto">
                     <table class="min-w-full text-sm">
@@ -514,10 +485,12 @@ new #[Layout('components.layouts.app')] class extends Component
                         <tbody class="divide-y divide-slate-100">
                             @foreach($driversSorted as $d)
                                 @php
-                                    $statusPill = match($d->live_status) {
-                                        'in_transit' => ['bg-orange-100 text-orange-800 border-orange-200', 'In transit'],
-                                        'assigned'   => ['bg-purple-100 text-purple-800 border-purple-200', 'Assigned'],
-                                        default      => ['bg-slate-100 text-slate-600 border-slate-200', 'Idle'],
+                                    // Semantic-pill mapping — blue = assigned (active),
+                                    // teal = in_transit (on the road), slate = idle.
+                                    $statusVariant = match($d->live_status) {
+                                        'in_transit' => ['teal',  'In transit'],
+                                        'assigned'   => ['blue',  'Assigned'],
+                                        default      => ['slate', 'Idle'],
                                     };
                                     $cur = $d->current_job;
                                 @endphp
@@ -542,11 +515,11 @@ new #[Layout('components.layouts.app')] class extends Component
                                         @endif
                                     </td>
                                     <td class="px-4 py-2.5 text-center">
-                                        <span class="inline-flex items-center rounded-full border px-2.5 py-0.5 text-[11px] font-semibold {{ $statusPill[0] }}">{{ $statusPill[1] }}</span>
+                                        <x-dash.pill :variant="$statusVariant[0]">{{ $statusVariant[1] }}</x-dash.pill>
                                     </td>
                                     <td class="px-4 py-2.5 text-right">
                                         @if($d->open_count > 0)
-                                            <span class="inline-flex items-center rounded-full bg-blue-50 border border-blue-200 text-blue-700 px-2 py-0.5 text-[11px] font-semibold tabular-nums">{{ $d->open_count }}</span>
+                                            <x-dash.pill variant="blue">{{ $d->open_count }}</x-dash.pill>
                                         @else
                                             <span class="text-[11px] text-slate-400">0</span>
                                         @endif
@@ -560,18 +533,14 @@ new #[Layout('components.layouts.app')] class extends Component
                     </table>
                 </div>
             @endif
-        </div>
+        </x-dash.panel>
 
         {{-- Assignment load --}}
-        <div class="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-            <div class="border-b border-slate-100 px-6 py-4">
-                <h2 class="text-base font-semibold tracking-tight text-slate-900">Assignment load</h2>
-                <p class="mt-0.5 text-xs text-slate-500">Open jobs per driver · top 10</p>
-            </div>
+        <x-dash.panel title="Assignment load" subtitle="Open jobs per driver · top 10">
             @if($topLoad->isEmpty())
-                <p class="px-6 py-10 text-sm text-slate-400 text-center">No drivers carrying open jobs</p>
+                <p class="py-10 text-sm text-slate-400 text-center">No drivers carrying open jobs</p>
             @else
-                <ul class="p-6 space-y-3">
+                <ul class="space-y-3">
                     @foreach($topLoad as $d)
                         <li>
                             <div class="flex items-center justify-between text-xs mb-1">
@@ -586,26 +555,27 @@ new #[Layout('components.layouts.app')] class extends Component
                         </li>
                     @endforeach
                 </ul>
-                <div class="border-t border-slate-100 bg-slate-50/40 px-6 py-2 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">
-                    Overload threshold: {{ $overloadThreshold }} open jobs
-                </div>
             @endif
-        </div>
+
+            <x-slot:footer>
+                Overload threshold: {{ $overloadThreshold }} open jobs
+            </x-slot:footer>
+        </x-dash.panel>
     </div>
 
     {{-- ══════════════════════════════════════════════════════════ --}}
     {{-- ROW 3 — PERFORMANCE                                       --}}
     {{-- ══════════════════════════════════════════════════════════ --}}
-    <div class="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-        <div class="flex items-center justify-between border-b border-slate-100 px-6 py-4">
-            <div>
-                <h2 class="text-base font-semibold tracking-tight text-slate-900">Driver performance</h2>
-                <p class="mt-0.5 text-xs text-slate-500">Completed in range · on-time ratio · avg transit · delays</p>
-            </div>
+    <x-dash.panel
+        title="Driver performance"
+        subtitle="Completed in range · on-time ratio · avg transit · delays"
+        :tight="true">
+        <x-slot:actions>
             <span class="text-[11px] text-slate-500">Range: {{ $from->format('d M') }} – {{ $to->format('d M') }}</span>
-        </div>
+        </x-slot:actions>
+
         @if($performers->isEmpty())
-            <p class="px-6 py-10 text-sm text-slate-400 text-center">No completed or delayed jobs in this range</p>
+            <p class="px-5 py-10 text-sm text-slate-400 text-center">No completed or delayed jobs in this range</p>
         @else
             <div class="overflow-x-auto">
                 <table class="min-w-full text-sm">
@@ -624,10 +594,9 @@ new #[Layout('components.layouts.app')] class extends Component
                         @foreach($performers as $d)
                             @php
                                 $otp = $d->on_time_pct;
-                                $otpColor = $otp === null ? 'bg-slate-100 text-slate-500 border-slate-200'
-                                    : ($otp >= 90 ? 'bg-emerald-100 text-emerald-700 border-emerald-200'
-                                    : ($otp >= 70 ? 'bg-amber-100 text-amber-800 border-amber-200'
-                                    : 'bg-rose-100 text-rose-700 border-rose-200'));
+                                $otpVariant = $otp === null ? 'slate'
+                                    : ($otp >= 90 ? 'green'
+                                    : ($otp >= 70 ? 'amber' : 'red'));
                                 $barColor = $otp === null ? '#cbd5e1' : ($otp >= 90 ? '#10b981' : ($otp >= 70 ? '#f59e0b' : '#ef4444'));
                             @endphp
                             <tr class="hover:bg-slate-50/60 transition-colors">
@@ -637,9 +606,7 @@ new #[Layout('components.layouts.app')] class extends Component
                                 <td class="px-4 py-2.5 text-right tabular-nums text-slate-700">{{ $human($d->avg_seconds) }}</td>
                                 <td class="px-4 py-2.5 text-right tabular-nums {{ $d->delays > 0 ? 'text-rose-700 font-semibold' : 'text-slate-500' }}">{{ $num($d->delays) }}</td>
                                 <td class="px-4 py-2.5 text-right">
-                                    <span class="inline-flex items-center rounded-full border px-2.5 py-0.5 text-[11px] font-semibold tabular-nums {{ $otpColor }}">
-                                        {{ $otp === null ? 'n/a' : $otp . '%' }}
-                                    </span>
+                                    <x-dash.pill :variant="$otpVariant">{{ $otp === null ? 'n/a' : $otp . '%' }}</x-dash.pill>
                                 </td>
                                 <td class="px-4 py-2.5">
                                     <div class="h-1.5 w-32 bg-slate-100 rounded-full overflow-hidden">
@@ -652,7 +619,7 @@ new #[Layout('components.layouts.app')] class extends Component
                 </table>
             </div>
         @endif
-    </div>
+    </x-dash.panel>
 
     {{-- ══════════════════════════════════════════════════════════ --}}
     {{-- ROW 4 — PROBLEMS / RISKS                                  --}}
@@ -660,23 +627,18 @@ new #[Layout('components.layouts.app')] class extends Component
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
 
         {{-- Driver issues panel --}}
-        <div class="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-            <div class="border-b border-slate-100 px-6 py-4">
-                <h2 class="text-base font-semibold tracking-tight text-slate-900">Driver issues</h2>
-                <p class="mt-0.5 text-xs text-slate-500">Assignment / workload anomalies right now</p>
-            </div>
+        <x-dash.panel title="Driver issues" subtitle="Assignment / workload anomalies right now" :tight="true">
             <div class="divide-y divide-slate-100">
                 {{-- Overloaded --}}
-                <div class="px-6 py-4">
+                <div class="px-5 py-4">
                     <div class="flex items-center justify-between mb-2">
                         <div>
                             <p class="text-sm font-semibold text-slate-900">Overloaded</p>
                             <p class="text-[11px] text-slate-500">More than {{ $overloadThreshold }} open jobs</p>
                         </div>
-                        <span class="inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold tabular-nums
-                            {{ $issues['overloaded']->count() > 0 ? 'bg-rose-100 text-rose-700 border-rose-200' : 'bg-slate-100 text-slate-500 border-slate-200' }}">
+                        <x-dash.pill size="md" :variant="$issues['overloaded']->count() > 0 ? 'red' : 'slate'">
                             {{ $num($issues['overloaded']->count()) }}
-                        </span>
+                        </x-dash.pill>
                     </div>
                     @if($issues['overloaded']->isNotEmpty())
                         <ul class="flex flex-wrap gap-1.5">
@@ -691,16 +653,15 @@ new #[Layout('components.layouts.app')] class extends Component
                 </div>
 
                 {{-- With delays --}}
-                <div class="px-6 py-4">
+                <div class="px-5 py-4">
                     <div class="flex items-center justify-between mb-2">
                         <div>
                             <p class="text-sm font-semibold text-slate-900">With delays</p>
                             <p class="text-[11px] text-slate-500">Completed jobs with delay_minutes &gt; 0 in range</p>
                         </div>
-                        <span class="inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold tabular-nums
-                            {{ $issues['with_delays']->count() > 0 ? 'bg-amber-100 text-amber-800 border-amber-200' : 'bg-slate-100 text-slate-500 border-slate-200' }}">
+                        <x-dash.pill size="md" :variant="$issues['with_delays']->count() > 0 ? 'amber' : 'slate'">
                             {{ $num($issues['with_delays']->count()) }}
-                        </span>
+                        </x-dash.pill>
                     </div>
                     @if($issues['with_delays']->isNotEmpty())
                         <ul class="flex flex-wrap gap-1.5">
@@ -715,16 +676,15 @@ new #[Layout('components.layouts.app')] class extends Component
                 </div>
 
                 {{-- No assignments --}}
-                <div class="px-6 py-4">
+                <div class="px-5 py-4">
                     <div class="flex items-center justify-between mb-2">
                         <div>
                             <p class="text-sm font-semibold text-slate-900">No assignments in range</p>
                             <p class="text-[11px] text-slate-500">Active drivers with zero jobs touched</p>
                         </div>
-                        <span class="inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold tabular-nums
-                            {{ $issues['no_assignments']->count() > 0 ? 'bg-amber-100 text-amber-800 border-amber-200' : 'bg-slate-100 text-slate-500 border-slate-200' }}">
+                        <x-dash.pill size="md" :variant="$issues['no_assignments']->count() > 0 ? 'amber' : 'slate'">
                             {{ $num($issues['no_assignments']->count()) }}
-                        </span>
+                        </x-dash.pill>
                     </div>
                     @if($issues['no_assignments']->isNotEmpty())
                         <ul class="flex flex-wrap gap-1.5">
@@ -737,16 +697,16 @@ new #[Layout('components.layouts.app')] class extends Component
                     @endif
                 </div>
             </div>
-        </div>
+        </x-dash.panel>
 
         {{-- Compliance panel --}}
-        <div class="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-            <div class="border-b border-slate-100 px-6 py-4">
-                <h2 class="text-base font-semibold tracking-tight text-slate-900">Compliance risks</h2>
-                <p class="mt-0.5 text-xs text-slate-500">Expired &amp; expiring within {{ $expirySoonDays }} days</p>
-            </div>
+        <x-dash.panel
+            title="Compliance risks"
+            :subtitle="'Expired & expiring within ' . $expirySoonDays . ' days'"
+            :tight="true">
+
             @if($complianceDrivers->isEmpty())
-                <p class="px-6 py-10 text-sm text-slate-400 text-center">All documentation is current</p>
+                <p class="px-5 py-10 text-sm text-slate-400 text-center">All documentation is current</p>
             @else
                 <div class="overflow-x-auto">
                     <table class="min-w-full text-sm">
@@ -761,36 +721,35 @@ new #[Layout('components.layouts.app')] class extends Component
                         <tbody class="divide-y divide-slate-100">
                             @foreach($complianceDrivers as $p)
                                 @php
-                                    [$licCol, $licTxt]   = $expiryBadge($p->license_expiry, $expirySoonDays);
-                                    [$pdpCol, $pdpTxt]   = $expiryBadge($p->prdp_expiry, $expirySoonDays);
-                                    [$tpCol, $tpTxt]     = $expiryBadge($p->trade_plate_expiry, $expirySoonDays);
-                                    $pill = fn ($c) => match($c) {
-                                        'red'   => 'bg-rose-100 text-rose-700 border-rose-200',
-                                        'amber' => 'bg-amber-100 text-amber-800 border-amber-200',
-                                        'green' => 'bg-emerald-50 text-emerald-700 border-emerald-200',
-                                        default => 'bg-slate-100 text-slate-500 border-slate-200',
-                                    };
+                                    [$licCol, $licTxt] = $expiryBadge($p->license_expiry, $expirySoonDays);
+                                    [$pdpCol, $pdpTxt] = $expiryBadge($p->prdp_expiry, $expirySoonDays);
+                                    [$tpCol,  $tpTxt]  = $expiryBadge($p->trade_plate_expiry, $expirySoonDays);
                                 @endphp
                                 <tr class="hover:bg-slate-50/60 transition-colors">
                                     <td class="px-4 py-2.5">
                                         <a href="{{ route('admin.drivers.edit', $p->user) }}" class="font-medium text-slate-900 hover:text-blue-700">{{ $p->user?->name ?? '—' }}</a>
                                     </td>
-                                    <td class="px-4 py-2.5"><span class="inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium {{ $pill($licCol) }}">{{ $licTxt }}</span></td>
-                                    <td class="px-4 py-2.5"><span class="inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium {{ $pill($pdpCol) }}">{{ $pdpTxt }}</span></td>
-                                    <td class="px-4 py-2.5"><span class="inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium {{ $pill($tpCol) }}">{{ $tpTxt }}</span></td>
+                                    <td class="px-4 py-2.5"><x-dash.pill :variant="$licCol">{{ $licTxt }}</x-dash.pill></td>
+                                    <td class="px-4 py-2.5"><x-dash.pill :variant="$pdpCol">{{ $pdpTxt }}</x-dash.pill></td>
+                                    <td class="px-4 py-2.5"><x-dash.pill :variant="$tpCol">{{ $tpTxt }}</x-dash.pill></td>
                                 </tr>
                             @endforeach
                         </tbody>
                     </table>
                 </div>
-                <div class="border-t border-slate-100 bg-slate-50/40 px-6 py-2 text-right">
-                    <a href="{{ route('admin.drivers.index', ['trade_plate' => 'expiring']) }}" class="text-[11px] font-semibold text-slate-600 hover:text-slate-900 inline-flex items-center gap-1">
-                        Manage roster
-                        <svg viewBox="0 0 24 24" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
-                    </a>
-                </div>
             @endif
-        </div>
+
+            @if($complianceDrivers->isNotEmpty())
+                <x-slot:footer>
+                    <div class="text-right">
+                        <a href="{{ route('admin.drivers.index', ['trade_plate' => 'expiring']) }}" class="text-[11px] font-semibold text-slate-600 hover:text-slate-900 inline-flex items-center gap-1">
+                            Manage roster
+                            <svg viewBox="0 0 24 24" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+                        </a>
+                    </div>
+                </x-slot:footer>
+            @endif
+        </x-dash.panel>
     </div>
 
     <p class="text-center text-[10px] text-slate-400 tracking-[0.2em] uppercase pt-2">

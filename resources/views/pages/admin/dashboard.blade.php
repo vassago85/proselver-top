@@ -543,9 +543,6 @@ new #[Layout('components.layouts.app')] class extends Component
 @php
     $money = fn ($v) => 'R ' . number_format((float) $v, 0);
     $num   = fn ($v) => number_format((int) $v);
-
-    // Inline SVG helper — Lucide-style 24x24 strokes.
-    $icon = fn ($paths, $size = 16) => '<svg viewBox="0 0 24 24" class="h-' . $size/4 . ' w-' . $size/4 . '" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' . $paths . '</svg>';
 @endphp
 
 <div class="space-y-6">
@@ -579,124 +576,60 @@ new #[Layout('components.layouts.app')] class extends Component
         </x-slot:actions>
     </x-page-header>
 
-    {{-- Filter strip --}}
-    <div class="rounded-2xl border border-slate-200 bg-white shadow-sm p-4">
-        <div class="flex flex-wrap items-end gap-3">
-            <div class="flex-1 min-w-[180px]">
-                <label class="block text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500 mb-1.5">From</label>
-                <input type="date" wire:model.live="dateFrom"
-                    class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500">
-            </div>
-            <div class="flex-1 min-w-[180px]">
-                <label class="block text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500 mb-1.5">To</label>
-                <input type="date" wire:model.live="dateTo"
-                    class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500">
-            </div>
-            <div class="flex-1 min-w-[200px]">
-                <label class="block text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500 mb-1.5">Customer / OEM</label>
-                <select wire:model.live="companyId" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500">
-                    <option value="">All</option>
-                    @foreach($companyOptions as $c)
-                        <option value="{{ $c->id }}">{{ $c->name }}</option>
-                    @endforeach
-                </select>
-            </div>
-            <div class="flex-1 min-w-[200px]">
-                <label class="block text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500 mb-1.5">Transporter</label>
-                <select wire:model.live="transporterId" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500">
-                    <option value="">All</option>
-                    @foreach($transporterOptions as $c)
-                        <option value="{{ $c->id }}">{{ $c->name }}</option>
-                    @endforeach
-                </select>
-            </div>
-            <div class="flex-1 min-w-[160px]">
-                <label class="block text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500 mb-1.5">Brand</label>
-                <select wire:model.live="brandId" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500">
-                    <option value="">All</option>
-                    @foreach($brandOptions as $b)
-                        <option value="{{ $b->id }}">{{ $b->name }}</option>
-                    @endforeach
-                </select>
-            </div>
-            <div class="flex-1 min-w-[160px]">
-                <label class="block text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500 mb-1.5">Region</label>
-                <select wire:model.live="region" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500">
-                    <option value="">All</option>
-                    @foreach($regionOptions as $r)
-                        <option value="{{ $r }}">{{ $r }}</option>
-                    @endforeach
-                </select>
-            </div>
-            <div class="flex-1 min-w-[180px]">
-                <label class="block text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500 mb-1.5">Status</label>
-                <select wire:model.live="status" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500">
-                    <option value="">Any</option>
-                    @foreach($statusOptions as $s)
-                        <option value="{{ $s }}">{{ ucwords(str_replace('_', ' ', $s)) }}</option>
-                    @endforeach
-                </select>
-            </div>
-            <button type="button" wire:click="resetFilters"
-                class="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition-colors">
-                <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>
-                Reset
-            </button>
-        </div>
-    </div>
+    {{-- Filter strip — the same <x-dash.*> filter system every other
+         operations dashboard uses. --}}
+    <x-dash.filter-bar>
+        <x-dash.filter-date label="From" wire:model.live="dateFrom" minWidth="160px" />
+        <x-dash.filter-date label="To"   wire:model.live="dateTo"   minWidth="160px" />
+        <x-dash.filter-select label="Customer / OEM" wire:model.live="companyId" minWidth="200px">
+            <option value="">All</option>
+            @foreach($companyOptions as $c)
+                <option value="{{ $c->id }}">{{ $c->name }}</option>
+            @endforeach
+        </x-dash.filter-select>
+        <x-dash.filter-select label="Transporter" wire:model.live="transporterId" minWidth="200px">
+            <option value="">All</option>
+            @foreach($transporterOptions as $c)
+                <option value="{{ $c->id }}">{{ $c->name }}</option>
+            @endforeach
+        </x-dash.filter-select>
+        <x-dash.filter-select label="Brand" wire:model.live="brandId" minWidth="160px">
+            <option value="">All</option>
+            @foreach($brandOptions as $b)
+                <option value="{{ $b->id }}">{{ $b->name }}</option>
+            @endforeach
+        </x-dash.filter-select>
+        <x-dash.filter-select label="Region" wire:model.live="region" minWidth="160px">
+            <option value="">All</option>
+            @foreach($regionOptions as $r)
+                <option value="{{ $r }}">{{ $r }}</option>
+            @endforeach
+        </x-dash.filter-select>
+        <x-dash.filter-select label="Status" wire:model.live="status" minWidth="180px">
+            <option value="">Any</option>
+            @foreach($statusOptions as $s)
+                <option value="{{ $s }}">{{ ucwords(str_replace('_', ' ', $s)) }}</option>
+            @endforeach
+        </x-dash.filter-select>
+        <x-dash.filter-reset wire:click="resetFilters" />
+    </x-dash.filter-bar>
 
     {{-- ══════════════════════════════════════════════════════════════ --}}
     {{-- ROW 1 — KPI CARDS                                             --}}
     {{-- ══════════════════════════════════════════════════════════════ --}}
     <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
         @foreach($kpis as $k)
-            @php
-                $tag = $k['href'] ? 'a' : 'div';
-                $accent = [
-                    'blue'   => 'text-blue-700',   'amber'  => 'text-amber-700',
-                    'indigo' => 'text-indigo-700', 'green'  => 'text-emerald-700',
-                    'red'    => 'text-rose-700',   'teal'   => 'text-teal-700',
-                    'slate'  => 'text-slate-900',
-                ][$k['color']] ?? 'text-slate-900';
-                $dot = [
-                    'blue'   => 'bg-blue-500',   'amber'  => 'bg-amber-500',
-                    'indigo' => 'bg-indigo-500', 'green'  => 'bg-emerald-500',
-                    'red'    => 'bg-rose-500',   'teal'   => 'bg-teal-500',
-                    'slate'  => 'bg-slate-400',
-                ][$k['color']] ?? 'bg-slate-400';
-                $iconTint = [
-                    'blue'   => 'text-blue-400',   'amber'  => 'text-amber-400',
-                    'indigo' => 'text-indigo-400', 'green'  => 'text-emerald-400',
-                    'red'    => 'text-rose-400',   'teal'   => 'text-teal-400',
-                    'slate'  => 'text-slate-300',
-                ][$k['color']] ?? 'text-slate-300';
-            @endphp
-            <{{ $tag }} @if($k['href']) href="{{ $k['href'] }}" @endif
-                class="group relative block rounded-xl border border-slate-200 bg-white p-5 shadow-sm transition-all {{ $k['href'] ? 'hover:border-slate-300 hover:shadow-md hover:-translate-y-0.5' : '' }}">
-                <div class="flex items-start justify-between gap-3">
-                    <div class="flex items-center gap-2 min-w-0">
-                        <span class="h-1.5 w-1.5 rounded-full {{ $dot }}"></span>
-                        <p class="text-[11px] font-semibold uppercase tracking-[0.15em] text-slate-500 truncate">{{ $k['label'] }}</p>
-                    </div>
-                    <span class="{{ $iconTint }}">
-                        <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{!! $k['iconPath'] !!}</svg>
-                    </span>
-                </div>
-                <div class="mt-3 flex items-baseline gap-2">
-                    <span class="text-3xl font-semibold tracking-tight tabular-nums {{ $accent }}">{{ $num($k['value']) }}</span>
-                    @if($k['trend'])
-                        <span class="inline-flex items-center gap-0.5 text-[11px] font-semibold {{ $k['trend']['dir'] === 'up' ? 'text-emerald-600' : 'text-rose-600' }}">
-                            <svg viewBox="0 0 24 24" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                                @if($k['trend']['dir'] === 'up')<path d="m6 9 6-6 6 6"/><path d="M12 3v18"/>@else<path d="m6 15 6 6 6-6"/><path d="M12 3v18"/>@endif
-                            </svg>
-                            {{ $k['trend']['label'] }}
-                        </span>
-                    @endif
-                </div>
-                @if($k['helper'])
-                    <p class="mt-1.5 text-[11px] font-medium text-slate-500">{{ $k['helper'] }}</p>
-                @endif
-            </{{ $tag }}>
+            <x-dash.kpi
+                :label="$k['label']"
+                :value="$num($k['value'])"
+                :color="$k['color']"
+                :href="$k['href']"
+                :helper="$k['helper']"
+                :trend="$k['trend']">
+                <x-slot:icon>
+                    <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{!! $k['iconPath'] !!}</svg>
+                </x-slot:icon>
+            </x-dash.kpi>
         @endforeach
     </div>
 
@@ -706,147 +639,131 @@ new #[Layout('components.layouts.app')] class extends Component
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
 
         {{-- Movement activity chart --}}
-        <div class="lg:col-span-2 rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-            <div class="flex items-center justify-between border-b border-slate-100 px-6 py-4">
-                <div>
-                    <h2 class="text-base font-semibold tracking-tight text-slate-900">Movement activity</h2>
-                    <p class="mt-0.5 text-xs text-slate-500">Daily dispatch, transit start, and delivery events · {{ $from->format('d M') }} – {{ $to->format('d M') }}</p>
-                </div>
-                <div class="flex items-center gap-4 text-[11px] font-semibold text-slate-600">
+        <x-dash.panel
+            class="lg:col-span-2"
+            title="Movement activity"
+            :subtitle="'Daily dispatch, transit start, and delivery events · ' . $from->format('d M') . ' – ' . $to->format('d M')">
+            <x-slot:actions>
+                <div class="flex items-center gap-3 text-[11px] font-semibold text-slate-600">
                     <span class="inline-flex items-center gap-1.5"><span class="h-2 w-2 rounded-full bg-purple-500"></span>Dispatched</span>
                     <span class="inline-flex items-center gap-1.5"><span class="h-2 w-2 rounded-full bg-orange-500"></span>In transit</span>
                     <span class="inline-flex items-center gap-1.5"><span class="h-2 w-2 rounded-full bg-emerald-500"></span>Delivered</span>
                 </div>
-            </div>
-            <div class="p-6">
-                @if(count($activitySeries) === 0 || $activityPeak === 0)
-                    <div class="h-56 flex items-center justify-center text-sm text-slate-400">
-                        No movement activity in this range
-                    </div>
-                @else
-                    @php
-                        $count = count($activitySeries);
-                        $barGap = 2;
-                        $chartH = 180;
-                        $chartW = max(600, $count * 22);
-                        $groupW = $chartW / max($count, 1);
-                        $innerW = max(1, $groupW - 6);
-                        $barW   = max(1, ($innerW / 3) - $barGap);
-                    @endphp
-                    <div class="overflow-x-auto">
-                        <svg viewBox="0 0 {{ $chartW }} {{ $chartH + 30 }}" class="w-full h-60 min-w-[600px]" preserveAspectRatio="none">
-                            {{-- Grid --}}
-                            @for($i = 1; $i <= 4; $i++)
-                                <line x1="0" x2="{{ $chartW }}" y1="{{ $chartH - ($chartH / 4) * $i }}" y2="{{ $chartH - ($chartH / 4) * $i }}" stroke="#f1f5f9" stroke-width="1"/>
-                            @endfor
-                            @foreach($activitySeries as $i => $d)
-                                @php
-                                    $gx = $i * $groupW + 3;
-                                    $dh = $activityPeak > 0 ? ($d['dispatched'] / $activityPeak) * ($chartH - 6) : 0;
-                                    $th_ = $activityPeak > 0 ? ($d['in_transit'] / $activityPeak) * ($chartH - 6) : 0;
-                                    $vh = $activityPeak > 0 ? ($d['delivered'] / $activityPeak) * ($chartH - 6) : 0;
-                                @endphp
-                                <g>
-                                    <rect x="{{ $gx }}"                   y="{{ $chartH - $dh }}"  width="{{ $barW }}" height="{{ $dh }}" fill="#a855f7" rx="1.5"/>
-                                    <rect x="{{ $gx + $barW + $barGap }}" y="{{ $chartH - $th_ }}" width="{{ $barW }}" height="{{ $th_ }}" fill="#f97316" rx="1.5"/>
-                                    <rect x="{{ $gx + 2*($barW + $barGap) }}" y="{{ $chartH - $vh }}" width="{{ $barW }}" height="{{ $vh }}" fill="#10b981" rx="1.5"/>
-                                </g>
-                                @if($count <= 30 || $i % (int) ceil($count / 15) === 0)
-                                    <text x="{{ $gx + ($innerW / 2) }}" y="{{ $chartH + 16 }}" text-anchor="middle" font-size="9" fill="#64748b" font-family="ui-sans-serif,system-ui">{{ $d['date']->format('d/m') }}</text>
-                                @endif
-                            @endforeach
-                        </svg>
-                    </div>
-                @endif
-            </div>
-        </div>
+            </x-slot:actions>
+
+            @if(count($activitySeries) === 0 || $activityPeak === 0)
+                <div class="h-56 flex items-center justify-center text-sm text-slate-400">
+                    No movement activity in this range
+                </div>
+            @else
+                @php
+                    $count = count($activitySeries);
+                    $barGap = 2;
+                    $chartH = 180;
+                    $chartW = max(600, $count * 22);
+                    $groupW = $chartW / max($count, 1);
+                    $innerW = max(1, $groupW - 6);
+                    $barW   = max(1, ($innerW / 3) - $barGap);
+                @endphp
+                <div class="overflow-x-auto">
+                    <svg viewBox="0 0 {{ $chartW }} {{ $chartH + 30 }}" class="w-full h-60 min-w-[600px]" preserveAspectRatio="none">
+                        {{-- Grid --}}
+                        @for($i = 1; $i <= 4; $i++)
+                            <line x1="0" x2="{{ $chartW }}" y1="{{ $chartH - ($chartH / 4) * $i }}" y2="{{ $chartH - ($chartH / 4) * $i }}" stroke="#f1f5f9" stroke-width="1"/>
+                        @endfor
+                        @foreach($activitySeries as $i => $d)
+                            @php
+                                $gx = $i * $groupW + 3;
+                                $dh = $activityPeak > 0 ? ($d['dispatched'] / $activityPeak) * ($chartH - 6) : 0;
+                                $th_ = $activityPeak > 0 ? ($d['in_transit'] / $activityPeak) * ($chartH - 6) : 0;
+                                $vh = $activityPeak > 0 ? ($d['delivered'] / $activityPeak) * ($chartH - 6) : 0;
+                            @endphp
+                            <g>
+                                <rect x="{{ $gx }}"                   y="{{ $chartH - $dh }}"  width="{{ $barW }}" height="{{ $dh }}" fill="#a855f7" rx="1.5"/>
+                                <rect x="{{ $gx + $barW + $barGap }}" y="{{ $chartH - $th_ }}" width="{{ $barW }}" height="{{ $th_ }}" fill="#f97316" rx="1.5"/>
+                                <rect x="{{ $gx + 2*($barW + $barGap) }}" y="{{ $chartH - $vh }}" width="{{ $barW }}" height="{{ $vh }}" fill="#10b981" rx="1.5"/>
+                            </g>
+                            @if($count <= 30 || $i % (int) ceil($count / 15) === 0)
+                                <text x="{{ $gx + ($innerW / 2) }}" y="{{ $chartH + 16 }}" text-anchor="middle" font-size="9" fill="#64748b" font-family="ui-sans-serif,system-ui">{{ $d['date']->format('d/m') }}</text>
+                            @endif
+                        @endforeach
+                    </svg>
+                </div>
+            @endif
+        </x-dash.panel>
 
         {{-- Status distribution --}}
-        <div class="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-            <div class="border-b border-slate-100 px-6 py-4">
-                <h2 class="text-base font-semibold tracking-tight text-slate-900">Status distribution</h2>
-                <p class="mt-0.5 text-xs text-slate-500">Active inventory by lifecycle state</p>
-            </div>
-            <div class="p-6">
-                @php
-                    $distTotal = array_sum($statusDist);
-                    // Hex colours used as inline style so we don't have to
-                    // rely on Tailwind content-scanning interpolated classes.
-                    $statusColorHex = [
-                        'produced'   => '#6366f1', // indigo-500
-                        'at_plant'   => '#818cf8', // indigo-400
-                        'at_yard'    => '#f59e0b', // amber-500
-                        'at_storage' => '#fbbf24', // amber-400
-                        'in_transit' => '#3b82f6', // blue-500
-                        'delivered'  => '#10b981', // emerald-500
-                    ];
-                @endphp
-                @if($distTotal === 0)
-                    <p class="text-sm text-slate-400 text-center py-8">No active inventory</p>
-                @else
-                    <ul class="space-y-3">
-                        @foreach(\App\Models\Inventory::ACTIVE_STATUSES as $s)
-                            @php
-                                $n = $statusDist[$s] ?? 0;
-                                $pct = $distTotal > 0 ? ($n / $distTotal) * 100 : 0;
-                                $hex = $statusColorHex[$s] ?? '#94a3b8';
-                            @endphp
-                            <li>
-                                <div class="flex items-center justify-between text-xs mb-1">
-                                    <span class="font-medium text-slate-700">{{ ucwords(str_replace('_', ' ', $s)) }}</span>
-                                    <span class="tabular-nums text-slate-500"><strong class="text-slate-900">{{ $num($n) }}</strong> · {{ number_format($pct, 0) }}%</span>
-                                </div>
-                                <div class="h-2 bg-slate-100 rounded-full overflow-hidden">
-                                    <div class="h-full rounded-full" style="width: {{ max(2, $pct) }}%; background-color: {{ $hex }};"></div>
-                                </div>
-                            </li>
-                        @endforeach
-                    </ul>
-                @endif
-            </div>
-        </div>
+        <x-dash.panel title="Status distribution" subtitle="Active inventory by lifecycle state">
+            @php
+                $distTotal = array_sum($statusDist);
+                // Hex colours used as inline style so we don't have to
+                // rely on Tailwind content-scanning interpolated classes.
+                $statusColorHex = [
+                    'produced'   => '#6366f1',
+                    'at_plant'   => '#818cf8',
+                    'at_yard'    => '#f59e0b',
+                    'at_storage' => '#fbbf24',
+                    'in_transit' => '#3b82f6',
+                    'delivered'  => '#10b981',
+                ];
+            @endphp
+            @if($distTotal === 0)
+                <p class="text-sm text-slate-400 text-center py-8">No active inventory</p>
+            @else
+                <ul class="space-y-3">
+                    @foreach(\App\Models\Inventory::ACTIVE_STATUSES as $s)
+                        @php
+                            $n = $statusDist[$s] ?? 0;
+                            $pct = $distTotal > 0 ? ($n / $distTotal) * 100 : 0;
+                            $hex = $statusColorHex[$s] ?? '#94a3b8';
+                        @endphp
+                        <li>
+                            <div class="flex items-center justify-between text-xs mb-1">
+                                <span class="font-medium text-slate-700">{{ ucwords(str_replace('_', ' ', $s)) }}</span>
+                                <span class="tabular-nums text-slate-500"><strong class="text-slate-900">{{ $num($n) }}</strong> · {{ number_format($pct, 0) }}%</span>
+                            </div>
+                            <div class="h-2 bg-slate-100 rounded-full overflow-hidden">
+                                <div class="h-full rounded-full" style="width: {{ max(2, $pct) }}%; background-color: {{ $hex }};"></div>
+                            </div>
+                        </li>
+                    @endforeach
+                </ul>
+            @endif
+        </x-dash.panel>
     </div>
 
-    {{-- Throughput vs target --}}
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <div class="lg:col-span-3 rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-            <div class="flex items-center justify-between border-b border-slate-100 px-6 py-4">
-                <div>
-                    <h2 class="text-base font-semibold tracking-tight text-slate-900">Throughput vs scheduled</h2>
-                    <p class="mt-0.5 text-xs text-slate-500">Deliveries completed in range vs bookings scheduled for the same window</p>
-                </div>
-                <span class="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-semibold
-                    {{ $throughputPct >= 90 ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                        : ($throughputPct >= 70 ? 'bg-amber-50 text-amber-800 border border-amber-200'
-                            : 'bg-rose-50 text-rose-700 border border-rose-200') }}">
-                    {{ $throughputPct }}% throughput
-                </span>
+    {{-- Throughput vs scheduled --}}
+    <x-dash.panel
+        title="Throughput vs scheduled"
+        subtitle="Deliveries completed in range vs bookings scheduled for the same window">
+        <x-slot:actions>
+            <x-dash.pill size="md" :variant="$throughputPct >= 90 ? 'green' : ($throughputPct >= 70 ? 'amber' : 'red')">
+                {{ $throughputPct }}% throughput
+            </x-dash.pill>
+        </x-slot:actions>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div>
+                <p class="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">Scheduled</p>
+                <p class="mt-2 text-3xl font-semibold text-slate-900 tabular-nums">{{ $num($scheduled) }}</p>
+                <p class="mt-1 text-xs text-slate-500">Bookings with a scheduled date in the window</p>
             </div>
-            <div class="p-6 grid grid-cols-1 md:grid-cols-3 gap-6">
-                <div>
-                    <p class="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">Scheduled</p>
-                    <p class="mt-2 text-3xl font-semibold text-slate-900 tabular-nums">{{ $num($scheduled) }}</p>
-                    <p class="mt-1 text-xs text-slate-500">Bookings with a scheduled date in the window</p>
-                </div>
-                <div>
-                    <p class="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">Delivered</p>
-                    <p class="mt-2 text-3xl font-semibold text-emerald-700 tabular-nums">{{ $num($delivered) }}</p>
-                    <p class="mt-1 text-xs text-slate-500">Jobs with a delivered_at timestamp in the window</p>
-                </div>
-                <div>
-                    <p class="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">Gap</p>
-                    <p class="mt-2 text-3xl font-semibold {{ $scheduled - $delivered > 0 ? 'text-amber-700' : 'text-slate-900' }} tabular-nums">{{ $num(max(0, $scheduled - $delivered)) }}</p>
-                    <p class="mt-1 text-xs text-slate-500">Scheduled but not yet delivered</p>
-                </div>
+            <div>
+                <p class="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">Delivered</p>
+                <p class="mt-2 text-3xl font-semibold text-emerald-700 tabular-nums">{{ $num($delivered) }}</p>
+                <p class="mt-1 text-xs text-slate-500">Jobs with a delivered_at timestamp in the window</p>
             </div>
-            <div class="px-6 pb-6">
-                <div class="h-3 bg-slate-100 rounded-full overflow-hidden">
-                    <div class="h-full {{ $throughputPct >= 90 ? 'bg-emerald-500' : ($throughputPct >= 70 ? 'bg-amber-500' : 'bg-rose-500') }} rounded-full transition-all"
-                         style="width: {{ min(100, $throughputPct) }}%"></div>
-                </div>
+            <div>
+                <p class="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">Gap</p>
+                <p class="mt-2 text-3xl font-semibold {{ $scheduled - $delivered > 0 ? 'text-amber-700' : 'text-slate-900' }} tabular-nums">{{ $num(max(0, $scheduled - $delivered)) }}</p>
+                <p class="mt-1 text-xs text-slate-500">Scheduled but not yet delivered</p>
             </div>
         </div>
-    </div>
+        <div class="mt-5 h-3 bg-slate-100 rounded-full overflow-hidden">
+            <div class="h-full {{ $throughputPct >= 90 ? 'bg-emerald-500' : ($throughputPct >= 70 ? 'bg-amber-500' : 'bg-rose-500') }} rounded-full transition-all"
+                 style="width: {{ min(100, $throughputPct) }}%"></div>
+        </div>
+    </x-dash.panel>
 
     {{-- ══════════════════════════════════════════════════════════════ --}}
     {{-- ROW 3 — OPERATIONS FOCUS                                      --}}
@@ -854,55 +771,47 @@ new #[Layout('components.layouts.app')] class extends Component
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
 
         {{-- Exceptions --}}
-        <div class="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-            <div class="border-b border-slate-100 px-6 py-4">
-                <h2 class="text-base font-semibold tracking-tight text-slate-900">Exceptions</h2>
-                <p class="mt-0.5 text-xs text-slate-500">Movements blocking the pipeline</p>
-            </div>
+        <x-dash.panel title="Exceptions" subtitle="Movements blocking the pipeline" :tight="true">
             <ul class="divide-y divide-slate-100">
                 @foreach($exceptions as $e)
                     @php
-                        $sevClass = match(true) {
-                            $e['count'] === 0            => 'bg-slate-100 text-slate-500 border-slate-200',
-                            $e['severity'] === 'red'     => 'bg-rose-100 text-rose-800 border-rose-200',
-                            $e['severity'] === 'amber'   => 'bg-amber-100 text-amber-900 border-amber-200',
-                            default                      => 'bg-slate-100 text-slate-700 border-slate-200',
-                        };
+                        $pillVariant = $e['count'] === 0
+                            ? 'slate'
+                            : ($e['severity'] === 'red' ? 'red' : 'amber');
                         $dotClass = match(true) {
-                            $e['count'] === 0            => 'bg-slate-300',
-                            $e['severity'] === 'red'     => 'bg-rose-500 node-pulse',
-                            $e['severity'] === 'amber'   => 'bg-amber-500 node-pulse',
-                            default                      => 'bg-slate-400',
+                            $e['count'] === 0           => 'bg-slate-300',
+                            $e['severity'] === 'red'    => 'bg-rose-500 node-pulse',
+                            $e['severity'] === 'amber'  => 'bg-amber-500 node-pulse',
+                            default                     => 'bg-slate-400',
                         };
                     @endphp
-                    <li class="flex items-center gap-3 px-6 py-3">
+                    <li class="flex items-center gap-3 px-5 py-3">
                         <span class="h-1.5 w-1.5 shrink-0 rounded-full {{ $dotClass }}"></span>
                         <div class="flex-1 min-w-0">
                             <p class="text-sm font-medium text-slate-900 truncate">{{ $e['label'] }}</p>
                             <p class="text-[11px] text-slate-500 truncate">{{ $e['sublabel'] }}</p>
                         </div>
-                        <span class="inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold tabular-nums shrink-0 {{ $sevClass }}">
-                            {{ $num($e['count']) }}
-                        </span>
+                        <x-dash.pill size="md" :variant="$pillVariant">{{ $num($e['count']) }}</x-dash.pill>
                     </li>
                 @endforeach
             </ul>
-        </div>
+        </x-dash.panel>
 
         {{-- Priority Movements --}}
-        <div class="lg:col-span-2 rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-            <div class="flex items-center justify-between border-b border-slate-100 px-6 py-4">
-                <div>
-                    <h2 class="text-base font-semibold tracking-tight text-slate-900">Priority movements</h2>
-                    <p class="mt-0.5 text-xs text-slate-500">Longest dwell in current state · top 12</p>
-                </div>
+        <x-dash.panel
+            class="lg:col-span-2"
+            title="Priority movements"
+            subtitle="Longest dwell in current state · top 12"
+            :tight="true">
+            <x-slot:actions>
                 <a href="{{ route('admin.vehicles.index') }}" class="text-xs font-semibold text-slate-600 hover:text-slate-900 inline-flex items-center gap-1">
                     View all vehicles
                     <svg viewBox="0 0 24 24" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
                 </a>
-            </div>
+            </x-slot:actions>
+
             @if($priority->isEmpty())
-                <p class="px-6 py-10 text-sm text-slate-400 text-center">No active inventory matches the current filters</p>
+                <p class="px-5 py-10 text-sm text-slate-400 text-center">No active inventory matches the current filters</p>
             @else
                 <div class="overflow-x-auto">
                     <table class="min-w-full text-sm">
@@ -920,10 +829,10 @@ new #[Layout('components.layouts.app')] class extends Component
                         <tbody class="divide-y divide-slate-100">
                             @foreach($priority as $r)
                                 @php
-                                    $riskPill = match($r->getAttribute('risk_level')) {
-                                        'high' => 'bg-rose-100 text-rose-700 border-rose-200',
-                                        'med'  => 'bg-amber-100 text-amber-800 border-amber-200',
-                                        default=> 'bg-slate-100 text-slate-600 border-slate-200',
+                                    $riskVariant = match($r->getAttribute('risk_level')) {
+                                        'high' => 'red',
+                                        'med'  => 'amber',
+                                        default=> 'slate',
                                     };
                                     $riskLabel = match($r->getAttribute('risk_level')) {
                                         'high' => 'High',
@@ -958,7 +867,7 @@ new #[Layout('components.layouts.app')] class extends Component
                                     <td class="px-4 py-2.5 text-[12px] text-slate-700">{{ $latest?->driver?->name ?? '—' }}</td>
                                     <td class="px-4 py-2.5 text-right text-[12px] tabular-nums text-slate-700">{{ $r->getAttribute('days_in_status') ?? '—' }}d</td>
                                     <td class="px-4 py-2.5 text-center">
-                                        <span class="inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold {{ $riskPill }}">{{ $riskLabel }}</span>
+                                        <x-dash.pill :variant="$riskVariant">{{ $riskLabel }}</x-dash.pill>
                                     </td>
                                 </tr>
                             @endforeach
@@ -966,16 +875,12 @@ new #[Layout('components.layouts.app')] class extends Component
                     </table>
                 </div>
             @endif
-        </div>
+        </x-dash.panel>
     </div>
 
     {{-- Location Pressure --}}
-    <div class="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-        <div class="border-b border-slate-100 px-6 py-4">
-            <h2 class="text-base font-semibold tracking-tight text-slate-900">Location pressure</h2>
-            <p class="mt-0.5 text-xs text-slate-500">Active inventory by the type of place it's sitting in</p>
-        </div>
-        <div class="p-6 grid grid-cols-2 md:grid-cols-5 gap-3">
+    <x-dash.panel title="Location pressure" subtitle="Active inventory by the type of place it's sitting in">
+        <div class="grid grid-cols-2 md:grid-cols-5 gap-3">
             @php
                 $locTypes = [
                     'plant'        => ['Plant',        'indigo'],
@@ -1001,7 +906,7 @@ new #[Layout('components.layouts.app')] class extends Component
                 </div>
             @endforeach
         </div>
-    </div>
+    </x-dash.panel>
 
     {{-- ══════════════════════════════════════════════════════════════ --}}
     {{-- ROW 4 — EXECUTIVE INSIGHT                                     --}}
@@ -1009,18 +914,14 @@ new #[Layout('components.layouts.app')] class extends Component
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
 
         {{-- Company / OEM Breakdown --}}
-        <div class="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-            <div class="border-b border-slate-100 px-6 py-4">
-                <h2 class="text-base font-semibold tracking-tight text-slate-900">Customer / OEM breakdown</h2>
-                <p class="mt-0.5 text-xs text-slate-500">Top 8 by active inventory</p>
-            </div>
+        <x-dash.panel title="Customer / OEM breakdown" subtitle="Top 8 by active inventory" :tight="true">
             @if($companyRows->isEmpty())
-                <p class="px-6 py-10 text-sm text-slate-400 text-center">No inventory rows</p>
+                <p class="px-5 py-10 text-sm text-slate-400 text-center">No inventory rows</p>
             @else
                 @php $topActive = $companyRows->max('active_count') ?: 1; @endphp
                 <ul class="divide-y divide-slate-100">
                     @foreach($companyRows as $r)
-                        <li class="px-6 py-3">
+                        <li class="px-5 py-3">
                             <div class="flex items-center justify-between gap-3 mb-1">
                                 <span class="text-sm font-medium text-slate-900 truncate">{{ $r->company?->name ?? '—' }}</span>
                                 <span class="text-[11px] tabular-nums shrink-0">
@@ -1038,48 +939,37 @@ new #[Layout('components.layouts.app')] class extends Component
                     @endforeach
                 </ul>
             @endif
-        </div>
+        </x-dash.panel>
 
         {{-- Transporter Performance --}}
-        <div class="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-            <div class="border-b border-slate-100 px-6 py-4">
-                <h2 class="text-base font-semibold tracking-tight text-slate-900">Transporter performance</h2>
-                <p class="mt-0.5 text-xs text-slate-500">Completed jobs in range · on-time ratio</p>
-            </div>
+        <x-dash.panel title="Transporter performance" subtitle="Completed jobs in range · on-time ratio" :tight="true">
             @if($transporterRows->isEmpty())
-                <p class="px-6 py-10 text-sm text-slate-400 text-center">No completed jobs in this range</p>
+                <p class="px-5 py-10 text-sm text-slate-400 text-center">No completed jobs in this range</p>
             @else
                 <ul class="divide-y divide-slate-100">
                     @foreach($transporterRows as $r)
                         @php
-                            $otp  = $r->getAttribute('on_time_pct');
-                            $pill = $otp === null ? 'bg-slate-100 text-slate-500 border-slate-200'
-                                : ($otp >= 90 ? 'bg-emerald-100 text-emerald-700 border-emerald-200'
-                                : ($otp >= 70 ? 'bg-amber-100 text-amber-800 border-amber-200'
-                                : 'bg-rose-100 text-rose-700 border-rose-200'));
+                            $otp = $r->getAttribute('on_time_pct');
+                            $variant = $otp === null ? 'slate'
+                                : ($otp >= 90 ? 'green'
+                                : ($otp >= 70 ? 'amber' : 'red'));
                         @endphp
-                        <li class="flex items-center gap-3 px-6 py-3">
+                        <li class="flex items-center gap-3 px-5 py-3">
                             <div class="flex-1 min-w-0">
                                 <p class="text-sm font-medium text-slate-900 truncate">{{ $r->getAttribute('transporter_name') }}</p>
                                 <p class="text-[11px] text-slate-500 tabular-nums">{{ $num($r->job_count) }} {{ \Illuminate\Support\Str::plural('job', $r->job_count) }} · {{ $num($r->on_time_count) }} on-time</p>
                             </div>
-                            <span class="inline-flex items-center rounded-full border px-2.5 py-0.5 text-[11px] font-semibold tabular-nums shrink-0 {{ $pill }}">
-                                {{ $otp === null ? 'n/a' : $otp . '%' }}
-                            </span>
+                            <x-dash.pill :variant="$variant">{{ $otp === null ? 'n/a' : $otp . '%' }}</x-dash.pill>
                         </li>
                     @endforeach
                 </ul>
             @endif
-        </div>
+        </x-dash.panel>
 
-        {{-- Revenue Snapshot (invoice-based, not forecast) --}}
-        <div class="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-            <div class="border-b border-slate-100 px-6 py-4">
-                <h2 class="text-base font-semibold tracking-tight text-slate-900">Invoice snapshot</h2>
-                <p class="mt-0.5 text-xs text-slate-500">What's invoiced, paid and outstanding</p>
-            </div>
+        {{-- Invoice Snapshot (invoice-based, not forecast) --}}
+        <x-dash.panel title="Invoice snapshot" subtitle="What's invoiced, paid and outstanding" :tight="true">
             <ul class="divide-y divide-slate-100">
-                <li class="flex items-center gap-3 px-6 py-3">
+                <li class="flex items-center gap-3 px-5 py-3">
                     <span class="h-1.5 w-1.5 rounded-full bg-slate-400"></span>
                     <div class="flex-1 min-w-0">
                         <p class="text-sm font-medium text-slate-900">Draft</p>
@@ -1087,7 +977,7 @@ new #[Layout('components.layouts.app')] class extends Component
                     </div>
                     <span class="text-sm font-semibold text-slate-900 tabular-nums shrink-0">{{ $money($invoiceDraft->v ?? 0) }}</span>
                 </li>
-                <li class="flex items-center gap-3 px-6 py-3">
+                <li class="flex items-center gap-3 px-5 py-3">
                     <span class="h-1.5 w-1.5 rounded-full bg-blue-500"></span>
                     <div class="flex-1 min-w-0">
                         <p class="text-sm font-medium text-slate-900">Issued (outstanding)</p>
@@ -1095,7 +985,7 @@ new #[Layout('components.layouts.app')] class extends Component
                     </div>
                     <span class="text-sm font-semibold text-blue-700 tabular-nums shrink-0">{{ $money($invoiceIssued->v ?? 0) }}</span>
                 </li>
-                <li class="flex items-center gap-3 px-6 py-3">
+                <li class="flex items-center gap-3 px-5 py-3">
                     <span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
                     <div class="flex-1 min-w-0">
                         <p class="text-sm font-medium text-slate-900">Paid (in range)</p>
@@ -1103,7 +993,7 @@ new #[Layout('components.layouts.app')] class extends Component
                     </div>
                     <span class="text-sm font-semibold text-emerald-700 tabular-nums shrink-0">{{ $money($invoicePaid->v ?? 0) }}</span>
                 </li>
-                <li class="flex items-center gap-3 px-6 py-3 bg-amber-50/40">
+                <li class="flex items-center gap-3 px-5 py-3 bg-amber-50/40">
                     <span class="h-1.5 w-1.5 rounded-full bg-amber-500 node-pulse"></span>
                     <div class="flex-1 min-w-0">
                         <p class="text-sm font-medium text-slate-900">Awaiting invoicing</p>
@@ -1112,13 +1002,16 @@ new #[Layout('components.layouts.app')] class extends Component
                     <span class="text-sm font-semibold text-amber-700 tabular-nums shrink-0">{{ $money($awaitingInv->v ?? 0) }}</span>
                 </li>
             </ul>
-            <div class="border-t border-slate-100 bg-slate-50/40 px-6 py-3 text-right">
-                <a href="{{ route('admin.invoices.index') }}" class="text-[11px] font-semibold text-slate-600 hover:text-slate-900 inline-flex items-center gap-1">
-                    Go to invoices
-                    <svg viewBox="0 0 24 24" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
-                </a>
-            </div>
-        </div>
+
+            <x-slot:footer>
+                <div class="text-right">
+                    <a href="{{ route('admin.invoices.index') }}" class="text-[11px] font-semibold text-slate-600 hover:text-slate-900 inline-flex items-center gap-1">
+                        Go to invoices
+                        <svg viewBox="0 0 24 24" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+                    </a>
+                </div>
+            </x-slot:footer>
+        </x-dash.panel>
     </div>
 
     <p class="text-center text-[10px] text-slate-400 tracking-[0.2em] uppercase pt-2">
