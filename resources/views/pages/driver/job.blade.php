@@ -362,73 +362,111 @@ new #[Layout('components.layouts.driver')] class extends Component {
 </div>
 
 <script>
-    // Tracks capture state for THIS job by tagging queue items with slotTag in notes.
-    // "Captured" means: either already uploaded server-side OR sitting in the IndexedDB queue.
+    // Tracks capture state for THIS job. A slot is considered captured if it
+    // is either (a) already uploaded server-side with its slot tag preserved
+    // in the documents.notes column, or (b) still sitting in the IndexedDB
+    // queue waiting to upload. Both sources are merged so a photo that
+    // successfully uploads (and therefore vanishes from IndexedDB) stays
+    // marked as captured — that bug was why the "Departed pickup" button
+    // would never enable even after all 7 required photos were taken.
     function driverJobCapture(jobId) {
         return {
             jobId,
-            capturedSlots: new Set(),
+            // Plain object map keyed by slot tag. Alpine tracks object-key
+            // mutations reliably; using a native Set produced intermittent
+            // reactivity misses on iOS Safari specifically.
+            capturedSlots: {},
             damageCaptured: 0,
             pettyCashCaptured: 0,
-            uploadedServerSide: @json($uploadedCounts ?? []),
 
             async init() {
                 await this.refresh();
                 window.addEventListener('driver-capture-enqueued', () => this.refresh());
+                // `driver-queue-changed` fires after a sync flush — that's
+                // when server-side state has just moved forward, so we
+                // re-fetch the summary to pick up newly persisted slots.
                 window.addEventListener('driver-queue-changed', () => this.refresh());
+
+                // Safety net: poll every 10s for up to 2 minutes after arrival
+                // on the page. Catches the edge case where an upload completes
+                // in a service-worker context without firing the page-level
+                // `driver-queue-changed` event (happens on some Android PWA
+                // builds after the tab backgrounds and returns).
+                let ticks = 0;
+                const poll = setInterval(() => {
+                    this.refresh();
+                    if (++ticks >= 12) clearInterval(poll);
+                }, 10000);
             },
 
             async refresh() {
-                const items = await window.driverCapture.listByJob(this.jobId);
-                this.capturedSlots = new Set();
-                this.damageCaptured = 0;
-                this.pettyCashCaptured = 0;
+                // 1) Pending / not-yet-uploaded items from IndexedDB.
+                let items = [];
+                try { items = await window.driverCapture.listByJob(this.jobId); } catch (e) { /* noop */ }
 
+                // 2) Authoritative server-side state, including slot tags.
+                //    This replaces the stale page-load snapshot we used to
+                //    lean on, which never updated as uploads completed.
+                let serverSlots  = [];
+                let serverCounts = {};
+                try {
+                    const resp = await fetch(`/driver/api/jobs/${this.jobId}/documents/summary`, {
+                        credentials: 'same-origin',
+                        headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+                    });
+                    if (resp.ok) {
+                        const data = await resp.json();
+                        serverSlots  = Array.isArray(data.slots)  ? data.slots  : [];
+                        serverCounts = data.counts && typeof data.counts === 'object' ? data.counts : {};
+                    }
+                } catch (e) { /* offline or auth lapse — we'll just use IDB below */ }
+
+                // Build a fresh object so Alpine definitely sees the change.
+                const next = {};
+                let damage = 0;
+                let petty  = 0;
+
+                // Server-tagged slots (authoritative for already-uploaded items).
+                for (const slot of serverSlots) next[slot] = true;
+
+                // Server-side category counts as a fallback when a slot tag
+                // is missing (e.g. document was uploaded through the admin
+                // UI without a slot label).
+                if ((serverCounts.photo || 0) >= 4) {
+                    ['pickup_front','pickup_rear','pickup_left','pickup_right'].forEach(s => next[s] = true);
+                }
+                if ((serverCounts.dashboard || 0) >= 1) next['pickup_dashboard']   = next['pickup_dashboard']   || true;
+                if ((serverCounts.dashboard || 0) >= 2) next['delivery_dashboard'] = next['delivery_dashboard'] || true;
+                if ((serverCounts.data_plate || 0) > 0)       next['pickup_data_plate'] = true;
+                if ((serverCounts.collection_note || 0) > 0)  next['collection_note']   = true;
+                if ((serverCounts.proof_of_delivery || 0) > 0) next['proof_of_delivery'] = true;
+
+                // Queue items (captured on this device but not yet acked by server).
                 for (const it of items) {
-                    const slot = it.metadata?.notes && it.metadata.notes.startsWith('slot:')
-                        ? it.metadata.notes.slice(5)
-                        : null;
-                    if (slot) this.capturedSlots.add(slot);
-                    if (it.category === 'damage_photo') this.damageCaptured++;
+                    const notes = it.metadata && it.metadata.notes;
+                    if (typeof notes === 'string' && notes.startsWith('slot:')) {
+                        next[notes.slice(5)] = true;
+                    }
+                    if (it.category === 'damage_photo') damage++;
                     if (['fuel_slip','food_slip','toll_slip','parking_slip','other'].includes(it.category)) {
-                        this.pettyCashCaptured++;
+                        petty++;
                     }
                 }
 
-                // Server-side uploaded items count as captured for pickup/delivery gating
-                // (server-side ones don't have slot tags, so we fall back to category counts).
-                // Note: we only know category totals from the server hydrate, not per-slot,
-                // so the mapping below is a best-effort assumption: if 4+ generic photos
-                // landed it's fair to assume all 4 angles are done.
-                const pickupPhotoCount = this.uploadedServerSide.photo || 0;
-                if (pickupPhotoCount >= 4) {
-                    ['pickup_front','pickup_rear','pickup_left','pickup_right'].forEach(s => this.capturedSlots.add(s));
-                }
-                // Dashboard is captured at BOTH pickup and delivery under the same
-                // `dashboard` category. If 1 exists it's almost certainly pickup
-                // (captured first); if 2+ exist the delivery one is in there too.
-                const dashboardCount = this.uploadedServerSide.dashboard || 0;
-                if (dashboardCount >= 1) this.capturedSlots.add('pickup_dashboard');
-                if (dashboardCount >= 2) this.capturedSlots.add('delivery_dashboard');
-                if ((this.uploadedServerSide.data_plate || 0) > 0) {
-                    this.capturedSlots.add('pickup_data_plate');
-                }
-                if ((this.uploadedServerSide.collection_note || 0) > 0) {
-                    this.capturedSlots.add('collection_note');
-                }
-                if ((this.uploadedServerSide.proof_of_delivery || 0) > 0) {
-                    this.capturedSlots.add('proof_of_delivery');
-                }
+                // Single reassignment → Alpine re-renders all dependents.
+                this.capturedSlots    = next;
+                this.damageCaptured    = damage;
+                this.pettyCashCaptured = petty;
             },
 
             hasCategoryFor(slotTag) {
-                return this.capturedSlots.has(slotTag);
+                return !!this.capturedSlots[slotTag];
             },
 
             hasAllPickupPhotos() {
                 return ['pickup_front','pickup_rear','pickup_left','pickup_right',
                         'pickup_dashboard','pickup_data_plate','collection_note']
-                    .every(s => this.capturedSlots.has(s));
+                    .every(s => !!this.capturedSlots[s]);
             },
 
             canArrivePickup() {
@@ -438,10 +476,10 @@ new #[Layout('components.layouts.driver')] class extends Component {
                 return this.hasAllPickupPhotos();
             },
             canComplete() {
-                return this.capturedSlots.has('proof_of_delivery')
-                    && this.capturedSlots.has('delivery_front')
-                    && this.capturedSlots.has('delivery_other')
-                    && this.capturedSlots.has('delivery_dashboard');
+                return !!this.capturedSlots['proof_of_delivery']
+                    && !!this.capturedSlots['delivery_front']
+                    && !!this.capturedSlots['delivery_other']
+                    && !!this.capturedSlots['delivery_dashboard'];
             },
 
             async capture(event, { category, slotTag = null }) {
@@ -453,6 +491,11 @@ new #[Layout('components.layouts.driver')] class extends Component {
                     category,
                     notes,
                 });
+                // Optimistically mark the slot captured straight away so the
+                // tile turns green before the server round-trip settles.
+                if (slotTag) {
+                    this.capturedSlots = { ...this.capturedSlots, [slotTag]: true };
+                }
                 await this.refresh();
             },
 

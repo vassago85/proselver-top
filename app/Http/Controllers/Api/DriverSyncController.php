@@ -154,4 +154,48 @@ class DriverSyncController extends Controller
 
         return response()->json(['document' => $doc], 201);
     }
+
+    /**
+     * Lightweight summary of documents already stored server-side, used by
+     * the PWA to keep its "required captures" gating accurate. Without this,
+     * once an upload succeeds the queue row is deleted and the UI forgets
+     * the slot was ever captured, so the "Departed pickup" button stays
+     * greyed out forever even when all photos are safely on the server.
+     *
+     * Response shape:
+     *   {
+     *     "slots":  ["pickup_front", "pickup_rear", ...],
+     *     "counts": { "photo": 4, "dashboard": 1, "data_plate": 1, ... }
+     *   }
+     */
+    public function documentsSummary(Request $request, Job $job): JsonResponse
+    {
+        if ($job->driver_user_id !== $request->user()->id) {
+            return response()->json(['error' => 'Unauthorized'], 403);
+        }
+
+        $docs = JobDocument::where('job_id', $job->id)
+            ->select(['id', 'category', 'notes'])
+            ->get();
+
+        $slots  = [];
+        $counts = [];
+
+        foreach ($docs as $doc) {
+            $counts[$doc->category] = ($counts[$doc->category] ?? 0) + 1;
+
+            $notes = (string) ($doc->notes ?? '');
+            if (str_starts_with($notes, 'slot:')) {
+                $tag = substr($notes, 5);
+                if ($tag !== '' && !in_array($tag, $slots, true)) {
+                    $slots[] = $tag;
+                }
+            }
+        }
+
+        return response()->json([
+            'slots'  => array_values($slots),
+            'counts' => $counts,
+        ]);
+    }
 }

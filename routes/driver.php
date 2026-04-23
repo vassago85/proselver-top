@@ -19,4 +19,9 @@ Route::prefix('api')->name('api.')->group(function () {
     Route::get('jobs', [DriverSyncController::class, 'jobs'])->name('jobs');
     Route::post('jobs/{job}/events', [DriverSyncController::class, 'syncEvents'])->name('events');
     Route::post('jobs/{job}/documents', [DriverSyncController::class, 'uploadDocument'])->name('documents');
+
+    // Capture summary. The PWA polls this after every upload completes so
+    // the "all required photos captured?" button state stays accurate even
+    // after IndexedDB items get removed on successful sync.
+    Route::get('jobs/{job}/documents/summary', [DriverSyncController::class, 'documentsSummary'])->name('documents.summary');
 });
