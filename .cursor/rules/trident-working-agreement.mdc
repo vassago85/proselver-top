@@ -1,0 +1,102 @@
+---
+description: Working agreement for the Trident / proselver project - how to react to production errors and how to deploy. Always apply.
+alwaysApply: true
+---
+
+# Trident working agreement
+
+## 1. Production errors → logs first, never code inspection
+
+The agent does NOT have access to the production server
+(`/opt/proselver` on `cha021-truserv1230-jhb1-001`). When the user
+reports a 500, a crash, or any server-side error, the FIRST response
+must be a single copy-paste CLI command that pulls the relevant log,
+so the user can paste the output back.
+
+Do NOT start by reading Blade / PHP files, searching the repo, or
+speculating about causes. Wait for the log output first, then diagnose.
+
+Default log command (use this unless the user asks for something else):
+
+```bash
+sudo docker compose exec -T app sh -c "tail -n 120 storage/logs/laravel.log"
+```
+
+Useful variants when the log is huge:
+
+```bash
+# Last N lines, grep for ERROR blocks
+sudo docker compose exec -T app sh -c "grep -n 'production.ERROR' storage/logs/laravel.log | tail -n 20"
+
+# Most recent exception block with its stack
+sudo docker compose exec -T app sh -c "awk '/production\.ERROR/{buf=\"\"} {buf=buf\$0\"\n\"} END{print buf}' storage/logs/laravel.log | head -n 80"
+
+# Tail live
+sudo docker compose exec -T app sh -c "tail -f storage/logs/laravel.log"
+```
+
+## 2. Deployment is Docker-based, code is baked into the image
+
+`docker-compose.yml` builds `proselver-app:latest` from the `Dockerfile`
+with code and compiled assets baked in. There are **no bind mounts for
+application code** on production. That means:
+
+- `git pull` on the host does NOT update the code inside the container.
+- `php artisan view:clear` / `config:clear` inside the container CANNOT
+  fix a bug in a `.blade.php` or `.php` file until the image has been
+  rebuilt.
+- There is no point telling the user to `php -r`, `php artisan tinker`,
+  write a helper PHP script, edit a file inside the container, or run
+  ad-hoc scripts on the server. The agent must only issue `git` and
+  `docker compose` commands for deployment.
+
+### Canonical deploy sequence (use this; copy-paste friendly)
+
+```bash
+cd /opt/proselver \
+ && sudo chown -R $(whoami):$(whoami) .git \
+ && git pull \
+ && sudo docker compose build app \
+ && sudo docker compose up -d --force-recreate app scheduler queue \
+ && sudo docker compose exec -T app php artisan view:clear \
+ && sudo docker compose exec -T app php artisan config:clear
+```
+
+Only use `--no-cache` on `docker compose build app` if a previous cached
+layer is the actual suspect (e.g. composer/npm install didn't pick up a
+new dependency). Default to a normal cached build — it's much faster.
+
+### When migrations are part of the change
+
+Add this step AFTER the `up -d` line:
+
+```bash
+sudo docker compose exec -T app php artisan migrate --force
+```
+
+## 3. Don't inline random local-only commands
+
+Do NOT suggest `php artisan ...` from the host, `composer ...`, or any
+`php` / `node` / `npm` command that assumes the user has a PHP or Node
+toolchain on the VM. The VM runs Docker only. Everything must go
+through `docker compose exec -T app ...`.
+
+## 4. Keep CLI output copy-paste clean
+
+- One command per code block where possible, or chained with `\` + `&&`
+  so the user can paste it as a single line.
+- Avoid PowerShell-only syntax (`&&` is fine in bash on the server; the
+  user's server is Linux, the user's local machine is Windows — server
+  commands go to the Linux server).
+- Never use heredocs / multiline `$(cat <<EOF ... EOF)` in commands
+  meant for the server terminal unless absolutely necessary; prefer a
+  single line.
+
+## 5. Summary of the loop
+
+1. User reports error.
+2. Agent sends ONE log command.
+3. User pastes log output.
+4. Agent diagnoses, edits code locally, commits, pushes.
+5. Agent sends the canonical deploy sequence.
+6. User confirms or pastes next error → go to step 2.

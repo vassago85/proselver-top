@@ -95,9 +95,13 @@ new #[Layout('components.layouts.app')] class extends Component
     // can never leak another customer's data into this dashboard.
     protected function baseJobsQuery(bool $applyStatusFilter = false)
     {
-        $q = Job::where('company_id', $this->company->id);
+        // Fully-qualify every column we touch here. Some callers of this
+        // helper join `locations` (which also has company_id / brand_id /
+        // status / updated_at columns), so an unqualified WHERE triggers
+        // SQLSTATE 42702 "column reference is ambiguous" in Postgres.
+        $q = Job::where('transport_jobs.company_id', $this->company->id);
 
-        if ($this->brandId) { $q->where('brand_id', $this->brandId); }
+        if ($this->brandId) { $q->where('transport_jobs.brand_id', $this->brandId); }
         if ($this->region) {
             $q->where(function ($w) {
                 $w->whereHas('pickupLocation',    fn ($l) => $l->where('province', $this->region))
@@ -105,7 +109,7 @@ new #[Layout('components.layouts.app')] class extends Component
             });
         }
         if ($applyStatusFilter && $this->status) {
-            $q->where('status', $this->status);
+            $q->where('transport_jobs.status', $this->status);
         }
         return $q;
     }
