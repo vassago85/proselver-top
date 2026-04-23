@@ -141,11 +141,16 @@ new #[Layout('components.layouts.driver')] class extends Component {
             Job::STATUS_DRIVER_ASSIGNED,
             Job::STATUS_ASSIGNED,
         ]);
+        // 4 body angles + dashboard (fuel/odo) + data plate (VIN).
+        // Dashboard and data plate flagged with category so the admin UI
+        // can surface them distinctly even without the slot tag.
         $pickupTiles = [
-            ['slot' => 'pickup_front', 'label' => 'Front'],
-            ['slot' => 'pickup_rear', 'label' => 'Rear'],
-            ['slot' => 'pickup_left', 'label' => 'Left side'],
-            ['slot' => 'pickup_right', 'label' => 'Right side'],
+            ['slot' => 'pickup_front',      'label' => 'Front',      'category' => 'photo'],
+            ['slot' => 'pickup_rear',       'label' => 'Rear',       'category' => 'photo'],
+            ['slot' => 'pickup_left',       'label' => 'Left side',  'category' => 'photo'],
+            ['slot' => 'pickup_right',      'label' => 'Right side', 'category' => 'photo'],
+            ['slot' => 'pickup_dashboard',  'label' => 'Dashboard',  'category' => 'dashboard', 'hint' => 'Fuel + odo'],
+            ['slot' => 'pickup_data_plate', 'label' => 'Data plate', 'category' => 'data_plate', 'hint' => 'VIN plate'],
         ];
     @endphp
 
@@ -153,7 +158,7 @@ new #[Layout('components.layouts.driver')] class extends Component {
     <section class="mt-4 rounded-xl bg-white border border-slate-200 p-4">
         <div class="flex items-center justify-between mb-3">
             <h3 class="text-sm font-bold text-slate-900 uppercase tracking-wide">Collection</h3>
-            <span class="text-[11px] text-slate-500">4 angles + collection note</span>
+            <span class="text-[11px] text-slate-500">4 angles + dashboard + data plate + collection note</span>
         </div>
 
         <div class="grid grid-cols-2 gap-2">
@@ -164,10 +169,13 @@ new #[Layout('components.layouts.driver')] class extends Component {
                                :class="hasCategoryFor('{{ $tile['slot'] }}') ? 'border-emerald-300 bg-emerald-50 text-emerald-700' : 'border-slate-300 bg-slate-50 text-slate-500'">
                             <input type="file" accept="image/*" capture="environment"
                                    class="sr-only"
-                                   @change="capture($event, { category: 'photo', slotTag: '{{ $tile['slot'] }}' })">
+                                   @change="capture($event, { category: '{{ $tile['category'] ?? 'photo' }}', slotTag: '{{ $tile['slot'] }}' })">
                             <svg x-show="!hasCategoryFor('{{ $tile['slot'] }}')" viewBox="0 0 24 24" class="h-6 w-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
                             <svg x-show="hasCategoryFor('{{ $tile['slot'] }}')" x-cloak viewBox="0 0 24 24" class="h-6 w-6" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
                             <span class="text-xs font-semibold">{{ $tile['label'] }}</span>
+                            @if(!empty($tile['hint']))
+                                <span class="text-[10px] text-slate-400 uppercase tracking-wide">{{ $tile['hint'] }}</span>
+                            @endif
                         </label>
                     </div>
                 </template>
@@ -206,7 +214,7 @@ new #[Layout('components.layouts.driver')] class extends Component {
             @endif
         </div>
         <p x-show="!canDepartPickup() && !hasAllPickupPhotos()" x-cloak class="mt-2 text-[11px] text-amber-700 text-center">
-            Capture all 4 angle photos + collection note before continuing.
+            Capture all 4 angles + dashboard + data plate + collection note before continuing.
         </p>
     </section>
     @endif
@@ -221,8 +229,9 @@ new #[Layout('components.layouts.driver')] class extends Component {
             Job::STATUS_DELIVERED,
         ]);
         $deliveryTiles = [
-            ['slot' => 'delivery_front', 'label' => 'Vehicle at delivery (1)'],
-            ['slot' => 'delivery_other', 'label' => 'Vehicle at delivery (2)'],
+            ['slot' => 'delivery_front',     'label' => 'Vehicle at delivery (1)', 'category' => 'photo'],
+            ['slot' => 'delivery_other',     'label' => 'Vehicle at delivery (2)', 'category' => 'photo'],
+            ['slot' => 'delivery_dashboard', 'label' => 'Dashboard',                'category' => 'dashboard', 'hint' => 'Fuel + odo'],
         ];
     @endphp
 
@@ -230,7 +239,7 @@ new #[Layout('components.layouts.driver')] class extends Component {
     <section class="mt-4 rounded-xl bg-white border border-slate-200 p-4">
         <div class="flex items-center justify-between mb-3">
             <h3 class="text-sm font-bold text-slate-900 uppercase tracking-wide">Delivery</h3>
-            <span class="text-[11px] text-slate-500">POD + 2 photos</span>
+            <span class="text-[11px] text-slate-500">POD + 2 photos + dashboard</span>
         </div>
 
         <label class="block rounded-lg border-2 border-dashed cursor-pointer px-4 py-3 flex items-center gap-3 mb-2"
@@ -249,10 +258,13 @@ new #[Layout('components.layouts.driver')] class extends Component {
                        :class="hasCategoryFor('{{ $tile['slot'] }}') ? 'border-emerald-300 bg-emerald-50 text-emerald-700' : 'border-slate-300 bg-slate-50 text-slate-500'">
                     <input type="file" accept="image/*" capture="environment"
                            class="sr-only"
-                           @change="capture($event, { category: 'photo', slotTag: '{{ $tile['slot'] }}' })">
+                           @change="capture($event, { category: '{{ $tile['category'] ?? 'photo' }}', slotTag: '{{ $tile['slot'] }}' })">
                     <svg x-show="!hasCategoryFor('{{ $tile['slot'] }}')" viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
                     <svg x-show="hasCategoryFor('{{ $tile['slot'] }}')" x-cloak viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
                     <span class="text-[11px] font-semibold">{{ $tile['label'] }}</span>
+                    @if(!empty($tile['hint']))
+                        <span class="text-[10px] text-slate-400 uppercase tracking-wide">{{ $tile['hint'] }}</span>
+                    @endif
                 </label>
             @endforeach
         </div>
@@ -275,7 +287,7 @@ new #[Layout('components.layouts.driver')] class extends Component {
                     Complete job
                 </button>
                 <p x-show="!canComplete()" x-cloak class="text-[11px] text-amber-700 text-center">
-                    Capture POD + 2 delivery photos to complete.
+                    Capture POD + 2 delivery photos + dashboard to complete.
                 </p>
             @endif
         </div>
@@ -385,9 +397,21 @@ new #[Layout('components.layouts.driver')] class extends Component {
 
                 // Server-side uploaded items count as captured for pickup/delivery gating
                 // (server-side ones don't have slot tags, so we fall back to category counts).
+                // Note: we only know category totals from the server hydrate, not per-slot,
+                // so the mapping below is a best-effort assumption: if 4+ generic photos
+                // landed it's fair to assume all 4 angles are done.
                 const pickupPhotoCount = this.uploadedServerSide.photo || 0;
                 if (pickupPhotoCount >= 4) {
                     ['pickup_front','pickup_rear','pickup_left','pickup_right'].forEach(s => this.capturedSlots.add(s));
+                }
+                // Dashboard is captured at BOTH pickup and delivery under the same
+                // `dashboard` category. If 1 exists it's almost certainly pickup
+                // (captured first); if 2+ exist the delivery one is in there too.
+                const dashboardCount = this.uploadedServerSide.dashboard || 0;
+                if (dashboardCount >= 1) this.capturedSlots.add('pickup_dashboard');
+                if (dashboardCount >= 2) this.capturedSlots.add('delivery_dashboard');
+                if ((this.uploadedServerSide.data_plate || 0) > 0) {
+                    this.capturedSlots.add('pickup_data_plate');
                 }
                 if ((this.uploadedServerSide.collection_note || 0) > 0) {
                     this.capturedSlots.add('collection_note');
@@ -402,7 +426,8 @@ new #[Layout('components.layouts.driver')] class extends Component {
             },
 
             hasAllPickupPhotos() {
-                return ['pickup_front','pickup_rear','pickup_left','pickup_right','collection_note']
+                return ['pickup_front','pickup_rear','pickup_left','pickup_right',
+                        'pickup_dashboard','pickup_data_plate','collection_note']
                     .every(s => this.capturedSlots.has(s));
             },
 
@@ -415,7 +440,8 @@ new #[Layout('components.layouts.driver')] class extends Component {
             canComplete() {
                 return this.capturedSlots.has('proof_of_delivery')
                     && this.capturedSlots.has('delivery_front')
-                    && this.capturedSlots.has('delivery_other');
+                    && this.capturedSlots.has('delivery_other')
+                    && this.capturedSlots.has('delivery_dashboard');
             },
 
             async capture(event, { category, slotTag = null }) {
