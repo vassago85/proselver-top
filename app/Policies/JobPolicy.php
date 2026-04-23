@@ -3,10 +3,27 @@
 namespace App\Policies;
 
 use App\Models\Job;
+use App\Models\SystemSetting;
 use App\Models\User;
 
 class JobPolicy
 {
+    /**
+     * Roles that always retain the ability to cancel, even if an operator
+     * accidentally saves an empty allow-list in the UI. This is a safety
+     * net — nobody should be able to lock themselves out of cancellations
+     * at the platform-owner tier, and support still needs a break-glass.
+     */
+    private const CANCEL_ALWAYS_ALLOWED = ['developer', 'super_admin', 'owner'];
+
+    /**
+     * Sensible default when the setting has never been configured. Keeps
+     * the pre-existing behaviour intact on first boot.
+     */
+    private const CANCEL_DEFAULT_INTERNAL_ROLES = [
+        'developer', 'super_admin', 'owner',
+        'ops_manager', 'operations_controller',
+    ];
     public function viewAny(User $user): bool
     {
         return true;
@@ -135,10 +152,23 @@ class JobPolicy
 
     public function cancel(User $user, Job $job): bool
     {
-        if ($user->isDeveloper() || $user->isSuperAdmin() || $user->hasRole('ops_manager') || $user->isOperationsController()) {
+        // Platform-owner tier staff: the owner curates the internal allow-list
+        // from Admin → Settings → Cancellation Permissions. The list is
+        // stored as a JSON array of role slugs in system_settings. A hard
+        // allow-list floor (developer/super_admin/owner) stops the org from
+        // locking itself out of cancellations by saving an empty list.
+        $allowedInternal = array_unique(array_merge(
+            self::CANCEL_ALWAYS_ALLOWED,
+            self::allowedInternalCancelRoles(),
+        ));
+
+        if ($user->hasAnyRole($allowedInternal)) {
             return true;
         }
 
+        // Customer / dealer self-service cancel while the movement has not
+        // yet left the depot. This is a business-rule gate, not a policy
+        // knob — the owner's allow-list only governs *internal* cancellers.
         if (($user->isCustomer() || $user->isDealer()) && $user->companies->pluck('id')->contains($job->company_id)) {
             return in_array($job->status, [
                 Job::STATUS_PENDING_VERIFICATION,
@@ -153,6 +183,29 @@ class JobPolicy
         }
 
         return false;
+    }
+
+    /**
+     * Internal role slugs the owner has authorised to cancel orders.
+     * Falls back to the pre-configurable default so first-boot behaviour
+     * matches what shipped before this setting existed.
+     *
+     * @return array<int,string>
+     */
+    public static function allowedInternalCancelRoles(): array
+    {
+        try {
+            $raw = SystemSetting::get('order_cancel_allowed_roles', null);
+        } catch (\Throwable) {
+            $raw = null;
+        }
+
+        if (is_array($raw)) {
+            $clean = array_values(array_filter(array_map('strval', $raw)));
+            return $clean !== [] ? $clean : self::CANCEL_DEFAULT_INTERNAL_ROLES;
+        }
+
+        return self::CANCEL_DEFAULT_INTERNAL_ROLES;
     }
 
     public function updateCosts(User $user, Job $job): bool

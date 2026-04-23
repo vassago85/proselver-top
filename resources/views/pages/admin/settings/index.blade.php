@@ -2,7 +2,18 @@
 use Livewire\Volt\Component;
 use Livewire\Attributes\Layout;
 
-new #[Layout('components.layouts.app')] class extends Component {};
+new #[Layout('components.layouts.app')] class extends Component {
+    public function with(): array
+    {
+        $u = auth()->user();
+        return [
+            // Cancellation permissions: owner can self-serve who on the
+            // team may cancel. Super admin / developer keep access for
+            // platform-level support.
+            'canManageCancellation' => (bool) ($u?->isDeveloper() || $u?->isSuperAdmin() || $u?->isOwner()),
+        ];
+    }
+};
 ?>
 <div>
     <x-slot:header>Settings</x-slot:header>
@@ -139,6 +150,20 @@ new #[Layout('components.layouts.app')] class extends Component {};
                 </div>
             </div>
         </a>
+
+        @if($canManageCancellation)
+        <a href="{{ route('admin.settings.cancellation') }}" class="group bg-white rounded-xl shadow-sm border border-gray-200 p-6 hover:border-red-300 hover:shadow-md transition-all">
+            <div class="flex items-center gap-4">
+                <div class="flex h-12 w-12 items-center justify-center rounded-lg bg-red-50 text-red-600 group-hover:bg-red-100">
+                    <svg class="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/></svg>
+                </div>
+                <div>
+                    <h3 class="text-sm font-semibold text-gray-900">Cancellation Permissions</h3>
+                    <p class="text-xs text-gray-500">Who on the team can cancel orders</p>
+                </div>
+            </div>
+        </a>
+        @endif
 
         <a href="{{ route('admin.settings.toll-plazas') }}" class="group bg-white rounded-xl shadow-sm border border-gray-200 p-6 hover:border-blue-300 hover:shadow-md transition-all">
             <div class="flex items-center gap-4">

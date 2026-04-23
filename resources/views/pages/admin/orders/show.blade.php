@@ -161,6 +161,11 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     public function cancelOrder(): void
     {
+        // Server-side guard. The UI hides the button when the user isn't
+        // authorised, but we re-check here so a crafted Livewire request
+        // (or stale session) can't bypass the owner's allow-list.
+        $this->authorize('cancel', $this->job);
+
         $this->validate(['cancelReason' => 'required|min:5']);
 
         $this->job->cancellation_reason = $this->cancelReason;
@@ -173,6 +178,7 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         AuditService::log('order_cancelled', 'job', $this->job->id, null, [
             'reason' => $this->cancelReason,
+            'cancelled_by_roles' => auth()->user()?->roles->pluck('slug')->values()->all() ?? [],
         ]);
         $this->showCancelModal = false;
         session()->flash('success', "Order {$this->job->job_number} cancelled.");
@@ -628,12 +634,26 @@ new #[Layout('components.layouts.app')] class extends Component {
 
                     {{-- =========================================================
                          4. CANCEL / TERMINAL STATE
+                         --------------------------------------------------------
+                         Cancellation is authorisation-gated. The owner curates
+                         the list of internal roles that may cancel from
+                         Admin → Settings → Cancellation Permissions. Users
+                         without permission don't see the button at all, and a
+                         matching policy check sits in cancelOrder() so a
+                         crafted request can't bypass it either.
                          ========================================================= --}}
                     @if($isCancellable)
-                        <button wire:click="openCancelModal"
-                            class="w-full rounded-lg bg-red-600 px-4 py-3 text-sm font-semibold text-white hover:bg-red-500 transition-colors">
-                            Cancel Order
-                        </button>
+                        @can('cancel', $job)
+                            <button wire:click="openCancelModal"
+                                class="w-full rounded-lg bg-red-600 px-4 py-3 text-sm font-semibold text-white hover:bg-red-500 transition-colors">
+                                Cancel Order
+                            </button>
+                        @else
+                            <div class="rounded-lg bg-gray-50 border border-gray-200 px-3 py-2.5 text-xs text-gray-600 leading-relaxed">
+                                <strong class="text-gray-800">Cancellation requires authorisation.</strong>
+                                Ask an authorised user (owner, ops manager or super admin) if this order must be cancelled.
+                            </div>
+                        @endcan
                     @elseif($isInFlight)
                         <div class="rounded-lg bg-gray-50 border border-gray-200 px-3 py-2.5 text-xs text-gray-600 leading-relaxed">
                             <strong class="text-gray-800">Cannot cancel</strong> &mdash; the vehicle has left the depot. If the order needs to be reversed, record a return movement against the destination.
