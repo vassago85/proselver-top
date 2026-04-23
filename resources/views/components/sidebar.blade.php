@@ -93,9 +93,17 @@
                             Dispatch Board
                         </x-sidebar-link>
 
-                        <x-sidebar-link :href="route('admin.drivers.index')" :active="request()->routeIs('admin.drivers.*')">
+                        <x-sidebar-link :href="route('admin.drivers.index')" :active="request()->routeIs('admin.drivers.index') || request()->routeIs('admin.drivers.create') || request()->routeIs('admin.drivers.edit')">
                             <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></x-slot:icon>
                             Drivers
+                        </x-sidebar-link>
+
+                        {{-- Driver Ops — fleet-control view (who is moving / idle /
+                             late / overloaded). Kept separate from the Drivers
+                             roster above so HR/compliance and ops stay distinct. --}}
+                        <x-sidebar-link :href="route('admin.drivers.operations')" :active="request()->routeIs('admin.drivers.operations')">
+                            <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></x-slot:icon>
+                            Driver Ops
                         </x-sidebar-link>
                     </ul>
                 </li>

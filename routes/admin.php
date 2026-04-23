@@ -3,7 +3,15 @@
 use Illuminate\Support\Facades\Route;
 use Livewire\Volt\Volt;
 
+// /admin/dashboard now renders the Executive Overview (vehicle movement
+// command centre driven by Inventory + Jobs + Invoices). Owners / ops
+// controllers land here on sign-in. Previous revenue-focused dashboard
+// has been retired in favour of this consolidated view.
 Volt::route('dashboard', 'admin.dashboard')->name('dashboard');
+
+// Keep the old /admin/executive link resolvable for anyone who bookmarked
+// the short-lived standalone route. Single 302 to /admin/dashboard.
+Route::redirect('executive', '/admin/dashboard')->name('executive');
 
 // Phase 1 operational routes
 Volt::route('planning', 'admin.planning')->name('planning');
@@ -65,6 +73,10 @@ Volt::route('jobs/{job}', 'admin.jobs.show')->name('jobs.show');
 
 // Drivers
 Volt::route('drivers', 'admin.drivers.index')->name('drivers.index');
+// Driver Operations — fleet-control view of who is on the road, who is
+// idle, who is late, who is overloaded. Separate from /admin/drivers
+// (roster + compliance) by design: ops and HR are different jobs.
+Volt::route('drivers/operations', 'admin.drivers.operations')->name('drivers.operations');
 Volt::route('drivers/create', 'admin.drivers.create')->name('drivers.create');
 Volt::route('drivers/{user}/edit', 'admin.drivers.edit')->name('drivers.edit');
 

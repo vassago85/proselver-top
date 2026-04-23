@@ -1,535 +1,1127 @@
 <?php
 
+use App\Models\Brand;
+use App\Models\Company;
+use App\Models\Inventory;
+use App\Models\Invoice;
 use App\Models\Job;
-use App\Models\JobDocument;
-use Livewire\Volt\Component;
+use App\Models\Location;
+use App\Models\SystemSetting;
+use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 use Livewire\Attributes\Layout;
+use Livewire\Attributes\Url;
+use Livewire\Volt\Component;
 
-new #[Layout('components.layouts.app')] class extends Component {
+new #[Layout('components.layouts.app')] class extends Component
+{
     /**
-     * One-click dismiss for a damage incident on the dashboard strip.
-     * Stamps damage_acknowledged_at so the incident drops off both the
-     * "Damage" stat tile and the "Recent damage incidents" list without
-     * forcing the operator through the full release-to-customer flow.
-     * Release implies ack elsewhere; this is the lighter-weight
-     * "yes I've seen it" action ops needed to stop the dashboard
-     * repeatedly nagging about incidents they're already working.
+     * ╔══════════════════════════════════════════════════════════════════╗
+     * ║  VEHICLE MOVEMENT — EXECUTIVE OVERVIEW                           ║
+     * ╠══════════════════════════════════════════════════════════════════╣
+     * ║  A high-level command centre on top of the inventory ledger.    ║
+     * ║  Does not replace /admin/dashboard. Every tile/card is backed    ║
+     * ║  by real rows in `inventory`, `transport_jobs`, `invoices`,      ║
+     * ║  `locations`, `companies` — no mock or seeded figures.           ║
+     * ║                                                                  ║
+     * ║  Inventory has no `status_changed_at` column. We treat           ║
+     * ║  `updated_at` as the "in-current-status since" timestamp. This   ║
+     * ║  is accurate so long as nothing else touches inventory rows      ║
+     * ║  between state changes; that is the current behaviour of         ║
+     * ║  InventoryLifecycleService.                                      ║
+     * ╚══════════════════════════════════════════════════════════════════╝
      */
-    public function dismissDamage(int $jobId): void
-    {
-        $user = auth()->user();
-        abort_unless($user && $user->isInternal(), 403);
 
-        $job = Job::find($jobId);
-        if (!$job) {
-            return;
+    // ─── Filter state (URL-persistent so links/bookmarks reflect the view) ──
+    #[Url] public ?string $dateFrom = null;
+    #[Url] public ?string $dateTo = null;
+    #[Url] public ?int $companyId = null;      // booking customer / OEM
+    #[Url] public ?int $transporterId = null;  // executing company
+    #[Url] public ?int $brandId = null;
+    #[Url] public ?string $region = null;      // province on current_location
+    #[Url] public ?string $status = null;      // inventory status
+
+    public function mount(): void
+    {
+        // Default window: rolling 30 days ending today. Carbon string form
+        // keeps wire:model happy on a plain <input type="date">.
+        if (!$this->dateFrom) {
+            $this->dateFrom = now()->subDays(29)->toDateString();
+        }
+        if (!$this->dateTo) {
+            $this->dateTo = now()->toDateString();
+        }
+    }
+
+    public function resetFilters(): void
+    {
+        $this->reset(['companyId', 'transporterId', 'brandId', 'region', 'status']);
+        $this->dateFrom = now()->subDays(29)->toDateString();
+        $this->dateTo = now()->toDateString();
+    }
+
+    // ───────────────────────────────────────────────────────────────────
+    //  Reusable query builders
+    // ───────────────────────────────────────────────────────────────────
+
+    /**
+     * Inventory scoped by the active filters EXCEPT status — we want to
+     * apply status per-metric (e.g. "in transit" ignores a user-selected
+     * status filter; the status filter only pre-limits the exploratory
+     * surfaces like Status Distribution and Priority Movements).
+     */
+    protected function baseInventoryQuery(bool $applyStatusFilter = false)
+    {
+        $q = Inventory::query();
+
+        if ($this->companyId) {
+            $q->where('owner_company_id', $this->companyId);
+        }
+        if ($this->brandId) {
+            $q->where('brand_id', $this->brandId);
+        }
+        if ($this->region) {
+            $q->whereHas('currentLocation', fn ($l) => $l->where('province', $this->region));
+        }
+        if ($applyStatusFilter && $this->status) {
+            $q->where('status', $this->status);
+        }
+        // Transporter filter on inventory: join through delivered_via_job
+        // (only affects historical/delivered rows). For active rows the
+        // transporter is implicit in the latest open job → we handle that
+        // in the jobs-driven queries below.
+        if ($this->transporterId) {
+            $q->whereHas('jobs', fn ($j) => $j->where('executing_company_id', $this->transporterId));
         }
 
-        $job->forceFill([
-            'damage_acknowledged_at' => now(),
-            'damage_acknowledged_by' => $user->id,
-        ])->save();
-
-        session()->flash('dashboard_ack', "Damage incident for #{$job->job_number} dismissed.");
+        return $q;
     }
+
+    /**
+     * Jobs query matching the same filters. Used for throughput, on-time
+     * ratios, transporter leaderboard.
+     */
+    protected function baseJobsQuery()
+    {
+        $q = Job::query();
+        if ($this->companyId)     { $q->where('company_id', $this->companyId); }
+        if ($this->transporterId) { $q->where('executing_company_id', $this->transporterId); }
+        if ($this->brandId)       { $q->where('brand_id', $this->brandId); }
+        if ($this->region) {
+            $q->where(function ($w) {
+                $w->whereHas('pickupLocation',   fn ($l) => $l->where('province', $this->region))
+                  ->orWhereHas('deliveryLocation', fn ($l) => $l->where('province', $this->region));
+            });
+        }
+        return $q;
+    }
+
+    // ───────────────────────────────────────────────────────────────────
+    //  Thresholds (config, tunable via SystemSetting)
+    // ───────────────────────────────────────────────────────────────────
+
+    protected function thresholds(): array
+    {
+        return [
+            'in_transit_days' => (int) SystemSetting::get('exec.alert.in_transit_days', 7),
+            'at_yard_days'    => (int) SystemSetting::get('exec.alert.at_yard_days', 14),
+            'at_plant_days'   => (int) SystemSetting::get('exec.alert.at_plant_days', 21),
+        ];
+    }
+
+    // ───────────────────────────────────────────────────────────────────
+    //  Data for view
+    // ───────────────────────────────────────────────────────────────────
 
     public function with(): array
     {
-        // ─── Operations headline counters ─────────────────────────────
-        // "New" from ops' point of view = anything that just landed
-        // and still needs eyes. Dealer + OEM bookings arrive in
-        // PENDING_VERIFICATION; portal bookings land in RECEIVED.
-        $newOrders = Job::whereIn('status', [
-            Job::STATUS_PENDING_VERIFICATION,
-            Job::STATUS_RECEIVED,
-        ])->count();
-        $pendingVerification = Job::where('status', Job::STATUS_PENDING_VERIFICATION)->count();
-        $readyToPlan         = Job::where('status', Job::STATUS_CONFIRMED)->count();
+        $from = Carbon::parse($this->dateFrom)->startOfDay();
+        $to   = Carbon::parse($this->dateTo)->endOfDay();
+        $span = max(1, $from->diffInDays($to) + 1);
+        $prevTo   = (clone $from)->subDay()->endOfDay();
+        $prevFrom = (clone $prevTo)->subDays($span - 1)->startOfDay();
 
-        // In-flight = anything with a driver actively moving (or about
-        // to). This feeds both the tile AND the live-movements board.
-        $inFlightStatuses = [
-            Job::STATUS_DRIVER_ASSIGNED,
-            Job::STATUS_READY_FOR_COLLECTION,
-            Job::STATUS_COLLECTED,
-            Job::STATUS_IN_TRANSIT,
+        $th = $this->thresholds();
+
+        // ─────────────────────────────────────────────────────────────
+        //  ROW 1 — KPI cards (all from Inventory, no fake figures)
+        // ─────────────────────────────────────────────────────────────
+        $inTransit = (clone $this->baseInventoryQuery())
+            ->where('status', Inventory::STATUS_IN_TRANSIT)->count();
+
+        $atYard = (clone $this->baseInventoryQuery())
+            ->whereIn('status', [Inventory::STATUS_AT_YARD, Inventory::STATUS_AT_STORAGE])->count();
+
+        $atPlant = (clone $this->baseInventoryQuery())
+            ->whereIn('status', [Inventory::STATUS_PRODUCED, Inventory::STATUS_AT_PLANT])->count();
+
+        $deliveredRange = (clone $this->baseInventoryQuery())
+            ->where('status', Inventory::STATUS_DELIVERED)
+            ->whereBetween('delivered_at', [$from, $to])->count();
+
+        $deliveredPrev = (clone $this->baseInventoryQuery())
+            ->where('status', Inventory::STATUS_DELIVERED)
+            ->whereBetween('delivered_at', [$prevFrom, $prevTo])->count();
+
+        // "At risk" — stuck in a non-terminal state past the status-specific
+        // threshold. Uses `updated_at` as the in-status proxy.
+        $atRiskQ = (clone $this->baseInventoryQuery())
+            ->where(function ($w) use ($th) {
+                $w->where(function ($a) use ($th) {
+                    $a->where('status', Inventory::STATUS_IN_TRANSIT)
+                      ->where('updated_at', '<=', now()->subDays($th['in_transit_days']));
+                })->orWhere(function ($a) use ($th) {
+                    $a->whereIn('status', [Inventory::STATUS_AT_YARD, Inventory::STATUS_AT_STORAGE])
+                      ->where('updated_at', '<=', now()->subDays($th['at_yard_days']));
+                })->orWhere(function ($a) use ($th) {
+                    $a->whereIn('status', [Inventory::STATUS_PRODUCED, Inventory::STATUS_AT_PLANT])
+                      ->where('updated_at', '<=', now()->subDays($th['at_plant_days']));
+                });
+            });
+        $atRisk = (clone $atRiskQ)->count();
+
+        $activeInventory = (clone $this->baseInventoryQuery())
+            ->whereIn('status', Inventory::ACTIVE_STATUSES)->count();
+
+        // Previous-period comparisons for the other KPI cards. We use
+        // updated_at as a proxy for "was in this status during the
+        // previous window" — imperfect but directionally correct and the
+        // only signal available without a status-history table.
+        $prevInTransit = (clone $this->baseInventoryQuery())
+            ->where('status', Inventory::STATUS_IN_TRANSIT)
+            ->whereBetween('updated_at', [$prevFrom, $prevTo])->count();
+        $prevAtYard = (clone $this->baseInventoryQuery())
+            ->whereIn('status', [Inventory::STATUS_AT_YARD, Inventory::STATUS_AT_STORAGE])
+            ->whereBetween('updated_at', [$prevFrom, $prevTo])->count();
+        $prevAtPlant = (clone $this->baseInventoryQuery())
+            ->whereIn('status', [Inventory::STATUS_PRODUCED, Inventory::STATUS_AT_PLANT])
+            ->whereBetween('updated_at', [$prevFrom, $prevTo])->count();
+        $prevActive = (clone $this->baseInventoryQuery())
+            ->whereIn('status', Inventory::ACTIVE_STATUSES)
+            ->whereBetween('updated_at', [$prevFrom, $prevTo])->count();
+
+        $kpis = [
+            [
+                'key'       => 'in_transit',
+                'label'     => 'Vehicles in Transit',
+                'value'     => $inTransit,
+                'color'     => 'blue',
+                'href'      => route('admin.vehicles.index', ['bucket' => 'live']),
+                'trend'     => $this->trend($inTransit, $prevInTransit),
+                'helper'    => 'Active road movements',
+                'iconPath'  => '<path d="M14 16H9m10 0h3v-3.15a1 1 0 0 0-.84-.99L16 11l-2.7-3.6a1 1 0 0 0-.8-.4H5.24a2 2 0 0 0-1.8 1.1l-.8 1.63A6 6 0 0 0 2 12.42V16h2"/><circle cx="6.5" cy="16.5" r="2.5"/><circle cx="16.5" cy="16.5" r="2.5"/>',
+            ],
+            [
+                'key'       => 'at_yard',
+                'label'     => 'At Yard / Storage',
+                'value'     => $atYard,
+                'color'     => 'amber',
+                'href'      => route('admin.vehicles.index'),
+                'trend'     => $this->trend($atYard, $prevAtYard),
+                'helper'    => 'Awaiting next hop',
+                'iconPath'  => '<path d="M3 21h18"/><path d="M5 21V7l8-4v18"/><path d="M19 21V11l-6-4"/><path d="M9 9v.01"/><path d="M9 12v.01"/><path d="M9 15v.01"/><path d="M9 18v.01"/>',
+            ],
+            [
+                'key'       => 'at_plant',
+                'label'     => 'At Plant / Produced',
+                'value'     => $atPlant,
+                'color'     => 'indigo',
+                'href'      => route('admin.vehicles.index'),
+                'trend'     => $this->trend($atPlant, $prevAtPlant),
+                'helper'    => 'Upstream, ready to release',
+                'iconPath'  => '<path d="M17 18a2 2 0 0 0-2-2H9a2 2 0 0 0-2 2"/><path d="M21 22H3"/><path d="M4 22V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v16"/><path d="M10 8h4"/><path d="M10 12h4"/><path d="M10 16h4"/>',
+            ],
+            [
+                'key'       => 'delivered',
+                'label'     => 'Delivered (range)',
+                'value'     => $deliveredRange,
+                'color'     => 'green',
+                'href'      => route('admin.deliveries'),
+                'trend'     => $this->trend($deliveredRange, $deliveredPrev),
+                'helper'    => $from->format('d M') . ' – ' . $to->format('d M'),
+                'iconPath'  => '<path d="M20 6 9 17l-5-5"/>',
+            ],
+            [
+                'key'       => 'at_risk',
+                'label'     => 'At Risk / Delayed',
+                'value'     => $atRisk,
+                'color'     => $atRisk > 0 ? 'red' : 'slate',
+                'href'      => null,
+                'trend'     => null,
+                'helper'    => "Transit >{$th['in_transit_days']}d · Yard >{$th['at_yard_days']}d · Plant >{$th['at_plant_days']}d",
+                'iconPath'  => '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+            ],
+            [
+                'key'       => 'active',
+                'label'     => 'Active Inventory',
+                'value'     => $activeInventory,
+                'color'     => 'teal',
+                'href'      => route('admin.vehicles.index'),
+                'trend'     => $this->trend($activeInventory, $prevActive),
+                'helper'    => 'Everything not yet delivered',
+                'iconPath'  => '<circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/>',
+            ],
         ];
-        $inFlight = Job::whereIn('status', $inFlightStatuses)->count();
 
-        $deliveredToday = Job::whereIn('status', [Job::STATUS_DELIVERED, Job::STATUS_COMPLETED])
-            ->whereDate('delivered_at', today())
+        // ─────────────────────────────────────────────────────────────
+        //  ROW 2 — Flow & Distribution
+        // ─────────────────────────────────────────────────────────────
+
+        // Daily activity series — 3 lines: dispatched (assigned_at),
+        // departed (in_transit_at), delivered (delivered_at).
+        $days = [];
+        $cursor = $from->copy();
+        while ($cursor->lte($to)) {
+            $days[$cursor->toDateString()] = ['date' => $cursor->copy(), 'dispatched' => 0, 'in_transit' => 0, 'delivered' => 0];
+            $cursor->addDay();
+        }
+
+        $jobActivity = (clone $this->baseJobsQuery())
+            ->where(function ($w) use ($from, $to) {
+                $w->whereBetween('assigned_at',   [$from, $to])
+                  ->orWhereBetween('in_transit_at', [$from, $to])
+                  ->orWhereBetween('delivered_at',  [$from, $to]);
+            })
+            ->get(['id', 'assigned_at', 'in_transit_at', 'delivered_at']);
+
+        foreach ($jobActivity as $j) {
+            foreach (['assigned_at' => 'dispatched', 'in_transit_at' => 'in_transit', 'delivered_at' => 'delivered'] as $col => $bucket) {
+                if ($j->$col && $j->$col->between($from, $to)) {
+                    $k = $j->$col->toDateString();
+                    if (isset($days[$k])) {
+                        $days[$k][$bucket]++;
+                    }
+                }
+            }
+        }
+        $activitySeries = array_values($days);
+        $activityPeak   = max(array_merge([1], array_map(fn ($d) => max($d['dispatched'], $d['in_transit'], $d['delivered']), $activitySeries)));
+
+        // Status distribution — inventory grouped by status (active only).
+        $statusDist = (clone $this->baseInventoryQuery())
+            ->whereIn('status', Inventory::ACTIVE_STATUSES)
+            ->selectRaw('status, count(*) as n')
+            ->groupBy('status')
+            ->pluck('n', 'status')
+            ->toArray();
+
+        // Throughput vs target — jobs scheduled inside the range vs
+        // delivered inside the range. Gap = overdue / undelivered.
+        $scheduled = (clone $this->baseJobsQuery())
+            ->whereBetween('scheduled_date', [$from->toDateString(), $to->toDateString()])
             ->count();
+        $delivered = (clone $this->baseJobsQuery())
+            ->whereNotNull('delivered_at')
+            ->whereBetween('delivered_at', [$from, $to])
+            ->count();
+        $throughputPct = $scheduled > 0 ? round(($delivered / $scheduled) * 100) : 0;
 
-        // Live pulse row: counts per live status. driver_assigned
-        // absorbs legacy ready_for_collection rows so the board never
-        // shows both side by side.
-        $liveCounts = [
-            'driver_assigned' => Job::whereIn('status', [Job::STATUS_DRIVER_ASSIGNED, Job::STATUS_READY_FOR_COLLECTION])->count(),
-            'collected'       => Job::where('status', Job::STATUS_COLLECTED)->count(),
-            'in_transit'      => Job::where('status', Job::STATUS_IN_TRANSIT)->count(),
+        // ─────────────────────────────────────────────────────────────
+        //  ROW 3 — Operations focus
+        // ─────────────────────────────────────────────────────────────
+
+        $exceptions = [
+            [
+                'key'      => 'stuck_plant',
+                'label'    => 'Stuck at plant',
+                'sublabel' => "> {$th['at_plant_days']}d",
+                'count'    => (clone $this->baseInventoryQuery())
+                    ->whereIn('status', [Inventory::STATUS_PRODUCED, Inventory::STATUS_AT_PLANT])
+                    ->where('updated_at', '<=', now()->subDays($th['at_plant_days']))
+                    ->count(),
+                'severity' => 'amber',
+            ],
+            [
+                'key'      => 'stuck_yard',
+                'label'    => 'Stuck at yard / storage',
+                'sublabel' => "> {$th['at_yard_days']}d",
+                'count'    => (clone $this->baseInventoryQuery())
+                    ->whereIn('status', [Inventory::STATUS_AT_YARD, Inventory::STATUS_AT_STORAGE])
+                    ->where('updated_at', '<=', now()->subDays($th['at_yard_days']))
+                    ->count(),
+                'severity' => 'amber',
+            ],
+            [
+                'key'      => 'long_transit',
+                'label'    => 'Long in transit',
+                'sublabel' => "> {$th['in_transit_days']}d",
+                'count'    => (clone $this->baseInventoryQuery())
+                    ->where('status', Inventory::STATUS_IN_TRANSIT)
+                    ->where('updated_at', '<=', now()->subDays($th['in_transit_days']))
+                    ->count(),
+                'severity' => 'red',
+            ],
+            [
+                'key'      => 'missing_driver',
+                'label'    => 'Jobs missing driver',
+                'sublabel' => 'planned / confirmed, no driver',
+                'count'    => (clone $this->baseJobsQuery())
+                    ->whereIn('status', [Job::STATUS_CONFIRMED, Job::STATUS_PLANNED])
+                    ->whereNull('driver_user_id')
+                    ->count(),
+                'severity' => 'amber',
+            ],
+            [
+                'key'      => 'delivered_open',
+                'label'    => 'Delivered but workflow open',
+                'sublabel' => 'inventory delivered, job not completed',
+                'count'    => Inventory::query()
+                    ->where('status', Inventory::STATUS_DELIVERED)
+                    ->whereNotNull('delivered_via_job_id')
+                    ->whereHas('deliveredViaJob', fn ($j) => $j->whereNotIn('status', [Job::STATUS_COMPLETED, Job::STATUS_INVOICED]))
+                    ->count(),
+                'severity' => 'amber',
+            ],
         ];
 
-        // ─── Revenue / money tiles ────────────────────────────────────
-        // Everything here uses invoiced_at (the moment the money
-        // becomes real). Awaiting-invoicing = delivered but the ops
-        // team hasn't invoiced yet = money sitting on the table.
-        $invoicedTodayValue = (float) Job::whereDate('invoiced_at', today())->sum('total_sell_price');
-        $invoicedTodayCount = Job::whereDate('invoiced_at', today())->count();
-
-        $monthStart = now()->startOfMonth();
-        $invoicedMtdValue = (float) Job::where('invoiced_at', '>=', $monthStart)->sum('total_sell_price');
-        $invoicedMtdCount = Job::where('invoiced_at', '>=', $monthStart)->count();
-        $costMtd          = (float) Job::where('invoiced_at', '>=', $monthStart)->sum('total_cost');
-        $marginMtd        = max(0, $invoicedMtdValue - $costMtd);
-        $marginPct        = $invoicedMtdValue > 0 ? round(($marginMtd / $invoicedMtdValue) * 100) : 0;
-
-        $awaitingInvoicing = Job::whereIn('status', [Job::STATUS_DELIVERED, Job::STATUS_COMPLETED, Job::STATUS_READY_FOR_INVOICING])
-            ->whereNull('invoiced_at');
-        $awaitingCount = (clone $awaitingInvoicing)->count();
-        $awaitingValue = (float) (clone $awaitingInvoicing)->sum('total_sell_price');
-
-        // ─── Live movements board ─────────────────────────────────────
-        // The cool shit: every vehicle currently on the road, with
-        // driver, route, elapsed time since dispatch. Ordered so
-        // the most "at-risk" (longest running) surface first.
-        $liveMovements = Job::with([
-                'company:id,name',
-                'pickupLocation:id,company_name,city',
-                'deliveryLocation:id,company_name,city',
+        // Priority movements — active inventory ordered by longest time
+        // in current status (= `updated_at` ascending among active rows).
+        $priority = (clone $this->baseInventoryQuery(applyStatusFilter: true))
+            ->whereIn('status', Inventory::ACTIVE_STATUSES)
+            ->with([
+                'currentLocation:id,company_name,city,province,type',
                 'brand:id,name',
-                'driver:id,name',
+                'owner:id,name',
             ])
-            ->whereIn('status', $inFlightStatuses)
-            ->orderByDesc(\DB::raw('COALESCE(collected_at, assigned_at, updated_at)'))
+            ->orderBy('updated_at', 'asc')
             ->limit(12)
             ->get();
 
-        // ─── Damage pulse ─────────────────────────────────────────────
-        // Only unacknowledged incidents. Ack happens when ops views
-        // the order page, dismisses inline, or releases to customer.
-        $damageJobIds = JobDocument::where('category', JobDocument::CATEGORY_DAMAGE_PHOTO)
-            ->distinct()
-            ->pluck('job_id');
+        // Enrich priority rows with the latest open job (for origin →
+        // destination + driver). Batch-load to avoid N+1.
+        $invIds = $priority->pluck('id')->all();
+        $latestJobs = !empty($invIds)
+            ? Job::whereIn('inventory_id', $invIds)
+                ->whereNotIn('status', [Job::STATUS_COMPLETED, Job::STATUS_INVOICED, Job::STATUS_CANCELLED, Job::STATUS_REJECTED])
+                ->with(['pickupLocation:id,city', 'deliveryLocation:id,city', 'driver:id,name'])
+                ->orderByDesc('updated_at')
+                ->get()
+                ->groupBy('inventory_id')
+            : collect();
 
-        $unackedBase = Job::whereIn('id', $damageJobIds)
-            ->whereNull('damage_acknowledged_at');
+        foreach ($priority as $row) {
+            $row->setAttribute('latest_job', $latestJobs->get($row->id)?->first());
+            $row->setAttribute('days_in_status', $row->updated_at ? (int) $row->updated_at->diffInDays(now()) : null);
+            $row->setAttribute('risk_level', $this->riskFor($row->status, $row->getAttribute('days_in_status'), $th));
+        }
 
-        $pendingReleaseCount = (clone $unackedBase)
-            ->whereNull('damage_report_released_at')
-            ->count();
-        $openDamageCount = (clone $unackedBase)
-            ->whereNotIn('status', [Job::STATUS_COMPLETED, Job::STATUS_CANCELLED])
-            ->count();
+        // Location pressure — inventory grouped by location.type.
+        $locationPressure = (clone $this->baseInventoryQuery())
+            ->whereIn('status', Inventory::ACTIVE_STATUSES)
+            ->join('locations', 'inventory.current_location_id', '=', 'locations.id')
+            ->selectRaw('locations.type as type, count(*) as n')
+            ->groupBy('locations.type')
+            ->pluck('n', 'type')
+            ->toArray();
 
-        $recentDamageJobs = (clone $unackedBase)
-            ->with([
-                'company:id,name',
-                'pickupLocation:id,company_name,city',
-                'deliveryLocation:id,company_name,city',
-                'brand:id,name',
-            ])
-            ->withCount(['documents as damage_photos_count' => function ($q) {
-                $q->where('category', JobDocument::CATEGORY_DAMAGE_PHOTO);
-            }])
-            ->orderByDesc('updated_at')
-            ->limit(6)
-            ->get();
+        // ─────────────────────────────────────────────────────────────
+        //  ROW 4 — Executive insight
+        // ─────────────────────────────────────────────────────────────
 
-        $recentOrders = Job::with(['company:id,name,workflow_type', 'pickupLocation:id,company_name,city', 'deliveryLocation:id,company_name,city', 'brand:id,name'])
-            ->whereIn('status', Job::PHASE1_STATUSES)
-            ->orderByDesc('created_at')
+        // Top customer / OEM breakdown — active inventory + delivered
+        // count in the selected window.
+        $companyRows = (clone $this->baseInventoryQuery())
+            ->selectRaw('owner_company_id, '
+                . 'count(*) filter (where status in (' . $this->pgStatusList(Inventory::ACTIVE_STATUSES) . ')) as active_count, '
+                . 'count(*) filter (where status = ? and delivered_at between ? and ?) as delivered_count', [
+                    Inventory::STATUS_DELIVERED, $from, $to,
+                ])
+            ->whereNotNull('owner_company_id')
+            ->groupBy('owner_company_id')
+            ->orderByDesc('active_count')
             ->limit(8)
             ->get();
 
+        $companyIds = $companyRows->pluck('owner_company_id')->all();
+        $companies  = !empty($companyIds)
+            ? Company::whereIn('id', $companyIds)->get(['id', 'name', 'type'])->keyBy('id')
+            : collect();
+        $companyRows->each(fn ($r) => $r->setAttribute('company', $companies->get($r->owner_company_id)));
+
+        // Transporter performance — jobs per transporter in the range,
+        // plus on-time %. NULL executing_company_id = platform-owner.
+        $transporterRows = (clone $this->baseJobsQuery())
+            ->whereBetween('completed_at', [$from, $to])
+            ->selectRaw('executing_company_id, '
+                . 'count(*) as job_count, '
+                . 'count(*) filter (where delivered_at::date <= scheduled_date and coalesce(delay_minutes,0)=0) as on_time_count')
+            ->groupBy('executing_company_id')
+            ->orderByDesc('job_count')
+            ->limit(8)
+            ->get();
+
+        $tpIds = $transporterRows->pluck('executing_company_id')->filter()->all();
+        $tpMap = !empty($tpIds) ? Company::whereIn('id', $tpIds)->pluck('name', 'id') : collect();
+        $transporterRows->each(function ($r) use ($tpMap) {
+            $r->setAttribute('transporter_name', $r->executing_company_id
+                ? ($tpMap->get($r->executing_company_id) ?? 'Unknown')
+                : 'Platform / Internal');
+            $r->setAttribute('on_time_pct', $r->job_count > 0
+                ? (int) round(($r->on_time_count / $r->job_count) * 100)
+                : null);
+        });
+
+        // Revenue snapshot — invoice surface, not financial forecasts.
+        // "Outstanding" = issued invoices not yet paid.
+        $invoiceIssued = Invoice::where('status', Invoice::STATUS_ISSUED)
+            ->when($this->companyId, fn ($q) => $q->where('company_id', $this->companyId))
+            ->selectRaw('count(*) as c, coalesce(sum(total),0) as v')
+            ->first();
+        $invoicePaid = Invoice::where('status', Invoice::STATUS_PAID)
+            ->when($this->companyId, fn ($q) => $q->where('company_id', $this->companyId))
+            ->whereBetween('generated_at', [$from, $to])
+            ->selectRaw('count(*) as c, coalesce(sum(total),0) as v')
+            ->first();
+        $invoiceDraft = Invoice::where('status', Invoice::STATUS_DRAFT)
+            ->when($this->companyId, fn ($q) => $q->where('company_id', $this->companyId))
+            ->selectRaw('count(*) as c, coalesce(sum(total),0) as v')
+            ->first();
+        $awaitingInv = (clone $this->baseJobsQuery())
+            ->whereIn('status', [Job::STATUS_DELIVERED, Job::STATUS_COMPLETED, Job::STATUS_READY_FOR_INVOICING])
+            ->whereNull('invoiced_at')
+            ->selectRaw('count(*) as c, coalesce(sum(total_sell_price),0) as v')
+            ->first();
+
+        // ─── Filter option lists ─────────────────────────────────────
+        $companyOptions = Company::whereIn('type', [Company::TYPE_OEM, Company::TYPE_DEALER, Company::TYPE_CUSTOMER])
+            ->where('is_active', true)->orderBy('name')->get(['id', 'name']);
+        $transporterOptions = Company::where('type', Company::TYPE_TRANSPORTER)
+            ->where('is_active', true)->orderBy('name')->get(['id', 'name']);
+        $brandOptions = Brand::where('is_active', true)->orderBy('name')->get(['id', 'name']);
+        $regionOptions = Location::query()
+            ->whereNotNull('province')->where('province', '!=', '')
+            ->distinct()->orderBy('province')->pluck('province');
+        $statusOptions = Inventory::STATUSES;
+
         return compact(
-            'newOrders',
-            'pendingVerification',
-            'readyToPlan',
-            'inFlight',
-            'deliveredToday',
-            'liveCounts',
-            'liveMovements',
-            'invoicedTodayValue',
-            'invoicedTodayCount',
-            'invoicedMtdValue',
-            'invoicedMtdCount',
-            'marginMtd',
-            'marginPct',
-            'awaitingCount',
-            'awaitingValue',
-            'openDamageCount',
-            'pendingReleaseCount',
-            'recentDamageJobs',
-            'recentOrders',
+            'from', 'to', 'span', 'kpis',
+            'activitySeries', 'activityPeak', 'statusDist',
+            'scheduled', 'delivered', 'throughputPct',
+            'exceptions', 'priority', 'locationPressure',
+            'companyRows', 'transporterRows',
+            'invoiceIssued', 'invoicePaid', 'invoiceDraft', 'awaitingInv',
+            'companyOptions', 'transporterOptions', 'brandOptions', 'regionOptions', 'statusOptions',
+            'th',
         );
     }
-};
 
+    // ───────── Helpers ─────────
+
+    protected function trend(int $current, int $previous): ?array
+    {
+        if ($previous === 0 && $current === 0) { return null; }
+        if ($previous === 0)                   { return ['dir' => 'up', 'label' => 'new']; }
+        $delta = (int) round((($current - $previous) / $previous) * 100);
+        return [
+            'dir'   => $delta >= 0 ? 'up' : 'down',
+            'label' => ($delta >= 0 ? '+' : '') . $delta . '%',
+        ];
+    }
+
+    protected function riskFor(string $status, ?int $days, array $th): string
+    {
+        if ($days === null) { return 'low'; }
+        return match ($status) {
+            Inventory::STATUS_IN_TRANSIT =>
+                $days >= $th['in_transit_days'] ? 'high' : ($days >= (int) round($th['in_transit_days'] / 2) ? 'med' : 'low'),
+            Inventory::STATUS_AT_YARD, Inventory::STATUS_AT_STORAGE =>
+                $days >= $th['at_yard_days'] ? 'high' : ($days >= (int) round($th['at_yard_days'] / 2) ? 'med' : 'low'),
+            Inventory::STATUS_PRODUCED, Inventory::STATUS_AT_PLANT =>
+                $days >= $th['at_plant_days'] ? 'high' : ($days >= (int) round($th['at_plant_days'] / 2) ? 'med' : 'low'),
+            default => 'low',
+        };
+    }
+
+    /** Safe in-operator list for Postgres FILTER clauses. */
+    protected function pgStatusList(array $statuses): string
+    {
+        return collect($statuses)->map(fn ($s) => "'" . addslashes($s) . "'")->implode(',');
+    }
+};
 ?>
 
 @php
-    // Small money formatter — R prefix, thousands sep, no decimals for
-    // stat tiles so big numbers stay scannable. Handled inline so we
-    // don't hit the helper autoload cost 8 times per render.
-    $money = fn($v) => 'R' . number_format((float) $v, 0);
+    $money = fn ($v) => 'R ' . number_format((float) $v, 0);
+    $num   = fn ($v) => number_format((int) $v);
+
+    // Inline SVG helper — Lucide-style 24x24 strokes.
+    $icon = fn ($paths, $size = 16) => '<svg viewBox="0 0 24 24" class="h-' . $size/4 . ' w-' . $size/4 . '" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' . $paths . '</svg>';
 @endphp
 
-<div wire:poll.60s>
-    <x-slot:header>Dashboard</x-slot:header>
+<div class="space-y-6">
 
-    {{-- Hero --}}
+    {{-- ══════════════════════════════════════════════════════════════ --}}
+    {{-- HEADER                                                         --}}
+    {{-- ══════════════════════════════════════════════════════════════ --}}
     <x-page-header
-        eyebrow="Control · Dispatch · Deliver"
-        title="Operations overview"
-        subtitle="Live money, live movements, and the things ops has to push next.">
+        eyebrow="Command centre"
+        title="Vehicle Movement Overview"
+        subtitle="Executive view of the inventory ledger — where every vehicle sits, how it's moving, and who's moving it.">
         <x-slot:actions>
-            <x-button :href="route('admin.planning')" variant="primary" size="md">
+            <x-button variant="secondary" size="sm" :href="route('admin.planning')">
                 <x-slot:icon>
-                    <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/></svg>
+                    <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
                 </x-slot:icon>
-                Planning Queue
+                New Dispatch
             </x-button>
-            <x-button :href="route('admin.dispatch')" variant="dark" size="md">
+            <x-button variant="secondary" size="sm" :href="route('admin.deliveries')">
                 <x-slot:icon>
-                    <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2"/><path d="M15 18H9"/><path d="M19 18h2a1 1 0 0 0 1-1v-3.65a1 1 0 0 0-.22-.624l-3.48-4.35A1 1 0 0 0 17.52 8H14"/><circle cx="17" cy="18" r="2"/><circle cx="7" cy="18" r="2"/></svg>
+                    <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
                 </x-slot:icon>
-                Dispatch Board
+                Log Delivery
+            </x-button>
+            <x-button variant="primary" size="sm" :href="route('admin.reports.index')">
+                <x-slot:icon>
+                    <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m7 14 4-4 4 4 5-6"/></svg>
+                </x-slot:icon>
+                View Reports
             </x-button>
         </x-slot:actions>
     </x-page-header>
 
-    {{-- Revenue row
-         This is the money line. Invoiced today / MTD / awaiting /
-         margin — the four numbers the owner actually wants on the
-         screen when they walk past. --}}
-    <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-3">
-        <x-stat-card
-            label="Invoiced Today"
-            :value="$money($invoicedTodayValue)"
-            color="emerald"
-            :helper="$invoicedTodayCount . ' ' . \Illuminate\Support\Str::plural('invoice', $invoicedTodayCount)"
-            helperColor="emerald">
-            <x-slot:icon>
-                <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
-            </x-slot:icon>
-        </x-stat-card>
-
-        <x-stat-card
-            label="Invoiced MTD"
-            :value="$money($invoicedMtdValue)"
-            color="emerald"
-            :helper="$invoicedMtdCount . ' ' . \Illuminate\Support\Str::plural('invoice', $invoicedMtdCount) . ' · since ' . now()->startOfMonth()->format('d M')"
-            helperColor="slate">
-            <x-slot:icon>
-                <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>
-            </x-slot:icon>
-        </x-stat-card>
-
-        <x-stat-card
-            label="Margin MTD"
-            :value="$money($marginMtd)"
-            :color="$marginPct >= 25 ? 'emerald' : ($marginPct >= 10 ? 'amber' : 'slate')"
-            :helper="$marginPct . '% gross'"
-            :helperColor="$marginPct >= 25 ? 'emerald' : ($marginPct >= 10 ? 'amber' : 'slate')">
-            <x-slot:icon>
-                <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20"/><path d="m5 12 7-7 7 7"/></svg>
-            </x-slot:icon>
-        </x-stat-card>
-
-        <x-stat-card
-            label="Awaiting Invoicing"
-            :value="$money($awaitingValue)"
-            :color="$awaitingCount > 0 ? 'amber' : 'slate'"
-            :helper="$awaitingCount > 0 ? $awaitingCount . ' ' . \Illuminate\Support\Str::plural('delivery', $awaitingCount) . ' to invoice' : 'All invoiced'"
-            :helperColor="$awaitingCount > 0 ? 'amber' : 'slate'"
-            :href="route('admin.deliveries', ['range' => 'all'])">
-            <x-slot:icon>
-                <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-            </x-slot:icon>
-        </x-stat-card>
-    </div>
-
-    {{-- Operations row --}}
-    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
-        <x-stat-card
-            label="New Bookings"
-            :value="$newOrders"
-            color="blue"
-            :helper="$pendingVerification > 0 ? $pendingVerification . ' to verify' : 'Queue clear'"
-            :helperColor="$pendingVerification > 0 ? 'amber' : 'slate'"
-            :href="route('admin.vehicles.index', ['bucket' => 'open'])">
-            <x-slot:icon>
-                <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
-            </x-slot:icon>
-        </x-stat-card>
-
-        <x-stat-card
-            label="Ready to Plan"
-            :value="$readyToPlan"
-            :color="$readyToPlan > 0 ? 'purple' : 'slate'"
-            :helper="$readyToPlan > 0 ? 'Assign drivers' : 'Queue clear'"
-            :helperColor="$readyToPlan > 0 ? 'purple' : 'slate'"
-            :href="route('admin.planning')" />
-
-        <x-stat-card
-            label="In Flight"
-            :value="$inFlight"
-            :color="$inFlight > 0 ? 'blue' : 'slate'"
-            helper="Drivers on the road"
-            helperColor="slate"
-            :href="route('admin.vehicles.index', ['bucket' => 'live'])" />
-
-        <x-stat-card
-            label="Delivered Today"
-            :value="$deliveredToday"
-            color="emerald"
-            :helper="$deliveredToday > 0 ? 'Ready for invoicing' : null"
-            helperColor="slate"
-            :href="route('admin.deliveries', ['range' => 'today'])" />
-    </div>
-
-    {{-- Live movements board
-         The hero piece. Every vehicle currently moving, with driver,
-         route, status, and time-since-dispatch. Rows are clickable,
-         going straight to the order detail. Empty state says so. --}}
-    <div class="mb-6 rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-        <div class="flex items-center justify-between gap-3 border-b border-slate-100 px-6 py-4">
-            <div class="flex items-center gap-3">
-                <span class="inline-flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.25em] text-blue-600">
-                    <span class="h-1.5 w-1.5 rounded-full bg-blue-500 {{ $liveMovements->isNotEmpty() ? 'node-pulse' : 'opacity-30' }}"></span>
-                    Live movements
-                </span>
-                <span class="text-[11px] text-slate-500 tabular-nums">
-                    {{ $liveMovements->count() }} {{ \Illuminate\Support\Str::plural('vehicle', $liveMovements->count()) }} on the road
-                </span>
+    {{-- Filter strip --}}
+    <div class="rounded-2xl border border-slate-200 bg-white shadow-sm p-4">
+        <div class="flex flex-wrap items-end gap-3">
+            <div class="flex-1 min-w-[180px]">
+                <label class="block text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500 mb-1.5">From</label>
+                <input type="date" wire:model.live="dateFrom"
+                    class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500">
             </div>
-            <a href="{{ route('admin.vehicles.index', ['bucket' => 'live']) }}" class="text-xs font-semibold text-slate-600 hover:text-slate-900 inline-flex items-center gap-1 transition-colors">
-                Open live fleet
-                <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></svg>
-            </a>
+            <div class="flex-1 min-w-[180px]">
+                <label class="block text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500 mb-1.5">To</label>
+                <input type="date" wire:model.live="dateTo"
+                    class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500">
+            </div>
+            <div class="flex-1 min-w-[200px]">
+                <label class="block text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500 mb-1.5">Customer / OEM</label>
+                <select wire:model.live="companyId" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500">
+                    <option value="">All</option>
+                    @foreach($companyOptions as $c)
+                        <option value="{{ $c->id }}">{{ $c->name }}</option>
+                    @endforeach
+                </select>
+            </div>
+            <div class="flex-1 min-w-[200px]">
+                <label class="block text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500 mb-1.5">Transporter</label>
+                <select wire:model.live="transporterId" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500">
+                    <option value="">All</option>
+                    @foreach($transporterOptions as $c)
+                        <option value="{{ $c->id }}">{{ $c->name }}</option>
+                    @endforeach
+                </select>
+            </div>
+            <div class="flex-1 min-w-[160px]">
+                <label class="block text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500 mb-1.5">Brand</label>
+                <select wire:model.live="brandId" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500">
+                    <option value="">All</option>
+                    @foreach($brandOptions as $b)
+                        <option value="{{ $b->id }}">{{ $b->name }}</option>
+                    @endforeach
+                </select>
+            </div>
+            <div class="flex-1 min-w-[160px]">
+                <label class="block text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500 mb-1.5">Region</label>
+                <select wire:model.live="region" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500">
+                    <option value="">All</option>
+                    @foreach($regionOptions as $r)
+                        <option value="{{ $r }}">{{ $r }}</option>
+                    @endforeach
+                </select>
+            </div>
+            <div class="flex-1 min-w-[180px]">
+                <label class="block text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500 mb-1.5">Status</label>
+                <select wire:model.live="status" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500">
+                    <option value="">Any</option>
+                    @foreach($statusOptions as $s)
+                        <option value="{{ $s }}">{{ ucwords(str_replace('_', ' ', $s)) }}</option>
+                    @endforeach
+                </select>
+            </div>
+            <button type="button" wire:click="resetFilters"
+                class="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition-colors">
+                <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>
+                Reset
+            </button>
+        </div>
+    </div>
+
+    {{-- ══════════════════════════════════════════════════════════════ --}}
+    {{-- ROW 1 — KPI CARDS                                             --}}
+    {{-- ══════════════════════════════════════════════════════════════ --}}
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+        @foreach($kpis as $k)
+            @php
+                $tag = $k['href'] ? 'a' : 'div';
+                $accent = [
+                    'blue'   => 'text-blue-700',   'amber'  => 'text-amber-700',
+                    'indigo' => 'text-indigo-700', 'green'  => 'text-emerald-700',
+                    'red'    => 'text-rose-700',   'teal'   => 'text-teal-700',
+                    'slate'  => 'text-slate-900',
+                ][$k['color']] ?? 'text-slate-900';
+                $dot = [
+                    'blue'   => 'bg-blue-500',   'amber'  => 'bg-amber-500',
+                    'indigo' => 'bg-indigo-500', 'green'  => 'bg-emerald-500',
+                    'red'    => 'bg-rose-500',   'teal'   => 'bg-teal-500',
+                    'slate'  => 'bg-slate-400',
+                ][$k['color']] ?? 'bg-slate-400';
+                $iconTint = [
+                    'blue'   => 'text-blue-400',   'amber'  => 'text-amber-400',
+                    'indigo' => 'text-indigo-400', 'green'  => 'text-emerald-400',
+                    'red'    => 'text-rose-400',   'teal'   => 'text-teal-400',
+                    'slate'  => 'text-slate-300',
+                ][$k['color']] ?? 'text-slate-300';
+            @endphp
+            <{{ $tag }} @if($k['href']) href="{{ $k['href'] }}" @endif
+                class="group relative block rounded-xl border border-slate-200 bg-white p-5 shadow-sm transition-all {{ $k['href'] ? 'hover:border-slate-300 hover:shadow-md hover:-translate-y-0.5' : '' }}">
+                <div class="flex items-start justify-between gap-3">
+                    <div class="flex items-center gap-2 min-w-0">
+                        <span class="h-1.5 w-1.5 rounded-full {{ $dot }}"></span>
+                        <p class="text-[11px] font-semibold uppercase tracking-[0.15em] text-slate-500 truncate">{{ $k['label'] }}</p>
+                    </div>
+                    <span class="{{ $iconTint }}">
+                        <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{!! $k['iconPath'] !!}</svg>
+                    </span>
+                </div>
+                <div class="mt-3 flex items-baseline gap-2">
+                    <span class="text-3xl font-semibold tracking-tight tabular-nums {{ $accent }}">{{ $num($k['value']) }}</span>
+                    @if($k['trend'])
+                        <span class="inline-flex items-center gap-0.5 text-[11px] font-semibold {{ $k['trend']['dir'] === 'up' ? 'text-emerald-600' : 'text-rose-600' }}">
+                            <svg viewBox="0 0 24 24" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                @if($k['trend']['dir'] === 'up')<path d="m6 9 6-6 6 6"/><path d="M12 3v18"/>@else<path d="m6 15 6 6 6-6"/><path d="M12 3v18"/>@endif
+                            </svg>
+                            {{ $k['trend']['label'] }}
+                        </span>
+                    @endif
+                </div>
+                @if($k['helper'])
+                    <p class="mt-1.5 text-[11px] font-medium text-slate-500">{{ $k['helper'] }}</p>
+                @endif
+            </{{ $tag }}>
+        @endforeach
+    </div>
+
+    {{-- ══════════════════════════════════════════════════════════════ --}}
+    {{-- ROW 2 — FLOW & DISTRIBUTION                                   --}}
+    {{-- ══════════════════════════════════════════════════════════════ --}}
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+
+        {{-- Movement activity chart --}}
+        <div class="lg:col-span-2 rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+            <div class="flex items-center justify-between border-b border-slate-100 px-6 py-4">
+                <div>
+                    <h2 class="text-base font-semibold tracking-tight text-slate-900">Movement activity</h2>
+                    <p class="mt-0.5 text-xs text-slate-500">Daily dispatch, transit start, and delivery events · {{ $from->format('d M') }} – {{ $to->format('d M') }}</p>
+                </div>
+                <div class="flex items-center gap-4 text-[11px] font-semibold text-slate-600">
+                    <span class="inline-flex items-center gap-1.5"><span class="h-2 w-2 rounded-full bg-purple-500"></span>Dispatched</span>
+                    <span class="inline-flex items-center gap-1.5"><span class="h-2 w-2 rounded-full bg-orange-500"></span>In transit</span>
+                    <span class="inline-flex items-center gap-1.5"><span class="h-2 w-2 rounded-full bg-emerald-500"></span>Delivered</span>
+                </div>
+            </div>
+            <div class="p-6">
+                @if(count($activitySeries) === 0 || $activityPeak === 0)
+                    <div class="h-56 flex items-center justify-center text-sm text-slate-400">
+                        No movement activity in this range
+                    </div>
+                @else
+                    @php
+                        $count = count($activitySeries);
+                        $barGap = 2;
+                        $chartH = 180;
+                        $chartW = max(600, $count * 22);
+                        $groupW = $chartW / max($count, 1);
+                        $innerW = max(1, $groupW - 6);
+                        $barW   = max(1, ($innerW / 3) - $barGap);
+                    @endphp
+                    <div class="overflow-x-auto">
+                        <svg viewBox="0 0 {{ $chartW }} {{ $chartH + 30 }}" class="w-full h-60 min-w-[600px]" preserveAspectRatio="none">
+                            {{-- Grid --}}
+                            @for($i = 1; $i <= 4; $i++)
+                                <line x1="0" x2="{{ $chartW }}" y1="{{ $chartH - ($chartH / 4) * $i }}" y2="{{ $chartH - ($chartH / 4) * $i }}" stroke="#f1f5f9" stroke-width="1"/>
+                            @endfor
+                            @foreach($activitySeries as $i => $d)
+                                @php
+                                    $gx = $i * $groupW + 3;
+                                    $dh = $activityPeak > 0 ? ($d['dispatched'] / $activityPeak) * ($chartH - 6) : 0;
+                                    $th_ = $activityPeak > 0 ? ($d['in_transit'] / $activityPeak) * ($chartH - 6) : 0;
+                                    $vh = $activityPeak > 0 ? ($d['delivered'] / $activityPeak) * ($chartH - 6) : 0;
+                                @endphp
+                                <g>
+                                    <rect x="{{ $gx }}"                   y="{{ $chartH - $dh }}"  width="{{ $barW }}" height="{{ $dh }}" fill="#a855f7" rx="1.5"/>
+                                    <rect x="{{ $gx + $barW + $barGap }}" y="{{ $chartH - $th_ }}" width="{{ $barW }}" height="{{ $th_ }}" fill="#f97316" rx="1.5"/>
+                                    <rect x="{{ $gx + 2*($barW + $barGap) }}" y="{{ $chartH - $vh }}" width="{{ $barW }}" height="{{ $vh }}" fill="#10b981" rx="1.5"/>
+                                </g>
+                                @if($count <= 30 || $i % (int) ceil($count / 15) === 0)
+                                    <text x="{{ $gx + ($innerW / 2) }}" y="{{ $chartH + 16 }}" text-anchor="middle" font-size="9" fill="#64748b" font-family="ui-sans-serif,system-ui">{{ $d['date']->format('d/m') }}</text>
+                                @endif
+                            @endforeach
+                        </svg>
+                    </div>
+                @endif
+            </div>
         </div>
 
-        {{-- Pipeline dots strip — gives the "3 active, 19 in transit"
-             feel at a glance. Clickable deep links into the live bucket
-             pre-filtered by status. --}}
-        <div class="grid grid-cols-3 divide-x divide-slate-100 border-b border-slate-100">
+        {{-- Status distribution --}}
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+            <div class="border-b border-slate-100 px-6 py-4">
+                <h2 class="text-base font-semibold tracking-tight text-slate-900">Status distribution</h2>
+                <p class="mt-0.5 text-xs text-slate-500">Active inventory by lifecycle state</p>
+            </div>
+            <div class="p-6">
+                @php
+                    $distTotal = array_sum($statusDist);
+                    // Hex colours used as inline style so we don't have to
+                    // rely on Tailwind content-scanning interpolated classes.
+                    $statusColorHex = [
+                        'produced'   => '#6366f1', // indigo-500
+                        'at_plant'   => '#818cf8', // indigo-400
+                        'at_yard'    => '#f59e0b', // amber-500
+                        'at_storage' => '#fbbf24', // amber-400
+                        'in_transit' => '#3b82f6', // blue-500
+                        'delivered'  => '#10b981', // emerald-500
+                    ];
+                @endphp
+                @if($distTotal === 0)
+                    <p class="text-sm text-slate-400 text-center py-8">No active inventory</p>
+                @else
+                    <ul class="space-y-3">
+                        @foreach(\App\Models\Inventory::ACTIVE_STATUSES as $s)
+                            @php
+                                $n = $statusDist[$s] ?? 0;
+                                $pct = $distTotal > 0 ? ($n / $distTotal) * 100 : 0;
+                                $hex = $statusColorHex[$s] ?? '#94a3b8';
+                            @endphp
+                            <li>
+                                <div class="flex items-center justify-between text-xs mb-1">
+                                    <span class="font-medium text-slate-700">{{ ucwords(str_replace('_', ' ', $s)) }}</span>
+                                    <span class="tabular-nums text-slate-500"><strong class="text-slate-900">{{ $num($n) }}</strong> · {{ number_format($pct, 0) }}%</span>
+                                </div>
+                                <div class="h-2 bg-slate-100 rounded-full overflow-hidden">
+                                    <div class="h-full rounded-full" style="width: {{ max(2, $pct) }}%; background-color: {{ $hex }};"></div>
+                                </div>
+                            </li>
+                        @endforeach
+                    </ul>
+                @endif
+            </div>
+        </div>
+    </div>
+
+    {{-- Throughput vs target --}}
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div class="lg:col-span-3 rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+            <div class="flex items-center justify-between border-b border-slate-100 px-6 py-4">
+                <div>
+                    <h2 class="text-base font-semibold tracking-tight text-slate-900">Throughput vs scheduled</h2>
+                    <p class="mt-0.5 text-xs text-slate-500">Deliveries completed in range vs bookings scheduled for the same window</p>
+                </div>
+                <span class="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-semibold
+                    {{ $throughputPct >= 90 ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                        : ($throughputPct >= 70 ? 'bg-amber-50 text-amber-800 border border-amber-200'
+                            : 'bg-rose-50 text-rose-700 border border-rose-200') }}">
+                    {{ $throughputPct }}% throughput
+                </span>
+            </div>
+            <div class="p-6 grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div>
+                    <p class="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">Scheduled</p>
+                    <p class="mt-2 text-3xl font-semibold text-slate-900 tabular-nums">{{ $num($scheduled) }}</p>
+                    <p class="mt-1 text-xs text-slate-500">Bookings with a scheduled date in the window</p>
+                </div>
+                <div>
+                    <p class="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">Delivered</p>
+                    <p class="mt-2 text-3xl font-semibold text-emerald-700 tabular-nums">{{ $num($delivered) }}</p>
+                    <p class="mt-1 text-xs text-slate-500">Jobs with a delivered_at timestamp in the window</p>
+                </div>
+                <div>
+                    <p class="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">Gap</p>
+                    <p class="mt-2 text-3xl font-semibold {{ $scheduled - $delivered > 0 ? 'text-amber-700' : 'text-slate-900' }} tabular-nums">{{ $num(max(0, $scheduled - $delivered)) }}</p>
+                    <p class="mt-1 text-xs text-slate-500">Scheduled but not yet delivered</p>
+                </div>
+            </div>
+            <div class="px-6 pb-6">
+                <div class="h-3 bg-slate-100 rounded-full overflow-hidden">
+                    <div class="h-full {{ $throughputPct >= 90 ? 'bg-emerald-500' : ($throughputPct >= 70 ? 'bg-amber-500' : 'bg-rose-500') }} rounded-full transition-all"
+                         style="width: {{ min(100, $throughputPct) }}%"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {{-- ══════════════════════════════════════════════════════════════ --}}
+    {{-- ROW 3 — OPERATIONS FOCUS                                      --}}
+    {{-- ══════════════════════════════════════════════════════════════ --}}
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+
+        {{-- Exceptions --}}
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+            <div class="border-b border-slate-100 px-6 py-4">
+                <h2 class="text-base font-semibold tracking-tight text-slate-900">Exceptions</h2>
+                <p class="mt-0.5 text-xs text-slate-500">Movements blocking the pipeline</p>
+            </div>
+            <ul class="divide-y divide-slate-100">
+                @foreach($exceptions as $e)
+                    @php
+                        $sevClass = match(true) {
+                            $e['count'] === 0            => 'bg-slate-100 text-slate-500 border-slate-200',
+                            $e['severity'] === 'red'     => 'bg-rose-100 text-rose-800 border-rose-200',
+                            $e['severity'] === 'amber'   => 'bg-amber-100 text-amber-900 border-amber-200',
+                            default                      => 'bg-slate-100 text-slate-700 border-slate-200',
+                        };
+                        $dotClass = match(true) {
+                            $e['count'] === 0            => 'bg-slate-300',
+                            $e['severity'] === 'red'     => 'bg-rose-500 node-pulse',
+                            $e['severity'] === 'amber'   => 'bg-amber-500 node-pulse',
+                            default                      => 'bg-slate-400',
+                        };
+                    @endphp
+                    <li class="flex items-center gap-3 px-6 py-3">
+                        <span class="h-1.5 w-1.5 shrink-0 rounded-full {{ $dotClass }}"></span>
+                        <div class="flex-1 min-w-0">
+                            <p class="text-sm font-medium text-slate-900 truncate">{{ $e['label'] }}</p>
+                            <p class="text-[11px] text-slate-500 truncate">{{ $e['sublabel'] }}</p>
+                        </div>
+                        <span class="inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold tabular-nums shrink-0 {{ $sevClass }}">
+                            {{ $num($e['count']) }}
+                        </span>
+                    </li>
+                @endforeach
+            </ul>
+        </div>
+
+        {{-- Priority Movements --}}
+        <div class="lg:col-span-2 rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+            <div class="flex items-center justify-between border-b border-slate-100 px-6 py-4">
+                <div>
+                    <h2 class="text-base font-semibold tracking-tight text-slate-900">Priority movements</h2>
+                    <p class="mt-0.5 text-xs text-slate-500">Longest dwell in current state · top 12</p>
+                </div>
+                <a href="{{ route('admin.vehicles.index') }}" class="text-xs font-semibold text-slate-600 hover:text-slate-900 inline-flex items-center gap-1">
+                    View all vehicles
+                    <svg viewBox="0 0 24 24" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+                </a>
+            </div>
+            @if($priority->isEmpty())
+                <p class="px-6 py-10 text-sm text-slate-400 text-center">No active inventory matches the current filters</p>
+            @else
+                <div class="overflow-x-auto">
+                    <table class="min-w-full text-sm">
+                        <thead>
+                            <tr class="bg-slate-50/70 text-[10px] uppercase tracking-[0.15em] text-slate-500">
+                                <th class="px-4 py-2 text-left font-semibold">Chassis / VIN</th>
+                                <th class="px-4 py-2 text-left font-semibold">Status</th>
+                                <th class="px-4 py-2 text-left font-semibold">Location</th>
+                                <th class="px-4 py-2 text-left font-semibold">Origin → Destination</th>
+                                <th class="px-4 py-2 text-left font-semibold">Driver</th>
+                                <th class="px-4 py-2 text-right font-semibold">Days</th>
+                                <th class="px-4 py-2 text-center font-semibold">Risk</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-100">
+                            @foreach($priority as $r)
+                                @php
+                                    $riskPill = match($r->getAttribute('risk_level')) {
+                                        'high' => 'bg-rose-100 text-rose-700 border-rose-200',
+                                        'med'  => 'bg-amber-100 text-amber-800 border-amber-200',
+                                        default=> 'bg-slate-100 text-slate-600 border-slate-200',
+                                    };
+                                    $riskLabel = match($r->getAttribute('risk_level')) {
+                                        'high' => 'High',
+                                        'med'  => 'Med',
+                                        default=> 'Low',
+                                    };
+                                    $latest = $r->getAttribute('latest_job');
+                                @endphp
+                                <tr class="hover:bg-slate-50/60 transition-colors">
+                                    <td class="px-4 py-2.5">
+                                        <div class="font-mono text-[12px] text-slate-900">{{ $r->chassis_number }}</div>
+                                        @if($r->vin && $r->vin !== $r->chassis_number)
+                                            <div class="font-mono text-[10px] text-slate-400">{{ $r->vin }}</div>
+                                        @endif
+                                    </td>
+                                    <td class="px-4 py-2.5"><x-status-badge :status="$r->status" size="sm"/></td>
+                                    <td class="px-4 py-2.5">
+                                        <div class="text-[12px] text-slate-700">{{ $r->currentLocation?->company_name ?? '—' }}</div>
+                                        <div class="text-[10px] text-slate-400">{{ $r->currentLocation?->city ?? '' }}</div>
+                                    </td>
+                                    <td class="px-4 py-2.5">
+                                        @if($latest)
+                                            <div class="text-[12px] text-slate-700 flex items-center gap-1">
+                                                <span>{{ $latest->pickupLocation?->city ?? '—' }}</span>
+                                                <svg viewBox="0 0 24 24" class="h-3 w-3 text-slate-300" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+                                                <span>{{ $latest->deliveryLocation?->city ?? '—' }}</span>
+                                            </div>
+                                        @else
+                                            <span class="text-[11px] text-slate-400">No open job</span>
+                                        @endif
+                                    </td>
+                                    <td class="px-4 py-2.5 text-[12px] text-slate-700">{{ $latest?->driver?->name ?? '—' }}</td>
+                                    <td class="px-4 py-2.5 text-right text-[12px] tabular-nums text-slate-700">{{ $r->getAttribute('days_in_status') ?? '—' }}d</td>
+                                    <td class="px-4 py-2.5 text-center">
+                                        <span class="inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold {{ $riskPill }}">{{ $riskLabel }}</span>
+                                    </td>
+                                </tr>
+                            @endforeach
+                        </tbody>
+                    </table>
+                </div>
+            @endif
+        </div>
+    </div>
+
+    {{-- Location Pressure --}}
+    <div class="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+        <div class="border-b border-slate-100 px-6 py-4">
+            <h2 class="text-base font-semibold tracking-tight text-slate-900">Location pressure</h2>
+            <p class="mt-0.5 text-xs text-slate-500">Active inventory by the type of place it's sitting in</p>
+        </div>
+        <div class="p-6 grid grid-cols-2 md:grid-cols-5 gap-3">
             @php
-                $nodes = [
-                    ['label' => 'Driver Assigned',       'key' => 'driver_assigned', 'dot' => 'bg-purple-500'],
-                    ['label' => 'Arrived at Pickup',     'key' => 'collected',       'dot' => 'bg-teal-500'],
-                    ['label' => 'In Transit',            'key' => 'in_transit',      'dot' => 'bg-orange-500'],
+                $locTypes = [
+                    'plant'        => ['Plant',        'indigo'],
+                    'yard'         => ['Yard',         'amber'],
+                    'storage'      => ['Storage',      'amber'],
+                    'dealer'       => ['Dealer',       'emerald'],
+                    'body_builder' => ['Body builder', 'blue'],
                 ];
             @endphp
-            @foreach($nodes as $node)
-                <div class="px-6 py-3 flex items-center justify-between gap-3">
-                    <div class="flex items-center gap-2.5 min-w-0">
-                        <span class="h-2 w-2 rounded-full {{ $node['dot'] }} {{ ($liveCounts[$node['key']] ?? 0) > 0 ? 'node-pulse' : 'opacity-30' }}"></span>
-                        <span class="text-xs font-medium text-slate-600 truncate">{{ $node['label'] }}</span>
-                    </div>
-                    <span class="text-lg font-semibold tabular-nums text-slate-900">{{ $liveCounts[$node['key']] ?? 0 }}</span>
-                </div>
-            @endforeach
-        </div>
-
-        @if($liveMovements->isEmpty())
-            <div class="px-6 py-10 text-center">
-                <div class="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 text-slate-400">
-                    <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2"/><path d="M15 18H9"/><path d="M19 18h2a1 1 0 0 0 1-1v-3.65a1 1 0 0 0-.22-.624l-3.48-4.35A1 1 0 0 0 17.52 8H14"/><circle cx="17" cy="18" r="2"/><circle cx="7" cy="18" r="2"/></svg>
-                </div>
-                <p class="text-sm font-medium text-slate-900">No vehicles moving right now</p>
-                <p class="text-xs text-slate-500 mt-0.5">The board will light up as soon as a driver is dispatched.</p>
-            </div>
-        @else
-        <ul class="divide-y divide-slate-100">
-            @foreach($liveMovements as $mov)
+            @foreach($locTypes as $type => [$label, $color])
                 @php
-                    $statusColor = match ($mov->status) {
-                        Job::STATUS_IN_TRANSIT                  => 'bg-orange-500',
-                        Job::STATUS_COLLECTED                   => 'bg-teal-500',
-                        Job::STATUS_DRIVER_ASSIGNED, Job::STATUS_READY_FOR_COLLECTION => 'bg-purple-500',
-                        default                                 => 'bg-slate-400',
-                    };
-                    $anchor = $mov->collected_at ?? $mov->assigned_at ?? $mov->updated_at;
-                    $pickupCity   = $mov->pickupLocation?->city ?? $mov->pickupLocation?->company_name ?? '—';
-                    $deliveryCity = $mov->deliveryLocation?->city ?? $mov->deliveryLocation?->company_name ?? '—';
+                    $n = $locationPressure[$type] ?? 0;
+                    $tint = [
+                        'indigo'  => ['border-indigo-200 bg-indigo-50',  'text-indigo-700'],
+                        'amber'   => ['border-amber-200 bg-amber-50',    'text-amber-800'],
+                        'emerald' => ['border-emerald-200 bg-emerald-50','text-emerald-700'],
+                        'blue'    => ['border-blue-200 bg-blue-50',      'text-blue-700'],
+                    ][$color];
                 @endphp
-                <li>
-                    <a href="{{ route('admin.orders.show', $mov) }}"
-                       class="flex items-center gap-4 px-6 py-3 hover:bg-slate-50/60 transition-colors">
-                        <span class="h-2 w-2 shrink-0 rounded-full {{ $statusColor }} node-pulse"></span>
-                        <div class="min-w-0 flex-1 grid grid-cols-12 gap-3 items-center">
-                            <div class="col-span-12 sm:col-span-3 min-w-0">
-                                <div class="text-sm font-semibold text-slate-900 truncate">
-                                    {{ $mov->job_number ?? ('#' . $mov->id) }}
-                                </div>
-                                <div class="text-[11px] text-slate-500 truncate">{{ $mov->company?->name ?? '—' }}</div>
-                            </div>
-                            <div class="col-span-6 sm:col-span-3 min-w-0">
-                                <div class="text-sm text-slate-700 truncate">
-                                    {{ $mov->driver?->name ?? '— Unassigned' }}
-                                </div>
-                                <div class="text-[11px] text-slate-400 truncate">
-                                    {{ trim(($mov->brand?->name ?? '') . ' ' . ($mov->model_name ?? '')) ?: '—' }}
-                                    @if($mov->registration) · <span class="font-mono uppercase">{{ $mov->registration }}</span>@endif
-                                </div>
-                            </div>
-                            <div class="col-span-6 sm:col-span-4 min-w-0">
-                                <div class="flex items-center gap-1.5 text-xs text-slate-600">
-                                    <span class="truncate">{{ $pickupCity }}</span>
-                                    <svg viewBox="0 0 24 24" class="h-3 w-3 text-slate-300 shrink-0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
-                                    <span class="truncate">{{ $deliveryCity }}</span>
-                                </div>
-                            </div>
-                            <div class="col-span-12 sm:col-span-2 flex items-center justify-end gap-2">
-                                <x-status-badge :status="$mov->status" />
-                                @if($anchor)
-                                    <span class="hidden sm:inline text-[11px] text-slate-400 tabular-nums shrink-0">
-                                        {{ $anchor->diffForHumans(['short' => true]) }}
-                                    </span>
-                                @endif
-                            </div>
-                        </div>
-                    </a>
-                </li>
+                <div class="rounded-xl border {{ $tint[0] }} p-4">
+                    <p class="text-[10px] font-semibold uppercase tracking-[0.2em] {{ $tint[1] }}">{{ $label }}</p>
+                    <p class="mt-2 text-2xl font-semibold tabular-nums {{ $tint[1] }}">{{ $num($n) }}</p>
+                </div>
             @endforeach
-        </ul>
-        @endif
-    </div>
-
-    {{-- Damage incidents strip
-         Only renders when there is damage to show — no point eating
-         vertical space on a clean week. Each row links directly to
-         the order page's #damage-section so ops can review photos +
-         download the PDF in one click. --}}
-    @if($recentDamageJobs->isNotEmpty())
-    <div class="mb-6 rounded-2xl border border-rose-200 bg-white shadow-sm overflow-hidden">
-        <div class="flex items-center justify-between gap-3 border-b border-rose-100 bg-rose-50/60 px-6 py-4">
-            <div class="flex items-center gap-3">
-                <span class="inline-flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.25em] text-rose-700">
-                    <span class="h-1.5 w-1.5 rounded-full bg-rose-500 node-pulse"></span>
-                    Damage incidents
-                </span>
-                <span class="text-[11px] text-rose-700/70">{{ $recentDamageJobs->count() }} most recent</span>
-            </div>
-            <a href="{{ route('admin.damage') }}" class="text-xs font-semibold text-rose-700 hover:text-rose-900 inline-flex items-center gap-1 transition-colors">
-                Open damage reports
-                <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></svg>
-            </a>
         </div>
-        @if(session('dashboard_ack'))
-            <div class="px-6 py-2 text-[11px] text-emerald-700 bg-emerald-50 border-b border-emerald-100">
-                {{ session('dashboard_ack') }}
-            </div>
-        @endif
-        <ul class="divide-y divide-rose-100">
-            @foreach($recentDamageJobs as $dmgJob)
-            <li class="flex items-center gap-4 px-6 py-3 hover:bg-rose-50/60 transition-colors">
-                <a href="{{ route('admin.orders.show', $dmgJob) }}#damage-section"
-                   class="flex items-center gap-4 min-w-0 flex-1">
-                    <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-rose-100 text-rose-700 shrink-0">
-                        <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
-                    </div>
-                    <div class="min-w-0 flex-1">
-                        <div class="flex items-center gap-2 flex-wrap">
-                            <span class="text-sm font-semibold text-slate-900">{{ $dmgJob->job_number ?? ('#' . $dmgJob->id) }}</span>
-                            <span class="inline-flex items-center rounded-full bg-rose-100 border border-rose-200 px-1.5 py-0.5 text-[10px] font-semibold text-rose-800">
-                                {{ $dmgJob->damage_photos_count }} {{ $dmgJob->damage_photos_count === 1 ? 'photo' : 'photos' }}
-                            </span>
-                            <x-status-badge :status="$dmgJob->status" />
-                        </div>
-                        <p class="text-xs text-slate-500 mt-0.5 truncate">
-                            {{ $dmgJob->company?->name ?? '—' }}
-                            @if($dmgJob->brand || $dmgJob->model_name)
-                                &middot; {{ $dmgJob->brand?->name }} {{ $dmgJob->model_name }}
-                            @endif
-                            @if($dmgJob->registration)
-                                &middot; {{ strtoupper($dmgJob->registration) }}
-                            @endif
-                        </p>
-                    </div>
-                    <div class="hidden sm:block text-right text-[11px] text-slate-400 shrink-0">
-                        {{ $dmgJob->updated_at?->diffForHumans() }}
-                    </div>
-                </a>
-                <button type="button"
-                        wire:click="dismissDamage({{ $dmgJob->id }})"
-                        wire:confirm="Dismiss this incident from the dashboard? It stays available in /admin/damage."
-                        title="Dismiss from dashboard"
-                        class="shrink-0 inline-flex items-center justify-center h-7 w-7 rounded-md text-slate-400 hover:text-rose-700 hover:bg-rose-100 transition-colors">
-                    <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
-                </button>
-            </li>
-            @endforeach
-        </ul>
     </div>
-    @endif
 
-    {{-- Recent orders --}}
-    <div>
-        <x-card title="Recent Orders" subtitle="Latest bookings across all customers" :padding="false">
-            <x-slot:actions>
-                <a href="{{ route('admin.orders.index') }}" class="text-xs font-semibold text-slate-600 hover:text-slate-900 inline-flex items-center gap-1 transition-colors">
-                    View all
-                    <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></svg>
-                </a>
-            </x-slot:actions>
+    {{-- ══════════════════════════════════════════════════════════════ --}}
+    {{-- ROW 4 — EXECUTIVE INSIGHT                                     --}}
+    {{-- ══════════════════════════════════════════════════════════════ --}}
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
 
-            @if($recentOrders->isEmpty())
-                <x-empty-state
-                    title="No orders yet"
-                    description="Orders will appear here as soon as customers submit bookings.">
-                    <x-slot:icon>
-                        <svg viewBox="0 0 24 24" class="h-6 w-6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></svg>
-                    </x-slot:icon>
-                </x-empty-state>
+        {{-- Company / OEM Breakdown --}}
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+            <div class="border-b border-slate-100 px-6 py-4">
+                <h2 class="text-base font-semibold tracking-tight text-slate-900">Customer / OEM breakdown</h2>
+                <p class="mt-0.5 text-xs text-slate-500">Top 8 by active inventory</p>
+            </div>
+            @if($companyRows->isEmpty())
+                <p class="px-6 py-10 text-sm text-slate-400 text-center">No inventory rows</p>
             @else
-            <div class="overflow-x-auto">
-                <table class="min-w-full">
-                    <thead class="bg-slate-50/60">
-                        <tr>
-                            <th class="px-6 py-3 text-left text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-500">Order</th>
-                            <th class="px-6 py-3 text-left text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-500">Customer</th>
-                            <th class="px-6 py-3 text-left text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-500">Vehicle · VIN</th>
-                            <th class="px-6 py-3 text-left text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-500">Route</th>
-                            <th class="px-6 py-3 text-left text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-500">Status</th>
-                        </tr>
-                    </thead>
-                    <tbody class="divide-y divide-slate-100">
-                        @foreach($recentOrders as $job)
-                        <tr class="hover:bg-slate-50/60 cursor-pointer transition-colors group"
-                            onclick="window.location='{{ route('admin.orders.show', $job) }}'">
-                            <td class="px-6 py-3.5">
-                                <div class="text-sm font-semibold text-slate-900 group-hover:text-blue-700 transition-colors">{{ $job->job_number ?? '—' }}</div>
-                                <div class="text-[11px] text-slate-400">{{ $job->created_at->diffForHumans(['short' => true]) }}</div>
-                            </td>
-                            <td class="px-6 py-3.5">
-                                <div class="flex items-center gap-2">
-                                    <span class="text-sm text-slate-700 truncate max-w-[140px]">{{ $job->company?->name ?? '—' }}</span>
-                                    @if($job->company?->workflow_type === 'faw')
-                                        <x-badge color="amber" size="sm">FAW</x-badge>
-                                    @endif
-                                </div>
-                            </td>
-                            <td class="px-6 py-3.5">
-                                <div class="text-sm text-slate-700 truncate max-w-[160px]">{{ trim(($job->brand?->name ?? '') . ' ' . ($job->model_name ?? '')) ?: '—' }}</div>
-                                <div class="text-[11px] font-mono uppercase text-slate-400">{{ $job->vin ?: '—' }}</div>
-                            </td>
-                            <td class="px-6 py-3.5">
-                                <div class="flex items-center gap-1.5 text-xs text-slate-600">
-                                    <span class="truncate max-w-[80px]">{{ $job->pickupLocation?->city ?? $job->pickupLocation?->company_name ?? '—' }}</span>
-                                    <svg viewBox="0 0 24 24" class="h-3 w-3 text-slate-300 shrink-0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
-                                    <span class="truncate max-w-[80px]">{{ $job->deliveryLocation?->city ?? $job->deliveryLocation?->company_name ?? '—' }}</span>
-                                </div>
-                            </td>
-                            <td class="px-6 py-3.5">
-                                <x-status-badge :status="$job->status" />
-                            </td>
-                        </tr>
-                        @endforeach
-                    </tbody>
-                </table>
-            </div>
+                @php $topActive = $companyRows->max('active_count') ?: 1; @endphp
+                <ul class="divide-y divide-slate-100">
+                    @foreach($companyRows as $r)
+                        <li class="px-6 py-3">
+                            <div class="flex items-center justify-between gap-3 mb-1">
+                                <span class="text-sm font-medium text-slate-900 truncate">{{ $r->company?->name ?? '—' }}</span>
+                                <span class="text-[11px] tabular-nums shrink-0">
+                                    <span class="font-semibold text-slate-900">{{ $num($r->active_count) }}</span>
+                                    <span class="text-slate-400">active</span>
+                                    <span class="mx-1.5 text-slate-300">·</span>
+                                    <span class="font-semibold text-emerald-700">{{ $num($r->delivered_count) }}</span>
+                                    <span class="text-slate-400">delivered</span>
+                                </span>
+                            </div>
+                            <div class="h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                                <div class="h-full bg-blue-500 rounded-full" style="width: {{ ($r->active_count / $topActive) * 100 }}%"></div>
+                            </div>
+                        </li>
+                    @endforeach
+                </ul>
             @endif
-        </x-card>
+        </div>
+
+        {{-- Transporter Performance --}}
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+            <div class="border-b border-slate-100 px-6 py-4">
+                <h2 class="text-base font-semibold tracking-tight text-slate-900">Transporter performance</h2>
+                <p class="mt-0.5 text-xs text-slate-500">Completed jobs in range · on-time ratio</p>
+            </div>
+            @if($transporterRows->isEmpty())
+                <p class="px-6 py-10 text-sm text-slate-400 text-center">No completed jobs in this range</p>
+            @else
+                <ul class="divide-y divide-slate-100">
+                    @foreach($transporterRows as $r)
+                        @php
+                            $otp  = $r->getAttribute('on_time_pct');
+                            $pill = $otp === null ? 'bg-slate-100 text-slate-500 border-slate-200'
+                                : ($otp >= 90 ? 'bg-emerald-100 text-emerald-700 border-emerald-200'
+                                : ($otp >= 70 ? 'bg-amber-100 text-amber-800 border-amber-200'
+                                : 'bg-rose-100 text-rose-700 border-rose-200'));
+                        @endphp
+                        <li class="flex items-center gap-3 px-6 py-3">
+                            <div class="flex-1 min-w-0">
+                                <p class="text-sm font-medium text-slate-900 truncate">{{ $r->getAttribute('transporter_name') }}</p>
+                                <p class="text-[11px] text-slate-500 tabular-nums">{{ $num($r->job_count) }} {{ \Illuminate\Support\Str::plural('job', $r->job_count) }} · {{ $num($r->on_time_count) }} on-time</p>
+                            </div>
+                            <span class="inline-flex items-center rounded-full border px-2.5 py-0.5 text-[11px] font-semibold tabular-nums shrink-0 {{ $pill }}">
+                                {{ $otp === null ? 'n/a' : $otp . '%' }}
+                            </span>
+                        </li>
+                    @endforeach
+                </ul>
+            @endif
+        </div>
+
+        {{-- Revenue Snapshot (invoice-based, not forecast) --}}
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+            <div class="border-b border-slate-100 px-6 py-4">
+                <h2 class="text-base font-semibold tracking-tight text-slate-900">Invoice snapshot</h2>
+                <p class="mt-0.5 text-xs text-slate-500">What's invoiced, paid and outstanding</p>
+            </div>
+            <ul class="divide-y divide-slate-100">
+                <li class="flex items-center gap-3 px-6 py-3">
+                    <span class="h-1.5 w-1.5 rounded-full bg-slate-400"></span>
+                    <div class="flex-1 min-w-0">
+                        <p class="text-sm font-medium text-slate-900">Draft</p>
+                        <p class="text-[11px] text-slate-500 tabular-nums">{{ $num($invoiceDraft->c ?? 0) }} invoices</p>
+                    </div>
+                    <span class="text-sm font-semibold text-slate-900 tabular-nums shrink-0">{{ $money($invoiceDraft->v ?? 0) }}</span>
+                </li>
+                <li class="flex items-center gap-3 px-6 py-3">
+                    <span class="h-1.5 w-1.5 rounded-full bg-blue-500"></span>
+                    <div class="flex-1 min-w-0">
+                        <p class="text-sm font-medium text-slate-900">Issued (outstanding)</p>
+                        <p class="text-[11px] text-slate-500 tabular-nums">{{ $num($invoiceIssued->c ?? 0) }} invoices</p>
+                    </div>
+                    <span class="text-sm font-semibold text-blue-700 tabular-nums shrink-0">{{ $money($invoiceIssued->v ?? 0) }}</span>
+                </li>
+                <li class="flex items-center gap-3 px-6 py-3">
+                    <span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
+                    <div class="flex-1 min-w-0">
+                        <p class="text-sm font-medium text-slate-900">Paid (in range)</p>
+                        <p class="text-[11px] text-slate-500 tabular-nums">{{ $num($invoicePaid->c ?? 0) }} invoices</p>
+                    </div>
+                    <span class="text-sm font-semibold text-emerald-700 tabular-nums shrink-0">{{ $money($invoicePaid->v ?? 0) }}</span>
+                </li>
+                <li class="flex items-center gap-3 px-6 py-3 bg-amber-50/40">
+                    <span class="h-1.5 w-1.5 rounded-full bg-amber-500 node-pulse"></span>
+                    <div class="flex-1 min-w-0">
+                        <p class="text-sm font-medium text-slate-900">Awaiting invoicing</p>
+                        <p class="text-[11px] text-slate-500 tabular-nums">{{ $num($awaitingInv->c ?? 0) }} jobs delivered / completed</p>
+                    </div>
+                    <span class="text-sm font-semibold text-amber-700 tabular-nums shrink-0">{{ $money($awaitingInv->v ?? 0) }}</span>
+                </li>
+            </ul>
+            <div class="border-t border-slate-100 bg-slate-50/40 px-6 py-3 text-right">
+                <a href="{{ route('admin.invoices.index') }}" class="text-[11px] font-semibold text-slate-600 hover:text-slate-900 inline-flex items-center gap-1">
+                    Go to invoices
+                    <svg viewBox="0 0 24 24" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+                </a>
+            </div>
+        </div>
     </div>
+
+    <p class="text-center text-[10px] text-slate-400 tracking-[0.2em] uppercase pt-2">
+        Trident · Executive Overview · Sources: inventory · transport_jobs · invoices · locations
+    </p>
 </div>
