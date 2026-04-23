@@ -9,7 +9,15 @@ use Livewire\Attributes\Layout;
 new #[Layout('components.layouts.app')] class extends Component {
     public function with(): array
     {
-        $newOrders = Job::where('status', Job::STATUS_RECEIVED)->count();
+        // "New" from ops' point of view = anything that just landed and hasn't
+        // been verified/confirmed yet. Dealer + OEM bookings arrive in
+        // PENDING_VERIFICATION; customer-portal bookings land in RECEIVED.
+        // Either way ops needs eyes on them, so we count both here.
+        $newOrders = Job::whereIn('status', [
+            Job::STATUS_PENDING_VERIFICATION,
+            Job::STATUS_RECEIVED,
+        ])->count();
+        $pendingVerification = Job::where('status', Job::STATUS_PENDING_VERIFICATION)->count();
         $awaitingConfirmation = Job::whereIn('status', [Job::STATUS_AWAITING_CUSTOMER_CONFIRMATION, Job::STATUS_CONFIRMATION_ISSUE])->count();
         $confirmationIssues = Job::where('status', Job::STATUS_CONFIRMATION_ISSUE)->count();
         $readyToPlan = Job::where('status', Job::STATUS_CONFIRMED)->count();
@@ -86,6 +94,7 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         return compact(
             'newOrders',
+            'pendingVerification',
             'awaitingConfirmation',
             'confirmationIssues',
             'readyToPlan',
@@ -139,10 +148,12 @@ new #[Layout('components.layouts.app')] class extends Component {
     {{-- Stat cards --}}
     <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 mb-6">
         <x-stat-card
-            label="New Orders"
+            label="New Bookings"
             :value="$newOrders"
             color="blue"
-            :href="route('admin.orders.index', ['status' => 'received'])">
+            :helper="$pendingVerification > 0 ? $pendingVerification . ' to verify' : null"
+            helperColor="amber"
+            :href="route('admin.vehicles.index', ['bucket' => 'open'])">
             <x-slot:icon>
                 <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
             </x-slot:icon>

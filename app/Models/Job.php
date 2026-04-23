@@ -85,7 +85,14 @@ class Job extends Model
         self::STATUS_CANCELLED => [],
     ];
 
+    // Statuses that appear on the Phase 1 operational surfaces
+    // (admin dashboard recent feed, /admin/orders table, status filter
+    // pills). PENDING_VERIFICATION is the entry state for every dealer
+    // and OEM booking created via BookingService, so it MUST live here —
+    // otherwise brand-new bookings are invisible to ops until someone
+    // manually nudges them forward.
     const PHASE1_STATUSES = [
+        self::STATUS_PENDING_VERIFICATION,
         self::STATUS_RECEIVED,
         self::STATUS_AWAITING_CUSTOMER_CONFIRMATION,
         self::STATUS_CONFIRMATION_ISSUE,
@@ -131,6 +138,7 @@ class Job extends Model
     ];
 
     const PHASE1_STATUS_LABELS = [
+        self::STATUS_PENDING_VERIFICATION => 'Pending Verification',
         self::STATUS_RECEIVED => 'Received',
         self::STATUS_AWAITING_CUSTOMER_CONFIRMATION => 'Awaiting Confirmation',
         self::STATUS_CONFIRMATION_ISSUE => 'Confirmation Issue',
