@@ -11,6 +11,23 @@ class DriverProfile extends Model
     public const ID_TYPE_PASSPORT = 'passport';
     public const ID_TYPE_OTHER = 'other';
 
+    // Off-roster lifecycle reasons. Keep in sync with the service and
+    // the edit-page UI. The labels are the single source of truth for
+    // how these show up on screen / in audit logs.
+    public const REASON_RETIRED   = 'retired';
+    public const REASON_RESIGNED  = 'resigned';
+    public const REASON_DISMISSED = 'dismissed';
+    public const REASON_DECEASED  = 'deceased';
+    public const REASON_OTHER     = 'other';
+
+    public const REASON_LABELS = [
+        self::REASON_RETIRED   => 'Retired',
+        self::REASON_RESIGNED  => 'Resigned',
+        self::REASON_DISMISSED => 'Dismissed',
+        self::REASON_DECEASED  => 'Deceased',
+        self::REASON_OTHER     => 'Other',
+    ];
+
     protected $fillable = [
         'user_id',
         'id_number',
@@ -19,6 +36,7 @@ class DriverProfile extends Model
         'base_location',
         'trade_plate',
         'trade_plate_expiry',
+        'trade_plate_returned_at',
         'tracker_id',
         'camera_id',
         'toll_card_number',
@@ -33,6 +51,10 @@ class DriverProfile extends Model
         'pdp_document_path',
         'pdp_document_filename',
         'notes',
+        'off_roster_at',
+        'off_roster_reason',
+        'off_roster_notes',
+        'off_roster_by_user_id',
     ];
 
     protected function casts(): array
@@ -41,7 +63,25 @@ class DriverProfile extends Model
             'license_expiry' => 'date',
             'prdp_expiry' => 'date',
             'trade_plate_expiry' => 'date',
+            'trade_plate_returned_at' => 'datetime',
+            'off_roster_at' => 'datetime',
         ];
+    }
+
+    public function offRosterBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'off_roster_by_user_id');
+    }
+
+    public function isOffRoster(): bool
+    {
+        return $this->off_roster_at !== null;
+    }
+
+    public function reasonLabel(): ?string
+    {
+        if (!$this->off_roster_reason) { return null; }
+        return self::REASON_LABELS[$this->off_roster_reason] ?? ucfirst($this->off_roster_reason);
     }
 
     public function user(): BelongsTo

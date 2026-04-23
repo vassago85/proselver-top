@@ -1,16 +1,25 @@
 <?php
 use App\Models\User;
 use App\Models\DriverProfile;
+use App\Services\DriverOffboardingService;
 use Livewire\Volt\Component;
 use Livewire\Attributes\Layout;
 use Livewire\WithFileUploads;
 use Illuminate\Support\Str;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Storage;
 
 new #[Layout('components.layouts.app')] class extends Component {
     use WithFileUploads;
 
     public User $user;
+
+    // --- Offboarding / reinstate state ---
+    public bool $showOffboardModal = false;
+    public string $offReason = 'retired';
+    public string $offNotes = '';
+    public string $plateDisposition = 'release'; // release | transfer
+    public ?int $plateTransferTo = null;
 
     // User fields
     public string $name = '';
@@ -176,6 +185,103 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         session()->flash('success', "Driver {$this->user->name} updated successfully.");
         $this->redirect(route('admin.drivers.index'));
+    }
+
+    // ---------------------------------------------------------------
+    // Offboarding: retire / resign / dismiss / deceased / other.
+    // Trade plates belong to the business, so we either release them
+    // back to the pool or transfer them to another active driver —
+    // never let a plate get lost with a departing driver.
+    // ---------------------------------------------------------------
+
+    public function openOffboardModal(): void
+    {
+        abort_unless(Auth::user()?->canManageUsers(), 403);
+        $this->resetErrorBag();
+        $this->offReason = 'retired';
+        $this->offNotes = '';
+        $this->plateDisposition = $this->user->driverProfile?->trade_plate ? 'release' : 'release';
+        $this->plateTransferTo = null;
+        $this->showOffboardModal = true;
+    }
+
+    public function closeOffboardModal(): void
+    {
+        $this->showOffboardModal = false;
+    }
+
+    public function offboardDriver(DriverOffboardingService $service): void
+    {
+        abort_unless(Auth::user()?->canManageUsers(), 403);
+
+        $rules = [
+            'offReason' => 'required|string|in:' . implode(',', array_keys(DriverProfile::REASON_LABELS)),
+            'offNotes'  => 'nullable|string|max:2000',
+            'plateDisposition' => 'required|in:release,transfer',
+        ];
+        if ($this->plateDisposition === 'transfer') {
+            $rules['plateTransferTo'] = 'required|integer|different:user.id';
+        }
+        $this->validate($rules);
+
+        try {
+            $service->offboard(
+                $this->user->fresh(),
+                $this->offReason,
+                $this->offNotes ?: null,
+                $this->plateDisposition,
+                $this->plateDisposition === 'transfer' ? $this->plateTransferTo : null,
+            );
+        } catch (\Throwable $e) {
+            $this->addError('offboard', $e->getMessage());
+            return;
+        }
+
+        session()->flash('success', "{$this->user->name} has been taken off the roster.");
+        $this->redirect(route('admin.drivers.index'));
+    }
+
+    public function reinstateDriver(DriverOffboardingService $service): void
+    {
+        abort_unless(Auth::user()?->canManageUsers(), 403);
+
+        try {
+            $service->reinstate($this->user->fresh());
+        } catch (\Throwable $e) {
+            $this->addError('offboard', $e->getMessage());
+            return;
+        }
+
+        session()->flash('success', "{$this->user->name} is back on the active roster.");
+        $this->redirect(route('admin.drivers.edit', $this->user));
+    }
+
+    public function with(): array
+    {
+        $service = app(DriverOffboardingService::class);
+        $profile = $this->user->driverProfile;
+
+        $transferCandidates = collect();
+        if ($profile?->trade_plate) {
+            $transferCandidates = User::query()
+                ->whereHas('roles', fn ($q) => $q->where('slug', 'driver'))
+                ->where('is_active', true)
+                ->where('id', '!=', $this->user->id)
+                ->with('driverProfile:user_id,trade_plate')
+                ->orderBy('name')
+                ->get(['id', 'name']);
+        }
+
+        return [
+            'canManage' => (bool) Auth::user()?->canManageUsers(),
+            'activeJobCount' => $service->activeJobCount($this->user),
+            'reasonLabels' => DriverProfile::REASON_LABELS,
+            'transferCandidates' => $transferCandidates,
+            'isOffRoster' => (bool) $profile?->isOffRoster(),
+            'offRosterActor' => $profile?->off_roster_by_user_id
+                ? User::find($profile->off_roster_by_user_id)?->name
+                : null,
+        ];
     }
 };
 ?>
@@ -364,4 +470,219 @@ new #[Layout('components.layouts.app')] class extends Component {
             </button>
         </div>
     </form>
+
+    {{-- ---------------------------------------------------------------
+         Roster status: retire / dismiss / remove a driver, with explicit
+         trade-plate handover. Trade plates belong to the business, so a
+         departing driver must either return their plate to the pool or
+         hand it to another active driver before they leave the roster.
+         --------------------------------------------------------------- --}}
+    @if($canManage)
+    <div class="max-w-2xl mt-8">
+        @if($isOffRoster)
+            {{-- Already off-roster: summary + reinstate. --}}
+            <div class="rounded-xl border border-amber-200 bg-amber-50 p-6 shadow-sm">
+                <div class="flex items-start gap-3">
+                    <div class="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-amber-100 text-amber-700">
+                        <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/></svg>
+                    </div>
+                    <div class="flex-1 min-w-0">
+                        <h3 class="text-base font-semibold text-amber-900">Driver is off the roster</h3>
+                        <dl class="mt-2 grid grid-cols-1 gap-x-6 gap-y-1 text-sm text-amber-900/90 sm:grid-cols-2">
+                            <div class="flex gap-2">
+                                <dt class="font-medium">Reason:</dt>
+                                <dd>{{ $user->driverProfile->reasonLabel() ?? '—' }}</dd>
+                            </div>
+                            <div class="flex gap-2">
+                                <dt class="font-medium">When:</dt>
+                                <dd>{{ optional($user->driverProfile->off_roster_at)->format('d M Y, H:i') ?? '—' }}</dd>
+                            </div>
+                            @if($offRosterActor)
+                            <div class="flex gap-2 sm:col-span-2">
+                                <dt class="font-medium">By:</dt>
+                                <dd>{{ $offRosterActor }}</dd>
+                            </div>
+                            @endif
+                            @if($user->driverProfile->off_roster_notes)
+                            <div class="sm:col-span-2 mt-1">
+                                <dt class="font-medium">Notes:</dt>
+                                <dd class="mt-0.5 whitespace-pre-wrap">{{ $user->driverProfile->off_roster_notes }}</dd>
+                            </div>
+                            @endif
+                        </dl>
+
+                        @if($user->driverProfile->trade_plate_returned_at)
+                            <p class="mt-3 text-xs text-amber-800">
+                                Trade plate returned to business pool on
+                                {{ $user->driverProfile->trade_plate_returned_at->format('d M Y, H:i') }}.
+                            </p>
+                        @endif
+
+                        @error('offboard')
+                            <p class="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{{ $message }}</p>
+                        @enderror
+
+                        <div class="mt-4 flex flex-wrap gap-2">
+                            <button type="button"
+                                wire:click="reinstateDriver"
+                                wire:confirm="Reinstate {{ $user->name }} to the active roster?"
+                                class="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-500">
+                                <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9"/><path d="M3 4v5h5"/></svg>
+                                Reinstate driver
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        @else
+            {{-- Active driver: offboarding panel. --}}
+            <div class="rounded-xl border border-red-200 bg-white p-6 shadow-sm">
+                <div class="flex items-start gap-3">
+                    <div class="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-red-50 text-red-600">
+                        <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="m17 8 5 5"/><path d="m22 8-5 5"/></svg>
+                    </div>
+                    <div class="flex-1 min-w-0">
+                        <h3 class="text-base font-semibold text-gray-900">Retire, dismiss or remove driver</h3>
+                        <p class="mt-1 text-sm text-gray-600">
+                            Takes {{ $user->name }} off the active roster. Their history is preserved on past jobs and invoices, and their trade plate returns to the business.
+                        </p>
+
+                        @if($activeJobCount > 0)
+                            <div class="mt-3 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                                <p class="font-medium">Cannot remove right now.</p>
+                                <p class="mt-0.5 text-xs">This driver still has <strong>{{ $activeJobCount }}</strong> active job{{ $activeJobCount === 1 ? '' : 's' }}. Reassign them on the <a href="{{ route('admin.dispatch') }}" class="underline">dispatch board</a> first.</p>
+                            </div>
+                        @endif
+
+                        @if($user->driverProfile?->trade_plate)
+                            <div class="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
+                                <div class="flex items-center gap-2">
+                                    <svg class="h-4 w-4 text-slate-500" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10h10"/><path d="M7 14h6"/></svg>
+                                    <span>Currently holds trade plate <strong class="font-mono">{{ $user->driverProfile->trade_plate }}</strong>@if($user->driverProfile->trade_plate_expiry) · expires {{ $user->driverProfile->trade_plate_expiry->format('d M Y') }}@endif</span>
+                                </div>
+                                <p class="mt-1 pl-6 text-[11px] text-slate-500">Trade plates belong to the business. You'll choose whether to release it to the pool or hand it to another driver.</p>
+                            </div>
+                        @endif
+
+                        @error('offboard')
+                            <p class="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{{ $message }}</p>
+                        @enderror
+
+                        <div class="mt-4">
+                            <button type="button"
+                                wire:click="openOffboardModal"
+                                @disabled($activeJobCount > 0)
+                                class="inline-flex items-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-50">
+                                <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></svg>
+                                Remove from roster…
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        @endif
+    </div>
+    @endif
+
+    {{-- Offboarding confirmation modal --}}
+    @if($canManage && $showOffboardModal)
+    <div class="fixed inset-0 z-50 flex items-center justify-center p-4"
+         role="dialog" aria-modal="true" aria-labelledby="offboard-title">
+        <div class="absolute inset-0 bg-slate-900/50" wire:click="closeOffboardModal"></div>
+        <div class="relative z-10 w-full max-w-lg rounded-xl bg-white shadow-xl">
+            <div class="flex items-start justify-between border-b border-slate-100 px-6 py-4">
+                <div>
+                    <h3 id="offboard-title" class="text-base font-semibold text-slate-900">Remove {{ $user->name }} from roster</h3>
+                    <p class="mt-0.5 text-xs text-slate-500">This action is auditable. It can be reversed from this page later.</p>
+                </div>
+                <button type="button" wire:click="closeOffboardModal" class="rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600">
+                    <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="m18 6-12 12"/><path d="m6 6 12 12"/></svg>
+                </button>
+            </div>
+
+            <form wire:submit.prevent="offboardDriver" class="space-y-5 px-6 py-5">
+                {{-- Reason --}}
+                <div>
+                    <label class="block text-sm font-medium text-slate-700">Reason</label>
+                    <div class="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3">
+                        @foreach($reasonLabels as $key => $label)
+                            <label class="flex cursor-pointer items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm hover:bg-slate-50 has-[:checked]:border-red-500 has-[:checked]:bg-red-50">
+                                <input type="radio" wire:model="offReason" value="{{ $key }}" class="h-4 w-4 border-slate-300 text-red-600 focus:ring-red-500">
+                                <span class="text-slate-800">{{ $label }}</span>
+                            </label>
+                        @endforeach
+                    </div>
+                    @error('offReason')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
+                </div>
+
+                {{-- Trade plate handling (only if driver holds a plate) --}}
+                @if($user->driverProfile?->trade_plate)
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700">
+                            Trade plate
+                            <span class="ml-1 font-mono text-xs text-slate-500">{{ $user->driverProfile->trade_plate }}</span>
+                        </label>
+                        <div class="mt-2 space-y-2">
+                            <label class="flex cursor-pointer items-start gap-3 rounded-lg border border-slate-200 p-3 text-sm hover:bg-slate-50 has-[:checked]:border-blue-500 has-[:checked]:bg-blue-50">
+                                <input type="radio" wire:model.live="plateDisposition" value="release" class="mt-0.5 h-4 w-4 border-slate-300 text-blue-600 focus:ring-blue-500">
+                                <span>
+                                    <span class="block font-medium text-slate-800">Release to business pool</span>
+                                    <span class="block text-xs text-slate-500">The plate becomes available to assign later.</span>
+                                </span>
+                            </label>
+                            <label class="flex cursor-pointer items-start gap-3 rounded-lg border border-slate-200 p-3 text-sm hover:bg-slate-50 has-[:checked]:border-blue-500 has-[:checked]:bg-blue-50">
+                                <input type="radio" wire:model.live="plateDisposition" value="transfer" class="mt-0.5 h-4 w-4 border-slate-300 text-blue-600 focus:ring-blue-500">
+                                <span class="flex-1">
+                                    <span class="block font-medium text-slate-800">Transfer to another driver</span>
+                                    <span class="block text-xs text-slate-500">Hand the plate directly to an active driver who doesn't already have one.</span>
+                                </span>
+                            </label>
+                            @if($plateDisposition === 'transfer')
+                                <div class="pl-7">
+                                    <select wire:model="plateTransferTo"
+                                            class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
+                                        <option value="">Select an active driver…</option>
+                                        @foreach($transferCandidates as $candidate)
+                                            <option value="{{ $candidate->id }}"
+                                                    @disabled($candidate->driverProfile?->trade_plate)>
+                                                {{ $candidate->name }}@if($candidate->driverProfile?->trade_plate) — already holds {{ $candidate->driverProfile->trade_plate }}@endif
+                                            </option>
+                                        @endforeach
+                                    </select>
+                                    @error('plateTransferTo')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
+                                </div>
+                            @endif
+                        </div>
+                    </div>
+                @endif
+
+                {{-- Notes --}}
+                <div>
+                    <label class="block text-sm font-medium text-slate-700">Notes <span class="text-slate-400 font-normal">(optional)</span></label>
+                    <textarea wire:model="offNotes" rows="3"
+                              class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:ring-slate-500"
+                              placeholder="Context for the record — handover details, effective date, etc."></textarea>
+                    @error('offNotes')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
+                </div>
+
+                @error('offboard')
+                    <p class="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{{ $message }}</p>
+                @enderror
+
+                <div class="flex items-center justify-end gap-2 border-t border-slate-100 pt-4">
+                    <button type="button" wire:click="closeOffboardModal"
+                            class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+                        Cancel
+                    </button>
+                    <button type="submit"
+                            class="inline-flex items-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-red-500"
+                            wire:loading.attr="disabled" wire:target="offboardDriver">
+                        <span wire:loading.remove wire:target="offboardDriver">Confirm removal</span>
+                        <span wire:loading wire:target="offboardDriver">Working…</span>
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+    @endif
 </div>
