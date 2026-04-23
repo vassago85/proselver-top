@@ -55,7 +55,53 @@ class VehicleModelSeeder extends Seeder
                 // Legacy (retained for historical order compatibility)
                 'JK6 15.180FL',
             ],
+            // Isuzu SA chassis-cab range (2026 catalogue).
+            // Names use the official brochure format (model + GVM in 100kg),
+            // grouped by range. Legacy short-form codes retained at the
+            // bottom so historical orders with model_name = 'NQR500AC' etc.
+            // continue to match cleanly.
             'Isuzu' => [
+                // N-Series (Medium)
+                'NLR 150',
+                'NMR 250',
+                'NMR 250 AMT',
+                'NPR 275',
+                'NPR 300',
+                'NPR 300 AMT',
+                'NPS 300 4x4',
+                'NPR 400',
+                'NPR 400 AMT',
+                'NPR 400 Crew Cab',
+                'NQR 500',
+                'NQR 500 AMT',
+                // F-Series (Heavy)
+                'FRR 500',
+                'FRR 500 AMT',
+                'FRR 600',
+                'FRR 600 AMT',
+                'FSR 750',
+                'FSR 750 AMT',
+                'FSR 750 Crew Cab',
+                'FSR 800',
+                'FTS 750 4x4',
+                'FTR 850',
+                'FTR 850 AMT',
+                'FTR 850 LWB',
+                'FTR 850 Compactor',
+                'FVR 900',
+                'FVM 1200',
+                'FVZ 1400',
+                'FVZ 1400 SWB',
+                'FVZ 1400 Compactor',
+                // FX-Series (Extra Heavy)
+                'FXR 17-360',
+                'FXZ 26-360',
+                'FXZ 26-360 Tipper',
+                'FXZ 26-360 Mixer',
+                'FYH 33-360',
+                'FYH 35-360',
+                // Legacy short-form codes (kept for historical compatibility
+                // with bookings created before the formal SA list was seeded)
                 'NQR500AC',
                 'NQR500AMT',
                 'FRR600AMT',
