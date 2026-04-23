@@ -226,24 +226,62 @@ new #[Layout('components.layouts.app')] class extends Component {
     @if(count($attentionVisible) > 0 || $attentionExpiredCount > 0 || $attentionExpiringCount > 0)
         @php
             $attnHeadColor = $attentionExpiredCount > 0 ? 'amber' : 'slate';
+            $attnSummary = trim(
+                ($attentionExpiredCount > 0 ? $attentionExpiredCount . ' expired' : '')
+                . ($attentionExpiredCount > 0 && $attentionExpiringCount > 0 ? ' · ' : '')
+                . ($attentionExpiringCount > 0 ? $attentionExpiringCount . ' expiring <60d' : '')
+            );
         @endphp
-        <div class="mb-6 rounded-2xl border {{ $attentionExpiredCount > 0 ? 'border-amber-200' : 'border-slate-200' }} bg-white shadow-sm overflow-hidden">
-            <div class="flex items-center justify-between gap-3 border-b border-slate-100 {{ $attentionExpiredCount > 0 ? 'bg-amber-50/60' : 'bg-slate-50/60' }} px-6 py-4">
-                <div class="flex items-center gap-3">
-                    <span class="inline-flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.25em] {{ $attentionExpiredCount > 0 ? 'text-amber-700' : 'text-slate-600' }}">
-                        <span class="h-1.5 w-1.5 rounded-full {{ $attentionExpiredCount > 0 ? 'bg-amber-500 node-pulse' : 'bg-slate-400' }}"></span>
-                        Action required
-                    </span>
-                    <span class="text-[11px] text-slate-500 tabular-nums">
-                        @if($attentionExpiredCount > 0){{ $attentionExpiredCount }} expired @endif
-                        @if($attentionExpiredCount > 0 && $attentionExpiringCount > 0) · @endif
-                        @if($attentionExpiringCount > 0){{ $attentionExpiringCount }} expiring &lt;60d @endif
-                    </span>
+        {{-- Dismissible on the client only. The user asked for this banner
+             to always be present when they open /admin/drivers (it's the
+             reason compliance lives here), but to be collapsible when it
+             gets in the way during a session. State deliberately does not
+             persist across page loads. --}}
+        <div x-data="{ open: true }" class="mb-6">
+
+            {{-- Collapsed chip — only renders once the banner is dismissed.
+                 Keeps the expired/expiring headline visible and offers a
+                 one-click way to bring the full list back. --}}
+            <div x-show="!open" x-cloak
+                 class="flex items-center justify-between gap-3 rounded-xl border {{ $attentionExpiredCount > 0 ? 'border-amber-200 bg-amber-50/70' : 'border-slate-200 bg-slate-50' }} px-4 py-2">
+                <div class="flex items-center gap-2 min-w-0">
+                    <span class="h-1.5 w-1.5 rounded-full {{ $attentionExpiredCount > 0 ? 'bg-amber-500 node-pulse' : 'bg-slate-400' }}"></span>
+                    <span class="text-[10px] font-semibold uppercase tracking-[0.25em] {{ $attentionExpiredCount > 0 ? 'text-amber-700' : 'text-slate-600' }}">Action required</span>
+                    @if($attnSummary !== '')
+                        <span class="text-[11px] text-slate-600 tabular-nums truncate">{!! $attnSummary !!}</span>
+                    @endif
                 </div>
-                <div class="flex items-center gap-3 text-[11px] text-slate-500 tabular-nums">
-                    <span>{{ $totalActiveDrivers }} active {{ \Illuminate\Support\Str::plural('driver', $totalActiveDrivers) }}</span>
-                </div>
+                <button type="button" @click="open = true"
+                    class="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition-colors shrink-0">
+                    Show
+                    <svg viewBox="0 0 24 24" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+                </button>
             </div>
+
+            <div x-show="open" x-transition.opacity
+                 class="rounded-2xl border {{ $attentionExpiredCount > 0 ? 'border-amber-200' : 'border-slate-200' }} bg-white shadow-sm overflow-hidden">
+                <div class="flex items-center justify-between gap-3 border-b border-slate-100 {{ $attentionExpiredCount > 0 ? 'bg-amber-50/60' : 'bg-slate-50/60' }} px-6 py-4">
+                    <div class="flex items-center gap-3 min-w-0">
+                        <span class="inline-flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.25em] {{ $attentionExpiredCount > 0 ? 'text-amber-700' : 'text-slate-600' }}">
+                            <span class="h-1.5 w-1.5 rounded-full {{ $attentionExpiredCount > 0 ? 'bg-amber-500 node-pulse' : 'bg-slate-400' }}"></span>
+                            Action required
+                        </span>
+                        <span class="text-[11px] text-slate-500 tabular-nums truncate">
+                            @if($attentionExpiredCount > 0){{ $attentionExpiredCount }} expired @endif
+                            @if($attentionExpiredCount > 0 && $attentionExpiringCount > 0) · @endif
+                            @if($attentionExpiringCount > 0){{ $attentionExpiringCount }} expiring &lt;60d @endif
+                        </span>
+                    </div>
+                    <div class="flex items-center gap-3 text-[11px] text-slate-500 tabular-nums">
+                        <span class="hidden sm:inline">{{ $totalActiveDrivers }} active {{ \Illuminate\Support\Str::plural('driver', $totalActiveDrivers) }}</span>
+                        <button type="button" @click="open = false"
+                            title="Hide compliance banner"
+                            aria-label="Hide compliance banner"
+                            class="inline-flex h-7 w-7 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition-colors">
+                            <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+                        </button>
+                    </div>
+                </div>
             @if(count($attentionVisible) > 0)
             <ul class="divide-y divide-slate-100">
                 @foreach($attentionVisible as $item)
@@ -294,7 +332,8 @@ new #[Layout('components.layouts.app')] class extends Component {
                 </div>
             @endif
             @endif
-        </div>
+            </div> {{-- /banner card (x-show="open") --}}
+        </div> {{-- /x-data dismiss wrapper --}}
     @endif
 
     <div class="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
