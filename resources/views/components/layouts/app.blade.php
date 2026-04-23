@@ -199,6 +199,23 @@
                             </button>
                         </div>
                     @endif
+                    @if (session('pwa_access_denied'))
+                        <div x-data="{ show: true }" x-show="show" class="mb-5 flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                            <svg viewBox="0 0 24 24" class="h-5 w-5 shrink-0 text-amber-600" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" x2="12" y1="9" y2="13"/><line x1="12" x2="12.01" y1="17" y2="17"/></svg>
+                            <div class="flex-1 space-y-2">
+                                <p class="leading-relaxed">{{ session('pwa_access_denied') }}</p>
+                                <div class="flex items-center gap-3">
+                                    <form method="POST" action="{{ route('logout') }}" class="inline">
+                                        @csrf
+                                        <button type="submit" class="inline-flex items-center gap-1.5 rounded-md bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-500 transition">
+                                            Sign out &amp; switch to driver
+                                        </button>
+                                    </form>
+                                    <button @click="show = false" class="text-xs font-medium text-amber-800 hover:text-amber-900 underline-offset-2 hover:underline">Dismiss</button>
+                                </div>
+                            </div>
+                        </div>
+                    @endif
                     {{ $slot }}
                 </div>
             </main>
