@@ -2,8 +2,6 @@
 
 use App\Models\Job;
 use App\Models\JobDocument;
-use App\Models\DriverProfile;
-use App\Models\User;
 use Livewire\Volt\Component;
 use Livewire\Attributes\Layout;
 
@@ -11,9 +9,9 @@ new #[Layout('components.layouts.app')] class extends Component {
     /**
      * One-click dismiss for a damage incident on the dashboard strip.
      * Stamps damage_acknowledged_at so the incident drops off both the
-     * "Damage Reports" stat tile and the "Recent damage incidents" list
-     * without forcing the operator through the full release-to-customer
-     * flow. Release implies ack elsewhere; this is the lighter-weight
+     * "Damage" stat tile and the "Recent damage incidents" list without
+     * forcing the operator through the full release-to-customer flow.
+     * Release implies ack elsewhere; this is the lighter-weight
      * "yes I've seen it" action ops needed to stop the dashboard
      * repeatedly nagging about incidents they're already working.
      */
@@ -37,114 +35,78 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     public function with(): array
     {
-        // "New" from ops' point of view = anything that just landed and hasn't
-        // been verified/confirmed yet. Dealer + OEM bookings arrive in
-        // PENDING_VERIFICATION; customer-portal bookings land in RECEIVED.
-        // Either way ops needs eyes on them, so we count both here.
+        // ─── Operations headline counters ─────────────────────────────
+        // "New" from ops' point of view = anything that just landed
+        // and still needs eyes. Dealer + OEM bookings arrive in
+        // PENDING_VERIFICATION; portal bookings land in RECEIVED.
         $newOrders = Job::whereIn('status', [
             Job::STATUS_PENDING_VERIFICATION,
             Job::STATUS_RECEIVED,
         ])->count();
         $pendingVerification = Job::where('status', Job::STATUS_PENDING_VERIFICATION)->count();
-        $awaitingConfirmation = Job::whereIn('status', [Job::STATUS_AWAITING_CUSTOMER_CONFIRMATION, Job::STATUS_CONFIRMATION_ISSUE])->count();
-        $confirmationIssues = Job::where('status', Job::STATUS_CONFIRMATION_ISSUE)->count();
-        $readyToPlan = Job::where('status', Job::STATUS_CONFIRMED)->count();
+        $readyToPlan         = Job::where('status', Job::STATUS_CONFIRMED)->count();
 
-        $inFlight = Job::whereIn('status', [
+        // In-flight = anything with a driver actively moving (or about
+        // to). This feeds both the tile AND the live-movements board.
+        $inFlightStatuses = [
             Job::STATUS_DRIVER_ASSIGNED,
             Job::STATUS_READY_FOR_COLLECTION,
             Job::STATUS_COLLECTED,
             Job::STATUS_IN_TRANSIT,
-        ])->count();
+        ];
+        $inFlight = Job::whereIn('status', $inFlightStatuses)->count();
 
         $deliveredToday = Job::whereIn('status', [Job::STATUS_DELIVERED, Job::STATUS_COMPLETED])
             ->whereDate('delivered_at', today())
             ->count();
 
-        // Live pulse row: counts per live status. driver_assigned absorbs legacy
-        // ready_for_collection rows so the board never shows both side by side.
+        // Live pulse row: counts per live status. driver_assigned
+        // absorbs legacy ready_for_collection rows so the board never
+        // shows both side by side.
         $liveCounts = [
-            'driver_assigned'      => Job::whereIn('status', [Job::STATUS_DRIVER_ASSIGNED, Job::STATUS_READY_FOR_COLLECTION])->count(),
-            'collected'            => Job::where('status', Job::STATUS_COLLECTED)->count(),
-            'in_transit'           => Job::where('status', Job::STATUS_IN_TRANSIT)->count(),
+            'driver_assigned' => Job::whereIn('status', [Job::STATUS_DRIVER_ASSIGNED, Job::STATUS_READY_FOR_COLLECTION])->count(),
+            'collected'       => Job::where('status', Job::STATUS_COLLECTED)->count(),
+            'in_transit'      => Job::where('status', Job::STATUS_IN_TRANSIT)->count(),
         ];
 
-        // Driver compliance (licence + PDP, 60-day horizon)
-        $driverThreshold = now()->addDays(60);
-        $driversExpiringSoon = DriverProfile::where(function ($q) use ($driverThreshold) {
-                $q->whereBetween('license_expiry', [now(), $driverThreshold])
-                  ->orWhereBetween('prdp_expiry', [now(), $driverThreshold]);
-            })->count();
-        $driversExpired = DriverProfile::where(function ($q) {
-                $q->where('license_expiry', '<', now())
-                  ->orWhere('prdp_expiry', '<', now());
-            })->count();
+        // ─── Revenue / money tiles ────────────────────────────────────
+        // Everything here uses invoiced_at (the moment the money
+        // becomes real). Awaiting-invoicing = delivered but the ops
+        // team hasn't invoiced yet = money sitting on the table.
+        $invoicedTodayValue = (float) Job::whereDate('invoiced_at', today())->sum('total_sell_price');
+        $invoicedTodayCount = Job::whereDate('invoiced_at', today())->count();
 
-        // Attention list — a single unified feed of every driver credential
-        // that is EXPIRED or expiring inside the 60-day window. Licence,
-        // PrDP, Trade Plate all land in the same list, sorted by urgency
-        // (expired first, then soonest expiry). Replaces the old three-
-        // column Fleet Health grid — ops wanted one focused list, not a
-        // chip showroom. Equipment / identity flags live on /admin/drivers
-        // where they belong.
-        $today = now()->startOfDay();
-        $attentionWindowEnd = $today->copy()->addDays(60)->endOfDay();
+        $monthStart = now()->startOfMonth();
+        $invoicedMtdValue = (float) Job::where('invoiced_at', '>=', $monthStart)->sum('total_sell_price');
+        $invoicedMtdCount = Job::where('invoiced_at', '>=', $monthStart)->count();
+        $costMtd          = (float) Job::where('invoiced_at', '>=', $monthStart)->sum('total_cost');
+        $marginMtd        = max(0, $invoicedMtdValue - $costMtd);
+        $marginPct        = $invoicedMtdValue > 0 ? round(($marginMtd / $invoicedMtdValue) * 100) : 0;
 
-        $attentionProfiles = DriverProfile::with('user:id,name,is_active')
-            ->whereHas('user', fn($q) => $q->where('is_active', true))
-            ->where(function ($q) use ($attentionWindowEnd) {
-                $q->where('license_expiry', '<=', $attentionWindowEnd)
-                  ->orWhere('prdp_expiry', '<=', $attentionWindowEnd)
-                  ->orWhere('trade_plate_expiry', '<=', $attentionWindowEnd);
-            })
+        $awaitingInvoicing = Job::whereIn('status', [Job::STATUS_DELIVERED, Job::STATUS_COMPLETED, Job::STATUS_READY_FOR_INVOICING])
+            ->whereNull('invoiced_at');
+        $awaitingCount = (clone $awaitingInvoicing)->count();
+        $awaitingValue = (float) (clone $awaitingInvoicing)->sum('total_sell_price');
+
+        // ─── Live movements board ─────────────────────────────────────
+        // The cool shit: every vehicle currently on the road, with
+        // driver, route, elapsed time since dispatch. Ordered so
+        // the most "at-risk" (longest running) surface first.
+        $liveMovements = Job::with([
+                'company:id,name',
+                'pickupLocation:id,company_name,city',
+                'deliveryLocation:id,company_name,city',
+                'brand:id,name',
+                'driver:id,name',
+            ])
+            ->whereIn('status', $inFlightStatuses)
+            ->orderByDesc(\DB::raw('COALESCE(collected_at, assigned_at, updated_at)'))
+            ->limit(12)
             ->get();
 
-        $attentionItems = [];
-        foreach ($attentionProfiles as $p) {
-            $fields = [
-                ['date' => $p->license_expiry,     'label' => 'Licence',     'filter' => 'license'],
-                ['date' => $p->prdp_expiry,        'label' => 'PrDP',        'filter' => 'prdp'],
-                ['date' => $p->trade_plate_expiry, 'label' => 'Trade plate', 'filter' => 'trade_plate'],
-            ];
-            foreach ($fields as $f) {
-                $d = $f['date'];
-                if (!$d || $d->gt($attentionWindowEnd)) {
-                    continue;
-                }
-                $daysLeft = (int) floor($today->diffInDays($d, false));
-                $attentionItems[] = [
-                    'user_id'     => $p->user_id,
-                    'driver_name' => $p->user?->name ?? 'Unknown',
-                    'label'       => $f['label'],
-                    'filter'      => $f['filter'],
-                    'date'        => $d,
-                    'days_left'   => $daysLeft,
-                    'expired'     => $daysLeft < 0,
-                ];
-            }
-        }
-        // Sort: expired first (by how long ago, worst at top), then
-        // upcoming (soonest first). Keeps the loudest alarm at the top.
-        usort($attentionItems, fn($a, $b) => $a['date'] <=> $b['date']);
-
-        $attentionExpiredCount  = count(array_filter($attentionItems, fn($i) => $i['expired']));
-        $attentionExpiringCount = count($attentionItems) - $attentionExpiredCount;
-        $attentionVisible = array_slice($attentionItems, 0, 10);
-        $attentionOverflow = max(0, count($attentionItems) - count($attentionVisible));
-
-        $recentOrders = Job::with(['company:id,name,workflow_type', 'pickupLocation:id,company_name,city', 'deliveryLocation:id,company_name,city', 'brand:id,name'])
-            ->whereIn('status', Job::PHASE1_STATUSES)
-            ->orderByDesc('created_at')
-            ->limit(8)
-            ->get();
-
-        // Damage pulse — only shows jobs with damage that ops has NOT
-        // acknowledged yet. Ack happens:
-        //   1. automatically on admin order page view (they've seen it),
-        //   2. via the inline Dismiss button on this strip, or
-        //   3. when ops explicitly releases the report to the customer.
-        // Once acked, the incident disappears from the dashboard. It
-        // stays in /admin/damage for audit / release workflow.
+        // ─── Damage pulse ─────────────────────────────────────────────
+        // Only unacknowledged incidents. Ack happens when ops views
+        // the order page, dismisses inline, or releases to customer.
         $damageJobIds = JobDocument::where('category', JobDocument::CATEGORY_DAMAGE_PHOTO)
             ->distinct()
             ->pluck('job_id');
@@ -152,18 +114,11 @@ new #[Layout('components.layouts.app')] class extends Component {
         $unackedBase = Job::whereIn('id', $damageJobIds)
             ->whereNull('damage_acknowledged_at');
 
-        // Headline is unreleased-to-customer incidents — this is still the
-        // number ops should drive to zero for customer sign-off.
         $pendingReleaseCount = (clone $unackedBase)
             ->whereNull('damage_report_released_at')
             ->count();
-        // "Open" = still operationally live (not completed / cancelled) AND
-        // not yet acknowledged by ops.
         $openDamageCount = (clone $unackedBase)
             ->whereNotIn('status', [Job::STATUS_COMPLETED, Job::STATUS_CANCELLED])
-            ->count();
-        $damageLast7d = JobDocument::where('category', JobDocument::CATEGORY_DAMAGE_PHOTO)
-            ->where('created_at', '>=', now()->subDays(7))
             ->count();
 
         $recentDamageJobs = (clone $unackedBase)
@@ -180,41 +135,53 @@ new #[Layout('components.layouts.app')] class extends Component {
             ->limit(6)
             ->get();
 
+        $recentOrders = Job::with(['company:id,name,workflow_type', 'pickupLocation:id,company_name,city', 'deliveryLocation:id,company_name,city', 'brand:id,name'])
+            ->whereIn('status', Job::PHASE1_STATUSES)
+            ->orderByDesc('created_at')
+            ->limit(8)
+            ->get();
+
         return compact(
             'newOrders',
             'pendingVerification',
-            'awaitingConfirmation',
-            'confirmationIssues',
             'readyToPlan',
             'inFlight',
             'deliveredToday',
             'liveCounts',
-            'driversExpiringSoon',
-            'driversExpired',
-            'recentOrders',
-            'attentionItems',
-            'attentionVisible',
-            'attentionOverflow',
-            'attentionExpiredCount',
-            'attentionExpiringCount',
+            'liveMovements',
+            'invoicedTodayValue',
+            'invoicedTodayCount',
+            'invoicedMtdValue',
+            'invoicedMtdCount',
+            'marginMtd',
+            'marginPct',
+            'awaitingCount',
+            'awaitingValue',
             'openDamageCount',
             'pendingReleaseCount',
-            'damageLast7d',
             'recentDamageJobs',
+            'recentOrders',
         );
     }
 };
 
 ?>
 
+@php
+    // Small money formatter — R prefix, thousands sep, no decimals for
+    // stat tiles so big numbers stay scannable. Handled inline so we
+    // don't hit the helper autoload cost 8 times per render.
+    $money = fn($v) => 'R' . number_format((float) $v, 0);
+@endphp
+
 <div wire:poll.60s>
     <x-slot:header>Dashboard</x-slot:header>
 
-    {{-- Hero strip --}}
+    {{-- Hero --}}
     <x-page-header
         eyebrow="Control · Dispatch · Deliver"
         title="Operations overview"
-        subtitle="Live snapshot of bookings, dispatch readiness, and active movements.">
+        subtitle="Live money, live movements, and the things ops has to push next.">
         <x-slot:actions>
             <x-button :href="route('admin.planning')" variant="primary" size="md">
                 <x-slot:icon>
@@ -231,16 +198,65 @@ new #[Layout('components.layouts.app')] class extends Component {
         </x-slot:actions>
     </x-page-header>
 
-    {{-- Stat cards
-         4-up on laptops, 7-up on wide monitors. Avoids the "too many
-         tiny tiles in one row" look that hid the numbers before. --}}
-    <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-7 mb-6">
+    {{-- Revenue row
+         This is the money line. Invoiced today / MTD / awaiting /
+         margin — the four numbers the owner actually wants on the
+         screen when they walk past. --}}
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-3">
+        <x-stat-card
+            label="Invoiced Today"
+            :value="$money($invoicedTodayValue)"
+            color="emerald"
+            :helper="$invoicedTodayCount . ' ' . \Illuminate\Support\Str::plural('invoice', $invoicedTodayCount)"
+            helperColor="emerald">
+            <x-slot:icon>
+                <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+            </x-slot:icon>
+        </x-stat-card>
+
+        <x-stat-card
+            label="Invoiced MTD"
+            :value="$money($invoicedMtdValue)"
+            color="emerald"
+            :helper="$invoicedMtdCount . ' ' . \Illuminate\Support\Str::plural('invoice', $invoicedMtdCount) . ' · since ' . now()->startOfMonth()->format('d M')"
+            helperColor="slate">
+            <x-slot:icon>
+                <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>
+            </x-slot:icon>
+        </x-stat-card>
+
+        <x-stat-card
+            label="Margin MTD"
+            :value="$money($marginMtd)"
+            :color="$marginPct >= 25 ? 'emerald' : ($marginPct >= 10 ? 'amber' : 'slate')"
+            :helper="$marginPct . '% gross'"
+            :helperColor="$marginPct >= 25 ? 'emerald' : ($marginPct >= 10 ? 'amber' : 'slate')">
+            <x-slot:icon>
+                <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20"/><path d="m5 12 7-7 7 7"/></svg>
+            </x-slot:icon>
+        </x-stat-card>
+
+        <x-stat-card
+            label="Awaiting Invoicing"
+            :value="$money($awaitingValue)"
+            :color="$awaitingCount > 0 ? 'amber' : 'slate'"
+            :helper="$awaitingCount > 0 ? $awaitingCount . ' ' . \Illuminate\Support\Str::plural('delivery', $awaitingCount) . ' to invoice' : 'All invoiced'"
+            :helperColor="$awaitingCount > 0 ? 'amber' : 'slate'"
+            :href="route('admin.deliveries', ['range' => 'all'])">
+            <x-slot:icon>
+                <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            </x-slot:icon>
+        </x-stat-card>
+    </div>
+
+    {{-- Operations row --}}
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
         <x-stat-card
             label="New Bookings"
             :value="$newOrders"
             color="blue"
-            :helper="$pendingVerification > 0 ? $pendingVerification . ' to verify' : null"
-            helperColor="amber"
+            :helper="$pendingVerification > 0 ? $pendingVerification . ' to verify' : 'Queue clear'"
+            :helperColor="$pendingVerification > 0 ? 'amber' : 'slate'"
             :href="route('admin.vehicles.index', ['bucket' => 'open'])">
             <x-slot:icon>
                 <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
@@ -248,96 +264,43 @@ new #[Layout('components.layouts.app')] class extends Component {
         </x-stat-card>
 
         <x-stat-card
-            label="Awaiting Confirmation"
-            :value="$awaitingConfirmation"
-            color="amber"
-            :helper="$confirmationIssues > 0 ? $confirmationIssues . ' with issues' : null"
-            helperColor="red"
-            :href="route('admin.orders.index', ['status' => 'awaiting_customer_confirmation'])" />
-
-        <x-stat-card
             label="Ready to Plan"
             :value="$readyToPlan"
-            color="indigo"
+            :color="$readyToPlan > 0 ? 'purple' : 'slate'"
+            :helper="$readyToPlan > 0 ? 'Assign drivers' : 'Queue clear'"
+            :helperColor="$readyToPlan > 0 ? 'purple' : 'slate'"
             :href="route('admin.planning')" />
 
         <x-stat-card
-            label="In Transit"
+            label="In Flight"
             :value="$inFlight"
-            color="orange"
+            :color="$inFlight > 0 ? 'blue' : 'slate'"
+            helper="Drivers on the road"
+            helperColor="slate"
             :href="route('admin.vehicles.index', ['bucket' => 'live'])" />
 
         <x-stat-card
             label="Delivered Today"
             :value="$deliveredToday"
             color="emerald"
+            :helper="$deliveredToday > 0 ? 'Ready for invoicing' : null"
+            helperColor="slate"
             :href="route('admin.deliveries', ['range' => 'today'])" />
-
-        @php
-            // Driver Compliance tile surfaces everything that needs action:
-            //   expired licences/PDPs (urgent) + those expiring inside the
-            //   60-day window. Headline count is the *total* action list so
-            //   a big "0" never hides an expired driver sitting underneath.
-            $driversNeedingAction = $driversExpired + $driversExpiringSoon;
-            $complianceHelper = match (true) {
-                $driversExpired > 0 && $driversExpiringSoon > 0
-                    => $driversExpired . ' expired · ' . $driversExpiringSoon . ' expiring soon',
-                $driversExpired > 0
-                    => $driversExpired . ' expired · action required',
-                $driversExpiringSoon > 0
-                    => $driversExpiringSoon . ' expiring in 60 days',
-                default
-                    => 'All licences valid',
-            };
-            $complianceColor = match (true) {
-                $driversExpired > 0 => 'red',
-                $driversExpiringSoon > 0 => 'amber',
-                default => 'slate',
-            };
-        @endphp
-
-        <x-stat-card
-            label="Driver Compliance"
-            :value="$driversNeedingAction"
-            :color="$complianceColor"
-            :helper="$complianceHelper"
-            :helperColor="$complianceColor"
-            :href="route('admin.drivers.index')" />
-
-        @php
-            // Damage Reports tile. Counts unacknowledged incidents —
-            // everything ops has either opened, dismissed, or formally
-            // released has already dropped off this number.
-            $damageHelper = match (true) {
-                $openDamageCount > 0 && $pendingReleaseCount > 0 && $openDamageCount !== $pendingReleaseCount
-                    => $openDamageCount . ' new · ' . $pendingReleaseCount . ' still to release',
-                $openDamageCount > 0
-                    => $openDamageCount . ' awaiting review',
-                default
-                    => 'No new damage',
-            };
-            $damageColor = $openDamageCount > 0 ? 'red' : 'slate';
-        @endphp
-        <x-stat-card
-            label="Damage Reports"
-            :value="$pendingReleaseCount"
-            :color="$damageColor"
-            :helper="$damageHelper"
-            :helperColor="$damageColor"
-            :href="route('admin.damage', ['bucket' => 'pending_release'])">
-            <x-slot:icon>
-                <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
-            </x-slot:icon>
-        </x-stat-card>
     </div>
 
-    {{-- Live movements strip (matches landing page operational tile feel) --}}
+    {{-- Live movements board
+         The hero piece. Every vehicle currently moving, with driver,
+         route, status, and time-since-dispatch. Rows are clickable,
+         going straight to the order detail. Empty state says so. --}}
     <div class="mb-6 rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
         <div class="flex items-center justify-between gap-3 border-b border-slate-100 px-6 py-4">
             <div class="flex items-center gap-3">
                 <span class="inline-flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.25em] text-blue-600">
-                    <span class="h-1.5 w-1.5 rounded-full bg-blue-500 node-pulse"></span>
-                    Live pipeline
+                    <span class="h-1.5 w-1.5 rounded-full bg-blue-500 {{ $liveMovements->isNotEmpty() ? 'node-pulse' : 'opacity-30' }}"></span>
+                    Live movements
+                </span>
+                <span class="text-[11px] text-slate-500 tabular-nums">
+                    {{ $liveMovements->count() }} {{ \Illuminate\Support\Str::plural('vehicle', $liveMovements->count()) }} on the road
                 </span>
             </div>
             <a href="{{ route('admin.vehicles.index', ['bucket' => 'live']) }}" class="text-xs font-semibold text-slate-600 hover:text-slate-900 inline-flex items-center gap-1 transition-colors">
@@ -345,13 +308,20 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></svg>
             </a>
         </div>
-        <div class="grid grid-cols-3 divide-y md:divide-y-0 md:divide-x divide-slate-100">
-            @foreach([
-                ['label' => 'Driver Assigned', 'key' => 'driver_assigned', 'dot' => 'bg-purple-500'],
-                ['label' => 'Driver Arrived at Pickup', 'key' => 'collected', 'dot' => 'bg-teal-500'],
-                ['label' => 'In Transit', 'key' => 'in_transit', 'dot' => 'bg-orange-500'],
-            ] as $node)
-                <div class="px-6 py-4 flex items-center justify-between gap-3">
+
+        {{-- Pipeline dots strip — gives the "3 active, 19 in transit"
+             feel at a glance. Clickable deep links into the live bucket
+             pre-filtered by status. --}}
+        <div class="grid grid-cols-3 divide-x divide-slate-100 border-b border-slate-100">
+            @php
+                $nodes = [
+                    ['label' => 'Driver Assigned',       'key' => 'driver_assigned', 'dot' => 'bg-purple-500'],
+                    ['label' => 'Arrived at Pickup',     'key' => 'collected',       'dot' => 'bg-teal-500'],
+                    ['label' => 'In Transit',            'key' => 'in_transit',      'dot' => 'bg-orange-500'],
+                ];
+            @endphp
+            @foreach($nodes as $node)
+                <div class="px-6 py-3 flex items-center justify-between gap-3">
                     <div class="flex items-center gap-2.5 min-w-0">
                         <span class="h-2 w-2 rounded-full {{ $node['dot'] }} {{ ($liveCounts[$node['key']] ?? 0) > 0 ? 'node-pulse' : 'opacity-30' }}"></span>
                         <span class="text-xs font-medium text-slate-600 truncate">{{ $node['label'] }}</span>
@@ -360,14 +330,77 @@ new #[Layout('components.layouts.app')] class extends Component {
                 </div>
             @endforeach
         </div>
+
+        @if($liveMovements->isEmpty())
+            <div class="px-6 py-10 text-center">
+                <div class="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 text-slate-400">
+                    <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2"/><path d="M15 18H9"/><path d="M19 18h2a1 1 0 0 0 1-1v-3.65a1 1 0 0 0-.22-.624l-3.48-4.35A1 1 0 0 0 17.52 8H14"/><circle cx="17" cy="18" r="2"/><circle cx="7" cy="18" r="2"/></svg>
+                </div>
+                <p class="text-sm font-medium text-slate-900">No vehicles moving right now</p>
+                <p class="text-xs text-slate-500 mt-0.5">The board will light up as soon as a driver is dispatched.</p>
+            </div>
+        @else
+        <ul class="divide-y divide-slate-100">
+            @foreach($liveMovements as $mov)
+                @php
+                    $statusColor = match ($mov->status) {
+                        Job::STATUS_IN_TRANSIT                  => 'bg-orange-500',
+                        Job::STATUS_COLLECTED                   => 'bg-teal-500',
+                        Job::STATUS_DRIVER_ASSIGNED, Job::STATUS_READY_FOR_COLLECTION => 'bg-purple-500',
+                        default                                 => 'bg-slate-400',
+                    };
+                    $anchor = $mov->collected_at ?? $mov->assigned_at ?? $mov->updated_at;
+                    $pickupCity   = $mov->pickupLocation?->city ?? $mov->pickupLocation?->company_name ?? '—';
+                    $deliveryCity = $mov->deliveryLocation?->city ?? $mov->deliveryLocation?->company_name ?? '—';
+                @endphp
+                <li>
+                    <a href="{{ route('admin.orders.show', $mov) }}"
+                       class="flex items-center gap-4 px-6 py-3 hover:bg-slate-50/60 transition-colors">
+                        <span class="h-2 w-2 shrink-0 rounded-full {{ $statusColor }} node-pulse"></span>
+                        <div class="min-w-0 flex-1 grid grid-cols-12 gap-3 items-center">
+                            <div class="col-span-12 sm:col-span-3 min-w-0">
+                                <div class="text-sm font-semibold text-slate-900 truncate">
+                                    {{ $mov->job_number ?? ('#' . $mov->id) }}
+                                </div>
+                                <div class="text-[11px] text-slate-500 truncate">{{ $mov->company?->name ?? '—' }}</div>
+                            </div>
+                            <div class="col-span-6 sm:col-span-3 min-w-0">
+                                <div class="text-sm text-slate-700 truncate">
+                                    {{ $mov->driver?->name ?? '— Unassigned' }}
+                                </div>
+                                <div class="text-[11px] text-slate-400 truncate">
+                                    {{ trim(($mov->brand?->name ?? '') . ' ' . ($mov->model_name ?? '')) ?: '—' }}
+                                    @if($mov->registration) · <span class="font-mono uppercase">{{ $mov->registration }}</span>@endif
+                                </div>
+                            </div>
+                            <div class="col-span-6 sm:col-span-4 min-w-0">
+                                <div class="flex items-center gap-1.5 text-xs text-slate-600">
+                                    <span class="truncate">{{ $pickupCity }}</span>
+                                    <svg viewBox="0 0 24 24" class="h-3 w-3 text-slate-300 shrink-0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+                                    <span class="truncate">{{ $deliveryCity }}</span>
+                                </div>
+                            </div>
+                            <div class="col-span-12 sm:col-span-2 flex items-center justify-end gap-2">
+                                <x-status-badge :status="$mov->status" />
+                                @if($anchor)
+                                    <span class="hidden sm:inline text-[11px] text-slate-400 tabular-nums shrink-0">
+                                        {{ $anchor->diffForHumans(['short' => true]) }}
+                                    </span>
+                                @endif
+                            </div>
+                        </div>
+                    </a>
+                </li>
+            @endforeach
+        </ul>
+        @endif
     </div>
 
-    {{-- Recent damage incidents strip
+    {{-- Damage incidents strip
          Only renders when there is damage to show — no point eating
          vertical space on a clean week. Each row links directly to
          the order page's #damage-section so ops can review photos +
-         download the PDF in one click.
-    --}}
+         download the PDF in one click. --}}
     @if($recentDamageJobs->isNotEmpty())
     <div class="mb-6 rounded-2xl border border-rose-200 bg-white shadow-sm overflow-hidden">
         <div class="flex items-center justify-between gap-3 border-b border-rose-100 bg-rose-50/60 px-6 py-4">
@@ -431,160 +464,72 @@ new #[Layout('components.layouts.app')] class extends Component {
     </div>
     @endif
 
-    {{-- Action required — unified expiry list
-         Single focused feed: every driver credential (Licence, PrDP,
-         Trade Plate) that is expired or expiring inside 60 days,
-         sorted by urgency. No chips, no equipment noise — just the
-         things ops has to do something about, grouped by driver.
-         Renders nothing when there's nothing to action. --}}
-    @if(!empty($attentionItems))
-    @php
-        $driversRoute = route('admin.drivers.index');
-        $headlineColor = $attentionExpiredCount > 0 ? 'amber' : 'amber';
-        $ring = $attentionExpiredCount > 0 ? 'border-amber-200' : 'border-slate-200';
-        $headBg = $attentionExpiredCount > 0 ? 'bg-amber-50/60' : 'bg-slate-50/60';
-    @endphp
-    <div class="mb-6 rounded-2xl border {{ $ring }} bg-white shadow-sm overflow-hidden">
-        <div class="flex items-center justify-between gap-3 border-b border-slate-100 {{ $headBg }} px-6 py-4">
-            <div class="flex items-center gap-3">
-                <span class="inline-flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.25em] {{ $attentionExpiredCount > 0 ? 'text-amber-700' : 'text-slate-600' }}">
-                    <span class="h-1.5 w-1.5 rounded-full {{ $attentionExpiredCount > 0 ? 'bg-amber-500 node-pulse' : 'bg-slate-400' }}"></span>
-                    Action required
-                </span>
-                <span class="text-[11px] text-slate-500 tabular-nums">
-                    @if($attentionExpiredCount > 0){{ $attentionExpiredCount }} expired @endif
-                    @if($attentionExpiredCount > 0 && $attentionExpiringCount > 0) · @endif
-                    @if($attentionExpiringCount > 0){{ $attentionExpiringCount }} expiring &lt;60d @endif
-                </span>
-            </div>
-            <a href="{{ $driversRoute }}" class="text-xs font-semibold text-slate-600 hover:text-slate-900 inline-flex items-center gap-1 transition-colors">
-                All drivers
-                <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></svg>
-            </a>
-        </div>
-        <ul class="divide-y divide-slate-100">
-            @foreach($attentionVisible as $item)
-                @php
-                    $expired = $item['expired'];
-                    $days = $item['days_left'];
-                    // Urgency pill: expired in red, <=14d in amber, else slate.
-                    if ($expired) {
-                        $pillClass = 'bg-red-100 text-red-700 border-red-200';
-                        $pillText  = $days === -1 ? 'Expired yesterday' : 'Expired ' . abs($days) . 'd ago';
-                        $dotClass  = 'bg-red-500';
-                    } elseif ($days <= 14) {
-                        $pillClass = 'bg-amber-100 text-amber-800 border-amber-200';
-                        $pillText  = $days === 0 ? 'Expires today' : ($days === 1 ? '1 day left' : $days . ' days left');
-                        $dotClass  = 'bg-amber-500';
-                    } else {
-                        $pillClass = 'bg-slate-100 text-slate-700 border-slate-200';
-                        $pillText  = $days . ' days left';
-                        $dotClass  = 'bg-slate-400';
-                    }
-                @endphp
-                <li>
-                    <a href="{{ route('admin.drivers.edit', $item['user_id']) }}"
-                       class="flex items-center gap-4 px-6 py-2.5 hover:bg-slate-50/70 transition-colors">
-                        <span class="h-1.5 w-1.5 shrink-0 rounded-full {{ $dotClass }}"></span>
-                        <div class="min-w-0 flex-1 flex items-center gap-3">
-                            <span class="text-sm font-medium text-slate-900 truncate">{{ $item['driver_name'] }}</span>
-                            <span class="inline-flex items-center rounded-md bg-slate-50 border border-slate-200 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
-                                {{ $item['label'] }}
-                            </span>
-                        </div>
-                        <span class="hidden sm:inline text-[11px] text-slate-400 tabular-nums shrink-0">
-                            {{ $item['date']->format('d M Y') }}
-                        </span>
-                        <span class="inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold tabular-nums shrink-0 {{ $pillClass }}">
-                            {{ $pillText }}
-                        </span>
-                    </a>
-                </li>
-            @endforeach
-        </ul>
-        @if($attentionOverflow > 0)
-            <div class="border-t border-slate-100 bg-slate-50/60 px-6 py-2.5 text-center">
-                <a href="{{ $driversRoute }}?expiring=1" class="text-[11px] font-semibold text-slate-600 hover:text-slate-900 inline-flex items-center gap-1">
-                    View {{ $attentionOverflow }} more
-                    <svg viewBox="0 0 24 24" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
-                </a>
-            </div>
-        @endif
-    </div>
-    @endif
-
-    {{-- Recent orders — full width.
-         The old Active Movements side panel was redundant with the Live
-         pipeline strip at the top; keeping the dashboard to one focused
-         column makes the whole page read top-to-bottom without the eye
-         having to juggle two stacks of information. --}}
+    {{-- Recent orders --}}
     <div>
-        <div>
-            <x-card title="Recent Orders" subtitle="Latest bookings across all customers" :padding="false">
-                <x-slot:actions>
-                    <a href="{{ route('admin.orders.index') }}" class="text-xs font-semibold text-slate-600 hover:text-slate-900 inline-flex items-center gap-1 transition-colors">
-                        View all
-                        <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></svg>
-                    </a>
-                </x-slot:actions>
+        <x-card title="Recent Orders" subtitle="Latest bookings across all customers" :padding="false">
+            <x-slot:actions>
+                <a href="{{ route('admin.orders.index') }}" class="text-xs font-semibold text-slate-600 hover:text-slate-900 inline-flex items-center gap-1 transition-colors">
+                    View all
+                    <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></svg>
+                </a>
+            </x-slot:actions>
 
-                @if($recentOrders->isEmpty())
-                    <x-empty-state
-                        title="No orders yet"
-                        description="Orders will appear here as soon as customers submit bookings.">
-                        <x-slot:icon>
-                            <svg viewBox="0 0 24 24" class="h-6 w-6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></svg>
-                        </x-slot:icon>
-                    </x-empty-state>
-                @else
-                <div class="overflow-x-auto">
-                    <table class="min-w-full">
-                        <thead class="bg-slate-50/60">
-                            <tr>
-                                <th class="px-6 py-3 text-left text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-500">Order</th>
-                                <th class="px-6 py-3 text-left text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-500">Customer</th>
-                                <th class="px-6 py-3 text-left text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-500">Vehicle · VIN</th>
-                                <th class="px-6 py-3 text-left text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-500">Route</th>
-                                <th class="px-6 py-3 text-left text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-500">Status</th>
-                            </tr>
-                        </thead>
-                        <tbody class="divide-y divide-slate-100">
-                            @foreach($recentOrders as $job)
-                            <tr class="hover:bg-slate-50/60 cursor-pointer transition-colors group"
-                                onclick="window.location='{{ route('admin.orders.show', $job) }}'">
-                                <td class="px-6 py-3.5">
-                                    <div class="text-sm font-semibold text-slate-900 group-hover:text-blue-700 transition-colors">{{ $job->job_number ?? '—' }}</div>
-                                    <div class="text-[11px] text-slate-400">{{ $job->created_at->diffForHumans(['short' => true]) }}</div>
-                                </td>
-                                <td class="px-6 py-3.5">
-                                    <div class="flex items-center gap-2">
-                                        <span class="text-sm text-slate-700 truncate max-w-[140px]">{{ $job->company?->name ?? '—' }}</span>
-                                        @if($job->company?->workflow_type === 'faw')
-                                            <x-badge color="amber" size="sm">FAW</x-badge>
-                                        @endif
-                                    </div>
-                                </td>
-                                <td class="px-6 py-3.5">
-                                    <div class="text-sm text-slate-700 truncate max-w-[160px]">{{ trim(($job->brand?->name ?? '') . ' ' . ($job->model_name ?? '')) ?: '—' }}</div>
-                                    <div class="text-[11px] font-mono uppercase text-slate-400">{{ $job->vin ?: '—' }}</div>
-                                </td>
-                                <td class="px-6 py-3.5">
-                                    <div class="flex items-center gap-1.5 text-xs text-slate-600">
-                                        <span class="truncate max-w-[80px]">{{ $job->pickupLocation?->city ?? $job->pickupLocation?->company_name ?? '—' }}</span>
-                                        <svg viewBox="0 0 24 24" class="h-3 w-3 text-slate-300 shrink-0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
-                                        <span class="truncate max-w-[80px]">{{ $job->deliveryLocation?->city ?? $job->deliveryLocation?->company_name ?? '—' }}</span>
-                                    </div>
-                                </td>
-                                <td class="px-6 py-3.5">
-                                    <x-status-badge :status="$job->status" />
-                                </td>
-                            </tr>
-                            @endforeach
-                        </tbody>
-                    </table>
-                </div>
-                @endif
-            </x-card>
-        </div>
+            @if($recentOrders->isEmpty())
+                <x-empty-state
+                    title="No orders yet"
+                    description="Orders will appear here as soon as customers submit bookings.">
+                    <x-slot:icon>
+                        <svg viewBox="0 0 24 24" class="h-6 w-6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></svg>
+                    </x-slot:icon>
+                </x-empty-state>
+            @else
+            <div class="overflow-x-auto">
+                <table class="min-w-full">
+                    <thead class="bg-slate-50/60">
+                        <tr>
+                            <th class="px-6 py-3 text-left text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-500">Order</th>
+                            <th class="px-6 py-3 text-left text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-500">Customer</th>
+                            <th class="px-6 py-3 text-left text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-500">Vehicle · VIN</th>
+                            <th class="px-6 py-3 text-left text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-500">Route</th>
+                            <th class="px-6 py-3 text-left text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-500">Status</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100">
+                        @foreach($recentOrders as $job)
+                        <tr class="hover:bg-slate-50/60 cursor-pointer transition-colors group"
+                            onclick="window.location='{{ route('admin.orders.show', $job) }}'">
+                            <td class="px-6 py-3.5">
+                                <div class="text-sm font-semibold text-slate-900 group-hover:text-blue-700 transition-colors">{{ $job->job_number ?? '—' }}</div>
+                                <div class="text-[11px] text-slate-400">{{ $job->created_at->diffForHumans(['short' => true]) }}</div>
+                            </td>
+                            <td class="px-6 py-3.5">
+                                <div class="flex items-center gap-2">
+                                    <span class="text-sm text-slate-700 truncate max-w-[140px]">{{ $job->company?->name ?? '—' }}</span>
+                                    @if($job->company?->workflow_type === 'faw')
+                                        <x-badge color="amber" size="sm">FAW</x-badge>
+                                    @endif
+                                </div>
+                            </td>
+                            <td class="px-6 py-3.5">
+                                <div class="text-sm text-slate-700 truncate max-w-[160px]">{{ trim(($job->brand?->name ?? '') . ' ' . ($job->model_name ?? '')) ?: '—' }}</div>
+                                <div class="text-[11px] font-mono uppercase text-slate-400">{{ $job->vin ?: '—' }}</div>
+                            </td>
+                            <td class="px-6 py-3.5">
+                                <div class="flex items-center gap-1.5 text-xs text-slate-600">
+                                    <span class="truncate max-w-[80px]">{{ $job->pickupLocation?->city ?? $job->pickupLocation?->company_name ?? '—' }}</span>
+                                    <svg viewBox="0 0 24 24" class="h-3 w-3 text-slate-300 shrink-0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+                                    <span class="truncate max-w-[80px]">{{ $job->deliveryLocation?->city ?? $job->deliveryLocation?->company_name ?? '—' }}</span>
+                                </div>
+                            </td>
+                            <td class="px-6 py-3.5">
+                                <x-status-badge :status="$job->status" />
+                            </td>
+                        </tr>
+                        @endforeach
+                    </tbody>
+                </table>
+            </div>
+            @endif
+        </x-card>
     </div>
 </div>

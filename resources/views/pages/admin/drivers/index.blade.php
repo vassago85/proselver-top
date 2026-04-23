@@ -151,18 +151,151 @@ new #[Layout('components.layouts.app')] class extends Component {
             || $this->idTypeFilter !== ''
             || $this->idAnomalyFilter !== '';
 
+        // ─── Compliance dashboard (the bit the admin dashboard used to
+        // show). Lives here because this is *the* drivers page and it's
+        // where ops actually come to act on expiring credentials.
+        $today = now()->startOfDay();
+        $windowEnd = $today->copy()->addDays(60)->endOfDay();
+
+        $totalActiveDrivers = User::whereHas('roles', fn($q) => $q->where('slug', 'driver'))
+            ->where('is_active', true)
+            ->count();
+
+        $profiles = DriverProfile::with('user:id,name,is_active')
+            ->whereHas('user', fn($q) => $q->where('is_active', true))
+            ->where(function ($q) use ($windowEnd) {
+                $q->where('license_expiry', '<=', $windowEnd)
+                  ->orWhere('prdp_expiry', '<=', $windowEnd)
+                  ->orWhere('trade_plate_expiry', '<=', $windowEnd);
+            })
+            ->get();
+
+        $attentionItems = [];
+        foreach ($profiles as $p) {
+            $fields = [
+                ['date' => $p->license_expiry,     'label' => 'Licence',     'filter' => 'license'],
+                ['date' => $p->prdp_expiry,        'label' => 'PrDP',        'filter' => 'prdp'],
+                ['date' => $p->trade_plate_expiry, 'label' => 'Trade plate', 'filter' => 'trade_plate'],
+            ];
+            foreach ($fields as $f) {
+                $d = $f['date'];
+                if (!$d || $d->gt($windowEnd)) continue;
+                $daysLeft = (int) floor($today->diffInDays($d, false));
+                $attentionItems[] = [
+                    'user_id'     => $p->user_id,
+                    'driver_name' => $p->user?->name ?? 'Unknown',
+                    'label'       => $f['label'],
+                    'date'        => $d,
+                    'days_left'   => $daysLeft,
+                    'expired'     => $daysLeft < 0,
+                ];
+            }
+        }
+        usort($attentionItems, fn($a, $b) => $a['date'] <=> $b['date']);
+
+        $attentionExpiredCount  = count(array_filter($attentionItems, fn($i) => $i['expired']));
+        $attentionExpiringCount = count($attentionItems) - $attentionExpiredCount;
+        $attentionVisible  = array_slice($attentionItems, 0, 8);
+        $attentionOverflow = max(0, count($attentionItems) - count($attentionVisible));
+
         return [
             'drivers' => $query->orderBy('name')->paginate(20),
             'licenseWarnMonths' => $licenseWarnMonths,
             'pdpWarnMonths' => $pdpWarnMonths,
             'tradePlateWarnDays' => $tradePlateWarnDays,
             'fleetFiltersActive' => $fleetFiltersActive,
+            'totalActiveDrivers' => $totalActiveDrivers,
+            'attentionVisible' => $attentionVisible,
+            'attentionExpiredCount' => $attentionExpiredCount,
+            'attentionExpiringCount' => $attentionExpiringCount,
+            'attentionOverflow' => $attentionOverflow,
         ];
     }
 };
 ?>
 <div>
     <x-slot:header>Drivers</x-slot:header>
+
+    {{-- Compliance dashboard
+         Moved off the admin dashboard and lives here because this is
+         where ops come to fix expiring credentials. Shows the
+         headline counts and a clickable "Action required" list of
+         the drivers with the most urgent expiries. Hidden when
+         there's literally nothing expiring — no point taking up
+         screen space on a clean fleet. --}}
+    @if(count($attentionVisible) > 0 || $attentionExpiredCount > 0 || $attentionExpiringCount > 0)
+        @php
+            $attnHeadColor = $attentionExpiredCount > 0 ? 'amber' : 'slate';
+        @endphp
+        <div class="mb-6 rounded-2xl border {{ $attentionExpiredCount > 0 ? 'border-amber-200' : 'border-slate-200' }} bg-white shadow-sm overflow-hidden">
+            <div class="flex items-center justify-between gap-3 border-b border-slate-100 {{ $attentionExpiredCount > 0 ? 'bg-amber-50/60' : 'bg-slate-50/60' }} px-6 py-4">
+                <div class="flex items-center gap-3">
+                    <span class="inline-flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.25em] {{ $attentionExpiredCount > 0 ? 'text-amber-700' : 'text-slate-600' }}">
+                        <span class="h-1.5 w-1.5 rounded-full {{ $attentionExpiredCount > 0 ? 'bg-amber-500 node-pulse' : 'bg-slate-400' }}"></span>
+                        Action required
+                    </span>
+                    <span class="text-[11px] text-slate-500 tabular-nums">
+                        @if($attentionExpiredCount > 0){{ $attentionExpiredCount }} expired @endif
+                        @if($attentionExpiredCount > 0 && $attentionExpiringCount > 0) · @endif
+                        @if($attentionExpiringCount > 0){{ $attentionExpiringCount }} expiring &lt;60d @endif
+                    </span>
+                </div>
+                <div class="flex items-center gap-3 text-[11px] text-slate-500 tabular-nums">
+                    <span>{{ $totalActiveDrivers }} active {{ \Illuminate\Support\Str::plural('driver', $totalActiveDrivers) }}</span>
+                </div>
+            </div>
+            @if(count($attentionVisible) > 0)
+            <ul class="divide-y divide-slate-100">
+                @foreach($attentionVisible as $item)
+                    @php
+                        $expired = $item['expired'];
+                        $days    = $item['days_left'];
+                        if ($expired) {
+                            $pillClass = 'bg-red-100 text-red-700 border-red-200';
+                            $pillText  = $days === -1 ? 'Expired yesterday' : 'Expired ' . abs($days) . 'd ago';
+                            $dotClass  = 'bg-red-500';
+                        } elseif ($days <= 14) {
+                            $pillClass = 'bg-amber-100 text-amber-800 border-amber-200';
+                            $pillText  = $days === 0 ? 'Expires today' : ($days === 1 ? '1 day left' : $days . ' days left');
+                            $dotClass  = 'bg-amber-500';
+                        } else {
+                            $pillClass = 'bg-slate-100 text-slate-700 border-slate-200';
+                            $pillText  = $days . ' days left';
+                            $dotClass  = 'bg-slate-400';
+                        }
+                    @endphp
+                    <li>
+                        <a href="{{ route('admin.drivers.edit', $item['user_id']) }}"
+                           class="flex items-center gap-4 px-6 py-2.5 hover:bg-slate-50/70 transition-colors">
+                            <span class="h-1.5 w-1.5 shrink-0 rounded-full {{ $dotClass }}"></span>
+                            <div class="min-w-0 flex-1 flex items-center gap-3">
+                                <span class="text-sm font-medium text-slate-900 truncate">{{ $item['driver_name'] }}</span>
+                                <span class="inline-flex items-center rounded-md bg-slate-50 border border-slate-200 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                                    {{ $item['label'] }}
+                                </span>
+                            </div>
+                            <span class="hidden sm:inline text-[11px] text-slate-400 tabular-nums shrink-0">
+                                {{ $item['date']->format('d M Y') }}
+                            </span>
+                            <span class="inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold tabular-nums shrink-0 {{ $pillClass }}">
+                                {{ $pillText }}
+                            </span>
+                        </a>
+                    </li>
+                @endforeach
+            </ul>
+            @if($attentionOverflow > 0)
+                <div class="border-t border-slate-100 bg-slate-50/60 px-6 py-2.5 text-center">
+                    <button type="button" wire:click="$set('showExpiring', true)"
+                        class="text-[11px] font-semibold text-slate-600 hover:text-slate-900 inline-flex items-center gap-1">
+                        View {{ $attentionOverflow }} more in roster
+                        <svg viewBox="0 0 24 24" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+                    </button>
+                </div>
+            @endif
+            @endif
+        </div>
+    @endif
 
     <div class="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div class="flex flex-1 flex-wrap items-center gap-3">
