@@ -91,17 +91,22 @@ new #[Layout('components.layouts.app')] class extends Component {
         // straight into the offending order without going via the bookings
         // list. We count distinct jobs (not photos) because two pictures
         // of the same scuff is still one incident for ops' purposes.
+        //
+        // Dashboard only shows UNRELEASED damage. Once an operator has
+        // reviewed + released the report (damage_report_released_at is
+        // set) it drops off the dashboard — the full history still lives
+        // on /admin/damage for audit purposes.
         $damageJobIds = JobDocument::where('category', JobDocument::CATEGORY_DAMAGE_PHOTO)
             ->distinct()
             ->pluck('job_id');
+        $pendingReleaseCount = Job::whereIn('id', $damageJobIds)
+            ->whereNull('damage_report_released_at')
+            ->count();
+        // "Open" here means still operationally live (not completed / not
+        // cancelled) AND not yet signed off by ops. Released incidents
+        // are considered handled and no longer shown here.
         $openDamageCount = Job::whereIn('id', $damageJobIds)
             ->whereNotIn('status', [Job::STATUS_COMPLETED, Job::STATUS_CANCELLED])
-            ->count();
-        // Jobs where damage exists but no operator has released the
-        // report to the customer yet. This is the number ops should
-        // drive to zero — every row here is a customer who is waiting
-        // for sign-off.
-        $pendingReleaseCount = Job::whereIn('id', $damageJobIds)
             ->whereNull('damage_report_released_at')
             ->count();
         $damageLast7d = JobDocument::where('category', JobDocument::CATEGORY_DAMAGE_PHOTO)
@@ -115,6 +120,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                 'brand:id,name',
             ])
             ->whereIn('id', $damageJobIds)
+            ->whereNull('damage_report_released_at')
             ->withCount(['documents as damage_photos_count' => function ($q) {
                 $q->where('category', JobDocument::CATEGORY_DAMAGE_PHOTO);
             }])
@@ -260,22 +266,19 @@ new #[Layout('components.layouts.app')] class extends Component {
             // Damage Reports tile. Headline is the number of incidents
             // still awaiting operator sign-off — these are the customers
             // currently blocked from seeing their report, so it's the
-            // number ops should drive to zero. Helper line surfaces
-            // overall open-damage volume so a quiet release queue doesn't
-            // hide a stack of older incidents.
+            // number ops should drive to zero. Once a report is reviewed
+            // and released, the job drops off the dashboard entirely;
+            // only the full /admin/damage page retains the archive.
             $damageHelper = match (true) {
-                $pendingReleaseCount > 0 && $openDamageCount > 0
-                    => $pendingReleaseCount . ' awaiting release · ' . $openDamageCount . ' open',
+                $pendingReleaseCount > 0 && $openDamageCount > 0 && $openDamageCount !== $pendingReleaseCount
+                    => $pendingReleaseCount . ' awaiting review · ' . $openDamageCount . ' still active',
                 $pendingReleaseCount > 0
-                    => $pendingReleaseCount . ' awaiting release',
-                $openDamageCount > 0
-                    => $openDamageCount . ' open incidents',
+                    => $pendingReleaseCount . ' awaiting review',
                 default
-                    => 'All reports released',
+                    => 'All reports reviewed',
             };
             $damageColor = match (true) {
                 $pendingReleaseCount > 0 => 'red',
-                $openDamageCount > 0     => 'amber',
                 default                  => 'slate',
             };
         @endphp
