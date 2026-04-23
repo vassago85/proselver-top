@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\Company;
 use App\Models\Job;
 use App\Models\Location;
 use App\Models\SystemSetting;
@@ -48,7 +49,11 @@ class BookingService
         $job = Job::create([
             'job_number' => $this->numberGenerator->generate(),
             'job_type' => Job::TYPE_TRANSPORT,
-            'status' => Job::STATUS_PENDING_VERIFICATION,
+            // Phase 1 workflow entry point. Whether the job needs a plant-side
+            // confirmation afterwards (FAW-style) vs jumps straight to CONFIRMED
+            // (Demo Motors-style) is decided downstream via
+            // Company::requiresExternalConfirmation(), NOT at creation time.
+            'status' => $this->initialBookingStatus($data['company_id'] ?? null),
             'company_id' => $data['company_id'],
             'created_by_user_id' => $data['created_by_user_id'],
             'transport_route_id' => $route->id,
@@ -108,7 +113,7 @@ class BookingService
         $job = Job::create([
             'job_number' => $this->numberGenerator->generate(),
             'job_type' => Job::TYPE_YARD_WORK,
-            'status' => Job::STATUS_PENDING_VERIFICATION,
+            'status' => $this->initialBookingStatus($data['company_id'] ?? null),
             'company_id' => $data['company_id'],
             'created_by_user_id' => $data['created_by_user_id'],
             'yard_location_id' => $data['yard_location_id'],
@@ -124,6 +129,30 @@ class BookingService
         $job->save();
 
         return $job;
+    }
+
+    /**
+     * Where a brand-new booking lands on the workflow.
+     *
+     * Standard-workflow companies (dealers like Demo Motors, transporters, most
+     * OEMs) jump straight into the Phase 1 chain at STATUS_RECEIVED — no ops
+     * PO-verification gate, they can manage their own bookings.
+     *
+     * The legacy STATUS_PENDING_VERIFICATION gate is reserved for workflows
+     * that explicitly need an ops eye on the PO before anything else (e.g.
+     * 'faw' workflow_type). Extend the match below if another OEM needs the
+     * strict chain.
+     */
+    protected function initialBookingStatus(?int $companyId): string
+    {
+        $workflow = $companyId
+            ? Company::whereKey($companyId)->value('workflow_type')
+            : null;
+
+        return match ($workflow) {
+            'faw'   => Job::STATUS_PENDING_VERIFICATION,
+            default => Job::STATUS_RECEIVED,
+        };
     }
 
     protected function calculateAndStoreRoute(Job $job): void
