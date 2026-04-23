@@ -38,6 +38,35 @@ new #[Layout('components.layouts.app')] class extends Component {
         session()->flash('success', "Order {$this->job->job_number} confirmed.");
     }
 
+    /**
+     * One-click verification bridge out of the legacy PENDING_VERIFICATION
+     * state into the Phase 1 chain at RECEIVED. Ops would previously have
+     * had to walk the job through verified → approved → awaiting confirmation
+     * on /admin/bookings; this collapses all of that into a single action
+     * on the order detail page where they're already looking at the PO.
+     */
+    public function verifyBooking(): void
+    {
+        $this->authorize('verify', $this->job);
+
+        $before = ['status' => $this->job->status];
+
+        if (!$this->job->transitionTo(Job::STATUS_RECEIVED)) {
+            session()->flash('error', 'Cannot verify this booking in its current state.');
+            return;
+        }
+
+        $this->job->po_verified = true;
+        $this->job->po_verified_at = now();
+        $this->job->save();
+
+        AuditService::log('verified', 'job', $this->job->id, $before, [
+            'status' => $this->job->status,
+            'po_verified' => true,
+        ]);
+        session()->flash('success', "Booking {$this->job->job_number} verified.");
+    }
+
     public function sendToCustomer(): void
     {
         if (!$this->job->transitionTo(Job::STATUS_AWAITING_CUSTOMER_CONFIRMATION)) {
@@ -429,7 +458,31 @@ new #[Layout('components.layouts.app')] class extends Component {
                     {{-- =========================================================
                          2. STATUS TRANSITION BUTTON
                          ========================================================= --}}
-                    @if($job->status === Job::STATUS_RECEIVED)
+                    @if($job->status === Job::STATUS_PENDING_VERIFICATION)
+                        @can('verify', $job)
+                            <div class="rounded-lg border border-amber-300 bg-amber-50 p-3.5">
+                                <div class="flex items-start gap-2.5 mb-3">
+                                    <svg class="h-5 w-5 text-amber-600 mt-0.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg>
+                                    <div class="min-w-0">
+                                        <h4 class="text-sm font-semibold text-amber-900">Verify this booking</h4>
+                                        <p class="mt-0.5 text-xs text-amber-800 leading-snug">Confirm the PO and the vehicle details are correct. Once verified the booking moves into the active queue and the customer flow begins.</p>
+                                    </div>
+                                </div>
+                                <button wire:click="verifyBooking" wire:confirm="Verify this booking?"
+                                    class="flex w-full items-center justify-center gap-2 rounded-lg bg-amber-600 px-4 py-3 text-sm font-semibold text-white hover:bg-amber-500 transition-colors shadow-sm">
+                                    <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2.25" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="m9 11 3 3L22 4"/></svg>
+                                    Verify &amp; Release to Queue
+                                </button>
+                            </div>
+                        @else
+                            <div class="rounded-lg bg-amber-50 border border-amber-200 p-4 text-sm text-amber-800">
+                                <div class="flex items-start gap-2">
+                                    <svg class="h-5 w-5 text-amber-500 mt-0.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                                    <span>Waiting for operations to verify this booking.</span>
+                                </div>
+                            </div>
+                        @endcan
+                    @elseif($job->status === Job::STATUS_RECEIVED)
                         @if($job->company?->requiresExternalConfirmation())
                             <button wire:click="sendToCustomer" wire:confirm="Send to customer for confirmation?"
                                 class="w-full rounded-lg bg-amber-600 px-4 py-3 text-sm font-semibold text-white hover:bg-amber-500 transition-colors">

@@ -73,7 +73,13 @@ class Job extends Model
     ];
 
     const ALLOWED_TRANSITIONS = [
-        self::STATUS_PENDING_VERIFICATION => [self::STATUS_VERIFIED, self::STATUS_REJECTED, self::STATUS_CANCELLED],
+        // STATUS_RECEIVED is the one-click "verify & move to Phase 1"
+        // bridge. Ops does not want to click verify → approve → send to
+        // customer → confirm to unblock a PO; a single Verify button on
+        // the order page drops the job straight into the Phase 1 chain
+        // at RECEIVED, where the rest of the UI takes over (send-to-
+        // customer for FAW-style workflows, confirm for standard).
+        self::STATUS_PENDING_VERIFICATION => [self::STATUS_VERIFIED, self::STATUS_RECEIVED, self::STATUS_REJECTED, self::STATUS_CANCELLED],
         self::STATUS_VERIFIED => [self::STATUS_APPROVED, self::STATUS_REJECTED, self::STATUS_CANCELLED],
         self::STATUS_APPROVED => [self::STATUS_ASSIGNED, self::STATUS_CANCELLED],
         self::STATUS_REJECTED => [self::STATUS_PENDING_VERIFICATION],
