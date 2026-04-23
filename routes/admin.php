@@ -15,6 +15,7 @@ Volt::route('dispatch', 'admin.dispatch')->name('dispatch');
 // bookmarks still resolve — just 302 to the merged page.
 Route::redirect('tracking', '/admin/vehicles?bucket=live')->name('tracking');
 Volt::route('deliveries', 'admin.deliveries')->name('deliveries');
+Volt::route('damage', 'admin.damage.index')->name('damage');
 Volt::route('vehicles', 'vehicles.index')->name('vehicles.index');
 Volt::route('documents', 'admin.documents.index')->name('documents.index');
 Volt::route('customers', 'admin.customers.index')->name('customers.index');

@@ -84,6 +84,21 @@ Route::get('/collection-note/{job}/download', function (\App\Models\Job $job) {
     ]);
 })->middleware('auth')->name('collection-note.download');
 
+// Damage Report PDF download. Uses JobPolicy::generateDamageReport which
+// reuses the job-view gate — anyone allowed to see the job can download
+// its damage report. No status restriction (reports may be pulled long
+// after completion for insurance / dispute work).
+Route::get('/damage-report/{job}/download', function (\App\Models\Job $job) {
+    \Illuminate\Support\Facades\Gate::authorize('generateDamageReport', $job);
+
+    $service = app(\App\Services\DamageReportService::class);
+    $pdf = $service->generate($job);
+    return response($pdf, 200, [
+        'Content-Type' => 'application/pdf',
+        'Content-Disposition' => 'inline; filename="damage-report-' . ($job->job_number ?: $job->uuid) . '.pdf"',
+    ]);
+})->middleware('auth')->name('damage-report.download');
+
 Route::get('/', function () {
     if (auth()->check()) {
         return redirect()->to(resolveUserHomePath(auth()->user()));

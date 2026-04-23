@@ -223,6 +223,101 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <p class="text-sm text-gray-600">{{ $job->phase1StatusLabel() }}</p>
             </div>
 
+            {{-- Damage banner
+                 If any damage photo has been uploaded against this job we surface
+                 a high-visibility red banner so ops / customer can't miss it.
+                 The banner also hosts the direct "Download damage report" CTA
+                 so admins don't have to hunt through the paperwork grid.
+            --}}
+            @php
+                $damageDocs = $job->documents->where('category', \App\Models\JobDocument::CATEGORY_DAMAGE_PHOTO)->values();
+            @endphp
+            @if($damageDocs->isNotEmpty())
+            <div class="bg-rose-50 rounded-xl shadow-sm border border-rose-200 p-6" id="damage-section">
+                <div class="flex items-start gap-3 mb-4">
+                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-rose-100 text-rose-700 shrink-0">
+                        <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/>
+                            <path d="M12 9v4"/><path d="M12 17h.01"/>
+                        </svg>
+                    </div>
+                    <div class="min-w-0 flex-1">
+                        <div class="flex items-center gap-2 flex-wrap">
+                            <h3 class="text-base font-semibold text-rose-900">Damage reported</h3>
+                            <span class="inline-flex items-center rounded-full bg-rose-100 border border-rose-200 px-2 py-0.5 text-[11px] font-semibold text-rose-800">
+                                {{ $damageDocs->count() }} {{ $damageDocs->count() === 1 ? 'photo' : 'photos' }}
+                            </span>
+                        </div>
+                        <p class="mt-1 text-sm text-rose-900/80 leading-relaxed">
+                            The driver flagged damage against this vehicle. Review the photographs and notes below, then download the customer-ready damage report.
+                        </p>
+
+                        {{-- Thumbnail strip --}}
+                        <div class="mt-4 grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2">
+                            @foreach($damageDocs as $dmg)
+                                @can('view', $dmg)
+                                <a href="{{ route('documents.view', $dmg) }}" target="_blank" rel="noopener"
+                                   class="group relative block rounded-md overflow-hidden border border-rose-200 bg-white hover:border-rose-400 hover:shadow transition">
+                                    @if(str_starts_with((string) $dmg->mime_type, 'image/'))
+                                        <div class="aspect-square overflow-hidden bg-rose-50">
+                                            <img src="{{ route('documents.view', $dmg) }}"
+                                                 alt="Damage photo"
+                                                 class="h-full w-full object-cover group-hover:scale-105 transition-transform"
+                                                 loading="lazy">
+                                        </div>
+                                    @else
+                                        <div class="aspect-square flex items-center justify-center bg-rose-50 text-rose-400 text-[10px] text-center p-2">
+                                            non-image<br>attachment
+                                        </div>
+                                    @endif
+                                    @if($dmg->captured_at)
+                                        <div class="px-1.5 py-1 text-[10px] bg-white border-t border-rose-100 text-rose-800 truncate">
+                                            {{ $dmg->captured_at->format('d M · H:i') }}
+                                        </div>
+                                    @endif
+                                </a>
+                                @endcan
+                            @endforeach
+                        </div>
+
+                        {{-- Driver notes (if any were attached to a damage photo) --}}
+                        @php
+                            $damageNotes = $damageDocs
+                                ->map(fn($d) => [
+                                    'text' => (is_string($d->notes) && !str_starts_with($d->notes, 'slot:')) ? trim($d->notes) : null,
+                                    'at'   => $d->captured_at ?? $d->created_at,
+                                ])
+                                ->filter(fn($row) => !empty($row['text']))
+                                ->values();
+                        @endphp
+                        @if($damageNotes->isNotEmpty())
+                        <div class="mt-4 space-y-2">
+                            <h4 class="text-xs font-semibold uppercase tracking-wider text-rose-900/70">Driver notes</h4>
+                            @foreach($damageNotes as $note)
+                                <div class="rounded-md bg-white border border-rose-200 px-3 py-2 text-sm text-rose-900">
+                                    <p class="whitespace-pre-line">{{ $note['text'] }}</p>
+                                    @if($note['at'])
+                                        <p class="mt-1 text-[11px] text-rose-700/70">{{ $note['at']->format('d M Y · H:i') }}</p>
+                                    @endif
+                                </div>
+                            @endforeach
+                        </div>
+                        @endif
+
+                        <div class="mt-5 flex flex-wrap items-center gap-2">
+                            @can('generateDamageReport', $job)
+                            <a href="{{ route('damage-report.download', $job) }}" target="_blank" rel="noopener"
+                               class="inline-flex items-center gap-2 rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-500 transition-colors">
+                                <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+                                Download Damage Report (PDF)
+                            </a>
+                            @endcan
+                        </div>
+                    </div>
+                </div>
+            </div>
+            @endif
+
             {{-- Order details --}}
             <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
                 <h3 class="text-lg font-semibold text-gray-900 mb-4">Order Details</h3>

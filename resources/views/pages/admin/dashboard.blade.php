@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\Job;
+use App\Models\JobDocument;
 use App\Models\DriverProfile;
 use App\Models\User;
 use Livewire\Volt\Component;
@@ -86,6 +87,34 @@ new #[Layout('components.layouts.app')] class extends Component {
             ->limit(8)
             ->get();
 
+        // Damage pulse — counts + the latest incidents so ops can click
+        // straight into the offending order without going via the bookings
+        // list. We count distinct jobs (not photos) because two pictures
+        // of the same scuff is still one incident for ops' purposes.
+        $damageJobIds = JobDocument::where('category', JobDocument::CATEGORY_DAMAGE_PHOTO)
+            ->distinct()
+            ->pluck('job_id');
+        $openDamageCount = Job::whereIn('id', $damageJobIds)
+            ->whereNotIn('status', [Job::STATUS_COMPLETED, Job::STATUS_CANCELLED])
+            ->count();
+        $damageLast7d = JobDocument::where('category', JobDocument::CATEGORY_DAMAGE_PHOTO)
+            ->where('created_at', '>=', now()->subDays(7))
+            ->count();
+
+        $recentDamageJobs = Job::with([
+                'company:id,name',
+                'pickupLocation:id,company_name,city',
+                'deliveryLocation:id,company_name,city',
+                'brand:id,name',
+            ])
+            ->whereIn('id', $damageJobIds)
+            ->withCount(['documents as damage_photos_count' => function ($q) {
+                $q->where('category', JobDocument::CATEGORY_DAMAGE_PHOTO);
+            }])
+            ->orderByDesc('updated_at')
+            ->limit(6)
+            ->get();
+
         $activeMovements = Job::with(['company:id,name', 'pickupLocation:id,company_name,city', 'deliveryLocation:id,company_name,city', 'brand:id,name', 'driver:id,name'])
             ->whereIn('status', [Job::STATUS_DRIVER_ASSIGNED, Job::STATUS_READY_FOR_COLLECTION, Job::STATUS_COLLECTED, Job::STATUS_IN_TRANSIT])
             ->orderByDesc('updated_at')
@@ -115,6 +144,9 @@ new #[Layout('components.layouts.app')] class extends Component {
             'missingTollCard',
             'passportHolders',
             'saIdAnomalies',
+            'openDamageCount',
+            'damageLast7d',
+            'recentDamageJobs',
         );
     }
 };
@@ -146,7 +178,7 @@ new #[Layout('components.layouts.app')] class extends Component {
     </x-page-header>
 
     {{-- Stat cards --}}
-    <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 mb-6">
+    <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-7 mb-6">
         <x-stat-card
             label="New Bookings"
             :value="$newOrders"
@@ -215,6 +247,29 @@ new #[Layout('components.layouts.app')] class extends Component {
             :helper="$complianceHelper"
             :helperColor="$complianceColor"
             :href="route('admin.drivers.index')" />
+
+        @php
+            // Damage Reports tile. Headline is the number of *open* jobs
+            // (i.e. not yet completed / cancelled) that have damage photos
+            // against them — these are the ones ops still need to action.
+            // The helper shows photo volume in the last 7 days so a sudden
+            // spike is visible at a glance.
+            $damageHelper = $damageLast7d > 0
+                ? $damageLast7d . ' new ' . ($damageLast7d === 1 ? 'photo' : 'photos') . ' · 7d'
+                : 'No new photos · 7d';
+            $damageColor = $openDamageCount > 0 ? 'red' : 'slate';
+        @endphp
+        <x-stat-card
+            label="Damage Reports"
+            :value="$openDamageCount"
+            :color="$damageColor"
+            :helper="$damageHelper"
+            :helperColor="$damageColor"
+            :href="route('admin.damage')">
+            <x-slot:icon>
+                <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+            </x-slot:icon>
+        </x-stat-card>
     </div>
 
     {{-- Live movements strip (matches landing page operational tile feel) --}}
@@ -247,6 +302,64 @@ new #[Layout('components.layouts.app')] class extends Component {
             @endforeach
         </div>
     </div>
+
+    {{-- Recent damage incidents strip
+         Only renders when there is damage to show — no point eating
+         vertical space on a clean week. Each row links directly to
+         the order page's #damage-section so ops can review photos +
+         download the PDF in one click.
+    --}}
+    @if($recentDamageJobs->isNotEmpty())
+    <div class="mb-6 rounded-2xl border border-rose-200 bg-white shadow-sm overflow-hidden">
+        <div class="flex items-center justify-between gap-3 border-b border-rose-100 bg-rose-50/60 px-6 py-4">
+            <div class="flex items-center gap-3">
+                <span class="inline-flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.25em] text-rose-700">
+                    <span class="h-1.5 w-1.5 rounded-full bg-rose-500 node-pulse"></span>
+                    Damage incidents
+                </span>
+                <span class="text-[11px] text-rose-700/70">{{ $recentDamageJobs->count() }} most recent</span>
+            </div>
+            <a href="{{ route('admin.damage') }}" class="text-xs font-semibold text-rose-700 hover:text-rose-900 inline-flex items-center gap-1 transition-colors">
+                Open damage reports
+                <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></svg>
+            </a>
+        </div>
+        <ul class="divide-y divide-rose-100">
+            @foreach($recentDamageJobs as $dmgJob)
+            <li>
+                <a href="{{ route('admin.orders.show', $dmgJob) }}#damage-section"
+                   class="flex items-center gap-4 px-6 py-3 hover:bg-rose-50/60 transition-colors">
+                    <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-rose-100 text-rose-700 shrink-0">
+                        <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+                    </div>
+                    <div class="min-w-0 flex-1">
+                        <div class="flex items-center gap-2 flex-wrap">
+                            <span class="text-sm font-semibold text-slate-900">{{ $dmgJob->job_number ?? ('#' . $dmgJob->id) }}</span>
+                            <span class="inline-flex items-center rounded-full bg-rose-100 border border-rose-200 px-1.5 py-0.5 text-[10px] font-semibold text-rose-800">
+                                {{ $dmgJob->damage_photos_count }} {{ $dmgJob->damage_photos_count === 1 ? 'photo' : 'photos' }}
+                            </span>
+                            <x-status-badge :status="$dmgJob->status" />
+                        </div>
+                        <p class="text-xs text-slate-500 mt-0.5 truncate">
+                            {{ $dmgJob->company?->name ?? '—' }}
+                            @if($dmgJob->brand || $dmgJob->model_name)
+                                &middot; {{ $dmgJob->brand?->name }} {{ $dmgJob->model_name }}
+                            @endif
+                            @if($dmgJob->registration)
+                                &middot; {{ strtoupper($dmgJob->registration) }}
+                            @endif
+                        </p>
+                    </div>
+                    <div class="hidden sm:block text-right text-[11px] text-slate-400 shrink-0">
+                        {{ $dmgJob->updated_at?->diffForHumans() }}
+                    </div>
+                    <svg class="h-4 w-4 text-slate-300 shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+                </a>
+            </li>
+            @endforeach
+        </ul>
+    </div>
+    @endif
 
     {{-- Fleet Health strip --}}
     {{-- Three horizontal clusters: Trade Plates, Equipment coverage, Identity.

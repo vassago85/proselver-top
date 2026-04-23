@@ -372,6 +372,34 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         {{-- Sidebar: Documents --}}
         <div class="space-y-6">
+            {{-- Damage report CTA — only surfaces when there is damage to
+                 report. We keep this above the generic Documents list so
+                 customers running an insurance claim can grab the PDF
+                 without scrolling through every collection photo. --}}
+            @php
+                $damageDocCount = $job->documents->where('category', \App\Models\JobDocument::CATEGORY_DAMAGE_PHOTO)->count();
+            @endphp
+            @if($damageDocCount > 0)
+            <div class="bg-rose-50 rounded-xl shadow-sm border border-rose-200 p-6">
+                <div class="flex items-start gap-3">
+                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-rose-100 text-rose-700 shrink-0">
+                        <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+                    </div>
+                    <div class="min-w-0 flex-1">
+                        <h3 class="text-base font-semibold text-rose-900">Damage on record</h3>
+                        <p class="mt-1 text-sm text-rose-900/80">{{ $damageDocCount }} {{ $damageDocCount === 1 ? 'photograph was' : 'photographs were' }} captured against this movement. Download the full report with vehicle details and evidence.</p>
+                        @can('generateDamageReport', $job)
+                        <a href="{{ route('damage-report.download', $job) }}" target="_blank" rel="noopener"
+                           class="mt-3 inline-flex items-center gap-2 rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-500">
+                            <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+                            Download Damage Report (PDF)
+                        </a>
+                        @endcan
+                    </div>
+                </div>
+            </div>
+            @endif
+
             <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
                 <h3 class="text-lg font-semibold text-gray-900 mb-4">Documents</h3>
                 @if($allDocuments->isNotEmpty())

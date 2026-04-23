@@ -234,4 +234,17 @@ class JobPolicy
             Job::STATUS_COMPLETED,
         ]);
     }
+
+    /**
+     * Damage report is a customer-facing document — anyone who can view
+     * the job itself can download it. That covers internal staff, the
+     * booking company, the executing company (future 3PL), and the
+     * assigned driver. We deliberately don't gate on status: damage
+     * reports are often needed long after a job is completed when an
+     * insurance claim or credit note is being prepared.
+     */
+    public function generateDamageReport(User $user, Job $job): bool
+    {
+        return $this->view($user, $job);
+    }
 }
