@@ -255,19 +255,53 @@ new #[Layout('components.layouts.app')] class extends Component {
 
             {{-- Driver section --}}
             @if($job->driver)
+            @php
+                $dp = $job->driver->driverProfile;
+                // When a vehicle is collected or in transit, the tracker ID is
+                // the single most useful piece of info on this page — ops needs
+                // it to pull a live location. Pin it to the top of the driver
+                // card in that window so nobody has to hunt for it.
+                $isInFlight = in_array($job->status, [
+                    \App\Models\Job::STATUS_COLLECTED,
+                    \App\Models\Job::STATUS_IN_TRANSIT,
+                    \App\Models\Job::STATUS_IN_PROGRESS,
+                ], true);
+            @endphp
             <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
                 <h3 class="text-lg font-semibold text-gray-900 mb-4">Assigned Driver</h3>
+
+                @if($isInFlight && $dp?->tracker_id)
+                    <div class="mb-4 flex items-center gap-3 rounded-lg bg-emerald-50 border border-emerald-200 p-3">
+                        <span class="flex h-8 w-8 items-center justify-center rounded-full bg-emerald-500 text-white">
+                            <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a8 8 0 0 1 8 8c0 4.5-6 12-8 12S4 14.5 4 10a8 8 0 0 1 8-8z"/><circle cx="12" cy="10" r="3"/></svg>
+                        </span>
+                        <div class="flex-1">
+                            <p class="text-[10px] font-semibold uppercase tracking-[0.15em] text-emerald-700">Live Tracker</p>
+                            <p class="font-mono text-sm font-semibold text-emerald-900">{{ $dp->tracker_id }}</p>
+                        </div>
+                    </div>
+                @endif
+
                 <dl class="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
                     <div><dt class="text-gray-500">Name</dt><dd class="font-medium">{{ $job->driver->name }}</dd></div>
                     @if($job->driver->phone)
                     <div><dt class="text-gray-500">Phone</dt><dd class="font-medium">{{ $job->driver->phone }}</dd></div>
                     @endif
-                    @if($job->driver->driverProfile)
-                        @if($job->driver->driverProfile->id_number)
-                        <div><dt class="text-gray-500">ID Number</dt><dd class="font-medium">{{ $job->driver->driverProfile->id_number }}</dd></div>
+                    @if($dp)
+                        @if($dp->id_number)
+                        <div><dt class="text-gray-500">ID Number</dt><dd class="font-medium">{{ $dp->id_number }}</dd></div>
                         @endif
-                        @if($job->driver->driverProfile->cellphone)
-                        <div><dt class="text-gray-500">Cellphone</dt><dd class="font-medium">{{ $job->driver->driverProfile->cellphone }}</dd></div>
+                        @if($dp->cellphone)
+                        <div><dt class="text-gray-500">Cellphone</dt><dd class="font-medium">{{ $dp->cellphone }}</dd></div>
+                        @endif
+                        @if($dp->tracker_id && !$isInFlight)
+                        <div><dt class="text-gray-500">Tracker ID</dt><dd class="font-medium font-mono">{{ $dp->tracker_id }}</dd></div>
+                        @endif
+                        @if($dp->camera_id)
+                        <div><dt class="text-gray-500">Camera ID</dt><dd class="font-medium font-mono">{{ $dp->camera_id }}</dd></div>
+                        @endif
+                        @if($dp->toll_card_number)
+                        <div><dt class="text-gray-500">Toll Card</dt><dd class="font-medium font-mono">{{ $dp->toll_card_number }}</dd></div>
                         @endif
                     @endif
                 </dl>

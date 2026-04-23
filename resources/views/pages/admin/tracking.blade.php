@@ -25,11 +25,17 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     public function with(): array
     {
+        // driverProfile is eager-loaded so we can surface tracker_id
+        // right next to the driver name on this screen. Ops use this page
+        // to chase a vehicle in real time — having the tracker serial one
+        // click away (instead of a round-trip into the driver record)
+        // saves them opening Cartrack with the wrong id.
         $query = Job::with([
                 'company:id,name',
                 'pickupLocation:id,company_name,city',
                 'deliveryLocation:id,company_name,city',
                 'driver:id,name,phone',
+                'driver.driverProfile:user_id,tracker_id',
                 'brand:id,name',
             ])
             ->whereIn('status', self::IN_FLIGHT_STATUSES)
@@ -48,7 +54,8 @@ new #[Layout('components.layouts.app')] class extends Component {
                     ->orWhereHas('company', fn($q) => $q->where('name', 'ilike', "%{$this->search}%"))
                     ->orWhereHas('pickupLocation', fn($q) => $q->where('company_name', 'ilike', "%{$this->search}%"))
                     ->orWhereHas('deliveryLocation', fn($q) => $q->where('company_name', 'ilike', "%{$this->search}%"))
-                    ->orWhereHas('driver', fn($q) => $q->where('name', 'ilike', "%{$this->search}%"));
+                    ->orWhereHas('driver', fn($q) => $q->where('name', 'ilike', "%{$this->search}%"))
+                    ->orWhereHas('driver.driverProfile', fn($q) => $q->where('tracker_id', 'ilike', "%{$this->search}%"));
             });
         }
 
@@ -100,7 +107,7 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     <div class="mb-4">
         <input wire:model.live.debounce.300ms="search" type="text"
-            placeholder="Search by order #, VIN, make/model, company, route, or driver..."
+            placeholder="Search by order #, VIN, make/model, company, route, driver or tracker ID..."
             class="w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm focus:border-blue-500 focus:ring-blue-500">
     </div>
 
@@ -129,7 +136,18 @@ new #[Layout('components.layouts.app')] class extends Component {
                         <td class="px-4 py-3 text-sm font-mono text-gray-600 uppercase">{{ $job->vin ? strtoupper($job->vin) : '—' }}</td>
                         <td class="px-4 py-3 text-sm text-gray-500">{{ $job->pickupLocation?->company_name ?? '—' }}</td>
                         <td class="px-4 py-3 text-sm text-gray-500">{{ $job->deliveryLocation?->company_name ?? '—' }}</td>
-                        <td class="px-4 py-3 text-sm text-gray-900">{{ $job->driver?->name ?? '—' }}</td>
+                        <td class="px-4 py-3 text-sm text-gray-900">
+                            <div class="flex flex-col leading-tight">
+                                <span>{{ $job->driver?->name ?? '—' }}</span>
+                                @if($job->driver?->driverProfile?->tracker_id)
+                                    <span class="mt-0.5 inline-flex items-center gap-1 self-start rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700 ring-1 ring-emerald-200"
+                                          title="Tracker ID: {{ $job->driver->driverProfile->tracker_id }}">
+                                        <svg viewBox="0 0 24 24" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a8 8 0 0 1 8 8c0 4.5-6 12-8 12S4 14.5 4 10a8 8 0 0 1 8-8z"/><circle cx="12" cy="10" r="3"/></svg>
+                                        <span class="font-mono tabular-nums">{{ $job->driver->driverProfile->tracker_id }}</span>
+                                    </span>
+                                @endif
+                            </div>
+                        </td>
                         <td class="px-4 py-3"><x-status-badge :status="$job->status" /></td>
                         <td class="px-4 py-3 text-sm text-gray-500">{{ $job->updated_at->diffForHumans() }}</td>
                     </tr>

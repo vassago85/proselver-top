@@ -30,6 +30,9 @@ new #[Layout('components.layouts.app')] class extends Component {
     public string $licenseNumber = '';
     public string $licenseExpiry = '';
     public string $prdpExpiry = '';
+    public string $trackerId = '';
+    public string $cameraId = '';
+    public string $tollCardNumber = '';
     public string $notes = '';
 
     // Existing document info
@@ -58,6 +61,9 @@ new #[Layout('components.layouts.app')] class extends Component {
             $this->licenseNumber = $profile->license_number ?? '';
             $this->licenseExpiry = $profile->license_expiry?->format('Y-m-d') ?? '';
             $this->prdpExpiry = $profile->prdp_expiry?->format('Y-m-d') ?? '';
+            $this->trackerId = $profile->tracker_id ?? '';
+            $this->cameraId = $profile->camera_id ?? '';
+            $this->tollCardNumber = $profile->toll_card_number ?? '';
             $this->notes = $profile->notes ?? '';
             $this->existingLicenseFilename = $profile->license_document_filename;
             $this->existingPdpFilename = $profile->pdp_document_filename;
@@ -103,6 +109,9 @@ new #[Layout('components.layouts.app')] class extends Component {
             'licenseNumber' => 'nullable|string|max:50',
             'licenseExpiry' => 'nullable|date',
             'prdpExpiry' => 'nullable|date',
+            'trackerId' => 'nullable|string|max:100',
+            'cameraId' => 'nullable|string|max:100',
+            'tollCardNumber' => 'nullable|string|max:100',
             'notes' => 'nullable|string|max:2000',
             'licenseDocument' => 'nullable|file|mimes:pdf,jpg,jpeg,png|max:5120',
             'pdpDocument' => 'nullable|file|mimes:pdf,jpg,jpeg,png|max:5120',
@@ -131,6 +140,9 @@ new #[Layout('components.layouts.app')] class extends Component {
             'license_number' => $this->licenseNumber ?: null,
             'license_expiry' => $this->licenseExpiry ?: null,
             'prdp_expiry' => $this->prdpExpiry ?: null,
+            'tracker_id' => trim($this->trackerId) ?: null,
+            'camera_id' => trim($this->cameraId) ?: null,
+            'toll_card_number' => trim($this->tollCardNumber) ?: null,
             'notes' => $this->notes ?: null,
         ];
 
@@ -270,6 +282,32 @@ new #[Layout('components.layouts.app')] class extends Component {
                     <input wire:model="prdpExpiry" type="date" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:ring-blue-500">
                     @error('prdpExpiry')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
                 </div>
+
+                {{-- Fleet equipment: tracker / dashcam / toll card. Populating --}}
+                {{-- any of these turns the matching T / C / $ dot green on the --}}
+                {{-- drivers list and makes the tracker number appear next to --}}
+                {{-- the driver on tracking/order screens when a vehicle is in --}}
+                {{-- transit. All three are free-text; devices have no fixed --}}
+                {{-- format across the fleet. --}}
+                <div class="sm:col-span-2 mt-2 pt-4 border-t border-gray-100">
+                    <h4 class="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-3">Fleet Equipment</h4>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Tracker ID</label>
+                    <input wire:model="trackerId" type="text" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:ring-blue-500" placeholder="e.g. Cartrack serial">
+                    @error('trackerId')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Camera / Dashcam ID</label>
+                    <input wire:model="cameraId" type="text" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:ring-blue-500" placeholder="Device serial / fleet asset #">
+                    @error('cameraId')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
+                </div>
+                <div class="sm:col-span-2">
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Toll Card Number</label>
+                    <input wire:model="tollCardNumber" type="text" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:ring-blue-500" placeholder="e-tag / fleet card number">
+                    @error('tollCardNumber')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
+                </div>
+
                 <div class="sm:col-span-2">
                     <label class="block text-sm font-medium text-gray-700 mb-1">Notes</label>
                     <textarea wire:model="notes" rows="3" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:ring-blue-500" placeholder="Any additional notes about this driver..."></textarea>
