@@ -15,6 +15,11 @@ new #[Layout('components.layouts.app')] class extends Component {
     public string $statusFilter = '';
     public bool $showExpiring = false;
 
+    // Presentation toggle — 'table' (dense triage grid, default) or 'cards'
+    // (photo-friendly briefing view ops tend to prefer when walking the
+    // floor). #[Url] so the choice survives a refresh and shared links.
+    #[Url(as: 'view', except: 'table')] public string $view = 'table';
+
     // Fleet-health filters. #[Url] makes them shareable via the dashboard's
     // deep links (?trade_plate=expired, ?missing=tracker, ?id_type=passport,
     // ?id_anomaly=1) so ops can triage with one click.
@@ -30,6 +35,11 @@ new #[Layout('components.layouts.app')] class extends Component {
     public function updatedMissingFilter(): void { $this->resetPage(); }
     public function updatedIdTypeFilter(): void { $this->resetPage(); }
     public function updatedIdAnomalyFilter(): void { $this->resetPage(); }
+
+    public function setView(string $view): void
+    {
+        $this->view = in_array($view, ['table', 'cards'], true) ? $view : 'table';
+    }
 
     public function clearFleetFilters(): void
     {
@@ -168,9 +178,28 @@ new #[Layout('components.layouts.app')] class extends Component {
                 Show expiring soon
             </label>
         </div>
-        <a href="{{ route('admin.drivers.create') }}" class="inline-flex items-center rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-500 transition-colors">
-            + Add Driver
-        </a>
+        <div class="flex items-center gap-2">
+            {{-- View toggle: table (dense) vs cards (briefing). Segmented
+                 control mirrors the pattern on /admin/vehicles so ops pick
+                 up the pattern once. --}}
+            <div class="inline-flex overflow-hidden rounded-lg border border-gray-300 bg-white text-sm">
+                <button type="button" wire:click="setView('table')"
+                    class="flex items-center gap-1.5 px-3 py-2 font-medium transition-colors {{ $view === 'table' ? 'bg-slate-900 text-white' : 'text-gray-600 hover:bg-gray-50' }}"
+                    title="Table view">
+                    <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M3 12h18"/><path d="M3 18h18"/></svg>
+                    Table
+                </button>
+                <button type="button" wire:click="setView('cards')"
+                    class="flex items-center gap-1.5 px-3 py-2 font-medium transition-colors {{ $view === 'cards' ? 'bg-slate-900 text-white' : 'text-gray-600 hover:bg-gray-50' }}"
+                    title="Card view">
+                    <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/></svg>
+                    Cards
+                </button>
+            </div>
+            <a href="{{ route('admin.drivers.create') }}" class="inline-flex items-center rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-500 transition-colors">
+                + Add Driver
+            </a>
+        </div>
     </div>
 
     @if(session('success'))
@@ -202,6 +231,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         </div>
     @endif
 
+    @if($view === 'table')
     <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-x-auto">
         <table class="min-w-full divide-y divide-gray-200">
             <thead class="bg-gray-50">
@@ -239,7 +269,6 @@ new #[Layout('components.layouts.app')] class extends Component {
                         'red'   => 'bg-red-100 text-red-800',
                         'gray'  => 'bg-gray-100 text-gray-500',
                     ];
-                    // ID number validity flag — only meaningful for SA IDs.
                     $rawId = $profile?->id_number ?? '';
                     $idDigits = strlen(preg_replace('/\D/', '', $rawId));
                     $idTypeRaw = $profile?->id_type ?? 'sa_id';
@@ -249,9 +278,6 @@ new #[Layout('components.layouts.app')] class extends Component {
                         'other'    => ['label' => 'Other',    'class' => 'bg-slate-50 text-slate-700 border border-slate-200'],
                         default    => ['label' => 'SA ID',    'class' => 'bg-slate-50 text-slate-600 border border-slate-200'],
                     };
-                    // Equipment coverage dots (T / C / $). Filled = present,
-                    // outlined = missing. Title tooltips expose the actual id
-                    // on hover without widening the column.
                     $hasTracker  = filled($profile?->tracker_id);
                     $hasCamera   = filled($profile?->camera_id);
                     $hasTollCard = filled($profile?->toll_card_number);
@@ -337,6 +363,176 @@ new #[Layout('components.layouts.app')] class extends Component {
             </tbody>
         </table>
     </div>
+    @else
+    {{-- Card view. Same badge logic as the table, laid out to scan one
+         driver at a time rather than compare a column across rows. Good
+         for onboarding / daily briefings / big monitors. --}}
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+        @forelse($drivers as $driver)
+            @php
+                $profile = $driver->driverProfile;
+                $licenseBadge = $this->expiryBadge($profile?->license_expiry?->toDateString(), $licenseWarnMonths);
+                $pdpBadge = $this->expiryBadge($profile?->prdp_expiry?->toDateString(), $pdpWarnMonths);
+                $tpBadge = 'gray';
+                if ($profile?->trade_plate_expiry) {
+                    if ($profile->trade_plate_expiry->isPast()) $tpBadge = 'red';
+                    elseif ($profile->trade_plate_expiry->diffInDays(now()) <= $tradePlateWarnDays) $tpBadge = 'amber';
+                    else $tpBadge = 'green';
+                }
+                $badgeClasses = [
+                    'green' => 'bg-green-100 text-green-800',
+                    'amber' => 'bg-amber-100 text-amber-800',
+                    'red'   => 'bg-red-100 text-red-800',
+                    'gray'  => 'bg-gray-100 text-gray-500',
+                ];
+                $rawId = $profile?->id_number ?? '';
+                $idDigits = strlen(preg_replace('/\D/', '', $rawId));
+                $idTypeRaw = $profile?->id_type ?? 'sa_id';
+                $idAnomaly = $idTypeRaw === 'sa_id' && $rawId !== '' && $idDigits !== 13;
+                $idTypeChip = match ($idTypeRaw) {
+                    'passport' => ['label' => 'Passport', 'class' => 'bg-blue-50 text-blue-700 border border-blue-200'],
+                    'other'    => ['label' => 'Other',    'class' => 'bg-slate-50 text-slate-700 border border-slate-200'],
+                    default    => ['label' => 'SA ID',    'class' => 'bg-slate-50 text-slate-600 border border-slate-200'],
+                };
+                $hasTracker  = filled($profile?->tracker_id);
+                $hasCamera   = filled($profile?->camera_id);
+                $hasTollCard = filled($profile?->toll_card_number);
+                $initials = collect(explode(' ', trim($driver->name)))
+                    ->filter()
+                    ->take(2)
+                    ->map(fn($p) => strtoupper(substr($p, 0, 1)))
+                    ->implode('');
+            @endphp
+            <div class="group relative flex flex-col rounded-2xl border border-slate-200 bg-white shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
+                {{-- Top stripe reflects the worst compliance status for this driver --}}
+                @php
+                    $worst = in_array('red', [$licenseBadge, $pdpBadge, $tpBadge], true) ? 'red'
+                           : (in_array('amber', [$licenseBadge, $pdpBadge, $tpBadge], true) ? 'amber'
+                           : (in_array('green', [$licenseBadge, $pdpBadge, $tpBadge], true) ? 'green' : 'gray'));
+                    $stripe = [
+                        'red'   => 'bg-gradient-to-r from-red-500 to-rose-500',
+                        'amber' => 'bg-gradient-to-r from-amber-400 to-orange-400',
+                        'green' => 'bg-gradient-to-r from-emerald-500 to-teal-500',
+                        'gray'  => 'bg-gradient-to-r from-slate-300 to-slate-200',
+                    ][$worst];
+                @endphp
+                <div class="h-1.5 w-full rounded-t-2xl {{ $stripe }}"></div>
+
+                <div class="flex flex-1 flex-col gap-4 p-5">
+                    {{-- Header: avatar + name + status --}}
+                    <div class="flex items-start gap-3">
+                        <div class="flex h-11 w-11 flex-none items-center justify-center rounded-full bg-slate-900 text-sm font-semibold text-white">
+                            {{ $initials ?: '??' }}
+                        </div>
+                        <div class="min-w-0 flex-1">
+                            <a href="{{ route('admin.drivers.edit', $driver) }}" class="block truncate text-sm font-semibold text-slate-900 hover:text-blue-600">
+                                {{ $driver->name }}
+                            </a>
+                            <div class="mt-0.5 flex items-center gap-1.5 text-xs text-slate-500">
+                                <span>{{ $profile?->cellphone ?? $driver->phone ?? '—' }}</span>
+                                @if($profile?->base_location)
+                                    <span class="text-slate-300">·</span>
+                                    <span class="truncate">{{ $profile->base_location }}</span>
+                                @endif
+                            </div>
+                        </div>
+                        <x-badge :color="$driver->is_active ? 'green' : 'red'">
+                            {{ $driver->is_active ? 'Active' : 'Inactive' }}
+                        </x-badge>
+                    </div>
+
+                    {{-- ID line --}}
+                    <div class="flex flex-wrap items-center gap-1.5 text-xs text-slate-600">
+                        <span class="font-mono">{{ $profile?->id_number ?: '—' }}</span>
+                        <span class="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide {{ $idTypeChip['class'] }}">{{ $idTypeChip['label'] }}</span>
+                        @if($idAnomaly)
+                            <span title="SA ID is not 13 digits — verify" class="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide bg-amber-100 text-amber-800 border border-amber-200">verify</span>
+                        @endif
+                    </div>
+
+                    {{-- Compliance grid (licence / PDP / trade plate) --}}
+                    <div class="grid grid-cols-3 gap-2 rounded-lg border border-slate-100 bg-slate-50/50 p-3">
+                        <div>
+                            <div class="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Licence</div>
+                            @if($profile?->license_expiry)
+                                <div class="mt-1 inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium {{ $badgeClasses[$licenseBadge] }}">
+                                    {{ $profile->license_expiry->format('d M Y') }}
+                                </div>
+                                @if($profile?->license_code)
+                                    <div class="mt-0.5 text-[10px] uppercase tracking-wide text-slate-400">Code {{ $profile->license_code }}</div>
+                                @endif
+                            @else
+                                <div class="mt-1 text-xs text-slate-400">—</div>
+                            @endif
+                        </div>
+                        <div>
+                            <div class="text-[10px] font-semibold uppercase tracking-wide text-slate-400">PDP</div>
+                            @if($profile?->prdp_expiry)
+                                <div class="mt-1 inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium {{ $badgeClasses[$pdpBadge] }}">
+                                    {{ $profile->prdp_expiry->format('d M Y') }}
+                                </div>
+                            @else
+                                <div class="mt-1 text-xs text-slate-400">—</div>
+                            @endif
+                        </div>
+                        <div>
+                            <div class="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Trade Plate</div>
+                            @if($profile?->trade_plate)
+                                <div class="mt-1 font-mono text-[11px] font-semibold text-slate-700">{{ strtoupper($profile->trade_plate) }}</div>
+                                @if($profile->trade_plate_expiry)
+                                    <div class="mt-0.5 inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium {{ $badgeClasses[$tpBadge] }}">
+                                        exp {{ $profile->trade_plate_expiry->format('d M Y') }}
+                                    </div>
+                                @else
+                                    <div class="mt-0.5 text-[10px] font-medium text-amber-700">no expiry</div>
+                                @endif
+                            @else
+                                <div class="mt-1 text-xs text-slate-400">—</div>
+                            @endif
+                        </div>
+                    </div>
+
+                    {{-- Equipment row --}}
+                    <div class="flex items-center justify-between">
+                        <div class="flex items-center gap-1.5">
+                            <span title="Tracker {{ $hasTracker ? ': ' . $profile->tracker_id : 'missing' }}"
+                                class="inline-flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-bold
+                                {{ $hasTracker ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-400 border border-dashed border-slate-300' }}">T</span>
+                            <span title="Camera {{ $hasCamera ? ': ' . $profile->camera_id : 'missing' }}"
+                                class="inline-flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-bold
+                                {{ $hasCamera ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-400 border border-dashed border-slate-300' }}">C</span>
+                            <span title="Toll card {{ $hasTollCard ? ': ' . $profile->toll_card_number : 'missing' }}"
+                                class="inline-flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-bold
+                                {{ $hasTollCard ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-400 border border-dashed border-slate-300' }}">$</span>
+                        </div>
+                        @if($driver->active_jobs_count > 0)
+                            <span class="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-semibold text-blue-700 border border-blue-200">
+                                <span class="h-1.5 w-1.5 rounded-full bg-blue-500"></span>
+                                {{ $driver->active_jobs_count }} active
+                            </span>
+                        @endif
+                    </div>
+
+                    {{-- Actions --}}
+                    <div class="mt-auto flex items-center justify-end gap-2 border-t border-slate-100 pt-3">
+                        <a href="{{ route('admin.drivers.edit', $driver) }}"
+                           class="inline-flex items-center rounded-md bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-100">
+                            Edit
+                        </a>
+                        <button wire:click="toggleActive({{ $driver->id }})" wire:confirm="Are you sure?"
+                            class="inline-flex items-center rounded-md px-3 py-1.5 text-xs font-semibold {{ $driver->is_active ? 'bg-red-50 text-red-700 hover:bg-red-100' : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100' }}">
+                            {{ $driver->is_active ? 'Deactivate' : 'Activate' }}
+                        </button>
+                    </div>
+                </div>
+            </div>
+        @empty
+            <div class="col-span-full rounded-xl border border-dashed border-slate-300 bg-white p-12 text-center text-sm text-slate-500">
+                No drivers found.
+            </div>
+        @endforelse
+    </div>
+    @endif
 
     <div class="mt-4">{{ $drivers->links() }}</div>
 </div>
