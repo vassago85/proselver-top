@@ -121,7 +121,7 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         $job = Job::where('company_id', auth()->user()->company()?->id)->findOrFail($this->poJobId);
 
-        $disk = config('filesystems.default') === 'local' ? 'local' : 'r2';
+        $disk = \App\Support\StorageDisk::forUploads();
         $path = $this->poFile->store('jobs/' . $job->uuid . '/po', $disk);
 
         PurchaseOrder::create([

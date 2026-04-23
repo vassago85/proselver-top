@@ -60,7 +60,11 @@ services:
       - MAIL_ENCRYPTION=${MAIL_ENCRYPTION:-tls}
       - MAIL_FROM_ADDRESS=${MAIL_FROM_ADDRESS:-noreply@tcdc.co.za}
       - MAIL_FROM_NAME=${MAIL_FROM_NAME:-TRIDENT Control & Dispatch Center}
-      - FILESYSTEM_DISK=${FILESYSTEM_DISK:-r2}
+      # Storage defaults to `local` so a freshly-deployed instance with
+      # no R2 creds silently works on the local Docker volume instead of
+      # 500-ing on every upload. Flip to `r2` in .env once R2_* are set
+      # and confirmed via `php artisan storage:check --disk=r2`.
+      - FILESYSTEM_DISK=${FILESYSTEM_DISK:-local}
       - R2_ACCESS_KEY_ID=${R2_ACCESS_KEY_ID:-}
       - R2_SECRET_ACCESS_KEY=${R2_SECRET_ACCESS_KEY:-}
       - R2_BUCKET=${R2_BUCKET:-}
@@ -71,6 +75,12 @@ services:
       - R2_BACKUP_BUCKET=${R2_BACKUP_BUCKET:-}
       - R2_BACKUP_ENDPOINT=${R2_BACKUP_ENDPOINT:-}
       - R2_BACKUP_REGION=${R2_BACKUP_REGION:-auto}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
+      - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-auto}
+      - AWS_BUCKET=${AWS_BUCKET:-}
+      - AWS_ENDPOINT=${AWS_ENDPOINT:-}
+      - AWS_USE_PATH_STYLE_ENDPOINT=${AWS_USE_PATH_STYLE_ENDPOINT:-false}
       - GOOGLE_MAPS_API_KEY=${GOOGLE_MAPS_API_KEY:-}
       - COLLECTION_NOTE_PUBLIC_URL=${COLLECTION_NOTE_PUBLIC_URL:-}
       - LIVEWIRE_TEMPORARY_FILE_UPLOAD_DISK=public
@@ -197,12 +207,18 @@ services:
       - MAIL_ENCRYPTION=${MAIL_ENCRYPTION:-tls}
       - MAIL_FROM_ADDRESS=${MAIL_FROM_ADDRESS:-noreply@tcdc.co.za}
       - MAIL_FROM_NAME=${MAIL_FROM_NAME:-TRIDENT Control & Dispatch Center}
-      - FILESYSTEM_DISK=${FILESYSTEM_DISK:-r2}
+      - FILESYSTEM_DISK=${FILESYSTEM_DISK:-local}
       - R2_ACCESS_KEY_ID=${R2_ACCESS_KEY_ID:-}
       - R2_SECRET_ACCESS_KEY=${R2_SECRET_ACCESS_KEY:-}
       - R2_BUCKET=${R2_BUCKET:-}
       - R2_ENDPOINT=${R2_ENDPOINT:-}
       - R2_REGION=${R2_REGION:-auto}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
+      - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-auto}
+      - AWS_BUCKET=${AWS_BUCKET:-}
+      - AWS_ENDPOINT=${AWS_ENDPOINT:-}
+      - AWS_USE_PATH_STYLE_ENDPOINT=${AWS_USE_PATH_STYLE_ENDPOINT:-false}
       - COLLECTION_NOTE_PUBLIC_URL=${COLLECTION_NOTE_PUBLIC_URL:-}
       - LIVEWIRE_TEMPORARY_FILE_UPLOAD_DISK=public
     volumes:

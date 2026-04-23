@@ -38,6 +38,37 @@ Route::get('/verify/{job:uuid}', function (\App\Models\Job $job) {
     return view('verify.collection-note', compact('job'));
 })->name('verify.collection-note');
 
+// View a driver-uploaded job document (vehicle photos, POD, collection
+// note photos, petty-cash slips). Policy-gated by JobDocumentPolicy::view,
+// which enforces the two-tier rule: paperwork = everyone on the job,
+// petty-cash slips = ops + owner only.
+//
+// We stream through the app (rather than redirecting to a pre-signed R2
+// URL) because the disk on each document row might be `local` (when R2
+// was unconfigured at upload time) OR `r2`, and we don't want the URL
+// scheme to change on consumers. The file size cap on uploads is 10MB
+// which is fine to proxy.
+Route::get('/documents/{document}/view', function (\App\Models\JobDocument $document) {
+    \Illuminate\Support\Facades\Gate::authorize('view', $document);
+
+    $disk = \Illuminate\Support\Facades\Storage::disk($document->disk);
+    if (!$disk->exists($document->path)) {
+        abort(404, 'Document file not found on disk.');
+    }
+
+    return $disk->response(
+        $document->path,
+        $document->original_filename ?: basename($document->path),
+        [
+            'Content-Type' => $document->mime_type ?: $disk->mimeType($document->path),
+            'Content-Disposition' => 'inline; filename="' . ($document->original_filename ?: 'document') . '"',
+            // Short cache so reloads are snappy but permission changes take
+            // effect quickly. Don't mark public — these are auth-gated.
+            'Cache-Control' => 'private, max-age=60',
+        ]
+    );
+})->middleware('auth')->name('documents.view');
+
 // Collection Note PDF download. Guarded by JobPolicy::generateCollectionNote
 // to block cross-tenant IDOR — without this, any authenticated user could
 // iterate numeric Job ids and pull another company's PDF (which contains

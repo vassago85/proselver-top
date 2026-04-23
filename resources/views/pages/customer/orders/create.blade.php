@@ -78,7 +78,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         $job->save();
 
         if ($this->poFile) {
-            $disk = config('filesystems.default') === 'local' ? 'local' : 'r2';
+            $disk = \App\Support\StorageDisk::forUploads();
             $path = $this->poFile->store('jobs/' . $job->uuid . '/po', $disk);
 
             PurchaseOrder::create([

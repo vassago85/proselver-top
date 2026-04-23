@@ -11,10 +11,16 @@
 Copy `.env.example` to `.env` and configure:
 - `APP_KEY` — generate with `php artisan key:generate --show`
 - `DB_PASSWORD` — PostgreSQL password
-- `R2_*` — Cloudflare R2 operational bucket credentials
-- `R2_BACKUP_*` — Separate R2 backup bucket credentials
+- `FILESYSTEM_DISK` + `R2_*` — primary storage for photos / PO PDFs / licences. See `docs/STORAGE.md` for the full setup.
+- `R2_BACKUP_*` — separate R2 backup bucket credentials (see `docs/STORAGE.md`).
 - `MAIL_*` — SMTP or Mailgun credentials
 - `SUPER_ADMIN_USERNAME`, `SUPER_ADMIN_PASSWORD` — initial admin credentials
+
+After setting storage env, verify:
+```bash
+docker compose exec app php artisan storage:check --disk=r2
+docker compose exec app php artisan storage:check --disk=r2-backup
+```
 
 ### Deploy
 ```bash

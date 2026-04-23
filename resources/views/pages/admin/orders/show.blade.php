@@ -337,13 +337,33 @@ new #[Layout('components.layouts.app')] class extends Component {
             </div>
             @endif
 
-            {{-- Documents & Purchase Orders --}}
+            {{-- Documents & Purchase Orders
+                 Documents split into two buckets so ops can scan paperwork and
+                 petty cash separately:
+                   * Paperwork / vehicle photos — POD, collection note, damage
+                     photos, generic photos. Anyone on the job can see these
+                     via JobDocumentPolicy, so the same block is rendered on
+                     customer/dealer views too.
+                   * Petty cash — fuel/food/toll/parking slips. Ops + owner
+                     only. The policy check enforces this server-side even if
+                     the template drops its guard.
+                 Images get a thumbnail; non-images fall back to a paper-clip
+                 + original filename link. Both use the auth-gated
+                 documents.view route so the disk (r2 or local) is abstracted.
+            --}}
+            @php
+                $paperwork = $job->documents->reject(fn($d) => in_array($d->category, \App\Models\JobDocument::pettyCashCategories(), true));
+                $pettyCash = $job->documents->filter(fn($d) => in_array($d->category, \App\Models\JobDocument::pettyCashCategories(), true));
+                $isImage = fn($d) => str_starts_with((string) $d->mime_type, 'image/');
+                $kb = fn($d) => number_format(max($d->size_bytes, 0) / 1024, 1);
+            @endphp
+
             @if($job->documents->isNotEmpty() || $job->purchaseOrders->isNotEmpty())
             <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
                 <h3 class="text-lg font-semibold text-gray-900 mb-4">Documents</h3>
 
                 @if($job->purchaseOrders->isNotEmpty())
-                <div class="mb-4">
+                <div class="mb-6">
                     <h4 class="text-sm font-semibold text-gray-700 mb-2">Purchase Orders</h4>
                     <ul class="divide-y divide-gray-100">
                         @foreach($job->purchaseOrders as $po)
@@ -361,17 +381,63 @@ new #[Layout('components.layouts.app')] class extends Component {
                 </div>
                 @endif
 
-                @if($job->documents->isNotEmpty())
-                <div>
-                    <h4 class="text-sm font-semibold text-gray-700 mb-2">Uploaded Documents</h4>
-                    <ul class="divide-y divide-gray-100">
-                        @foreach($job->documents as $doc)
-                        <li class="py-2 flex items-center justify-between">
-                            <div>
-                                <p class="text-sm font-medium text-gray-900">{{ $doc->original_filename }}</p>
-                                <p class="text-xs text-gray-500">{{ ucfirst(str_replace('_', ' ', $doc->category)) }} &middot; {{ number_format($doc->size_bytes / 1024, 1) }} KB</p>
+                @if($paperwork->isNotEmpty())
+                <div class="mb-6">
+                    <h4 class="text-sm font-semibold text-gray-700 mb-3">Vehicle photos &amp; paperwork</h4>
+                    <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+                        @foreach($paperwork as $doc)
+                        @can('view', $doc)
+                        <a href="{{ route('documents.view', $doc) }}" target="_blank" rel="noopener"
+                           class="group block rounded-lg border border-gray-200 hover:border-blue-400 hover:shadow-sm overflow-hidden bg-gray-50 transition">
+                            @if($isImage($doc))
+                                <div class="aspect-[4/3] overflow-hidden bg-gray-100">
+                                    <img src="{{ route('documents.view', $doc) }}" alt="{{ $doc->original_filename }}"
+                                         class="h-full w-full object-cover group-hover:scale-105 transition-transform" loading="lazy">
+                                </div>
+                            @else
+                                <div class="aspect-[4/3] flex items-center justify-center bg-gray-100 text-gray-400">
+                                    <svg class="h-10 w-10" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                                        <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
+                                    </svg>
+                                </div>
+                            @endif
+                            <div class="px-2 py-1.5 text-[11px]">
+                                <p class="font-medium text-gray-800 truncate" title="{{ $doc->original_filename }}">{{ $doc->original_filename ?: 'document' }}</p>
+                                <p class="text-gray-500">{{ ucfirst(str_replace('_', ' ', $doc->category)) }} &middot; {{ $kb($doc) }} KB</p>
+                                @if($doc->captured_at)
+                                <p class="text-gray-400">{{ $doc->captured_at->format('d M H:i') }}</p>
+                                @endif
                             </div>
+                        </a>
+                        @endcan
+                        @endforeach
+                    </div>
+                </div>
+                @endif
+
+                @if($pettyCash->isNotEmpty() && (auth()->user()->isInternal() || auth()->user()->belongsToPlatformOwner()))
+                <div>
+                    <div class="flex items-center gap-2 mb-2">
+                        <h4 class="text-sm font-semibold text-gray-700">Driver expenses</h4>
+                        <span class="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700 border border-amber-200">
+                            Ops only
+                        </span>
+                    </div>
+                    <ul class="divide-y divide-gray-100 border border-gray-100 rounded-lg">
+                        @foreach($pettyCash as $doc)
+                        @can('view', $doc)
+                        <li class="py-2 px-3 flex items-center justify-between text-sm">
+                            <div>
+                                <p class="font-medium text-gray-900">{{ ucfirst(str_replace('_', ' ', $doc->category)) }}</p>
+                                <p class="text-xs text-gray-500">
+                                    {{ $doc->original_filename }} &middot; {{ $kb($doc) }} KB
+                                    @if($doc->captured_at) &middot; {{ $doc->captured_at->format('d M H:i') }} @endif
+                                </p>
+                            </div>
+                            <a href="{{ route('documents.view', $doc) }}" target="_blank" rel="noopener"
+                               class="text-xs font-medium text-blue-600 hover:text-blue-800">View</a>
                         </li>
+                        @endcan
                         @endforeach
                     </ul>
                 </div>

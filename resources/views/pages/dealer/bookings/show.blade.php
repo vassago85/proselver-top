@@ -74,7 +74,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             'poFile' => 'required|file|mimes:pdf,jpg,jpeg,png|max:10240',
         ]);
 
-        $disk = config('filesystems.default') === 'local' ? 'local' : 'r2';
+        $disk = \App\Support\StorageDisk::forUploads();
         $path = $this->poFile->store('jobs/' . $this->job->uuid . '/po', $disk);
 
         PurchaseOrder::create([
@@ -139,7 +139,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             Storage::disk($po->document_disk)->delete($po->document_path);
         }
 
-        $disk = config('filesystems.default') === 'local' ? 'local' : 'r2';
+        $disk = \App\Support\StorageDisk::forUploads();
         $path = $this->replacePoFile->store('jobs/' . $this->job->uuid . '/po', $disk);
 
         $po->update([
@@ -206,7 +206,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             'vehicle_reassigned_by' => auth()->id(),
         ]);
 
-        $disk = config('filesystems.default') === 'local' ? 'local' : 'r2';
+        $disk = \App\Support\StorageDisk::forUploads();
         $path = $this->reassignPoFile->store('jobs/' . $this->job->uuid . '/po', $disk);
 
         PurchaseOrder::create([

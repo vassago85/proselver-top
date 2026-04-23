@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Job;
 use App\Models\JobDocument;
 use App\Models\JobEvent;
+use App\Support\StorageDisk;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
@@ -131,7 +132,7 @@ class DriverSyncController extends Controller
         }
 
         $file = $request->file('file');
-        $disk = config('filesystems.default') === 'local' ? 'local' : 'r2';
+        $disk = StorageDisk::forUploads();
         $path = $file->store('jobs/' . $job->uuid . '/documents', $disk);
 
         $doc = JobDocument::create([

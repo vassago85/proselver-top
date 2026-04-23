@@ -107,7 +107,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             'notes' => $this->notes ?: null,
         ];
 
-        $disk = config('filesystems.default', 'local');
+        $disk = \App\Support\StorageDisk::forUploads();
 
         if ($this->licenseDocument) {
             $path = $this->licenseDocument->store("drivers/{$user->id}/license", $disk);
