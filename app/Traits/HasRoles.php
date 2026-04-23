@@ -147,7 +147,7 @@ trait HasRoles
 
     public function canManageUsers(): bool
     {
-        return $this->hasAnyRole(['super_admin', 'developer', 'ops_manager', 'operations_controller']);
+        return $this->hasAnyRole(['super_admin', 'developer', 'owner', 'ops_manager', 'operations_controller']);
     }
 
     public function canManagePricing(): bool
@@ -332,6 +332,6 @@ trait HasRoles
      */
     public function canManageInternalUsers(): bool
     {
-        return $this->hasAnyRole(['super_admin', 'developer', 'ops_manager', 'operations_controller']);
+        return $this->hasAnyRole(['super_admin', 'developer', 'owner', 'ops_manager', 'operations_controller']);
     }
 }

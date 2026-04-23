@@ -12,17 +12,35 @@ new #[Layout('components.layouts.app')] class extends Component {
     public string $roleFilter = '';
     public string $statusFilter = '';
 
+    public function mount(): void
+    {
+        abort_unless(auth()->user()?->canManageInternalUsers(), 403, 'You may not manage team members.');
+    }
+
     public function updatedSearch(): void { $this->resetPage(); }
     public function updatedRoleFilter(): void { $this->resetPage(); }
     public function updatedStatusFilter(): void { $this->resetPage(); }
 
     public function toggleActive(int $userId): void
     {
+        $actor = auth()->user();
+        abort_unless($actor?->canManageInternalUsers(), 403);
+
         $user = User::findOrFail($userId);
-        if ($user->isSuperAdmin() && $user->id !== auth()->id()) {
+
+        // Rank guard: an Owner must not be able to deactivate a super_admin
+        // or another Owner. Mirrors the edit page's hierarchy check so the
+        // list view cannot be used as a back door.
+        if (!$actor->isDeveloper() && $user->highestRoleLevel() >= $actor->highestRoleLevel()) {
+            session()->flash('error', 'You may not deactivate a user at or above your own role level.');
+            return;
+        }
+
+        if ($user->isSuperAdmin() && $user->id !== $actor->id) {
             session()->flash('error', 'Cannot deactivate a super admin.');
             return;
         }
+
         $user->update(['is_active' => !$user->is_active]);
     }
 
@@ -55,7 +73,18 @@ new #[Layout('components.layouts.app')] class extends Component {
 };
 ?>
 <div>
-    <x-slot:header>Users</x-slot:header>
+    <x-slot:header>Team</x-slot:header>
+
+    @php
+        $actor = auth()->user();
+        $canManage = $actor?->canManageInternalUsers() ?? false;
+    @endphp
+
+    <p class="mb-4 text-sm text-gray-500 max-w-3xl">
+        Invite and manage internal staff — operations, admin, accounts/finance and dispatch.
+        You can only grant roles below your own rank, and you cannot edit or deactivate anyone
+        at or above your level.
+    </p>
 
     <div class="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div class="flex flex-1 gap-3">
@@ -74,7 +103,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             </select>
         </div>
         <a href="{{ route('admin.users.create') }}" class="inline-flex items-center rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-500 transition-colors">
-            + Add User
+            + Add Team Member
         </a>
     </div>
 
@@ -100,6 +129,12 @@ new #[Layout('components.layouts.app')] class extends Component {
             </thead>
             <tbody class="divide-y divide-gray-200">
                 @forelse($users as $u)
+                    @php
+                        // Owners and ops controllers can only act on users strictly
+                        // below their own rank. Developers bypass the check.
+                        $canActOnRow = $actor?->isDeveloper()
+                            || ($u->highestRoleLevel() < ($actor?->highestRoleLevel() ?? -1));
+                    @endphp
                 <tr class="hover:bg-gray-50">
                     <td class="px-6 py-4 text-sm font-medium text-gray-900">{{ $u->name }}</td>
                     <td class="px-6 py-4 text-sm text-gray-500">{{ $u->email ?? '—' }}</td>
@@ -120,16 +155,20 @@ new #[Layout('components.layouts.app')] class extends Component {
                     <td class="px-6 py-4 text-sm text-gray-500">{{ $u->created_at->format('d M Y') }}</td>
                     <td class="px-6 py-4 text-right text-sm">
                         <div class="flex items-center justify-end gap-2">
-                            <a href="{{ route('admin.users.edit', $u) }}" class="text-blue-600 hover:text-blue-800 font-medium">Edit</a>
-                            <button wire:click="toggleActive({{ $u->id }})" wire:confirm="Are you sure you want to {{ $u->is_active ? 'deactivate' : 'activate' }} this user?"
-                                class="{{ $u->is_active ? 'text-red-600 hover:text-red-800' : 'text-green-600 hover:text-green-800' }} font-medium">
-                                {{ $u->is_active ? 'Deactivate' : 'Activate' }}
-                            </button>
+                            @if($canActOnRow)
+                                <a href="{{ route('admin.users.edit', $u) }}" class="text-blue-600 hover:text-blue-800 font-medium">Edit</a>
+                                <button wire:click="toggleActive({{ $u->id }})" wire:confirm="Are you sure you want to {{ $u->is_active ? 'deactivate' : 'activate' }} this user?"
+                                    class="{{ $u->is_active ? 'text-red-600 hover:text-red-800' : 'text-green-600 hover:text-green-800' }} font-medium">
+                                    {{ $u->is_active ? 'Deactivate' : 'Activate' }}
+                                </button>
+                            @else
+                                <span class="text-xs text-gray-400 italic">Out of rank</span>
+                            @endif
                         </div>
                     </td>
                 </tr>
                 @empty
-                <tr><td colspan="7" class="px-6 py-12 text-center text-sm text-gray-500">No users found.</td></tr>
+                <tr><td colspan="7" class="px-6 py-12 text-center text-sm text-gray-500">No team members found.</td></tr>
                 @endforelse
             </tbody>
         </table>
