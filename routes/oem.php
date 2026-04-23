@@ -9,6 +9,7 @@ Volt::route('bookings/create', 'oem.bookings.create')->name('bookings.create');
 Volt::route('bookings/{job}', 'oem.bookings.show')->name('bookings.show');
 Volt::route('jobs', 'oem.jobs.index')->name('jobs.index');
 Volt::route('jobs/{job}', 'oem.jobs.show')->name('jobs.show');
+Volt::route('vehicles', 'vehicles.index')->name('vehicles.index');
 Volt::route('invoices', 'oem.invoices.index')->name('invoices.index');
 Volt::route('team', 'oem.team.index')->name('team.index');
 Volt::route('settings/roles', 'oem.settings.roles')->name('settings.roles');

@@ -12,6 +12,7 @@ Volt::route('orders/{job}', 'admin.orders.show')->name('orders.show');
 Volt::route('dispatch', 'admin.dispatch')->name('dispatch');
 Volt::route('tracking', 'admin.tracking')->name('tracking');
 Volt::route('deliveries', 'admin.deliveries')->name('deliveries');
+Volt::route('vehicles', 'vehicles.index')->name('vehicles.index');
 Volt::route('documents', 'admin.documents.index')->name('documents.index');
 Volt::route('customers', 'admin.customers.index')->name('customers.index');
 Volt::route('customers/{company}', 'admin.customers.show')->name('customers.show');
