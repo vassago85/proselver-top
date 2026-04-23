@@ -265,16 +265,14 @@ new #[Layout('components.layouts.app')] class extends Component
             ->all();
 
         // ── In-transit routes (live movement arrows on the map) ───────
-        // Each route = a job currently in transit, with origin + dest
-        // lat/lng so we can draw a directional polyline on the map.
+        // Each route = a job currently in transit. We no longer require
+        // BOTH ends to have lat/lng — if only the destination does,
+        // we'll still draw an arrow arriving at it.
         $routes = (clone $this->baseJobsQuery())
             ->whereIn('transport_jobs.status', self::G_IN_TRANSIT)
-            ->whereNotNull('transport_jobs.pickup_location_id')
             ->whereNotNull('transport_jobs.delivery_location_id')
-            ->join('locations as pick', 'transport_jobs.pickup_location_id', '=', 'pick.id')
             ->join('locations as drop', 'transport_jobs.delivery_location_id', '=', 'drop.id')
-            ->whereNotNull('pick.latitude')->whereNotNull('pick.longitude')
-            ->whereNotNull('drop.latitude')->whereNotNull('drop.longitude')
+            ->leftJoin('locations as pick', 'transport_jobs.pickup_location_id', '=', 'pick.id')
             ->select([
                 'transport_jobs.id as job_id',
                 'transport_jobs.job_number',
@@ -282,23 +280,38 @@ new #[Layout('components.layouts.app')] class extends Component
                 'pick.latitude  as from_lat',
                 'pick.longitude as from_lng',
                 'pick.city      as from_city',
+                'pick.province  as from_province',
                 'drop.latitude  as to_lat',
                 'drop.longitude as to_lng',
                 'drop.city      as to_city',
+                'drop.province  as to_province',
                 'drop.company_name as to_name',
             ])
             ->get()
-            ->map(fn ($r) => [
-                'id'        => (int) $r->job_id,
-                'number'    => $r->job_number ?: ('JOB-' . $r->job_id),
-                'from_lat'  => (float) $r->from_lat,
-                'from_lng'  => (float) $r->from_lng,
-                'from_city' => $r->from_city,
-                'to_lat'    => (float) $r->to_lat,
-                'to_lng'    => (float) $r->to_lng,
-                'to_city'   => $r->to_city,
-                'to_name'   => $r->to_name,
-            ])
+            ->map(function ($r) {
+                $fromLat = $r->from_lat !== null ? (float) $r->from_lat : null;
+                $fromLng = $r->from_lng !== null ? (float) $r->from_lng : null;
+                $toLat   = $r->to_lat   !== null ? (float) $r->to_lat   : null;
+                $toLng   = $r->to_lng   !== null ? (float) $r->to_lng   : null;
+
+                // At least one end must be plottable
+                if ($toLat === null && $fromLat === null) return null;
+
+                return [
+                    'id'            => (int) $r->job_id,
+                    'number'        => $r->job_number ?: ('JOB-' . $r->job_id),
+                    'from_lat'      => $fromLat,
+                    'from_lng'      => $fromLng,
+                    'from_city'     => $r->from_city,
+                    'from_province' => $r->from_province,
+                    'to_lat'        => $toLat,
+                    'to_lng'        => $toLng,
+                    'to_city'       => $r->to_city,
+                    'to_province'   => $r->to_province,
+                    'to_name'       => $r->to_name,
+                ];
+            })
+            ->filter()
             ->values()
             ->all();
 
@@ -986,11 +999,11 @@ new #[Layout('components.layouts.app')] class extends Component
                     bounds.extend(marker.getPosition());
                 });
 
-                // Fit nicely, but don't over-zoom on a single point.
-                if (this.markers.length === 1) {
-                    this.map.setCenter(this.markers[0].getPosition());
+                const realMarkers = this.markers.filter(m => m !== null);
+                if (realMarkers.length === 1) {
+                    this.map.setCenter(realMarkers[0].getPosition());
                     this.map.setZoom(8);
-                } else if (this.markers.length > 1) {
+                } else if (realMarkers.length > 1) {
                     this.map.fitBounds(bounds, 48);
                 }
             },
@@ -1001,11 +1014,33 @@ new #[Layout('components.layouts.app')] class extends Component
                 this.routeLines = [];
                 if (this.routes.length === 0) return;
 
+                // SA province centroids as fallback when a location
+                // has no coordinates. Better than not drawing at all.
+                const provinceFallback = {
+                    'Gauteng':        { lat: -26.27, lng: 28.11 },
+                    'Western Cape':   { lat: -33.93, lng: 18.42 },
+                    'Eastern Cape':   { lat: -33.72, lng: 25.53 },
+                    'KwaZulu-Natal':  { lat: -29.60, lng: 30.38 },
+                    'Free State':     { lat: -29.09, lng: 26.16 },
+                    'Limpopo':        { lat: -23.40, lng: 29.42 },
+                    'Mpumalanga':     { lat: -25.47, lng: 30.97 },
+                    'North West':     { lat: -26.66, lng: 25.29 },
+                    'Northern Cape':  { lat: -29.05, lng: 21.86 },
+                };
+                const fallback = (prov) => provinceFallback[prov] || { lat: -33.80, lng: 25.80 };
+
                 this.routes.forEach(r => {
-                    const path = [
-                        { lat: r.from_lat, lng: r.from_lng },
-                        { lat: r.to_lat,   lng: r.to_lng   },
-                    ];
+                    const from = (r.from_lat != null && r.from_lng != null)
+                        ? { lat: r.from_lat, lng: r.from_lng }
+                        : fallback(r.from_province);
+                    const to = (r.to_lat != null && r.to_lng != null)
+                        ? { lat: r.to_lat, lng: r.to_lng }
+                        : fallback(r.to_province);
+
+                    // Don't draw if both ends resolved to the same fallback
+                    if (from.lat === to.lat && from.lng === to.lng) return;
+
+                    const path = [from, to];
 
                     const line = new google.maps.Polyline({
                         path,
