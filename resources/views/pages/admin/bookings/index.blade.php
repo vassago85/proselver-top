@@ -258,7 +258,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                     </th>
                     <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">From</th>
                     <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">To</th>
-                    <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">Collected</th>
+                    <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">Arrived</th>
                     <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">Delivered</th>
                     <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
                     <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">Comment</th>

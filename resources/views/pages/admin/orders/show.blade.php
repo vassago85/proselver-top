@@ -111,11 +111,11 @@ new #[Layout('components.layouts.app')] class extends Component {
     public function markCollected(): void
     {
         if (!$this->job->transitionTo(Job::STATUS_COLLECTED)) {
-            session()->flash('error', 'Cannot mark as collected.');
+            session()->flash('error', 'Cannot mark as arrived at pickup.');
             return;
         }
         AuditService::log('collected', 'job', $this->job->id);
-        session()->flash('success', "Order {$this->job->job_number} marked as collected.");
+        session()->flash('success', "Order {$this->job->job_number} — driver arrived at pickup.");
     }
 
     public function markInTransit(): void
@@ -401,10 +401,11 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         {{-- Right column: Actions — priority is driven by status. When a driver has
              been assigned, Printing the Delivery Paperwork becomes the most important
-             next step and sits above Mark Collected. Once the vehicle has been
-             collected, the status-change button takes over as primary and the
-             Collection Note demotes to a reprint-style secondary button below it.
-             Cancel is only allowed while the vehicle is still on the depot. --}}
+             next step and sits above "Mark Arrived at Pickup". Once the driver has
+             arrived and taken possession, the "Mark In Transit" button takes over as
+             primary and the Collection Note demotes to a reprint-style secondary
+             button below it. Cancel is only allowed while the vehicle is still on
+             the depot. --}}
         @php
             $preReleaseStatuses = [
                 Job::STATUS_DRIVER_ASSIGNED,
@@ -443,7 +444,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                                     <svg class="h-5 w-5 text-green-600 mt-0.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
                                     <div class="min-w-0">
                                         <h4 class="text-sm font-semibold text-green-900">Print Delivery Paperwork</h4>
-                                        <p class="mt-0.5 text-xs text-green-800 leading-snug">POD, Collection Note &amp; Manual Inspection Sheet &mdash; 4 pages. Print double-sided and hand to the driver before the vehicle leaves.</p>
+                                        <p class="mt-0.5 text-xs text-green-800 leading-snug">Collection Note, Manual Inspection &amp; POD (Customer + Office) &mdash; 5 pages. Print double-sided and hand to the driver before the vehicle leaves.</p>
                                     </div>
                                 </div>
                                 <a href="{{ route('collection-note.download', $job) }}" target="_blank"
@@ -523,14 +524,14 @@ new #[Layout('components.layouts.app')] class extends Component {
                     @elseif($isPreRelease)
                         {{-- Secondary to the paperwork prompt above — outlined so ops
                              only presses it once the paperwork is out and signed. --}}
-                        <button wire:click="markCollected" wire:confirm="Has the paperwork been printed and handed to the driver? Mark as collected?"
+                        <button wire:click="markCollected" wire:confirm="Has the driver arrived at the pickup location with the paperwork signed?"
                             class="w-full rounded-lg border border-teal-600 bg-white px-4 py-3 text-sm font-semibold text-teal-700 hover:bg-teal-50 transition-colors">
-                            Mark Collected
+                            Mark Arrived at Pickup
                         </button>
                     @elseif($job->status === Job::STATUS_COLLECTED)
-                        <button wire:click="markInTransit" wire:confirm="Mark as in transit?"
+                        <button wire:click="markInTransit" wire:confirm="Has the driver departed with the vehicle? Mark as in transit?"
                             class="w-full rounded-lg bg-orange-600 px-4 py-3 text-sm font-semibold text-white hover:bg-orange-500 transition-colors">
-                            Mark In Transit
+                            Mark In Transit (Departed)
                         </button>
                     @elseif($job->status === Job::STATUS_IN_TRANSIT)
                         <button wire:click="markDelivered" wire:confirm="Mark as delivered?"

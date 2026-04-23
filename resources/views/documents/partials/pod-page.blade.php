@@ -18,7 +18,7 @@
         <td style="width: 40%;">
             <div class="doc-title">Proof of Delivery</div>
             <div class="doc-number">{{ $job->job_number }}</div>
-            <div class="doc-copy"><span class="copy-badge">{{ $copyLabel }}</span> &nbsp; Page {{ $copyNum }} of 4</div>
+            <div class="doc-copy"><span class="copy-badge">{{ $copyLabel }}</span> &nbsp; Page {{ $copyNum }} of 5</div>
         </td>
     </tr>
 </table>

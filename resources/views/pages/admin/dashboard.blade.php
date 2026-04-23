@@ -234,7 +234,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         <div class="grid grid-cols-3 divide-y md:divide-y-0 md:divide-x divide-slate-100">
             @foreach([
                 ['label' => 'Driver Assigned', 'key' => 'driver_assigned', 'dot' => 'bg-purple-500'],
-                ['label' => 'Collected', 'key' => 'collected', 'dot' => 'bg-teal-500'],
+                ['label' => 'Arrived at Pickup', 'key' => 'collected', 'dot' => 'bg-teal-500'],
                 ['label' => 'In Transit', 'key' => 'in_transit', 'dot' => 'bg-orange-500'],
             ] as $node)
                 <div class="px-6 py-4 flex items-center justify-between gap-3">

@@ -152,7 +152,7 @@ class Job extends Model
         self::STATUS_PLANNED => 'Planned',
         self::STATUS_DRIVER_ASSIGNED => 'Driver Assigned',
         self::STATUS_READY_FOR_COLLECTION => 'Collection Confirmed',
-        self::STATUS_COLLECTED => 'Collected',
+        self::STATUS_COLLECTED => 'Arrived at Pickup',
         self::STATUS_IN_TRANSIT => 'In Transit',
         self::STATUS_DELIVERED => 'Delivered',
         self::STATUS_COMPLETED => 'Completed',

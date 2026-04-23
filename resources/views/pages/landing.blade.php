@@ -175,7 +175,7 @@
                                 <g font-family="ui-sans-serif, system-ui" font-size="8" fill="#64748b">
                                     <text x="40" y="115" text-anchor="middle">Received</text>
                                     <text x="160" y="115" text-anchor="middle">Confirmed</text>
-                                    <text x="280" y="115" text-anchor="middle">Collected</text>
+                                    <text x="280" y="115" text-anchor="middle">Picked Up</text>
                                     <text x="370" y="115" text-anchor="middle">Delivered</text>
                                 </g>
                                 {{-- Secondary branch: customer confirmation loop --}}

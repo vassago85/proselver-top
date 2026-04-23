@@ -159,7 +159,10 @@
         .mi-sig td.line.filled { font-size: 9px; color: #111827; padding-bottom: 1px; }
 
         /* ========================================================
-           PAGES 3 & 4 — Proof of Delivery (Customer / Office copies)
+           PAGES 3 & 5 — Proof of Delivery (Customer / Office copies)
+           Page 4 is intentionally blank so the Customer Copy comes
+           off the printer as a clean single-sided sheet when printed
+           double-sided.
            ======================================================== */
         .pod-ref { width: 100%; border-collapse: collapse; font-size: 9.5px; margin-bottom: 4px; }
         .pod-ref td { border: none; padding: 2px 4px; vertical-align: top; }
@@ -413,7 +416,7 @@
             <td style="width: 40%;">
                 <div class="doc-title">Manual Inspection</div>
                 <div class="doc-number">{{ $job->job_number }}</div>
-                <div class="doc-copy">Page 2 of 4</div>
+                <div class="doc-copy">Page 2 of 5</div>
             </td>
         </tr>
     </table>
@@ -618,10 +621,25 @@
 
 
     {{-- =========================================================
-         PAGE 4 — PROOF OF DELIVERY (Office Copy)
+         PAGE 4 — INTENTIONALLY BLANK
+         Sits on the back of the Customer Copy so that when the
+         document is printed double-sided the customer can walk
+         away with a clean, single-sided copy and the Office Copy
+         stays with dispatch on its own sheet.
          ========================================================= --}}
     <div class="page-break"></div>
-    @include('documents.partials.pod-page', ['copyLabel' => 'Office Copy', 'copyNum' => 4])
+    <div style="height: 100%; display: table; width: 100%; color: #cbd5e1; text-align: center; font-size: 9pt;">
+        <div style="display: table-cell; vertical-align: middle;">
+            This page intentionally left blank.
+        </div>
+    </div>
+
+
+    {{-- =========================================================
+         PAGE 5 — PROOF OF DELIVERY (Office Copy)
+         ========================================================= --}}
+    <div class="page-break"></div>
+    @include('documents.partials.pod-page', ['copyLabel' => 'Office Copy', 'copyNum' => 5])
 
 
     {{-- Fixed footer — lives inside the @page bottom margin --}}
