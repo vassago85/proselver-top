@@ -19,23 +19,46 @@ use Illuminate\Support\Facades\Schema;
  */
 return new class extends Migration
 {
+    /**
+     * Idempotent — this migration was originally written against a
+     * non-existent `jobs` table. The real model table is
+     * `transport_jobs`, so on prod it was logged as "migrated" without
+     * actually adding the columns. The hasColumn guards below mean
+     * re-running this (or running it for the first time after the fix)
+     * is safe on every environment.
+     */
     public function up(): void
     {
-        Schema::table('jobs', function (Blueprint $table) {
-            $table->timestamp('damage_report_released_at')->nullable()->after('invoiced_at');
-            $table->foreignId('damage_report_released_by')
-                ->nullable()
-                ->after('damage_report_released_at')
-                ->constrained('users')
-                ->nullOnDelete();
+        if (!Schema::hasTable('transport_jobs')) {
+            return;
+        }
+
+        Schema::table('transport_jobs', function (Blueprint $table) {
+            if (!Schema::hasColumn('transport_jobs', 'damage_report_released_at')) {
+                $table->timestamp('damage_report_released_at')->nullable()->after('invoiced_at');
+            }
+            if (!Schema::hasColumn('transport_jobs', 'damage_report_released_by')) {
+                $table->foreignId('damage_report_released_by')
+                    ->nullable()
+                    ->after('damage_report_released_at')
+                    ->constrained('users')
+                    ->nullOnDelete();
+            }
         });
     }
 
     public function down(): void
     {
-        Schema::table('jobs', function (Blueprint $table) {
-            $table->dropConstrainedForeignId('damage_report_released_by');
-            $table->dropColumn('damage_report_released_at');
+        if (!Schema::hasTable('transport_jobs')) {
+            return;
+        }
+        Schema::table('transport_jobs', function (Blueprint $table) {
+            if (Schema::hasColumn('transport_jobs', 'damage_report_released_by')) {
+                $table->dropConstrainedForeignId('damage_report_released_by');
+            }
+            if (Schema::hasColumn('transport_jobs', 'damage_report_released_at')) {
+                $table->dropColumn('damage_report_released_at');
+            }
         });
     }
 };
