@@ -147,9 +147,16 @@ new #[Layout('components.layouts.app')] class extends Component {
             fn ($r) => $actor->canAssignRole($r->slug) || in_array($r->id, $existingIds, true)
         )->values();
 
+        $companies = Company::where('is_active', true)->orderBy('name')->get();
+        $companyOptions = $companies->map(fn ($c) => [
+            'value' => (string) $c->id,
+            'label' => $c->name,
+        ])->values()->all();
+
         return [
             'roles' => $assignable,
-            'companies' => Company::where('is_active', true)->orderBy('name')->get(),
+            'companies' => $companies,
+            'companyOptions' => $companyOptions,
         ];
     }
 };
@@ -239,15 +246,12 @@ new #[Layout('components.layouts.app')] class extends Component {
                     Currently unassigned.
                 @endif
             </p>
-            <select wire:model="companyId" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm">
-                <option value="">— not assigned —</option>
-                @foreach($companies as $company)
-                    <option value="{{ $company->id }}">
-                        {{ $company->name }}
-                        @if($company->type) · {{ str_replace('_', ' ', $company->type) }} @endif
-                    </option>
-                @endforeach
-            </select>
+            <x-searchable-select
+                wire:model="companyId"
+                :options="$companyOptions"
+                placeholder="— not assigned —"
+                search-placeholder="Search organisations…"
+            />
             @error('companyId')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
         </div>
 

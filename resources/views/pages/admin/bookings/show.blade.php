@@ -113,7 +113,12 @@ new #[Layout('components.layouts.app')] class extends Component {
             ->orderBy('name')
             ->get(['id', 'name']);
 
-        return ['drivers' => $drivers];
+        $driverOptions = $drivers->map(fn ($d) => [
+            'value' => (string) $d->id,
+            'label' => $d->name,
+        ])->values()->all();
+
+        return ['drivers' => $drivers, 'driverOptions' => $driverOptions];
     }
 };
 
@@ -285,12 +290,14 @@ new #[Layout('components.layouts.app')] class extends Component {
                 @if($job->driver)
                     <p class="text-sm text-gray-600 mb-3">Currently: <strong>{{ $job->driver->name }}</strong></p>
                 @endif
-                <select wire:model="assignDriverId" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm mb-3">
-                    <option value="">Select driver...</option>
-                    @foreach($drivers as $d)
-                        <option value="{{ $d->id }}">{{ $d->name }}</option>
-                    @endforeach
-                </select>
+                <div class="mb-3">
+                    <x-searchable-select
+                        wire:model="assignDriverId"
+                        :options="$driverOptions"
+                        placeholder="Select driver..."
+                        search-placeholder="Search drivers…"
+                    />
+                </div>
                 <button wire:click="assignDriver" class="w-full rounded-lg bg-purple-600 px-4 py-3 text-sm font-semibold text-white hover:bg-purple-500 transition-colors">
                     Assign Driver
                 </button>
@@ -336,13 +343,13 @@ new #[Layout('components.layouts.app')] class extends Component {
                 </div>
 
                 <div>
-                    <label for="approveDriverSelect" class="block text-sm font-medium text-gray-700 mb-1.5">Assign Driver <span class="text-gray-400 font-normal">(optional)</span></label>
-                    <select wire:model="assignDriverId" id="approveDriverSelect" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-purple-500 focus:ring-purple-500">
-                        <option value="">Skip — assign later</option>
-                        @foreach($drivers as $d)
-                            <option value="{{ $d->id }}">{{ $d->name }}</option>
-                        @endforeach
-                    </select>
+                    <label class="block text-sm font-medium text-gray-700 mb-1.5">Assign Driver <span class="text-gray-400 font-normal">(optional)</span></label>
+                    <x-searchable-select
+                        wire:model="assignDriverId"
+                        :options="$driverOptions"
+                        placeholder="Skip — assign later"
+                        search-placeholder="Search drivers…"
+                    />
                     <p class="mt-1.5 text-xs text-gray-500">Selecting a driver will also mark the booking as assigned.</p>
                 </div>
             </div>

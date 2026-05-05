@@ -193,10 +193,25 @@ new #[Layout('components.layouts.app')] class extends Component {
             ->when($this->filterCompany, fn ($q) => $q->where('company_id', $this->filterCompany))
             ->orderBy('company_name');
 
+        $companies = Company::orderBy('name')->get();
+        $zones = Zone::active()->orderBy('name')->get();
+
+        $companyOptions = $companies->map(fn ($c) => [
+            'value' => (string) $c->id,
+            'label' => $c->name,
+        ])->values()->all();
+
+        $zoneOptions = $zones->map(fn ($z) => [
+            'value' => (string) $z->id,
+            'label' => $z->name,
+        ])->values()->all();
+
         return [
             'locations' => $query->paginate(25),
-            'companies' => Company::orderBy('name')->get(),
-            'zones' => Zone::active()->orderBy('name')->get(),
+            'companies' => $companies,
+            'zones' => $zones,
+            'companyOptions' => $companyOptions,
+            'zoneOptions' => $zoneOptions,
         ];
     }
 };
@@ -210,13 +225,14 @@ new #[Layout('components.layouts.app')] class extends Component {
             <div class="flex flex-col sm:flex-row gap-3 flex-1">
                 <input wire:model.live.debounce.300ms="search" type="text" placeholder="Search name or address…"
                        class="w-full sm:w-64 rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
-                <select wire:model.live="filterCompany"
-                        class="w-full sm:w-56 rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
-                    <option value="">All Companies</option>
-                    @foreach($companies as $c)
-                        <option value="{{ $c->id }}">{{ $c->name }}</option>
-                    @endforeach
-                </select>
+                <div class="w-full sm:w-56">
+                    <x-searchable-select
+                        wire:model.live="filterCompany"
+                        :options="$companyOptions"
+                        placeholder="All Companies"
+                        search-placeholder="Search companies…"
+                    />
+                </div>
             </div>
             <button wire:click="$toggle('showAddForm')"
                     class="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-500 transition">
@@ -233,12 +249,12 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                     <div>
                         <label class="block text-xs font-medium text-gray-700 mb-1">Owner Company</label>
-                        <select wire:model="addCompanyId" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
-                            <option value="">— None —</option>
-                            @foreach($companies as $c)
-                                <option value="{{ $c->id }}">{{ $c->name }}</option>
-                            @endforeach
-                        </select>
+                        <x-searchable-select
+                            wire:model="addCompanyId"
+                            :options="$companyOptions"
+                            placeholder="— None —"
+                            search-placeholder="Search companies…"
+                        />
                     </div>
                     <div>
                         <label class="block text-xs font-medium text-gray-700 mb-1">Location Name *</label>
@@ -267,10 +283,12 @@ new #[Layout('components.layouts.app')] class extends Component {
                     </div>
                     <div>
                         <label class="block text-xs font-medium text-gray-700 mb-1">Zone</label>
-                        <select wire:model="addZoneId" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
-                            <option value="">Select zone...</option>
-                            @foreach($zones as $z)<option value="{{ $z->id }}">{{ $z->name }}</option>@endforeach
-                        </select>
+                        <x-searchable-select
+                            wire:model="addZoneId"
+                            :options="$zoneOptions"
+                            placeholder="Select zone..."
+                            search-placeholder="Search zones…"
+                        />
                     </div>
                     <div>
                         <label class="block text-xs font-medium text-gray-700 mb-1">Customer Name</label>
@@ -319,12 +337,12 @@ new #[Layout('components.layouts.app')] class extends Component {
                                             <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                                                 <div>
                                                     <label class="block text-xs font-medium text-gray-700 mb-1">Owner Company</label>
-                                                    <select wire:model="editCompanyId" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
-                                                        <option value="">— None —</option>
-                                                        @foreach($companies as $c)
-                                                            <option value="{{ $c->id }}">{{ $c->name }}</option>
-                                                        @endforeach
-                                                    </select>
+                                                    <x-searchable-select
+                                                        wire:model="editCompanyId"
+                                                        :options="$companyOptions"
+                                                        placeholder="— None —"
+                                                        search-placeholder="Search companies…"
+                                                    />
                                                 </div>
                                                 <div>
                                                     <label class="block text-xs font-medium text-gray-700 mb-1">Location Name *</label>
@@ -353,10 +371,12 @@ new #[Layout('components.layouts.app')] class extends Component {
                                                 </div>
                                                 <div>
                                                     <label class="block text-xs font-medium text-gray-700 mb-1">Zone</label>
-                                                    <select wire:model="editZoneId" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
-                                                        <option value="">Select zone...</option>
-                                                        @foreach($zones as $z)<option value="{{ $z->id }}">{{ $z->name }}</option>@endforeach
-                                                    </select>
+                                                    <x-searchable-select
+                                                        wire:model="editZoneId"
+                                                        :options="$zoneOptions"
+                                                        placeholder="Select zone..."
+                                                        search-placeholder="Search zones…"
+                                                    />
                                                 </div>
                                                 <div>
                                                     <label class="block text-xs font-medium text-gray-700 mb-1">Customer Name</label>

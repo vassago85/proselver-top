@@ -322,13 +322,35 @@ new #[Layout('components.layouts.app')] class extends Component {
             $modelsQuery->whereIn('brand_id', $linkedBrandIds);
         }
 
+        $locations = $company
+            ? Location::visibleTo($company)->active()->orderBy('company_name')->get(['id', 'company_name', 'city', 'address'])
+            : collect();
+
+        $vehicleClasses = VehicleClass::where('is_active', true)->orderBy('name')->get(['id', 'name']);
+
+        $locationOptions = $locations->map(fn ($l) => [
+            'value' => (string) $l->id,
+            'label' => $l->company_name . ($l->city ? " ({$l->city})" : ''),
+        ])->values()->all();
+
+        $vehicleClassOptions = $vehicleClasses->map(fn ($vc) => [
+            'value' => (string) $vc->id,
+            'label' => $vc->name,
+        ])->values()->all();
+
+        $brandOptions = $brands->map(fn ($b) => [
+            'value' => (string) $b->id,
+            'label' => $b->name,
+        ])->values()->all();
+
         return [
-            'locations' => $company
-                ? Location::visibleTo($company)->active()->orderBy('company_name')->get(['id', 'company_name', 'city', 'address'])
-                : collect(),
-            'vehicleClasses' => VehicleClass::where('is_active', true)->orderBy('name')->get(['id', 'name']),
+            'locations' => $locations,
+            'vehicleClasses' => $vehicleClasses,
             'brands' => $brands,
             'vehicleModels' => $modelsQuery->get(['id', 'brand_id', 'name']),
+            'locationOptions' => $locationOptions,
+            'vehicleClassOptions' => $vehicleClassOptions,
+            'brandOptions' => $brandOptions,
         ];
     }
 };
@@ -359,20 +381,24 @@ new #[Layout('components.layouts.app')] class extends Component {
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">From *</label>
-                    <select wire:model.live="pickupLocationId" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm">
-                        <option value="">Select pickup...</option>
-                        @foreach($locations as $loc)<option value="{{ $loc->id }}">{{ $loc->company_name }}{{ $loc->city ? " ({$loc->city})" : '' }}</option>@endforeach
-                    </select>
+                    <x-searchable-select
+                        wire:model.live="pickupLocationId"
+                        :options="$locationOptions"
+                        placeholder="Select pickup..."
+                        search-placeholder="Search locations…"
+                    />
                     @error('pickupLocationId')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
                     <button type="button" wire:click="$toggle('showNewPickup')" class="mt-1 text-xs text-blue-600 hover:underline">+ Add new location</button>
                     @if($showNewPickup)@include('partials.new-location-form', ['target' => 'pickup'])@endif
                 </div>
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">To *</label>
-                    <select wire:model.live="deliveryLocationId" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm">
-                        <option value="">Select delivery...</option>
-                        @foreach($locations as $loc)<option value="{{ $loc->id }}">{{ $loc->company_name }}{{ $loc->city ? " ({$loc->city})" : '' }}</option>@endforeach
-                    </select>
+                    <x-searchable-select
+                        wire:model.live="deliveryLocationId"
+                        :options="$locationOptions"
+                        placeholder="Select delivery..."
+                        search-placeholder="Search locations…"
+                    />
                     @error('deliveryLocationId')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
                     <button type="button" wire:click="$toggle('showNewDelivery')" class="mt-1 text-xs text-blue-600 hover:underline">+ Add new location</button>
                     @if($showNewDelivery)@include('partials.new-location-form', ['target' => 'delivery'])@endif
@@ -391,10 +417,12 @@ new #[Layout('components.layouts.app')] class extends Component {
 
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">Vehicle Class *</label>
-                    <select wire:model.live="vehicleClassId" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm">
-                        <option value="">Select class...</option>
-                        @foreach($vehicleClasses as $vc)<option value="{{ $vc->id }}">{{ $vc->name }}</option>@endforeach
-                    </select>
+                    <x-searchable-select
+                        wire:model.live="vehicleClassId"
+                        :options="$vehicleClassOptions"
+                        placeholder="Select class..."
+                        search-placeholder="Search classes…"
+                    />
                     @error('vehicleClassId')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
                 </div>
                 <div class="flex items-end">
@@ -464,10 +492,14 @@ new #[Layout('components.layouts.app')] class extends Component {
                 @if($brands->count() <= 1)
                     <input type="text" value="{{ $brands->first()?->name ?? 'No brand assigned to your account' }}" disabled class="w-full max-w-xs rounded-lg border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm text-gray-600">
                 @else
-                    <select wire:model.live="brandId" class="w-full max-w-xs rounded-lg border border-gray-300 px-3 py-2.5 text-sm">
-                        <option value="">Select brand...</option>
-                        @foreach($brands as $brand)<option value="{{ $brand->id }}">{{ $brand->name }}</option>@endforeach
-                    </select>
+                    <div class="max-w-xs">
+                        <x-searchable-select
+                            wire:model.live="brandId"
+                            :options="$brandOptions"
+                            placeholder="Select brand..."
+                            search-placeholder="Search brands…"
+                        />
+                    </div>
                 @endif
                 @if($vehicleModels->isEmpty() && $brandId)
                     <p class="mt-1 text-xs text-amber-600">No models defined for this brand — ask your TCDC admin to add them.</p>
@@ -571,10 +603,12 @@ new #[Layout('components.layouts.app')] class extends Component {
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">Yard Location *</label>
-                    <select wire:model="yardLocationId" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm">
-                        <option value="">Select yard...</option>
-                        @foreach($locations as $loc)<option value="{{ $loc->id }}">{{ $loc->company_name }}{{ $loc->city ? " ({$loc->city})" : '' }}</option>@endforeach
-                    </select>
+                    <x-searchable-select
+                        wire:model="yardLocationId"
+                        :options="$locationOptions"
+                        placeholder="Select yard..."
+                        search-placeholder="Search yards…"
+                    />
                     @error('yardLocationId')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
                     <button type="button" wire:click="$toggle('showNewYard')" class="mt-1 text-xs text-blue-600 hover:underline">+ Add New Location</button>
                     @if($showNewYard)@include('partials.new-location-form', ['target' => 'yard'])@endif

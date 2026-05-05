@@ -192,7 +192,20 @@ class extends Component
             return $isOemCompany ? str_replace('Customer ', 'OEM ', $name) : $name;
         };
 
-        return compact('members', 'canManage', 'locations', 'customerRoles', 'roleLabel', 'isOemCompany');
+        $roleOptions = $customerRoles->map(fn ($r) => [
+            'value' => $r->slug,
+            'label' => $roleLabel($r->name),
+        ])->values()->all();
+
+        $locationOptions = $locations->map(fn ($loc) => [
+            'value' => (string) $loc->id,
+            'label' => $loc->company_name . ($loc->city ? " — {$loc->city}" : ''),
+        ])->values()->all();
+
+        return compact(
+            'members', 'canManage', 'locations', 'customerRoles',
+            'roleLabel', 'isOemCompany', 'roleOptions', 'locationOptions'
+        );
     }
 };
 ?>
@@ -250,23 +263,23 @@ class extends Component
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1">Role <span class="text-red-500">*</span></label>
-                        <select wire:model="userRole" required
-                            class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
-                            @foreach($customerRoles as $role)
-                                <option value="{{ $role->slug }}">{{ $roleLabel($role->name) }}</option>
-                            @endforeach
-                        </select>
+                        <x-searchable-select
+                            wire:model="userRole"
+                            :options="$roleOptions"
+                            placeholder="Select role"
+                            search-placeholder="Search roles…"
+                            :allow-clear="false"
+                        />
                         @error('userRole') <p class="mt-1 text-xs text-red-600">{{ $message }}</p> @enderror
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1">Assigned Location</label>
-                        <select wire:model="userLocationId"
-                            class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
-                            <option value="">All locations (no restriction)</option>
-                            @foreach($locations as $loc)
-                                <option value="{{ $loc->id }}">{{ $loc->company_name }}{{ $loc->city ? " — {$loc->city}" : '' }}</option>
-                            @endforeach
-                        </select>
+                        <x-searchable-select
+                            wire:model="userLocationId"
+                            :options="$locationOptions"
+                            placeholder="All locations (no restriction)"
+                            search-placeholder="Search locations…"
+                        />
                         @error('userLocationId') <p class="mt-1 text-xs text-red-600">{{ $message }}</p> @enderror
                     </div>
                 </div>

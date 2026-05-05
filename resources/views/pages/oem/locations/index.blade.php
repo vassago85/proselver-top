@@ -180,9 +180,16 @@ new #[Layout('components.layouts.app')] class extends Component {
             });
         }
 
+        $zones = Zone::active()->orderBy('name')->get();
+        $zoneOptions = $zones->map(fn ($z) => [
+            'value' => (string) $z->id,
+            'label' => $z->name,
+        ])->values()->all();
+
         return [
             'locations' => $query->paginate(25),
-            'zones' => Zone::active()->orderBy('name')->get(),
+            'zones' => $zones,
+            'zoneOptions' => $zoneOptions,
         ];
     }
 };
@@ -238,10 +245,12 @@ new #[Layout('components.layouts.app')] class extends Component {
                 </div>
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">Zone</label>
-                    <select wire:model="addZoneId" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
-                        <option value="">Select zone...</option>
-                        @foreach($zones as $z)<option value="{{ $z->id }}">{{ $z->name }}</option>@endforeach
-                    </select>
+                    <x-searchable-select
+                        wire:model="addZoneId"
+                        :options="$zoneOptions"
+                        placeholder="Select zone..."
+                        search-placeholder="Search zones…"
+                    />
                 </div>
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">Customer Name</label>
@@ -316,10 +325,12 @@ new #[Layout('components.layouts.app')] class extends Component {
                                     </div>
                                     <div>
                                         <label class="block text-sm font-medium text-gray-700 mb-1">Zone</label>
-                                        <select wire:model="editZoneId" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
-                                            <option value="">Select zone...</option>
-                                            @foreach($zones as $z)<option value="{{ $z->id }}">{{ $z->name }}</option>@endforeach
-                                        </select>
+                                        <x-searchable-select
+                                            wire:model="editZoneId"
+                                            :options="$zoneOptions"
+                                            placeholder="Select zone..."
+                                            search-placeholder="Search zones…"
+                                        />
                                     </div>
                                     <div>
                                         <label class="block text-sm font-medium text-gray-700 mb-1">Customer Name</label>

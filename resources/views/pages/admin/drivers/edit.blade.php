@@ -272,11 +272,24 @@ new #[Layout('components.layouts.app')] class extends Component {
                 ->get(['id', 'name']);
         }
 
+        // Drivers who already hold a plate were previously rendered as
+        // disabled <option>s. The searchable dropdown drops them entirely
+        // — there is never a reason to surface a non-selectable row.
+        $transferCandidateOptions = $transferCandidates
+            ->filter(fn ($u) => empty($u->driverProfile?->trade_plate))
+            ->map(fn ($u) => [
+                'value' => (string) $u->id,
+                'label' => $u->name,
+            ])
+            ->values()
+            ->all();
+
         return [
             'canManage' => (bool) Auth::user()?->canManageUsers(),
             'activeJobCount' => $service->activeJobCount($this->user),
             'reasonLabels' => DriverProfile::REASON_LABELS,
             'transferCandidates' => $transferCandidates,
+            'transferCandidateOptions' => $transferCandidateOptions,
             'isOffRoster' => (bool) $profile?->isOffRoster(),
             'offRosterActor' => $profile?->off_roster_by_user_id
                 ? User::find($profile->off_roster_by_user_id)?->name
@@ -639,16 +652,15 @@ new #[Layout('components.layouts.app')] class extends Component {
                             </label>
                             @if($plateDisposition === 'transfer')
                                 <div class="pl-7">
-                                    <select wire:model="plateTransferTo"
-                                            class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
-                                        <option value="">Select an active driver…</option>
-                                        @foreach($transferCandidates as $candidate)
-                                            <option value="{{ $candidate->id }}"
-                                                    @disabled($candidate->driverProfile?->trade_plate)>
-                                                {{ $candidate->name }}@if($candidate->driverProfile?->trade_plate) — already holds {{ $candidate->driverProfile->trade_plate }}@endif
-                                            </option>
-                                        @endforeach
-                                    </select>
+                                    <x-searchable-select
+                                        wire:model="plateTransferTo"
+                                        :options="$transferCandidateOptions"
+                                        placeholder="Select an active driver…"
+                                        search-placeholder="Search drivers…"
+                                    />
+                                    @if(count($transferCandidateOptions) === 0)
+                                        <p class="mt-1 text-xs text-slate-500">No active drivers without a plate.</p>
+                                    @endif
                                     @error('plateTransferTo')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
                                 </div>
                             @endif

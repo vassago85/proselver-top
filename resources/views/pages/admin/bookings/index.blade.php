@@ -69,9 +69,15 @@ new #[Layout('components.layouts.app')] class extends Component {
             ->orderBy('name')
             ->get(['id', 'name']);
 
+        $driverOptions = $drivers->map(fn ($d) => [
+            'value' => (string) $d->id,
+            'label' => $d->name,
+        ])->values()->all();
+
         return [
             'jobs' => $query->paginate(25),
             'drivers' => $drivers,
+            'driverOptions' => $driverOptions,
         ];
     }
 
@@ -455,13 +461,13 @@ new #[Layout('components.layouts.app')] class extends Component {
                 </div>
 
                 <div>
-                    <label for="indexApproveDriverSelect" class="block text-sm font-medium text-gray-700 mb-1.5">Assign Driver <span class="text-gray-400 font-normal">(optional)</span></label>
-                    <select wire:model="approveDriverId" id="indexApproveDriverSelect" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-purple-500 focus:ring-purple-500">
-                        <option value="">Skip — assign later</option>
-                        @foreach($drivers as $d)
-                            <option value="{{ $d->id }}">{{ $d->name }}</option>
-                        @endforeach
-                    </select>
+                    <label class="block text-sm font-medium text-gray-700 mb-1.5">Assign Driver <span class="text-gray-400 font-normal">(optional)</span></label>
+                    <x-searchable-select
+                        wire:model="approveDriverId"
+                        :options="$driverOptions"
+                        placeholder="Skip — assign later"
+                        search-placeholder="Search drivers…"
+                    />
                     <p class="mt-1.5 text-xs text-gray-500">Selecting a driver will also mark the booking as assigned.</p>
                 </div>
             </div>

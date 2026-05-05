@@ -151,13 +151,50 @@ new #[Layout('components.layouts.app')] class extends Component {
                 => 'Enter model',
         };
 
+        $vehicleClasses = VehicleClass::where('is_active', true)->orderBy('name')->get(['id', 'name']);
+
+        // Shape the location options for <x-searchable-select>: a grouped
+        // structure so "My Locations" stays separate from "Shared Depots"
+        // even with typeahead filtering. Same shape powers pickup and
+        // delivery — they pull from the same pool.
+        $locationFormatter = fn ($loc) => [
+            'value' => (string) $loc->id,
+            'label' => $loc->company_name . ($loc->city ? " — {$loc->city}" : ''),
+        ];
+        $locationGroups = [];
+        if ($companyLocations->isNotEmpty()) {
+            $locationGroups[] = [
+                'label' => 'My Locations',
+                'options' => $companyLocations->map($locationFormatter)->values()->all(),
+            ];
+        }
+        if ($sharedLocations->isNotEmpty()) {
+            $locationGroups[] = [
+                'label' => 'Shared Depots',
+                'options' => $sharedLocations->map($locationFormatter)->values()->all(),
+            ];
+        }
+
+        $brandOptions = $brands->map(fn ($b) => [
+            'value' => (string) $b->id,
+            'label' => $b->name,
+        ])->values()->all();
+
+        $vehicleClassOptions = $vehicleClasses->map(fn ($vc) => [
+            'value' => (string) $vc->id,
+            'label' => $vc->name,
+        ])->values()->all();
+
         return [
             'companyLocations' => $companyLocations,
             'sharedLocations' => $sharedLocations,
             'brands' => $brands,
-            'vehicleClasses' => VehicleClass::where('is_active', true)->orderBy('name')->get(['id', 'name']),
+            'vehicleClasses' => $vehicleClasses,
             'vehicleModels' => $vehicleModels,
             'modelPlaceholder' => $modelPlaceholder,
+            'locationGroups' => $locationGroups,
+            'brandOptions' => $brandOptions,
+            'vehicleClassOptions' => $vehicleClassOptions,
         ];
     }
 };
@@ -192,46 +229,22 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1">Pickup Location <span class="text-red-500">*</span></label>
-                        <select wire:model.live="pickupLocationId" required
-                            class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:ring-blue-500">
-                            <option value="">Select pickup location</option>
-                            @if($companyLocations->isNotEmpty())
-                                <optgroup label="My Locations">
-                                    @foreach($companyLocations as $loc)
-                                        <option value="{{ $loc->id }}">{{ $loc->company_name }}{{ $loc->city ? " — {$loc->city}" : '' }}</option>
-                                    @endforeach
-                                </optgroup>
-                            @endif
-                            @if($sharedLocations->isNotEmpty())
-                                <optgroup label="Shared Depots">
-                                    @foreach($sharedLocations as $loc)
-                                        <option value="{{ $loc->id }}">{{ $loc->company_name }}{{ $loc->city ? " — {$loc->city}" : '' }}</option>
-                                    @endforeach
-                                </optgroup>
-                            @endif
-                        </select>
+                        <x-searchable-select
+                            wire:model.live="pickupLocationId"
+                            :options="$locationGroups"
+                            placeholder="Select pickup location"
+                            search-placeholder="Search locations…"
+                        />
                         @error('pickupLocationId') <p class="mt-1 text-xs text-red-600">{{ $message }}</p> @enderror
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1">Delivery Location <span class="text-red-500">*</span></label>
-                        <select wire:model.live="deliveryLocationId" required
-                            class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:ring-blue-500">
-                            <option value="">Select delivery location</option>
-                            @if($companyLocations->isNotEmpty())
-                                <optgroup label="My Locations">
-                                    @foreach($companyLocations as $loc)
-                                        <option value="{{ $loc->id }}">{{ $loc->company_name }}{{ $loc->city ? " — {$loc->city}" : '' }}</option>
-                                    @endforeach
-                                </optgroup>
-                            @endif
-                            @if($sharedLocations->isNotEmpty())
-                                <optgroup label="Shared Depots">
-                                    @foreach($sharedLocations as $loc)
-                                        <option value="{{ $loc->id }}">{{ $loc->company_name }}{{ $loc->city ? " — {$loc->city}" : '' }}</option>
-                                    @endforeach
-                                </optgroup>
-                            @endif
-                        </select>
+                        <x-searchable-select
+                            wire:model.live="deliveryLocationId"
+                            :options="$locationGroups"
+                            placeholder="Select delivery location"
+                            search-placeholder="Search locations…"
+                        />
                         @error('deliveryLocationId') <p class="mt-1 text-xs text-red-600">{{ $message }}</p> @enderror
                     </div>
                 </div>
@@ -243,13 +256,12 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1">Brand</label>
-                        <select wire:model.live="brandId"
-                            class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:ring-blue-500">
-                            <option value="">Select brand</option>
-                            @foreach($brands as $brand)
-                                <option value="{{ $brand->id }}">{{ $brand->name }}</option>
-                            @endforeach
-                        </select>
+                        <x-searchable-select
+                            wire:model.live="brandId"
+                            :options="$brandOptions"
+                            placeholder="Select brand"
+                            search-placeholder="Search brands…"
+                        />
                         @error('brandId') <p class="mt-1 text-xs text-red-600">{{ $message }}</p> @enderror
                     </div>
                     <div>
@@ -290,13 +302,12 @@ new #[Layout('components.layouts.app')] class extends Component {
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1">Vehicle Class <span class="text-red-500">*</span></label>
-                        <select wire:model="vehicleClassId" required
-                            class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:ring-blue-500">
-                            <option value="">Select vehicle class</option>
-                            @foreach($vehicleClasses as $vc)
-                                <option value="{{ $vc->id }}">{{ $vc->name }}</option>
-                            @endforeach
-                        </select>
+                        <x-searchable-select
+                            wire:model="vehicleClassId"
+                            :options="$vehicleClassOptions"
+                            placeholder="Select vehicle class"
+                            search-placeholder="Search classes…"
+                        />
                         @error('vehicleClassId') <p class="mt-1 text-xs text-red-600">{{ $message }}</p> @enderror
                     </div>
                 </div>

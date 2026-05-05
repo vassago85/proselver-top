@@ -53,15 +53,38 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     public function with(): array
     {
+        $companies = Company::query()
+            ->where('is_active', true)
+            ->whereIn('type', [Company::TYPE_OEM, Company::TYPE_DEALER, Company::TYPE_CUSTOMER])
+            ->orderBy('name')
+            ->get(['id', 'name', 'type', 'movement_csv_mapping']);
+
+        $brands = Brand::query()->where('is_active', true)->orderBy('name')->get();
+        $vehicleClasses = VehicleClass::query()->where('is_active', true)->orderBy('name')->get();
+
+        $companyOptions = $companies->map(fn ($c) => [
+            'value' => (string) $c->id,
+            'label' => $c->name . ' (' . $c->type . ')',
+        ])->values()->all();
+
+        $brandOptions = $brands->map(fn ($b) => [
+            'value' => (string) $b->id,
+            'label' => $b->name,
+        ])->values()->all();
+
+        $vehicleClassOptions = $vehicleClasses->map(fn ($vc) => [
+            'value' => (string) $vc->id,
+            'label' => $vc->name,
+        ])->values()->all();
+
         return [
-            'companies' => Company::query()
-                ->where('is_active', true)
-                ->whereIn('type', [Company::TYPE_OEM, Company::TYPE_DEALER, Company::TYPE_CUSTOMER])
-                ->orderBy('name')
-                ->get(['id', 'name', 'type', 'movement_csv_mapping']),
-            'brands' => Brand::query()->where('is_active', true)->orderBy('name')->get(),
-            'vehicleClasses' => VehicleClass::query()->where('is_active', true)->orderBy('name')->get(),
+            'companies' => $companies,
+            'brands' => $brands,
+            'vehicleClasses' => $vehicleClasses,
             'fields' => JobBulkImporter::FIELDS,
+            'companyOptions' => $companyOptions,
+            'brandOptions' => $brandOptions,
+            'vehicleClassOptions' => $vehicleClassOptions,
         ];
     }
 
@@ -300,16 +323,14 @@ new #[Layout('components.layouts.app')] class extends Component {
             <div class="mt-6 space-y-5">
                 <div>
                     <label class="block text-sm font-medium text-slate-700">Customer</label>
-                    <select wire:model="companyId" class="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
-                        <option value="">— pick a customer —</option>
-                        @foreach($companies as $c)
-                            <option value="{{ $c->id }}">
-                                {{ $c->name }}
-                                @if($c->movement_csv_mapping) · saved mapping @endif
-                                @if($c->type) · {{ str_replace('_',' ', $c->type) }} @endif
-                            </option>
-                        @endforeach
-                    </select>
+                    <div class="mt-1">
+                        <x-searchable-select
+                            wire:model="companyId"
+                            :options="$companyOptions"
+                            placeholder="— pick a customer —"
+                            search-placeholder="Search customers…"
+                        />
+                    </div>
                     @error('companyId')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
                 </div>
 
@@ -379,22 +400,26 @@ new #[Layout('components.layouts.app')] class extends Component {
             <div class="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-5">
                 <div>
                     <label class="block text-sm font-medium text-slate-700">Brand</label>
-                    <select wire:model="defaultBrandId" class="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
-                        <option value="">— none —</option>
-                        @foreach($brands as $b)
-                            <option value="{{ $b->id }}">{{ $b->name }}</option>
-                        @endforeach
-                    </select>
+                    <div class="mt-1">
+                        <x-searchable-select
+                            wire:model="defaultBrandId"
+                            :options="$brandOptions"
+                            placeholder="— none —"
+                            search-placeholder="Search brands…"
+                        />
+                    </div>
                 </div>
 
                 <div>
                     <label class="block text-sm font-medium text-slate-700">Default vehicle class</label>
-                    <select wire:model="defaultVehicleClassId" class="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
-                        <option value="">— let the importer guess from the model —</option>
-                        @foreach($vehicleClasses as $vc)
-                            <option value="{{ $vc->id }}">{{ $vc->name }}</option>
-                        @endforeach
-                    </select>
+                    <div class="mt-1">
+                        <x-searchable-select
+                            wire:model="defaultVehicleClassId"
+                            :options="$vehicleClassOptions"
+                            placeholder="— let the importer guess from the model —"
+                            search-placeholder="Search classes…"
+                        />
+                    </div>
                     <p class="mt-1 text-xs text-slate-500">
                         Optional. Leave blank to let us infer the class from the model description (e.g. "28.290FL" → 28-tonne).
                         You can also override the class per row on the next screen.
@@ -483,12 +508,14 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <div class="mt-6 rounded-lg border border-slate-200 bg-slate-50 p-3">
                     <p class="text-xs font-semibold uppercase tracking-wider text-slate-500">Bulk allocate vehicle class</p>
                     <div class="mt-2 flex flex-wrap items-center gap-2">
-                        <select wire:model="bulkVehicleClassId" class="rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
-                            <option value="">— pick a class —</option>
-                            @foreach($vehicleClasses as $vc)
-                                <option value="{{ $vc->id }}">{{ $vc->name }}</option>
-                            @endforeach
-                        </select>
+                        <div class="w-56">
+                            <x-searchable-select
+                                wire:model="bulkVehicleClassId"
+                                :options="$vehicleClassOptions"
+                                placeholder="— pick a class —"
+                                search-placeholder="Search classes…"
+                            />
+                        </div>
                         <button type="button" wire:click="applyVehicleClassToBlanks" class="rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-500 disabled:opacity-50" {{ $bulkVehicleClassId ? '' : 'disabled' }}>
                             Apply to rows missing a class
                         </button>

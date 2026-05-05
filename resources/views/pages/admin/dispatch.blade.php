@@ -94,9 +94,15 @@ new #[Layout('components.layouts.app')] class extends Component {
         $plannedCount = Job::where('status', Job::STATUS_PLANNED)->count();
         $assignedCount = Job::where('status', Job::STATUS_DRIVER_ASSIGNED)->count();
 
+        $driverOptions = $drivers->map(fn ($d) => [
+            'value' => (string) $d->id,
+            'label' => $d->name,
+        ])->values()->all();
+
         return [
             'jobs' => $jobs,
             'drivers' => $drivers,
+            'driverOptions' => $driverOptions,
             'plannedCount' => $plannedCount,
             'assignedCount' => $assignedCount,
         ];
@@ -190,15 +196,14 @@ new #[Layout('components.layouts.app')] class extends Component {
                         <td class="px-6 py-4">
                             @if($job->status === 'planned')
                             <div class="flex items-center justify-end gap-2">
-                                <select
-                                    wire:model="driverSelections.{{ $job->id }}"
-                                    class="rounded-lg border border-gray-300 bg-white py-1.5 pl-3 pr-8 text-xs text-gray-700 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-                                >
-                                    <option value="">Select driver...</option>
-                                    @foreach($drivers as $driver)
-                                    <option value="{{ $driver->id }}">{{ $driver->name }}</option>
-                                    @endforeach
-                                </select>
+                                <div class="w-52">
+                                    <x-searchable-select
+                                        wire:model="driverSelections.{{ $job->id }}"
+                                        :options="$driverOptions"
+                                        placeholder="Select driver..."
+                                        search-placeholder="Search drivers…"
+                                    />
+                                </div>
                                 <button
                                     wire:click="assignDriver({{ $job->id }})"
                                     class="inline-flex items-center gap-1 rounded-lg bg-purple-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-purple-700 transition-colors"

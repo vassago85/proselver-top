@@ -319,7 +319,12 @@ new #[Layout('components.layouts.app')] class extends Component {
             ->orderBy('name')
             ->get(['id', 'name']);
 
-        return ['drivers' => $drivers];
+        $driverOptions = $drivers->map(fn ($d) => [
+            'value' => (string) $d->id,
+            'label' => $d->name,
+        ])->values()->all();
+
+        return ['drivers' => $drivers, 'driverOptions' => $driverOptions];
     }
 };
 
@@ -548,12 +553,14 @@ new #[Layout('components.layouts.app')] class extends Component {
                         </button>
                     @elseif($job->status === Job::STATUS_PLANNED)
                         <div class="flex flex-wrap items-center gap-2 w-full sm:w-auto">
-                            <select wire:model="driverId" class="rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-purple-500 focus:ring-purple-500">
-                                <option value="">Select driver…</option>
-                                @foreach($drivers as $d)
-                                    <option value="{{ $d->id }}">{{ $d->name }}</option>
-                                @endforeach
-                            </select>
+                            <div class="w-64">
+                                <x-searchable-select
+                                    wire:model="driverId"
+                                    :options="$driverOptions"
+                                    placeholder="Select driver…"
+                                    search-placeholder="Search drivers…"
+                                />
+                            </div>
                             <button wire:click="assignDriver"
                                 class="inline-flex items-center gap-2 rounded-lg bg-purple-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-purple-500 shadow-sm transition-colors">
                                 Assign Driver
