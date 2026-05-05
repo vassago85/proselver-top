@@ -19,9 +19,11 @@ new #[Layout('components.layouts.app')] class extends Component {
     public string $tsAccount = '';
     public string $tsAppKey = '';
     public string $tsAppSecret = '';
+    public string $tsUserPassword = '';
     public int $tsPollIntervalSeconds = 30;
     public bool $hasExistingTsKey = false;
     public bool $hasExistingTsSecret = false;
+    public bool $hasExistingTsPassword = false;
 
     public function mount(): void
     {
@@ -34,6 +36,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         $this->tsPollIntervalSeconds = (int) SystemSetting::get(TrackSolidClient::SETTING_POLL_INTERVAL, 30);
         $this->hasExistingTsKey = !empty(SystemSetting::get(TrackSolidClient::SETTING_APP_KEY));
         $this->hasExistingTsSecret = !empty(SystemSetting::get(TrackSolidClient::SETTING_APP_SECRET));
+        $this->hasExistingTsPassword = !empty(SystemSetting::get(TrackSolidClient::SETTING_USER_PWD_MD5));
     }
 
     public function save(): void
@@ -72,6 +75,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             'tsAccount' => 'nullable|string|max:255',
             'tsAppKey' => 'nullable|string|max:255',
             'tsAppSecret' => 'nullable|string|max:255',
+            'tsUserPassword' => 'nullable|string|max:255',
             'tsPollIntervalSeconds' => 'integer|min:10|max:600',
         ]);
 
@@ -88,9 +92,22 @@ new #[Layout('components.layouts.app')] class extends Component {
             SystemSetting::set(TrackSolidClient::SETTING_APP_SECRET, trim($this->tsAppSecret), 'string', 'TrackSolid app secret');
             $this->hasExistingTsSecret = true;
         }
+        if ($this->tsUserPassword !== '') {
+            // The TrackSolid spec wants a lowercase MD5 of the platform
+            // login password. Be friendly: if the operator pasted a plain
+            // password, hash it ourselves; if they pasted a 32-char hex
+            // string, trust it as-is so they can copy it from another
+            // tool without us double-hashing.
+            $raw = trim($this->tsUserPassword);
+            $md5 = preg_match('/^[a-f0-9]{32}$/i', $raw) ? strtolower($raw) : md5($raw);
+            SystemSetting::set(TrackSolidClient::SETTING_USER_PWD_MD5, $md5, 'string', 'TrackSolid platform password (md5)');
+            $this->hasExistingTsPassword = true;
+        }
 
         $this->tsAppKey = '';
         $this->tsAppSecret = '';
+        $this->tsUserPassword = '';
+        \Illuminate\Support\Facades\Cache::forget('tracksolid.access_token');
         session()->flash('success', 'TrackSolid settings saved.');
     }
 
@@ -102,6 +119,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             TrackSolidClient::SETTING_APP_KEY,
             TrackSolidClient::SETTING_APP_SECRET,
             TrackSolidClient::SETTING_ACCOUNT,
+            TrackSolidClient::SETTING_USER_PWD_MD5,
         ] as $key) {
             SystemSetting::set($key, '', 'string', null);
         }
@@ -110,6 +128,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         $this->tsAccount = '';
         $this->hasExistingTsKey = false;
         $this->hasExistingTsSecret = false;
+        $this->hasExistingTsPassword = false;
         \Illuminate\Support\Facades\Cache::forget('tracksolid.access_token');
         session()->flash('success', 'TrackSolid credentials cleared.');
     }
@@ -285,9 +304,9 @@ new #[Layout('components.layouts.app')] class extends Component {
                         Enable TrackSolid integration
                     </label>
                     <span class="ml-auto text-xs text-slate-500">
-                        @if($tsEnabled && $hasExistingTsKey && $hasExistingTsSecret)
+                        @if($tsEnabled && $hasExistingTsKey && $hasExistingTsSecret && $hasExistingTsPassword)
                             <span class="rounded-full bg-emerald-100 px-2 py-0.5 font-medium text-emerald-700">configured</span>
-                        @elseif($hasExistingTsKey || $hasExistingTsSecret)
+                        @elseif($hasExistingTsKey || $hasExistingTsSecret || $hasExistingTsPassword)
                             <span class="rounded-full bg-amber-100 px-2 py-0.5 font-medium text-amber-700">partial</span>
                         @else
                             <span class="rounded-full bg-slate-200 px-2 py-0.5 font-medium text-slate-700">not configured</span>
@@ -298,7 +317,8 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1">Base URL</label>
-                        <input wire:model="tsBaseUrl" type="url" placeholder="https://open.tracksolidpro.com" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-emerald-500 focus:ring-emerald-500">
+                        <input wire:model="tsBaseUrl" type="url" placeholder="https://hk-open.tracksolidpro.com" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-emerald-500 focus:ring-emerald-500">
+                        <p class="mt-1 text-xs text-gray-500">HK / EU / US regional endpoint, without <code>/route/rest</code>. e.g. <code>https://hk-open.tracksolidpro.com</code>.</p>
                         @error('tsBaseUrl')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
                     </div>
                     <div>
@@ -331,6 +351,20 @@ new #[Layout('components.layouts.app')] class extends Component {
                             </button>
                         </div>
                         @error('tsAppSecret')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
+                    </div>
+                    <div x-data="{ show: false }" class="sm:col-span-2">
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Account password</label>
+                        <div class="relative">
+                            <input wire:model="tsUserPassword" :type="show ? 'text' : 'password'" autocomplete="new-password"
+                                placeholder="{{ $hasExistingTsPassword ? 'Leave blank to keep current password' : 'Paste plain password OR 32-char MD5' }}"
+                                class="w-full rounded-lg border border-gray-300 px-3 py-2.5 pr-10 text-sm focus:border-emerald-500 focus:ring-emerald-500">
+                            <button type="button" @click="show = !show" class="absolute inset-y-0 right-0 flex items-center pr-3 text-gray-400 hover:text-gray-600">
+                                <svg x-show="!show" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
+                                <svg x-show="show" x-cloak class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/><line x1="2" x2="22" y1="2" y2="22"/></svg>
+                            </button>
+                        </div>
+                        <p class="mt-1 text-xs text-gray-500">The TrackSolid login password for the <strong>account</strong> above. Stored as a one-way MD5 hash; we'll hash it for you if you paste plain text.</p>
+                        @error('tsUserPassword')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1">Poll interval (seconds)</label>

@@ -59,6 +59,59 @@ new #[Layout('components.layouts.app')] class extends Component {
     }
 
     /**
+     * Operations override of the customer-confirmation gate.
+     *
+     * For OEM customers (e.g. FAW) we normally require a confirmation
+     * tap from the customer side before ops can plan the job — that's
+     * how we capture buy-in that the truck really is at the yard ready
+     * to collect. While that buy-in flow is still being rolled out, ops
+     * needs an escape hatch: pick up the phone, confirm verbally, and
+     * push the job into "Collection Confirmed" without waiting for the
+     * portal click. Every override is audit-logged with the prior
+     * status and the operator's identity so the trail is unambiguous.
+     */
+    public function confirmOrderOverride(): void
+    {
+        $user = auth()->user();
+        abort_unless($user && $user->isInternal(), 403, 'Only ops staff can override customer confirmation.');
+
+        // Allowed entry points: a brand-new order in RECEIVED, or one
+        // already sat AWAITING_CUSTOMER_CONFIRMATION because FAW hasn't
+        // tapped through. Anything else is past this gate already.
+        if (!in_array($this->job->status, [
+            Job::STATUS_RECEIVED,
+            Job::STATUS_AWAITING_CUSTOMER_CONFIRMATION,
+            Job::STATUS_CONFIRMATION_ISSUE,
+        ], true)) {
+            session()->flash('error', 'This order is past the customer-confirmation step already.');
+            return;
+        }
+
+        $before = ['status' => $this->job->status];
+
+        if (!$this->job->transitionTo(Job::STATUS_CONFIRMED)) {
+            session()->flash('error', 'Cannot confirm this order in its current state.');
+            return;
+        }
+
+        // Stamp the confirmation note so every downstream view (admin
+        // detail, customer portal, audit dump) makes it obvious this was
+        // an ops override rather than a customer tap.
+        $this->job->confirmation_reason = null;
+        $this->job->confirmation_note = 'Confirmed by ops on behalf of customer ('
+            . $user->name . ' at ' . now()->toIso8601String() . ').';
+        $this->job->save();
+
+        AuditService::log('order_confirmed_override', 'job', $this->job->id, $before, [
+            'status' => $this->job->status,
+            'overridden_by' => $user->id,
+            'note' => 'Ops override of customer confirmation gate',
+        ]);
+
+        session()->flash('warning', "Order {$this->job->job_number} confirmed without customer sign-off — make sure you've spoken to the customer.");
+    }
+
+    /**
      * One-click verification bridge out of the legacy PENDING_VERIFICATION
      * state into the Phase 1 chain at RECEIVED. Ops would previously have
      * had to walk the job through verified â†’ approved â†’ awaiting confirmation
@@ -413,6 +466,19 @@ new #[Layout('components.layouts.app')] class extends Component {
             </div>
 
             <div class="{{ $v['bg'] }} px-6 py-5">
+                {{-- Ops-only badge: if this order was confirmed via the
+                     manual override (we stamp confirmation_note when
+                     ops bypass the customer portal sign-off) make it
+                     unmistakable to the next operator who opens it. --}}
+                @if($job->confirmation_note && $job->confirmation_reason === null && str_starts_with($job->confirmation_note, 'Confirmed by ops'))
+                    <div class="mb-4 flex items-start gap-3 rounded-lg border-2 border-orange-300 bg-orange-50 px-4 py-3 text-sm text-orange-900">
+                        <svg class="h-5 w-5 mt-0.5 shrink-0 text-orange-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+                        <div class="flex-1">
+                            <p class="font-semibold">Confirmed via ops override</p>
+                            <p class="mt-0.5 text-xs text-orange-800">{{ $job->confirmation_note }}</p>
+                        </div>
+                    </div>
+                @endif
                 <div class="flex items-start gap-3">
                     <span class="mt-1 inline-flex h-2 w-2 shrink-0 rounded-full {{ $v['dot'] }} {{ !$isTerminal ? 'node-pulse' : '' }}"></span>
                     <div class="min-w-0 flex-1">
@@ -442,12 +508,39 @@ new #[Layout('components.layouts.app')] class extends Component {
                                 class="inline-flex items-center gap-2 rounded-lg bg-amber-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-amber-500 shadow-sm transition-colors">
                                 Send to Customer for Confirmation
                             </button>
+                            {{-- Interim escape hatch while OEM customers (e.g. FAW)
+                                 are still being onboarded onto the customer-portal
+                                 confirmation flow. Ops phones the customer, gets
+                                 verbal sign-off, and pushes the order to "Collection
+                                 Confirmed" without waiting for the portal tap.
+                                 Audit-logged in confirmOrderOverride(). --}}
+                            <button wire:click="confirmOrderOverride"
+                                wire:confirm="Override the customer confirmation?\n\nThis will mark the order ready for collection WITHOUT the customer's portal sign-off. Only do this if you've confirmed verbally with the customer that the truck is at the yard."
+                                class="inline-flex items-center gap-2 rounded-lg border-2 border-orange-400 bg-orange-50 px-4 py-2.5 text-sm font-semibold text-orange-800 hover:bg-orange-100 shadow-sm transition-colors">
+                                <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+                                Override: Mark Ready for Collection
+                            </button>
                         @else
                             <button wire:click="confirmOrder" wire:confirm="Confirm this order?"
                                 class="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-500 shadow-sm transition-colors">
                                 Confirm Order
                             </button>
                         @endif
+                    @elseif(in_array($job->status, [Job::STATUS_AWAITING_CUSTOMER_CONFIRMATION, Job::STATUS_CONFIRMATION_ISSUE], true))
+                        {{-- Order has been sent to the customer but they haven't
+                             tapped through yet. Ops can chase them, OR if it's
+                             dragging on, override and push it to Collection
+                             Confirmed manually. --}}
+                        <span class="inline-flex items-center gap-2 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-sm text-amber-800">
+                            <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                            {{ $job->status === Job::STATUS_CONFIRMATION_ISSUE ? 'Customer reported an issue' : 'Waiting for customer confirmation' }}
+                        </span>
+                        <button wire:click="confirmOrderOverride"
+                            wire:confirm="Override the customer confirmation?\n\nThis will mark the order ready for collection WITHOUT waiting for the customer's portal sign-off. Only do this if you've confirmed verbally with the customer that the truck is at the yard."
+                            class="inline-flex items-center gap-2 rounded-lg border-2 border-orange-400 bg-orange-50 px-4 py-2.5 text-sm font-semibold text-orange-800 hover:bg-orange-100 shadow-sm transition-colors">
+                            <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+                            Override: Mark Ready for Collection
+                        </button>
                     @elseif($job->status === Job::STATUS_CONFIRMED)
                         <button wire:click="planOrder" wire:confirm="Mark as planned?"
                             class="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-500 shadow-sm transition-colors">

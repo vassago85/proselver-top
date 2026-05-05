@@ -126,7 +126,10 @@ class Job extends Model
     const PHASE1_TRANSITIONS = [
         self::STATUS_RECEIVED => [self::STATUS_AWAITING_CUSTOMER_CONFIRMATION, self::STATUS_CONFIRMED, self::STATUS_CANCELLED],
         self::STATUS_AWAITING_CUSTOMER_CONFIRMATION => [self::STATUS_CONFIRMED, self::STATUS_CONFIRMATION_ISSUE, self::STATUS_CANCELLED],
-        self::STATUS_CONFIRMATION_ISSUE => [self::STATUS_AWAITING_CUSTOMER_CONFIRMATION, self::STATUS_CANCELLED],
+        // CONFIRMATION_ISSUE → CONFIRMED is the ops-override path: ops phones
+        // the customer, resolves the issue verbally, and pushes through
+        // (audit-logged in admin/orders/show.blade.php:confirmOrderOverride).
+        self::STATUS_CONFIRMATION_ISSUE => [self::STATUS_AWAITING_CUSTOMER_CONFIRMATION, self::STATUS_CONFIRMED, self::STATUS_CANCELLED],
         self::STATUS_CONFIRMED => [self::STATUS_PLANNED, self::STATUS_CANCELLED],
         self::STATUS_PLANNED => [self::STATUS_DRIVER_ASSIGNED, self::STATUS_CANCELLED],
         // Once a driver is assigned the next event is the driver arriving at pickup
