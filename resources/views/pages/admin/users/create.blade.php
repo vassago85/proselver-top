@@ -47,8 +47,14 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         $hasDealerRole = Role::whereIn('id', $this->selectedRoles)->where('tier', 'dealer')->exists();
         $hasOemRole = Role::whereIn('id', $this->selectedRoles)->where('tier', 'oem')->exists();
+
+        // Dealer / OEM tier roles are meaningless without a company link.
+        // For every other role the picker is optional but still available
+        // so site admins can attach any user to any organisation.
         if ($hasDealerRole || $hasOemRole) {
             $rules['companyId'] = 'required|exists:companies,id';
+        } else {
+            $rules['companyId'] = 'nullable|integer|exists:companies,id';
         }
 
         $this->validate($rules);
@@ -87,7 +93,7 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         $user->roles()->sync($this->selectedRoles);
 
-        if (($hasDealerRole || $hasOemRole) && $this->companyId) {
+        if ($this->companyId) {
             $user->companies()->sync([$this->companyId]);
         }
 
@@ -171,25 +177,31 @@ new #[Layout('components.layouts.app')] class extends Component {
             </div>
         </div>
 
-        @if(collect($selectedRoles)->isNotEmpty())
-            @php
-                $hasDealerRole = \App\Models\Role::whereIn('id', $selectedRoles)->where('tier', 'dealer')->exists();
-                $hasOemRole = \App\Models\Role::whereIn('id', $selectedRoles)->where('tier', 'oem')->exists();
-                $companyType = $hasOemRole ? 'oem' : ($hasDealerRole ? 'dealer' : null);
-            @endphp
-            @if($companyType)
-            <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
-                <h3 class="text-lg font-semibold text-gray-900 mb-4">{{ $hasOemRole ? 'OEM' : 'Dealer' }} Company Assignment *</h3>
-                <select wire:model="companyId" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm">
-                    <option value="">Select company...</option>
-                    @foreach($companies->where('type', $companyType) as $company)
-                        <option value="{{ $company->id }}">{{ $company->name }}</option>
-                    @endforeach
-                </select>
-                @error('companyId')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
-            </div>
-            @endif
-        @endif
+        @php
+            $hasDealerRole = \App\Models\Role::whereIn('id', $selectedRoles)->where('tier', 'dealer')->exists();
+            $hasOemRole = \App\Models\Role::whereIn('id', $selectedRoles)->where('tier', 'oem')->exists();
+            $companyRequired = $hasDealerRole || $hasOemRole;
+        @endphp
+        <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
+            <h3 class="text-lg font-semibold text-gray-900 mb-1">
+                Organisation
+                @if($companyRequired) <span class="text-red-500">*</span> @endif
+            </h3>
+            <p class="text-xs text-gray-500 mb-4">
+                Pin this user to a single customer / dealer / OEM. Required
+                for dealer- and OEM-tier roles, optional for everyone else.
+            </p>
+            <select wire:model="companyId" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm">
+                <option value="">— not assigned —</option>
+                @foreach($companies as $company)
+                    <option value="{{ $company->id }}">
+                        {{ $company->name }}
+                        @if($company->type) · {{ str_replace('_', ' ', $company->type) }} @endif
+                    </option>
+                @endforeach
+            </select>
+            @error('companyId')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
+        </div>
 
         <div class="flex justify-end gap-3">
             <a href="{{ route('admin.users.index') }}" class="rounded-lg border border-gray-300 bg-white px-6 py-3 text-sm font-semibold text-gray-700 hover:bg-gray-50">Cancel</a>
