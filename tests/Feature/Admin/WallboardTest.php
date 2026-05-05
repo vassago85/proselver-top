@@ -287,3 +287,71 @@ it('exposes driver markers with normalised lat/lng for the map', function () {
     expect($first['lng'])->toEqualWithDelta(28.04738, 0.0001);
     expect($first['bucket'])->toBe('idle');
 });
+
+it('enriches driver markers with phone, last-fix, and active job detail for the info window', function () {
+    asInternal();
+
+    $driver = User::factory()->create([
+        'name' => 'Sipho M.',
+        'phone' => '+27821234567',
+        'is_active' => true,
+    ]);
+    $driver->assignRole('driver');
+    DriverProfile::create(['user_id' => $driver->id, 'tracker_id' => 'IMEI-INFO']);
+
+    TrackerPosition::create([
+        'tracker_id' => 'IMEI-INFO',
+        'latitude' => -26.0, 'longitude' => 28.0,
+        'speed_kmh' => 78.4,
+        'reported_at' => now()->subMinute(),
+        'received_at' => now()->subMinute(),
+    ]);
+
+    [$company, $pickup] = wbCompanyAndLocation('Acme Customer', 'Pretoria Plant');
+    $delivery = Location::create([
+        'company_id' => $company->id,
+        'company_name' => 'JHB Depot',
+        'address' => 'JHB Depot',
+        'type' => Location::TYPE_YARD,
+        'is_active' => true,
+    ]);
+
+    wbJob($company->id, $driver->id, $pickup->id, $delivery->id, [
+        'status' => Job::STATUS_IN_TRANSIT,
+        'job_number' => 'JOB-INFO',
+    ]);
+
+    $markers = collect(Volt::test('admin.wallboard.index')->viewData('driverMarkers'));
+    $first = $markers->first();
+
+    expect($first['phone'])->toBe('+27821234567');
+    expect($first['speed_kmh'])->toBe(78);
+    expect($first['last_fix_human'])->not->toBeNull();
+    expect($first['job']['job_number'])->toBe('JOB-INFO');
+    expect($first['job']['pickup'])->toBe('Pretoria Plant');
+    expect($first['job']['delivery'])->toBe('JHB Depot');
+    expect($first['job']['customer'])->toBe('Acme Customer');
+    expect($first['job']['detail_url'])->toContain('/admin/orders/');
+});
+
+it('boots in kiosk mode when ?kiosk=1 is on the URL', function () {
+    $this->actingAs(asInternal('operations_controller'));
+
+    // Hit the route with the query param so mount() picks it up.
+    $response = $this->get('/admin/wallboard?kiosk=1');
+    $response->assertOk();
+
+    // The component should also expose kiosk=true via Volt::test+set, so
+    // the rendered output omits the app shell.
+    $component = Volt::test('admin.wallboard.index')->set('kiosk', true);
+    $html = $component->html();
+    expect($html)->toContain('Exit kiosk');
+    expect($html)->not->toContain('Operations Wallboard</x-slot');
+});
+
+it('defaults to non-kiosk mode without the query param', function () {
+    $this->actingAs(asInternal('operations_controller'));
+    $component = Volt::test('admin.wallboard.index');
+    expect($component->get('kiosk'))->toBeFalse();
+    expect($component->html())->toContain('Kiosk mode');
+});

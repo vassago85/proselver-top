@@ -35,6 +35,20 @@ new #[Layout('components.layouts.app')] class extends Component {
      */
     public bool $showStale = true;
 
+    /**
+     * Kiosk / wall-TV mode: hides the app sidebar and top bar, takes
+     * over the full viewport and lets the operator press F11 / the
+     * floating button to drop into native browser fullscreen too.
+     * Toggleable from the wallboard top strip; URL is rewritten to
+     * `?kiosk=1` so a refresh keeps the mode.
+     */
+    public bool $kiosk = false;
+
+    public function mount(): void
+    {
+        $this->kiosk = (bool) request()->boolean('kiosk', false);
+    }
+
     public function with(): array
     {
         // ---------------------------------------------------------------
@@ -55,9 +69,10 @@ new #[Layout('components.layouts.app')] class extends Component {
             ->keyBy('tracker_id');
 
         $drivers = User::query()
+            ->select(['id', 'name', 'phone', 'is_active'])
             ->whereHas('roles', fn ($q) => $q->where('slug', 'driver'))
             ->where('is_active', true)
-            ->with(['driverProfile'])
+            ->with(['driverProfile:id,user_id,tracker_id'])
             ->orderBy('name')
             ->get();
 
@@ -70,7 +85,11 @@ new #[Layout('components.layouts.app')] class extends Component {
                 Job::STATUS_ASSIGNED,
                 Job::STATUS_IN_PROGRESS,
             ])
-            ->with(['pickupLocation:id,company_name,city,latitude,longitude', 'deliveryLocation:id,company_name,city,latitude,longitude'])
+            ->with([
+                'pickupLocation:id,company_name,city,latitude,longitude',
+                'deliveryLocation:id,company_name,city,latitude,longitude',
+                'company:id,name',
+            ])
             ->get()
             ->keyBy('driver_user_id');
 
@@ -84,6 +103,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             return (object) [
                 'id' => $driver->id,
                 'name' => $driver->name,
+                'phone' => $driver->phone,
                 'tracker_id' => $trackerId,
                 'has_position' => $position !== null,
                 'lat' => $position?->latitude !== null ? (float) $position->latitude : null,
@@ -98,6 +118,8 @@ new #[Layout('components.layouts.app')] class extends Component {
                     'status_label' => $job->phase1StatusLabel(),
                     'pickup' => $job->pickupLocation?->company_name,
                     'delivery' => $job->deliveryLocation?->company_name,
+                    'customer' => $job->company?->name,
+                    'detail_url' => route('admin.orders.show', $job->id),
                 ] : null,
                 'bucket' => $bucket,
             ];
@@ -184,12 +206,23 @@ new #[Layout('components.layouts.app')] class extends Component {
             ->map(fn ($r) => [
                 'id' => $r->id,
                 'name' => $r->name,
+                'phone' => $r->phone,
                 'lat' => $r->lat,
                 'lng' => $r->lng,
                 'heading' => $r->heading_deg,
                 'bucket' => $r->bucket,
-                'speed_kmh' => $r->speed_kmh,
-                'job' => $r->job ? ($r->job->job_number . ' · ' . $r->job->status_label) : null,
+                'speed_kmh' => $r->speed_kmh !== null ? (int) round($r->speed_kmh) : null,
+                'last_fix_human' => $r->reported_at?->diffForHumans(['parts' => 1, 'short' => true]),
+                'job' => $r->job ? [
+                    'id' => $r->job->id,
+                    'job_number' => $r->job->job_number,
+                    'status' => $r->job->status,
+                    'status_label' => $r->job->status_label,
+                    'pickup' => $r->job->pickup,
+                    'delivery' => $r->job->delivery,
+                    'customer' => $r->job->customer,
+                    'detail_url' => $r->job->detail_url,
+                ] : null,
             ])
             ->values();
 
@@ -303,18 +336,80 @@ new #[Layout('components.layouts.app')] class extends Component {
         'apiKey' => (string) $mapsApiKey,
     ];
 @endphp
-<script id="wallboard-data" type="application/json">{!! json_encode($wallboardPayload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) !!}</script>
 <div
     wire:poll.5s
-    x-data="wallboardMap()"
+    x-data="wallboardMap({ kiosk: @js($kiosk) })"
     x-init="bootMap()"
-    class="-mx-4 -my-6 sm:-mx-6 lg:-mx-8 lg:-my-8"
+    @class([
+        '-mx-4 -my-6 sm:-mx-6 lg:-mx-8 lg:-my-8' => !$kiosk,
+        'fixed inset-0 z-[60] bg-slate-100' => $kiosk,
+    ])
 >
-    <x-slot:header>Operations Wallboard</x-slot:header>
+    {{-- Live JSON payload re-emitted on every wire:poll cycle. The
+         Alpine glue further down reads it via getElementById, so its
+         position inside the root element is irrelevant — but it has
+         to live INSIDE the root or Livewire flags multiple roots. --}}
+    <script id="wallboard-data" type="application/json">{!! json_encode($wallboardPayload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) !!}</script>
+
+    @if($kiosk)
+    {{-- Kiosk overrides: hide the app shell so the wallboard owns the
+         entire viewport on a wall TV. Scoped <style> tag instead of
+         touching the layout component, because the layout is used by
+         every other page and kiosk mode is wallboard-specific. --}}
+    <style>
+        body { overflow: hidden !important; }
+        body > nav,
+        body > header,
+        aside.app-sidebar,
+        nav[role="navigation"]:first-of-type,
+        .app-shell-sidebar,
+        .app-shell-topbar,
+        div[x-data*="sidebarOpen"],
+        .min-h-screen > aside,
+        .min-h-screen > header { display: none !important; }
+        main, .min-h-screen > main, .py-8, .py-6, .max-w-7xl, .container-fluid {
+            margin: 0 !important; padding: 0 !important; max-width: 100vw !important;
+        }
+    </style>
+    @endif
+
+    <style>
+        .wb-iw {
+            font-family: ui-sans-serif, system-ui, sans-serif;
+            min-width: 240px;
+            max-width: 300px;
+        }
+        .wb-iw h3 { font-size: 14px; font-weight: 700; color: #0f172a; margin: 0 0 4px; }
+        .wb-iw .wb-row { font-size: 12px; color: #475569; line-height: 1.4; }
+        .wb-iw .wb-row strong { color: #0f172a; font-weight: 600; }
+        .wb-iw .wb-pill {
+            display: inline-block; font-size: 10px; font-weight: 700;
+            text-transform: uppercase; letter-spacing: 0.06em;
+            padding: 2px 8px; border-radius: 9999px;
+            margin-bottom: 6px;
+        }
+        .wb-iw .wb-actions { margin-top: 8px; display: flex; gap: 8px; }
+        .wb-iw .wb-btn {
+            font-size: 11px; font-weight: 600; padding: 5px 9px;
+            border-radius: 6px; text-decoration: none;
+            background: #2563eb; color: white;
+        }
+        .wb-iw .wb-btn-secondary { background: #f1f5f9; color: #0f172a; }
+        .wb-iw .wb-route { font-size: 11px; color: #334155; margin-top: 4px; }
+    </style>
+
+    @if(!$kiosk)
+        <x-slot:header>Operations Wallboard</x-slot:header>
+    @endif
 
     {{-- Top stats strip --}}
     <div class="px-4 sm:px-6 lg:px-8 pt-2 pb-3 border-b border-slate-200 bg-white">
         <div class="flex flex-wrap items-center gap-2 text-xs">
+            @if($kiosk)
+                <span class="rounded-full border border-slate-300 bg-slate-900 px-3 py-1.5 font-semibold uppercase tracking-[0.18em] text-white">
+                    Ops Wallboard
+                </span>
+            @endif
             <span class="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-slate-700">
                 <span class="font-semibold tabular-nums">{{ $counts['total'] }}</span> drivers
             </span>
@@ -336,6 +431,31 @@ new #[Layout('components.layouts.app')] class extends Component {
                 Show stale / offline drivers
             </label>
 
+            {{-- Kiosk / fullscreen toggle. Two buttons because they do
+                 different things: "Kiosk" hides the app chrome via
+                 ?kiosk=1 (survives refresh, good for a TV that boots
+                 to this URL), and "Fullscreen" calls the browser's
+                 own fullscreen API on top of that. --}}
+            @if($kiosk)
+                <a href="{{ route('admin.wallboard') }}"
+                   class="inline-flex items-center gap-1.5 rounded-full border border-slate-300 bg-white px-3 py-1.5 font-medium text-slate-700 hover:bg-slate-50">
+                    <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor"><path d="M3 6a1 1 0 011-1h4a1 1 0 010 2H5v3a1 1 0 11-2 0V6zm14 0a1 1 0 00-1-1h-4a1 1 0 100 2h3v3a1 1 0 102 0V6zM3 14a1 1 0 011-1h4a1 1 0 110 2H5v-3a1 1 0 00-2 0v2zm14 0a1 1 0 01-1 1h-4a1 1 0 110-2h3v-3a1 1 0 112 0v4z"/></svg>
+                    Exit kiosk
+                </a>
+            @else
+                <a href="{{ route('admin.wallboard', ['kiosk' => 1]) }}"
+                   class="inline-flex items-center gap-1.5 rounded-full border border-slate-300 bg-white px-3 py-1.5 font-medium text-slate-700 hover:bg-slate-50">
+                    <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor"><path d="M3 4a1 1 0 011-1h4a1 1 0 010 2H5v3a1 1 0 11-2 0V4zm14 0a1 1 0 00-1-1h-4a1 1 0 100 2h3v3a1 1 0 102 0V4zM3 16a1 1 0 011 1h4a1 1 0 110-2H5v-3a1 1 0 00-2 0v4zm14 0a1 1 0 01-1 1h-4a1 1 0 110-2h3v-3a1 1 0 112 0v4z"/></svg>
+                    Kiosk mode
+                </a>
+            @endif
+            <button type="button"
+                    x-on:click="toggleFullscreen()"
+                    class="inline-flex items-center gap-1.5 rounded-full border border-slate-300 bg-white px-3 py-1.5 font-medium text-slate-700 hover:bg-slate-50">
+                <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor"><path d="M5 3a2 2 0 00-2 2v3a1 1 0 002 0V5h3a1 1 0 100-2H5zm10 0a1 1 0 100 2h3v3a1 1 0 102 0V5a2 2 0 00-2-2h-3zM5 17a2 2 0 01-2-2v-3a1 1 0 112 0v3h3a1 1 0 110 2H5zm10 0a1 1 0 110-2h3v-3a1 1 0 112 0v3a2 2 0 01-2 2h-3z"/></svg>
+                <span x-text="isFullscreen ? 'Exit fullscreen' : 'Fullscreen'"></span>
+            </button>
+
             @if(!$tracksolidConfigured)
                 <a href="{{ route('admin.settings.integrations') }}" class="rounded-full border border-amber-300 bg-amber-50 px-3 py-1.5 font-medium text-amber-700 hover:bg-amber-100">
                     TrackSolid not configured — set up integration
@@ -350,8 +470,14 @@ new #[Layout('components.layouts.app')] class extends Component {
         </div>
     </div>
 
-    {{-- Three-panel grid --}}
-    <div class="grid grid-cols-12 gap-0 h-[calc(100vh-9rem)]">
+    {{-- Three-panel grid. In kiosk mode we eat the whole viewport
+         minus the top stats strip; in normal mode we leave room for
+         the app chrome above. --}}
+    <div @class([
+        'grid grid-cols-12 gap-0',
+        'h-[calc(100vh-9rem)]' => !$kiosk,
+        'h-[calc(100vh-3.25rem)]' => $kiosk,
+    ])>
 
         {{-- LEFT · DRIVERS --}}
         <aside class="col-span-12 md:col-span-3 lg:col-span-3 border-r border-slate-200 bg-white overflow-y-auto">
@@ -489,23 +615,130 @@ new #[Layout('components.layouts.app')] class extends Component {
             }
         }
 
+        // Bucket → colour palette shared between marker pin, cluster
+        // tint and info window status pill so everything reads as a
+        // single coherent visual system.
+        const WB_COLOURS = {
+            on_job:  { fill: '#10b981', dark: '#047857', label: 'On job',   bg: '#d1fae5', text: '#065f46' },
+            idle:    { fill: '#3b82f6', dark: '#1d4ed8', label: 'Idle',     bg: '#dbeafe', text: '#1e40af' },
+            stale:   { fill: '#f59e0b', dark: '#b45309', label: 'Stale',    bg: '#fef3c7', text: '#92400e' },
+            offline: { fill: '#94a3b8', dark: '#475569', label: 'Offline',  bg: '#f1f5f9', text: '#334155' },
+        };
+        const WB_DEFAULT = WB_COLOURS.idle;
+
+        // SVG pin used per driver. Tinted by status; the inner dot
+        // pulses on active drivers. Embedded as a data: URL so we can
+        // hand it straight to the Google Maps Marker icon prop.
+        // We use \x3c (escaped '<') everywhere a real angle bracket
+        // would appear in a JS string. PHP's libxml HTML parser
+        // (DOMDocument) — which is what Livewire's multiple-root
+        // detector runs on the rendered output — has a long-standing
+        // quirk where certain content inside a <body>-level <script>
+        // (especially when there's also a <style> in body, processing-
+        // instructions, or particular tag patterns) trips it out of
+        // "script data" state and then it parses our JS template
+        // literals as actual HTML elements, which spawn extra root
+        // nodes. The escape sidesteps the whole class of bugs.
+        function wbDriverIcon(bucket) {
+            const c = WB_COLOURS[bucket] || WB_DEFAULT;
+            const svg =
+                '\x3csvg xmlns="http://www.w3.org/2000/svg" width="34" height="44" viewBox="0 0 34 44">' +
+                  '\x3cdefs>' +
+                    '\x3cradialGradient id="g" cx="50%" cy="40%" r="60%">' +
+                      '\x3cstop offset="0%" stop-color="' + c.fill + '" stop-opacity="0.95"/>' +
+                      '\x3cstop offset="100%" stop-color="' + c.dark + '" stop-opacity="1"/>' +
+                    '\x3c/radialGradient>' +
+                    '\x3cfilter id="s" x="-50%" y="-50%" width="200%" height="200%">' +
+                      '\x3cfeDropShadow dx="0" dy="1" stdDeviation="1.4" flood-opacity="0.35"/>' +
+                    '\x3c/filter>' +
+                  '\x3c/defs>' +
+                  '\x3cpath d="M17 1 C8.2 1 1 8.2 1 17 c0 11.5 16 26 16 26 s16-14.5 16-26 c0-8.8-7.2-16-16-16 z" ' +
+                       'fill="url(#g)" stroke="#0f172a" stroke-width="1.4" filter="url(#s)"/>' +
+                  '\x3ccircle cx="17" cy="17" r="6.5" fill="#ffffff" opacity="0.95"/>' +
+                  '\x3ccircle cx="17" cy="17" r="3.5" fill="' + c.dark + '"/>' +
+                '\x3c/svg>';
+            return 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg);
+        }
+
+        function wbClusterIconUrl(tone, size) {
+            const c = WB_COLOURS[tone] || WB_DEFAULT;
+            const svg =
+                '\x3csvg xmlns="http://www.w3.org/2000/svg" width="' + size + '" height="' + size + '" viewBox="0 0 ' + size + ' ' + size + '">' +
+                  '\x3cdefs>' +
+                    '\x3cradialGradient id="cg" cx="50%" cy="50%" r="50%">' +
+                      '\x3cstop offset="0%" stop-color="' + c.fill + '" stop-opacity="0.45"/>' +
+                      '\x3cstop offset="60%" stop-color="' + c.fill + '" stop-opacity="0.25"/>' +
+                      '\x3cstop offset="100%" stop-color="' + c.fill + '" stop-opacity="0"/>' +
+                    '\x3c/radialGradient>' +
+                  '\x3c/defs>' +
+                  '\x3ccircle cx="' + (size/2) + '" cy="' + (size/2) + '" r="' + (size/2) + '" fill="url(#cg)"/>' +
+                  '\x3ccircle cx="' + (size/2) + '" cy="' + (size/2) + '" r="' + (size*0.32) + '" fill="' + c.fill + '" stroke="#0f172a" stroke-width="1.5" opacity="0.95"/>' +
+                '\x3c/svg>';
+            return 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg);
+        }
+
+        function wbInfoWindowHtml(m) {
+            const c = WB_COLOURS[m.bucket] || WB_DEFAULT;
+            const speedTxt = (m.speed_kmh != null) ? (' · ' + m.speed_kmh + ' km/h') : '';
+            const fixTxt = m.last_fix_human
+                ? ('\x3cdiv class="wb-row">\x3cstrong>Last fix:\x3c/strong> ' + m.last_fix_human + speedTxt + '\x3c/div>')
+                : '';
+            const phoneRow = m.phone
+                ? ('\x3cdiv class="wb-row">\x3cstrong>Phone:\x3c/strong> \x3ca href="tel:' + m.phone + '" style="color:#2563eb">' + m.phone + '\x3c/a>\x3c/div>')
+                : '';
+
+            let jobBlock = '\x3cdiv class="wb-row" style="margin-top:6px">\x3cem>No active job.\x3c/em>\x3c/div>';
+            let actions = '';
+            if (m.job) {
+                const route = (m.job.pickup || m.job.delivery)
+                    ? ('\x3cdiv class="wb-route">' + (m.job.pickup || '?') + ' → ' + (m.job.delivery || '?') + '\x3c/div>') : '';
+                const cust = m.job.customer
+                    ? ('\x3cdiv class="wb-row">\x3cstrong>Customer:\x3c/strong> ' + m.job.customer + '\x3c/div>')
+                    : '';
+                jobBlock =
+                    '\x3cdiv class="wb-row" style="margin-top:6px">\x3cstrong>' + m.job.job_number + '\x3c/strong> · ' + m.job.status_label + '\x3c/div>' +
+                    cust + route;
+                actions = '\x3ca class="wb-btn" target="_blank" rel="noopener" href="' + m.job.detail_url + '">Open job\x3c/a>';
+            }
+            const callBtn = m.phone ? ('\x3ca class="wb-btn wb-btn-secondary" href="tel:' + m.phone + '">Call\x3c/a>') : '';
+
+            return (
+                '\x3cdiv class="wb-iw">' +
+                  '\x3cspan class="wb-pill" style="background:' + c.bg + ';color:' + c.text + '">' + c.label + '\x3c/span>' +
+                  '\x3ch3>' + (m.name || 'Driver') + '\x3c/h3>' +
+                  fixTxt + phoneRow + jobBlock +
+                  '\x3cdiv class="wb-actions">' + actions + callBtn + '\x3c/div>' +
+                '\x3c/div>'
+            );
+        }
+
         document.addEventListener('alpine:init', () => {
-            Alpine.data('wallboardMap', () => ({
+            Alpine.data('wallboardMap', (opts = {}) => ({
                 map: null,
                 markers: [],
                 jobMarkers: [],
                 apiKey: '',
+                kiosk: !!opts.kiosk,
+                isFullscreen: false,
                 _pins: [],
                 _jobPins: [],
+                _clusterer: null,
+                _infoWindow: null,
+                _hasFitted: false,
 
                 bootMap() {
                     const payload = _wallboardReadPayload();
                     this.markers = payload.markers || [];
                     this.jobMarkers = payload.jobMarkers || [];
                     this.apiKey = payload.apiKey || '';
+
+                    document.addEventListener('fullscreenchange', () => {
+                        this.isFullscreen = !!document.fullscreenElement;
+                    });
+
                     if (!this.apiKey) return;
 
-                    const start = () => this.initMap();
+                    const start = () => this.loadClusterer().then(() => this.initMap());
 
                     if (window.google && window.google.maps) {
                         start();
@@ -531,6 +764,20 @@ new #[Layout('components.layouts.app')] class extends Component {
                     document.head.appendChild(s);
                 },
 
+                // Lazy-load the @googlemaps/markerclusterer UMD bundle.
+                // Resolves immediately if it's already on window.
+                loadClusterer() {
+                    return new Promise((resolve) => {
+                        if (window.markerClusterer) return resolve();
+                        const s = document.createElement('script');
+                        s.src = 'https://unpkg.com/@googlemaps/markerclusterer@2.5.3/dist/index.min.js';
+                        s.async = true;
+                        s.onload = () => resolve();
+                        s.onerror = () => resolve(); // fall back to plain markers
+                        document.head.appendChild(s);
+                    });
+                },
+
                 initMap() {
                     const el = document.getElementById('wallboard-map');
                     if (!el) return;
@@ -540,7 +787,10 @@ new #[Layout('components.layouts.app')] class extends Component {
                         mapTypeControl: false,
                         streetViewControl: false,
                         fullscreenControl: false,
+                        clickableIcons: false,
+                        gestureHandling: 'greedy',
                     });
+                    this._infoWindow = new google.maps.InfoWindow();
                     this.replaceMarkers();
                     this.fitToMarkers();
                 },
@@ -548,6 +798,9 @@ new #[Layout('components.layouts.app')] class extends Component {
                 replaceMarkers() {
                     if (!this.map || !window.google) return;
 
+                    if (this._clusterer) {
+                        this._clusterer.clearMarkers();
+                    }
                     this._pins.forEach(p => p.setMap(null));
                     this._pins = [];
                     this._jobPins.forEach(p => p.setMap(null));
@@ -555,28 +808,73 @@ new #[Layout('components.layouts.app')] class extends Component {
 
                     this.markers.forEach((m) => {
                         if (m.lat == null || m.lng == null) return;
-                        const colour = ({
-                            on_job:  '#10b981',
-                            idle:    '#3b82f6',
-                            stale:   '#f59e0b',
-                            offline: '#94a3b8',
-                        })[m.bucket] || '#3b82f6';
 
                         const pin = new google.maps.Marker({
-                            map: this.map,
                             position: { lat: Number(m.lat), lng: Number(m.lng) },
-                            title: m.name + (m.job ? ' — ' + m.job : ''),
+                            title: m.name + (m.job ? ' — ' + m.job.job_number : ''),
                             icon: {
-                                path: google.maps.SymbolPath.CIRCLE,
-                                scale: 8,
-                                fillColor: colour,
-                                fillOpacity: 1,
-                                strokeColor: '#0f172a',
-                                strokeWeight: 1.5,
+                                url: wbDriverIcon(m.bucket || 'idle'),
+                                scaledSize: new google.maps.Size(34, 44),
+                                anchor: new google.maps.Point(17, 42),
                             },
+                            optimized: false,
                         });
+                        pin.__driver = m;
+
+                        pin.addListener('click', () => {
+                            this._infoWindow.setContent(wbInfoWindowHtml(m));
+                            this._infoWindow.open({ map: this.map, anchor: pin });
+                        });
+
                         this._pins.push(pin);
                     });
+
+                    // Cluster the driver pins. The clusterer auto-creates
+                    // count bubbles when zoomed out, and breaks them up
+                    // as you zoom in — same pattern operators use on
+                    // every other fleet tool, so it's the right fit.
+                    if (window.markerClusterer && this._pins.length) {
+                        const renderer = {
+                            render: ({ count, position, markers: cMarkers }) => {
+                                // Tint the cluster by the most "active" status
+                                // it contains: on_job > stale > idle > offline.
+                                const order = ['on_job', 'stale', 'idle', 'offline'];
+                                let tone = 'idle';
+                                for (const t of order) {
+                                    if (cMarkers.some(mk => (mk.__driver && mk.__driver.bucket === t))) { tone = t; break; }
+                                }
+                                const size = Math.min(72, 36 + Math.log2(count) * 7);
+                                return new google.maps.Marker({
+                                    position,
+                                    icon: {
+                                        url: wbClusterIconUrl(tone, size),
+                                        scaledSize: new google.maps.Size(size, size),
+                                        anchor: new google.maps.Point(size / 2, size / 2),
+                                    },
+                                    label: {
+                                        text: String(count),
+                                        color: '#ffffff',
+                                        fontWeight: '700',
+                                        fontSize: '13px',
+                                    },
+                                    zIndex: 1000 + count,
+                                    optimized: false,
+                                });
+                            },
+                        };
+
+                        if (this._clusterer) {
+                            this._clusterer.addMarkers(this._pins);
+                        } else {
+                            this._clusterer = new markerClusterer.MarkerClusterer({
+                                map: this.map,
+                                markers: this._pins,
+                                renderer,
+                            });
+                        }
+                    } else {
+                        this._pins.forEach(p => p.setMap(this.map));
+                    }
 
                     this.jobMarkers.forEach((j) => {
                         const pin = new google.maps.Marker({
@@ -591,23 +889,39 @@ new #[Layout('components.layouts.app')] class extends Component {
                                 strokeColor: '#0f172a',
                                 strokeWeight: 1,
                             },
+                            zIndex: 50,
                         });
                         this._jobPins.push(pin);
                     });
                 },
 
+                // Only fit on the first paint — auto-refitting on every
+                // poll makes the wallboard zoom in and out every 5
+                // seconds, which is nausea-inducing on a wall TV.
                 fitToMarkers() {
-                    if (!this.map || !window.google) return;
+                    if (!this.map || !window.google || this._hasFitted) return;
                     const bounds = new google.maps.LatLngBounds();
                     let any = false;
                     this._pins.forEach(p => { bounds.extend(p.getPosition()); any = true; });
-                    if (any) this.map.fitBounds(bounds, 60);
+                    if (any) {
+                        this.map.fitBounds(bounds, 60);
+                        this._hasFitted = true;
+                    }
                 },
 
                 panTo(lat, lng) {
                     if (!this.map || !window.google) return;
                     this.map.panTo({ lat: Number(lat), lng: Number(lng) });
                     if (this.map.getZoom() < 12) this.map.setZoom(12);
+                },
+
+                toggleFullscreen() {
+                    const el = document.documentElement;
+                    if (!document.fullscreenElement) {
+                        if (el.requestFullscreen) el.requestFullscreen().catch(() => {});
+                    } else {
+                        if (document.exitFullscreen) document.exitFullscreen().catch(() => {});
+                    }
                 },
             }));
         });
@@ -621,8 +935,6 @@ new #[Layout('components.layouts.app')] class extends Component {
             const ctx = root._x_dataStack[0];
             if (!ctx) return;
 
-            // Re-read the freshly-emitted payload script and push it back
-            // onto the live Alpine component, then replay the markers.
             const payload = _wallboardReadPayload();
             ctx.markers = payload.markers || [];
             ctx.jobMarkers = payload.jobMarkers || [];
