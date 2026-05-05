@@ -274,10 +274,67 @@ class JobBulkImporter
     ): array {
         $includeOnHold = (bool) ($options['include_on_hold'] ?? false);
         $autoCreate = (bool) ($options['auto_create_locations'] ?? true);
+        $defaultClassId = $options['default_vehicle_class_id'] ?? null;
+
+        // The vehicle-class collection is optional. When provided we can
+        // run a model-name heuristic per row (e.g. "28.290FL" → 28-tonne
+        // class). Without it we just rely on the default class id.
+        $vehicleClasses = $options['vehicle_classes'] ?? collect();
 
         $locations = $company->locations()->get();
 
         $preview = [];
+
+        foreach ($rows as $row) {
+            $entry = $this->buildPreviewRow($row, $mapping, $locations, $autoCreate);
+
+            // Per-row vehicle class: prefer the operator-set default;
+            // otherwise try to infer from the model description so the
+            // preview screen lights up green for the rows we recognise
+            // and only flags the unfamiliar ones for manual review.
+            $entry['parsed']['vehicle_class_id'] = $defaultClassId
+                ?: $this->guessVehicleClassId($entry['parsed']['model'] ?? null, $vehicleClasses);
+
+            if (!$entry['parsed']['vehicle_class_id']) {
+                $entry['errors'][] = 'Vehicle class needed — set per row in the preview, or pick a default on the previous step';
+            }
+
+            $preview[] = $this->finaliseRowStatus($entry, $includeOnHold);
+        }
+
+        return [
+            'rows' => $preview,
+            'stats' => $this->aggregateStats($preview),
+        ];
+    }
+
+    /**
+     * Re-evaluate a single preview row's status — used by the Volt component
+     * after the operator changes a per-row vehicle class. Wipes any stale
+     * "vehicle class needed" error so the row can flip green when fixed.
+     */
+    public function recalculateRow(array $row, bool $includeOnHold = false): array
+    {
+        $row['errors'] = array_values(array_filter(
+            $row['errors'] ?? [],
+            fn ($err) => !str_contains($err, 'Vehicle class needed'),
+        ));
+
+        if (empty($row['parsed']['vehicle_class_id'])) {
+            $row['errors'][] = 'Vehicle class needed — set per row in the preview, or pick a default on the previous step';
+        }
+
+        return $this->finaliseRowStatus($row, $includeOnHold);
+    }
+
+    /**
+     * Recompute the summary stats for a list of preview rows. Public so
+     * the Volt component can refresh the row-status counters after a
+     * per-row vehicle class change without re-running the full preview
+     * pipeline against the spreadsheet.
+     */
+    public function aggregateStats(array $rows): array
+    {
         $stats = [
             'total' => count($rows),
             'ready' => 0,
@@ -287,33 +344,119 @@ class JobBulkImporter
         ];
 
         foreach ($rows as $row) {
-            $entry = $this->buildPreviewRow($row, $mapping, $locations, $autoCreate);
-
-            if ($entry['on_hold'] && !$includeOnHold) {
-                $entry['status'] = 'skipped';
-                $entry['errors'][] = 'Row marked ON HOLD — toggle "Include on-hold rows" to import';
-                $stats['on_hold']++;
+            switch ($row['status'] ?? null) {
+                case 'ready':
+                    $stats['ready']++;
+                    break;
+                case 'warning':
+                    $stats['warnings']++;
+                    $stats['ready']++;
+                    break;
+                case 'error':
+                    $stats['errors']++;
+                    break;
+                case 'skipped':
+                    if (!empty($row['on_hold'])) {
+                        $stats['on_hold']++;
+                    } else {
+                        $stats['errors']++;
+                    }
+                    break;
             }
-
-            if (!empty($entry['errors'])) {
-                $entry['status'] = $entry['status'] ?? 'error';
-                $stats['errors']++;
-            } elseif (!empty($entry['warnings'])) {
-                $entry['status'] = 'warning';
-                $stats['warnings']++;
-                $stats['ready']++;
-            } else {
-                $entry['status'] = 'ready';
-                $stats['ready']++;
-            }
-
-            $preview[] = $entry;
         }
 
-        return [
-            'rows' => $preview,
-            'stats' => $stats,
-        ];
+        return $stats;
+    }
+
+    /**
+     * Given a model description ("J5N 28.290FL", "FTR 850 RIGID"), try to
+     * find a matching vehicle class by tonnage. We only commit a guess
+     * when there's exactly one candidate so ambiguous rows route to the
+     * operator instead of silently picking the wrong class.
+     */
+    public function guessVehicleClassId(?string $model, \Illuminate\Support\Collection $vehicleClasses): ?int
+    {
+        if (!$model || $vehicleClasses->isEmpty()) {
+            return null;
+        }
+
+        $tonnage = $this->extractTonnage($model);
+        if ($tonnage === null) {
+            return null;
+        }
+
+        $matches = $vehicleClasses->filter(function ($vc) use ($tonnage) {
+            $name = strtolower((string) $vc->name);
+            // Match "8t", "8 t", "8 ton", "8-ton", "8tonne" — guarded on
+            // the left so "18t" doesn't bleed into a search for tonne 8,
+            // and `\b` on the right because the unit (t/ton/tonne) is
+            // always followed by a non-word boundary.
+            return preg_match('/(?<!\d)' . $tonnage . '\s*(?:t|ton|tonne)\b/i', $name) === 1;
+        });
+
+        return $matches->count() === 1 ? (int) $matches->first()->id : null;
+    }
+
+    /**
+     * Pull a tonnage hint out of an OEM model code.
+     *
+     * - FAW: "J5N 28.290FL" → 28, "8.140FL" → 8, "13.180FL" → 13.
+     *   The pattern is "<tonnage>.<engine kw·10>" so the leading number
+     *   IS the tonnage. We use a `(?!\d)` lookahead instead of `\b`
+     *   because the engine kW is followed directly by letters ("FL"),
+     *   so a word boundary never fires.
+     * - Isuzu: "FTR850AMT" → 8 (tonnage = hundreds digit of a 3-digit
+     *   number embedded in the model code). The string typically butts
+     *   the digits up against letters with no whitespace, so again no
+     *   `\b`-based regex would catch it.
+     */
+    private function extractTonnage(string $model): ?int
+    {
+        $m = [];
+
+        if (preg_match('/(?<![\d.])(\d{1,2})\.\d{2,3}(?!\d)/', $model, $m)) {
+            return (int) $m[1];
+        }
+
+        if (preg_match('/(?<!\d)(\d)(\d{2})(?!\d)/', $model, $m)) {
+            return (int) $m[1];
+        }
+
+        return null;
+    }
+
+    /**
+     * Compute the final status for a preview row from its on_hold flag,
+     * accumulated errors and warnings. Single source of truth so initial
+     * preview build and per-row mutations stay consistent.
+     */
+    private function finaliseRowStatus(array $entry, bool $includeOnHold): array
+    {
+        if ($entry['on_hold'] && !$includeOnHold) {
+            $entry['status'] = 'skipped';
+            // Avoid stacking duplicate hold messages on every recompute.
+            $hasHoldErr = false;
+            foreach ($entry['errors'] as $e) {
+                if (str_contains($e, 'ON HOLD')) {
+                    $hasHoldErr = true;
+                    break;
+                }
+            }
+            if (!$hasHoldErr) {
+                $entry['errors'][] = 'Row marked ON HOLD — toggle "Include on-hold rows" to import';
+            }
+            return $entry;
+        }
+
+        if (!empty($entry['errors'])) {
+            $entry['status'] = 'error';
+        } elseif (!empty($entry['warnings'])) {
+            $entry['status'] = 'warning';
+        } else {
+            $entry['status'] = 'ready';
+        }
+
+        return $entry;
     }
 
     // ---------------------------------------------------------------------
@@ -387,6 +530,17 @@ class JobBulkImporter
                         continue;
                     }
 
+                    // Per-row vehicle class wins over the default. The
+                    // BookingService payload requires this to be set
+                    // (NOT NULL on transport_jobs); if neither source has
+                    // one we skip rather than crash the transaction.
+                    $vehicleClassId = $row['parsed']['vehicle_class_id'] ?? $defaultVehicleClassId;
+                    if (!$vehicleClassId) {
+                        $skipped++;
+                        $errors[] = ['row' => $row['source_row'], 'message' => 'Vehicle class is required'];
+                        continue;
+                    }
+
                     $createdLocations += (int) $createdPickup + (int) $createdDelivery;
 
                     $this->bookingService->createTransportBooking([
@@ -394,7 +548,7 @@ class JobBulkImporter
                         'created_by_user_id' => $createdByUserId,
                         'pickup_location_id' => $pickupId,
                         'delivery_location_id' => $deliveryId,
-                        'vehicle_class_id' => $defaultVehicleClassId,
+                        'vehicle_class_id' => $vehicleClassId,
                         'brand_id' => $defaultBrandId,
                         'model_name' => $row['parsed']['model'] ?? null,
                         'vin' => $row['parsed']['vin'],

@@ -46,6 +46,9 @@ new #[Layout('components.layouts.app')] class extends Component {
     public array $previewRows = [];
     public array $previewStats = [];
 
+    /** Bulk-set helper: dropdown value for "apply this class to ..." actions on the preview screen. */
+    public ?int $bulkVehicleClassId = null;
+
     public array $commitResult = [];
 
     public function with(): array
@@ -111,18 +114,22 @@ new #[Layout('components.layouts.app')] class extends Component {
      */
     public function buildPreview(JobBulkImporter $importer): void
     {
+        // Vehicle class is no longer required on this step — ops can pick
+        // a default OR allocate per-row on the preview screen, OR rely on
+        // the model-name heuristic. Whichever path they take, every
+        // committed row still ends up with a class (commit() refuses
+        // unclassed rows).
         $this->validate([
             'companyId' => 'required|integer|exists:companies,id',
             'mapping.vin' => 'required|string',
             'mapping.pickup' => 'required|string',
             'mapping.delivery' => 'required|string',
-            'defaultVehicleClassId' => 'required|integer|exists:vehicle_classes,id',
+            'defaultVehicleClassId' => 'nullable|integer|exists:vehicle_classes,id',
             'defaultBrandId' => 'nullable|integer|exists:brands,id',
         ], [
             'mapping.vin.required' => 'You must map the chassis / VIN column.',
             'mapping.pickup.required' => 'You must map the pickup / origin column.',
             'mapping.delivery.required' => 'You must map the delivery / destination column.',
-            'defaultVehicleClassId.required' => 'Pick a default vehicle class for these jobs.',
         ]);
 
         $company = Company::findOrFail($this->companyId);
@@ -130,12 +137,66 @@ new #[Layout('components.layouts.app')] class extends Component {
         $preview = $importer->preview($company, $this->parsedRows, $this->mapping, [
             'include_on_hold' => $this->includeOnHold,
             'auto_create_locations' => $this->autoCreateLocations,
+            'default_vehicle_class_id' => $this->defaultVehicleClassId,
+            'vehicle_classes' => VehicleClass::query()->where('is_active', true)->get(['id', 'name']),
         ]);
 
         $this->previewRows = $preview['rows'];
         $this->previewStats = $preview['stats'];
+        $this->bulkVehicleClassId = $this->defaultVehicleClassId;
 
         $this->step = 'preview';
+    }
+
+    /**
+     * Update one preview row's vehicle class and refresh its status —
+     * driven by the per-row dropdown on the preview table.
+     */
+    public function setRowVehicleClass(int $index, ?int $classId, JobBulkImporter $importer): void
+    {
+        if (!isset($this->previewRows[$index])) {
+            return;
+        }
+        $this->previewRows[$index]['parsed']['vehicle_class_id'] = $classId ?: null;
+        $this->previewRows[$index] = $importer->recalculateRow($this->previewRows[$index], $this->includeOnHold);
+        $this->previewStats = $importer->aggregateStats($this->previewRows);
+    }
+
+    /**
+     * Apply a vehicle class to every row that doesn't already have one.
+     * The "set 1117 trucks to '8t Rigid'" button — kept conservative
+     * (only fills blanks, doesn't overwrite) so a heuristic guess that
+     * was correct on row 12 isn't blown away by an over-eager click.
+     */
+    public function applyVehicleClassToBlanks(JobBulkImporter $importer): void
+    {
+        if (!$this->bulkVehicleClassId) {
+            return;
+        }
+        foreach ($this->previewRows as $i => $row) {
+            if (empty($row['parsed']['vehicle_class_id'])) {
+                $this->previewRows[$i]['parsed']['vehicle_class_id'] = $this->bulkVehicleClassId;
+                $this->previewRows[$i] = $importer->recalculateRow($this->previewRows[$i], $this->includeOnHold);
+            }
+        }
+        $this->previewStats = $importer->aggregateStats($this->previewRows);
+    }
+
+    /**
+     * Force a class onto every row regardless of what was guessed —
+     * intentionally separate from "fill blanks" so the destructive
+     * variant requires an explicit second button press.
+     */
+    public function applyVehicleClassToAll(JobBulkImporter $importer): void
+    {
+        if (!$this->bulkVehicleClassId) {
+            return;
+        }
+        foreach ($this->previewRows as $i => $row) {
+            $this->previewRows[$i]['parsed']['vehicle_class_id'] = $this->bulkVehicleClassId;
+            $this->previewRows[$i] = $importer->recalculateRow($this->previewRows[$i], $this->includeOnHold);
+        }
+        $this->previewStats = $importer->aggregateStats($this->previewRows);
     }
 
     /**
@@ -178,7 +239,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             'step', 'companyId', 'spreadsheet', 'parsedHeaders', 'parsedRows',
             'mapping', 'defaultBrandId', 'defaultVehicleClassId',
             'autoCreateLocations', 'includeOnHold', 'rememberMapping',
-            'previewRows', 'previewStats', 'commitResult',
+            'previewRows', 'previewStats', 'commitResult', 'bulkVehicleClassId',
         ]);
     }
 
@@ -327,15 +388,17 @@ new #[Layout('components.layouts.app')] class extends Component {
                 </div>
 
                 <div>
-                    <label class="block text-sm font-medium text-slate-700">
-                        Vehicle class <span class="text-red-500">*</span>
-                    </label>
+                    <label class="block text-sm font-medium text-slate-700">Default vehicle class</label>
                     <select wire:model="defaultVehicleClassId" class="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
-                        <option value="">— pick one —</option>
+                        <option value="">— let the importer guess from the model —</option>
                         @foreach($vehicleClasses as $vc)
                             <option value="{{ $vc->id }}">{{ $vc->name }}</option>
                         @endforeach
                     </select>
+                    <p class="mt-1 text-xs text-slate-500">
+                        Optional. Leave blank to let us infer the class from the model description (e.g. "28.290FL" → 28-tonne).
+                        You can also override the class per row on the next screen.
+                    </p>
                     @error('defaultVehicleClassId')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
                 </div>
             </div>
@@ -415,6 +478,26 @@ new #[Layout('components.layouts.app')] class extends Component {
                     </button>
                     <button type="button" wire:click="backToMap" class="text-sm font-medium text-slate-500 hover:text-slate-800">Cancel</button>
                 </div>
+
+                {{-- Bulk vehicle-class allocator --}}
+                <div class="mt-6 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                    <p class="text-xs font-semibold uppercase tracking-wider text-slate-500">Bulk allocate vehicle class</p>
+                    <div class="mt-2 flex flex-wrap items-center gap-2">
+                        <select wire:model="bulkVehicleClassId" class="rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
+                            <option value="">— pick a class —</option>
+                            @foreach($vehicleClasses as $vc)
+                                <option value="{{ $vc->id }}">{{ $vc->name }}</option>
+                            @endforeach
+                        </select>
+                        <button type="button" wire:click="applyVehicleClassToBlanks" class="rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-500 disabled:opacity-50" {{ $bulkVehicleClassId ? '' : 'disabled' }}>
+                            Apply to rows missing a class
+                        </button>
+                        <button type="button" wire:click="applyVehicleClassToAll" wire:confirm="Overwrite the vehicle class on every row, including ones that already have one?" class="rounded-lg bg-white border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50" {{ $bulkVehicleClassId ? '' : 'disabled' }}>
+                            Apply to all rows
+                        </button>
+                        <p class="text-xs text-slate-500">Or change the class one row at a time in the table below.</p>
+                    </div>
+                </div>
             </div>
 
             <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
@@ -426,6 +509,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                                 <th class="px-3 py-2 text-left text-[11px] font-medium uppercase tracking-wider text-gray-500">Source</th>
                                 <th class="px-3 py-2 text-left text-[11px] font-medium uppercase tracking-wider text-gray-500">VIN</th>
                                 <th class="px-3 py-2 text-left text-[11px] font-medium uppercase tracking-wider text-gray-500">Model</th>
+                                <th class="px-3 py-2 text-left text-[11px] font-medium uppercase tracking-wider text-gray-500">Class</th>
                                 <th class="px-3 py-2 text-left text-[11px] font-medium uppercase tracking-wider text-gray-500">Pickup</th>
                                 <th class="px-3 py-2 text-left text-[11px] font-medium uppercase tracking-wider text-gray-500">Delivery</th>
                                 <th class="px-3 py-2 text-left text-[11px] font-medium uppercase tracking-wider text-gray-500">Date</th>
@@ -433,7 +517,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                             </tr>
                         </thead>
                         <tbody class="divide-y divide-gray-100">
-                            @foreach(array_slice($previewRows, 0, 200) as $row)
+                            @foreach(array_slice($previewRows, 0, 200) as $index => $row)
                                 @php
                                     $status = $row['status'];
                                     $pillClass = match($status) {
@@ -455,6 +539,15 @@ new #[Layout('components.layouts.app')] class extends Component {
                                     </td>
                                     <td class="px-3 py-2 text-xs font-mono text-slate-700">{{ $row['parsed']['vin'] ?? '—' }}</td>
                                     <td class="px-3 py-2 text-xs text-slate-700">{{ $row['parsed']['model'] ?? '—' }}</td>
+                                    <td class="px-3 py-2 text-xs">
+                                        <select wire:change="setRowVehicleClass({{ $index }}, $event.target.value)"
+                                                class="block w-36 rounded border border-gray-300 px-2 py-1 text-xs focus:border-blue-500 focus:ring-blue-500">
+                                            <option value="">— pick —</option>
+                                            @foreach($vehicleClasses as $vc)
+                                                <option value="{{ $vc->id }}" @selected(($row['parsed']['vehicle_class_id'] ?? null) == $vc->id)>{{ $vc->name }}</option>
+                                            @endforeach
+                                        </select>
+                                    </td>
                                     <td class="px-3 py-2 text-xs text-slate-700">
                                         {{ $row['parsed']['pickup_match']?->company_name ?? $row['parsed']['pickup_raw'] ?? '—' }}
                                         @if(!$row['parsed']['pickup_match'] && $row['parsed']['pickup_raw'])

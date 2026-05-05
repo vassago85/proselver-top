@@ -132,6 +132,7 @@ it('detectMapping() prefers a previously-saved mapping over the heuristic guess'
 
 it('preview() flags rows with on-hold dates and surfaces missing locations as warnings', function () {
     $company = setUpOemCompany('FAW SA', ['PE Plant', 'GB Bodies']);
+    $vehicleClass = VehicleClass::create(['name' => 'Truck Class 4']);
 
     $importer = app(JobBulkImporter::class);
     $rows = [
@@ -159,7 +160,9 @@ it('preview() flags rows with on-hold dates and surfaces missing locations as wa
     ];
 
     $mapping = $importer->detectMapping(['Model', 'Chassis No.', 'From', 'To', 'Movement Order Date', 'Comments']);
-    $preview = $importer->preview($company, $rows, $mapping);
+    $preview = $importer->preview($company, $rows, $mapping, [
+        'default_vehicle_class_id' => $vehicleClass->id,
+    ]);
 
     expect($preview['rows'][0]['status'])->toBe('ready');
     expect($preview['rows'][1]['status'])->toBe('warning');
@@ -171,6 +174,7 @@ it('preview() flags rows with on-hold dates and surfaces missing locations as wa
 
 it('preview() honours include_on_hold and treats blank dates as warnings', function () {
     $company = setUpOemCompany('FAW SA', ['PE Plant', 'GB Bodies']);
+    $vehicleClass = VehicleClass::create(['name' => 'Truck Class 4']);
 
     $importer = app(JobBulkImporter::class);
     $rows = [
@@ -182,11 +186,84 @@ it('preview() honours include_on_hold and treats blank dates as warnings', funct
     ];
     $mapping = $importer->detectMapping(['Chassis No.', 'From', 'To', 'Movement Order Date']);
 
-    $preview = $importer->preview($company, $rows, $mapping, ['include_on_hold' => true]);
+    $preview = $importer->preview($company, $rows, $mapping, [
+        'include_on_hold' => true,
+        'default_vehicle_class_id' => $vehicleClass->id,
+    ]);
 
     // Even with on-hold rows included, a blank date is a warning, not an error.
     expect($preview['rows'][0]['status'])->toBe('warning');
     expect($preview['rows'][0]['warnings'])->toContain('No movement date — defaulted to today');
+});
+
+it('preview() flags rows that are missing a vehicle class as errors', function () {
+    $company = setUpOemCompany('FAW SA', ['PE Plant', 'GB Bodies']);
+
+    $importer = app(JobBulkImporter::class);
+    $rows = [[
+        '_sheet' => 'X', '_row' => 2,
+        'Chassis No.' => 'AAA', 'Model' => 'unrecognisable',
+        'From' => 'PE Plant', 'To' => 'GB Bodies',
+        'Movement Order Date' => 46062,
+    ]];
+    $mapping = $importer->detectMapping(['Chassis No.', 'Model', 'From', 'To', 'Movement Order Date']);
+
+    // No default class, no vehicle classes catalogue → can't infer.
+    $preview = $importer->preview($company, $rows, $mapping);
+
+    expect($preview['rows'][0]['status'])->toBe('error');
+    expect($preview['rows'][0]['errors'])->toContain('Vehicle class needed — set per row in the preview, or pick a default on the previous step');
+});
+
+it('guessVehicleClassId() infers tonnage from FAW model strings', function () {
+    $importer = app(JobBulkImporter::class);
+
+    $classes = collect([
+        (object) ['id' => 1, 'name' => '8t Rigid'],
+        (object) ['id' => 2, 'name' => '13t Rigid'],
+        (object) ['id' => 3, 'name' => '28t Rigid'],
+    ]);
+
+    expect($importer->guessVehicleClassId('J5N 28.290FL', $classes))->toBe(3);
+    expect($importer->guessVehicleClassId('13.180FL', $classes))->toBe(2);
+    expect($importer->guessVehicleClassId('8.140FL', $classes))->toBe(1);
+    // Unknown tonnage → no guess (stay null so ops sees the row as needs-attention)
+    expect($importer->guessVehicleClassId('99.999FL', $classes))->toBeNull();
+    expect($importer->guessVehicleClassId(null, $classes))->toBeNull();
+});
+
+it('recalculateRow() flips a row to ready once a vehicle class is supplied', function () {
+    $importer = app(JobBulkImporter::class);
+
+    // Simulate the shape preview() emits for an unclassed but otherwise-valid row.
+    $row = [
+        'source_row' => 2,
+        'source_sheet' => 'X',
+        'on_hold' => false,
+        'errors' => ['Vehicle class needed — set per row in the preview, or pick a default on the previous step'],
+        'warnings' => [],
+        'status' => 'error',
+        'parsed' => [
+            'vin' => 'AAA',
+            'model' => 'J5N 28.290FL',
+            'pickup_raw' => 'PE Plant',
+            'delivery_raw' => 'GB Bodies',
+            'pickup_match' => null,
+            'delivery_match' => null,
+            'scheduled_date' => '2026-02-01',
+            'comments' => null,
+            'vehicle_class_id' => null,
+        ],
+    ];
+
+    // Initial state: error.
+    expect($importer->recalculateRow($row)['status'])->toBe('error');
+
+    $row['parsed']['vehicle_class_id'] = 7;
+
+    $fixed = $importer->recalculateRow($row);
+    expect($fixed['status'])->toBe('ready');
+    expect($fixed['errors'])->toBe([]);
 });
 
 it('commit() creates transport jobs and auto-creates missing locations', function () {
@@ -215,7 +292,9 @@ it('commit() creates transport jobs and auto-creates missing locations', functio
     ];
 
     $mapping = $importer->detectMapping(['Chassis No.', 'Model', 'From', 'To', 'Movement Order Date', 'Comments']);
-    $preview = $importer->preview($company, $rows, $mapping);
+    $preview = $importer->preview($company, $rows, $mapping, [
+        'default_vehicle_class_id' => $vehicleClass->id,
+    ]);
 
     expect($preview['stats']['ready'])->toBe(2);
 
@@ -241,6 +320,37 @@ it('commit() creates transport jobs and auto-creates missing locations', functio
     // a standard workflow that means STATUS_RECEIVED (not the legacy
     // pending_verification gate, which is reserved for the FAW workflow).
     expect($job->status)->toBe(Job::STATUS_RECEIVED);
+});
+
+it('commit() honours per-row vehicle classes over the supplied default', function () {
+    $brand = Brand::create(['name' => 'FAW']);
+    $defaultClass = VehicleClass::create(['name' => 'Default 8t']);
+    $heavyClass = VehicleClass::create(['name' => 'Heavy 28t']);
+
+    $company = setUpOemCompany('FAW SA', ['PE Plant', 'GB Bodies']);
+    $user = User::factory()->create();
+
+    $importer = app(JobBulkImporter::class);
+    $rows = [[
+        '_sheet' => 'X', '_row' => 2,
+        'Chassis No.' => 'AAA', 'Model' => 'J5N 28.290FL',
+        'From' => 'PE Plant', 'To' => 'GB Bodies',
+        'Movement Order Date' => 46062,
+    ]];
+    $mapping = $importer->detectMapping(['Chassis No.', 'Model', 'From', 'To', 'Movement Order Date']);
+
+    $preview = $importer->preview($company, $rows, $mapping, [
+        'default_vehicle_class_id' => $defaultClass->id,
+    ]);
+
+    // Operator overrides this single row to the heavy class on the
+    // preview screen — commit() must persist the per-row choice instead
+    // of falling back to the default.
+    $preview['rows'][0]['parsed']['vehicle_class_id'] = $heavyClass->id;
+
+    $importer->commit($company, $user->id, $preview['rows'], $brand->id, $defaultClass->id);
+
+    expect(Job::first()->vehicle_class_id)->toBe($heavyClass->id);
 });
 
 it('rememberMapping() persists the user choices on the company for next time', function () {
