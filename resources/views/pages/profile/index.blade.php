@@ -54,8 +54,15 @@ new #[Layout('components.layouts.app')] class extends Component {
     /**
      * Update the signed-in user's password. Requires the current password so
      * a hijacked session (stolen cookie, left unlocked) cannot silently change
-     * the credential. Invalidates other sessions via the auth password confirm
-     * pattern is Laravel's usual, but here we just enforce current-password.
+     * the credential.
+     *
+     * Post-save we ALWAYS issue a redirect, even for users not in forced-
+     * rotation mode. Without this, a successful save resets the three password
+     * fields to '' (their initial value), Livewire computes no DOM diff and
+     * returns an ~89-byte no-op response; the user sees no feedback whatsoever
+     * and is convinced the page has hung. A hard redirect to the same page
+     * (or to the role home for forced-rotation users) gives them an unambiguous
+     * "we did the thing" with the flash message visible.
      */
     public function updatePassword(): void
     {
@@ -80,26 +87,31 @@ new #[Layout('components.layouts.app')] class extends Component {
             ]);
         }
 
+        // Capture the forced-rotation state from the model BEFORE we clear it.
+        // Don't read this from the URL (`?must_change=1`) — Livewire's POST to
+        // /livewire-{id}/update has no query string, so a URL-based check
+        // always reads false for these AJAX calls and the redirect never fires.
+        $wasForcedRotation = (bool) $user->must_change_password;
+
         $user->forceFill([
             'password' => Hash::make($data['newPassword']),
-            // Clear the force-change flag and record the rotation time.
-            // ForceChangePassword middleware blocks the rest of the app until
-            // this happens.
             'must_change_password' => false,
             'password_changed_at' => now(),
         ])->save();
 
         $this->reset('currentPassword', 'newPassword', 'newPasswordConfirmation');
 
-        // If the middleware sent them here, bounce them back to their normal
-        // home page so they aren't stranded on the profile page.
-        if (request()->boolean('must_change')) {
+        if ($wasForcedRotation) {
             session()->flash('passwordStatus', 'Password updated. Welcome back.');
             $this->redirect(resolveUserHomePath($user), navigate: false);
             return;
         }
 
+        // Self-service change (user wasn't forced) — reload the profile page so
+        // the success banner is visibly rendered. Livewire would otherwise emit
+        // an empty diff because every property reset back to its initial value.
         session()->flash('passwordStatus', 'Password updated.');
+        $this->redirect(route('profile.index'), navigate: false);
     }
 };
 ?>
