@@ -14,6 +14,11 @@
          remove Safari UI and the in-app nav buttons below make no sense. --}}
     <link rel="manifest" href="/manifest.json">
     <meta name="theme-color" content="#0f172a">
+    {{-- Both meta names are needed: the legacy `apple-...` one is what
+         Safari actually reads, the new `mobile-web-app-capable` is what
+         every other browser reads (and what Chrome's deprecation
+         warning asks for). Keep both. --}}
+    <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="Trident">
@@ -378,7 +383,12 @@
             }));
         });
     </script>
-    <script src="https://maps.googleapis.com/maps/api/js?key={{ $__gmapsKey }}&libraries=places&callback=initGooglePlaces" async defer></script>
+    {{-- loading=async is what google.maps recommends as of v3.55 — it
+         lets the loader stream library code in parallel with the rest
+         of the page. async/defer on the script tag are no longer
+         enough on their own; without loading=async Chrome warns in
+         the console on every load. --}}
+    <script src="https://maps.googleapis.com/maps/api/js?key={{ $__gmapsKey }}&libraries=places&loading=async&callback=initGooglePlaces" async defer></script>
     @endif
 </body>
 </html>
