@@ -740,24 +740,43 @@ new #[Layout('components.layouts.app')] class extends Component {
 
                     const start = () => this.loadClusterer().then(() => this.initMap());
 
-                    if (window.google && window.google.maps) {
+                    // Case 1: API already fully loaded (e.g. another tab on
+                    // this page already pulled it in). Just go.
+                    if (window.google && window.google.maps && window.google.maps.Map) {
                         start();
                         return;
                     }
 
-                    if (window.__wallboardMapsLoading) {
+                    // Case 2: SOMETHING (the app layout's Places loader, or
+                    // an earlier Alpine instance of this same wallboard) has
+                    // already added a <script> for maps.googleapis.com but
+                    // it hasn't finished executing yet. Reuse it instead of
+                    // injecting a duplicate — Google's loader corrupts and
+                    // throws "Cannot read properties of undefined (reading
+                    // 'JS')" if you load the API twice with different
+                    // params. We just poll until window.google.maps.Map is
+                    // there, then start.
+                    const existing = document.querySelector('script[src*="maps.googleapis.com/maps/api/js"]');
+                    if (existing || window.__wallboardMapsLoading) {
                         const t = setInterval(() => {
-                            if (window.google && window.google.maps) {
+                            if (window.google && window.google.maps && window.google.maps.Map) {
                                 clearInterval(t);
                                 start();
                             }
                         }, 100);
+                        // After 30s give up — something is wrong, e.g. key
+                        // restrictions. The map div will just stay blank.
+                        setTimeout(() => clearInterval(t), 30000);
                         return;
                     }
 
+                    // Case 3: nobody loaded Maps yet. Pull it in WITH the
+                    // Places library so any other widget on this page that
+                    // needs it (address autocomplete in the app shell)
+                    // doesn't trigger a second load later.
                     window.__wallboardMapsLoading = true;
                     const s = document.createElement('script');
-                    s.src = 'https://maps.googleapis.com/maps/api/js?key=' + encodeURIComponent(this.apiKey);
+                    s.src = 'https://maps.googleapis.com/maps/api/js?key=' + encodeURIComponent(this.apiKey) + '&libraries=places&loading=async';
                     s.async = true;
                     s.defer = true;
                     s.onload = () => start();
