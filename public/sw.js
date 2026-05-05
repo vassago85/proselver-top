@@ -1,106 +1,38 @@
-const CACHE_NAME = 'tcdc-v3';
-const STATIC_ASSETS = [
-    '/',
-    '/manifest.json',
-];
+/*
+ * TRIDENT main-app service worker — DEPRECATED, self-uninstalling stub.
+ *
+ * The previous version of this file was a cache-first SW that pinned the
+ * Vite build bundle and Livewire JS, causing post-deploy crashes inside
+ * Livewire's success handler (stale JS shape, undefined .components.forEach)
+ * and was flagged by docs/SECURITY_AUDIT_2026-04-22.md (H-1) for caching
+ * authenticated HTML across users on shared devices.
+ *
+ * This file remains in the build only so that browsers which already have
+ * the old SW installed will fetch THIS replacement on their next update
+ * check, immediately self-unregister, and drop any caches it created. The
+ * resources/js/app.js entry point also explicitly unregisters /sw.js on
+ * page load as a faster path to the same outcome.
+ *
+ * The driver PWA continues to use its own scoped service worker at
+ * /driver-sw.js — that one is unaffected.
+ */
 
-self.addEventListener('install', (event) => {
-    event.waitUntil(
-        caches.open(CACHE_NAME).then((cache) => cache.addAll(STATIC_ASSETS))
-    );
+self.addEventListener('install', () => {
     self.skipWaiting();
 });
 
 self.addEventListener('activate', (event) => {
-    event.waitUntil(
-        caches.keys().then((keys) =>
-            Promise.all(keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key)))
-        )
-    );
-    self.clients.claim();
+    event.waitUntil((async () => {
+        try {
+            const keys = await caches.keys();
+            await Promise.all(
+                keys
+                    .filter((k) => k.startsWith('tcdc-'))
+                    .map((k) => caches.delete(k))
+            );
+            await self.registration.unregister();
+        } catch (e) { /* noop */ }
+    })());
 });
 
-self.addEventListener('fetch', (event) => {
-    if (event.request.method !== 'GET') return;
-
-    // Network-first for HTML, cache-first for static assets
-    if (event.request.headers.get('accept')?.includes('text/html')) {
-        event.respondWith(
-            fetch(event.request)
-                .then((response) => {
-                    const clone = response.clone();
-                    caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
-                    return response;
-                })
-                .catch(() => caches.match(event.request))
-        );
-    } else {
-        event.respondWith(
-            caches.match(event.request).then((cached) => cached || fetch(event.request))
-        );
-    }
-});
-
-// Background sync for offline events
-self.addEventListener('sync', (event) => {
-    if (event.tag === 'sync-job-events') {
-        event.waitUntil(syncJobEvents());
-    }
-});
-
-async function syncJobEvents() {
-    try {
-        const db = await openDB();
-        const tx = db.transaction('pendingEvents', 'readonly');
-        const store = tx.objectStore('pendingEvents');
-        const events = await getAllFromStore(store);
-
-        for (const entry of events) {
-            try {
-                const response = await fetch(`/api/driver/jobs/${entry.jobId}/events`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${entry.token}`,
-                        'Accept': 'application/json',
-                    },
-                    body: JSON.stringify({ events: [entry.event] }),
-                });
-
-                if (response.ok) {
-                    const deleteTx = db.transaction('pendingEvents', 'readwrite');
-                    deleteTx.objectStore('pendingEvents').delete(entry.id);
-                }
-            } catch (e) {
-                // Will retry on next sync
-            }
-        }
-    } catch (e) {
-        console.error('Sync failed:', e);
-    }
-}
-
-function openDB() {
-    return new Promise((resolve, reject) => {
-        const request = indexedDB.open('TcdcDriver', 1);
-        request.onupgradeneeded = (e) => {
-            const db = e.target.result;
-            if (!db.objectStoreNames.contains('pendingEvents')) {
-                db.createObjectStore('pendingEvents', { keyPath: 'id', autoIncrement: true });
-            }
-            if (!db.objectStoreNames.contains('jobs')) {
-                db.createObjectStore('jobs', { keyPath: 'id' });
-            }
-        };
-        request.onsuccess = (e) => resolve(e.target.result);
-        request.onerror = (e) => reject(e.target.error);
-    });
-}
-
-function getAllFromStore(store) {
-    return new Promise((resolve, reject) => {
-        const request = store.getAll();
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error);
-    });
-}
+// No fetch handler — every request goes straight to the network.
