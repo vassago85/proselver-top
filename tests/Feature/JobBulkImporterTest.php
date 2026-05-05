@@ -134,21 +134,27 @@ it('preview() flags rows with on-hold dates and surfaces missing locations as wa
     $company = setUpOemCompany('FAW SA', ['PE Plant', 'GB Bodies']);
     $vehicleClass = VehicleClass::create(['name' => 'Truck Class 4']);
 
+    // Tomorrow's date in dd-mm-yyyy form — keeps the fixture forever-relative
+    // instead of frozen against an Excel serial that drifts into the past.
+    $tomorrow = now()->addDay()->format('d-m-Y');
+
     $importer = app(JobBulkImporter::class);
     $rows = [
-        // ready row — both locations match exactly
+        // ready row — both locations match exactly. Comments deliberately
+        // does NOT contain "urgent" so the row is plain ready, not a
+        // warning (urgent rows surface as warnings + emergency booking).
         [
             '_sheet' => 'February 2026', '_row' => 2,
             'Model' => 'J5N 28.290FL', 'Chassis No.' => 'AAK2829FLSB121485',
             'From' => 'PE Plant', 'To' => 'GB Bodies',
-            'Movement Order Date' => 46062, 'Comments' => 'Urgent',
+            'Movement Order Date' => $tomorrow, 'Comments' => 'standard',
         ],
         // delivery isn't in the address book — warn, don't error (auto-create on)
         [
             '_sheet' => 'February 2026', '_row' => 3,
             'Model' => '8.140FL', 'Chassis No.' => 'AAK8140FLSB112025',
             'From' => 'PE Plant', 'To' => 'East London',
-            'Movement Order Date' => 46062, 'Comments' => '',
+            'Movement Order Date' => $tomorrow, 'Comments' => '',
         ],
         // on hold — should be marked skipped unless include_on_hold is set
         [
@@ -274,20 +280,22 @@ it('commit() creates transport jobs and auto-creates missing locations', functio
     $company = setUpOemCompany('FAW SA', ['PE Plant']);
     $user = User::factory()->create();
 
+    $tomorrow = now()->addDay()->format('d-m-Y');
+
     $importer = app(JobBulkImporter::class);
     $rows = [
         [
             '_sheet' => 'February 2026', '_row' => 2,
             'Chassis No.' => 'AAK2829FLSB121485', 'Model' => 'J5N 28.290FL',
             'From' => 'PE Plant', 'To' => 'GB Bodies',
-            'Movement Order Date' => 46062, 'Comments' => 'Urgent',
+            'Movement Order Date' => $tomorrow, 'Comments' => 'Standard',
         ],
         // This row's pickup is missing — relies on auto-create
         [
             '_sheet' => 'February 2026', '_row' => 3,
             'Chassis No.' => 'AAK8140FLSB112025', 'Model' => '8.140FL',
             'From' => 'Brand New Yard', 'To' => 'PE Plant',
-            'Movement Order Date' => 46062, 'Comments' => '',
+            'Movement Order Date' => $tomorrow, 'Comments' => '',
         ],
     ];
 
@@ -322,6 +330,186 @@ it('commit() creates transport jobs and auto-creates missing locations', functio
     expect($job->status)->toBe(Job::STATUS_RECEIVED);
 });
 
+it('preview() rejects rows with past-dated movements', function () {
+    $company = setUpOemCompany('FAW SA', ['PE Plant', 'GB Bodies']);
+    $vehicleClass = VehicleClass::create(['name' => 'Truck Class 4']);
+
+    $importer = app(JobBulkImporter::class);
+    $rows = [[
+        '_sheet' => 'X', '_row' => 2,
+        'Chassis No.' => 'AAA', 'Model' => 'J5N 28.290FL',
+        'From' => 'PE Plant', 'To' => 'GB Bodies',
+        // Yesterday — a stale carry-over from last month's file.
+        'Movement Order Date' => now()->subDay()->format('d-m-Y'),
+    ]];
+    $mapping = $importer->detectMapping(['Chassis No.', 'Model', 'From', 'To', 'Movement Order Date']);
+    $preview = $importer->preview($company, $rows, $mapping, [
+        'default_vehicle_class_id' => $vehicleClass->id,
+    ]);
+
+    expect($preview['rows'][0]['status'])->toBe('error');
+    expect(implode(' ', $preview['rows'][0]['errors']))
+        ->toContain('is in the past');
+});
+
+it('preview() flags duplicate VINs within the same spreadsheet', function () {
+    $company = setUpOemCompany('FAW SA', ['PE Plant', 'GB Bodies']);
+    $vehicleClass = VehicleClass::create(['name' => 'Truck Class 4']);
+
+    $importer = app(JobBulkImporter::class);
+    $rows = [
+        ['_sheet' => 'X', '_row' => 2, 'Chassis No.' => 'AAA', 'Model' => 'J5N 28.290FL', 'From' => 'PE Plant', 'To' => 'GB Bodies', 'Movement Order Date' => now()->addDay()->format('d-m-Y')],
+        ['_sheet' => 'X', '_row' => 5, 'Chassis No.' => 'AAA', 'Model' => 'J5N 28.290FL', 'From' => 'PE Plant', 'To' => 'GB Bodies', 'Movement Order Date' => now()->addDay()->format('d-m-Y')],
+    ];
+    $mapping = $importer->detectMapping(['Chassis No.', 'Model', 'From', 'To', 'Movement Order Date']);
+    $preview = $importer->preview($company, $rows, $mapping, [
+        'default_vehicle_class_id' => $vehicleClass->id,
+    ]);
+
+    expect($preview['rows'][0]['status'])->toBe('ready');
+    expect($preview['rows'][1]['status'])->toBe('error');
+    expect(implode(' ', $preview['rows'][1]['errors']))
+        ->toContain('Duplicate VIN in this file');
+});
+
+it('preview() flags VINs already in flight for the customer', function () {
+    $brand = Brand::create(['name' => 'FAW']);
+    $vehicleClass = VehicleClass::create(['name' => 'Truck Class 4']);
+    $company = setUpOemCompany('FAW SA', ['PE Plant', 'GB Bodies']);
+    $user = User::factory()->create();
+
+    // Seed an in-flight job for this VIN.
+    $route = \App\Models\TransportRoute::firstOrCreate([
+        'origin_location_id' => $company->locations()->first()->id,
+        'destination_location_id' => $company->locations()->skip(1)->first()->id,
+        'vehicle_class_id' => $vehicleClass->id,
+    ], ['base_price' => 0]);
+    Job::create([
+        'uuid' => (string) \Illuminate\Support\Str::uuid(),
+        'job_number' => 'TST-001',
+        'job_type' => 'transport',
+        'status' => Job::STATUS_RECEIVED,
+        'company_id' => $company->id,
+        'created_by_user_id' => $user->id,
+        'transport_route_id' => $route->id,
+        'pickup_location_id' => $company->locations()->first()->id,
+        'delivery_location_id' => $company->locations()->skip(1)->first()->id,
+        'vehicle_class_id' => $vehicleClass->id,
+        'brand_id' => $brand->id,
+        'vin' => 'IN-FLIGHT-VIN',
+        'scheduled_date' => now()->addDay()->toDateString(),
+    ]);
+
+    $importer = app(JobBulkImporter::class);
+    $rows = [[
+        '_sheet' => 'X', '_row' => 2,
+        'Chassis No.' => 'in-flight-vin',  // case-insensitive match
+        'Model' => 'J5N 28.290FL',
+        'From' => 'PE Plant', 'To' => 'GB Bodies',
+        'Movement Order Date' => now()->addDay()->format('d-m-Y'),
+    ]];
+    $mapping = $importer->detectMapping(['Chassis No.', 'Model', 'From', 'To', 'Movement Order Date']);
+    $preview = $importer->preview($company, $rows, $mapping, [
+        'default_vehicle_class_id' => $vehicleClass->id,
+    ]);
+
+    expect($preview['rows'][0]['status'])->toBe('error');
+    expect(implode(' ', $preview['rows'][0]['errors']))
+        ->toContain('VIN already booked for this customer');
+});
+
+it('preview() does not block VINs that have already been delivered or completed', function () {
+    $brand = Brand::create(['name' => 'FAW']);
+    $vehicleClass = VehicleClass::create(['name' => 'Truck Class 4']);
+    $company = setUpOemCompany('FAW SA', ['PE Plant', 'GB Bodies']);
+    $user = User::factory()->create();
+
+    // Seed a completed job — historical movement, the same physical
+    // vehicle is back for another move.
+    $route = \App\Models\TransportRoute::firstOrCreate([
+        'origin_location_id' => $company->locations()->first()->id,
+        'destination_location_id' => $company->locations()->skip(1)->first()->id,
+        'vehicle_class_id' => $vehicleClass->id,
+    ], ['base_price' => 0]);
+    Job::create([
+        'uuid' => (string) \Illuminate\Support\Str::uuid(),
+        'job_number' => 'TST-002',
+        'job_type' => 'transport',
+        'status' => Job::STATUS_COMPLETED,
+        'company_id' => $company->id,
+        'created_by_user_id' => $user->id,
+        'transport_route_id' => $route->id,
+        'pickup_location_id' => $company->locations()->first()->id,
+        'delivery_location_id' => $company->locations()->skip(1)->first()->id,
+        'vehicle_class_id' => $vehicleClass->id,
+        'brand_id' => $brand->id,
+        'vin' => 'OLD-DELIVERED-VIN',
+        'scheduled_date' => now()->subMonth()->toDateString(),
+    ]);
+
+    $importer = app(JobBulkImporter::class);
+    $rows = [[
+        '_sheet' => 'X', '_row' => 2,
+        'Chassis No.' => 'OLD-DELIVERED-VIN',
+        'Model' => 'J5N 28.290FL',
+        'From' => 'PE Plant', 'To' => 'GB Bodies',
+        'Movement Order Date' => now()->addDay()->format('d-m-Y'),
+    ]];
+    $mapping = $importer->detectMapping(['Chassis No.', 'Model', 'From', 'To', 'Movement Order Date']);
+    $preview = $importer->preview($company, $rows, $mapping, [
+        'default_vehicle_class_id' => $vehicleClass->id,
+    ]);
+
+    expect($preview['rows'][0]['status'])->toBe('ready');
+});
+
+it('preview() flags rows with "urgent" in the comments column', function () {
+    $company = setUpOemCompany('FAW SA', ['PE Plant', 'GB Bodies']);
+    $vehicleClass = VehicleClass::create(['name' => 'Truck Class 4']);
+
+    $importer = app(JobBulkImporter::class);
+    $rows = [[
+        '_sheet' => 'X', '_row' => 2,
+        'Chassis No.' => 'AAA', 'Model' => 'J5N 28.290FL',
+        'From' => 'PE Plant', 'To' => 'GB Bodies',
+        'Movement Order Date' => now()->addDay()->format('d-m-Y'),
+        'Comments' => 'URGENT please move asap',
+    ]];
+    $mapping = $importer->detectMapping(['Chassis No.', 'Model', 'From', 'To', 'Movement Order Date', 'Comments']);
+    $preview = $importer->preview($company, $rows, $mapping, [
+        'default_vehicle_class_id' => $vehicleClass->id,
+    ]);
+
+    expect($preview['rows'][0]['parsed']['is_urgent'])->toBeTrue();
+    expect($preview['rows'][0]['warnings'])->toContain('Marked URGENT — will create as emergency booking');
+});
+
+it('commit() persists urgent rows as emergency bookings', function () {
+    $brand = Brand::create(['name' => 'FAW']);
+    $vehicleClass = VehicleClass::create(['name' => 'Truck Class 4']);
+    $company = setUpOemCompany('FAW SA', ['PE Plant', 'GB Bodies']);
+    $user = User::factory()->create();
+
+    $importer = app(JobBulkImporter::class);
+    $rows = [[
+        '_sheet' => 'X', '_row' => 2,
+        'Chassis No.' => 'AAA', 'Model' => 'J5N 28.290FL',
+        'From' => 'PE Plant', 'To' => 'GB Bodies',
+        'Movement Order Date' => now()->addDay()->format('d-m-Y'),
+        'Comments' => 'urgent — needed today',
+    ]];
+    $mapping = $importer->detectMapping(['Chassis No.', 'Model', 'From', 'To', 'Movement Order Date', 'Comments']);
+    $preview = $importer->preview($company, $rows, $mapping, [
+        'default_vehicle_class_id' => $vehicleClass->id,
+    ]);
+
+    $importer->commit($company, $user->id, $preview['rows'], $brand->id, $vehicleClass->id);
+
+    $job = Job::first();
+    expect($job->is_emergency)->toBeTrue();
+    expect($job->emergency_reason)->toContain('urgent');
+});
+
 it('commit() honours per-row vehicle classes over the supplied default', function () {
     $brand = Brand::create(['name' => 'FAW']);
     $defaultClass = VehicleClass::create(['name' => 'Default 8t']);
@@ -335,7 +523,7 @@ it('commit() honours per-row vehicle classes over the supplied default', functio
         '_sheet' => 'X', '_row' => 2,
         'Chassis No.' => 'AAA', 'Model' => 'J5N 28.290FL',
         'From' => 'PE Plant', 'To' => 'GB Bodies',
-        'Movement Order Date' => 46062,
+        'Movement Order Date' => now()->addDay()->format('d-m-Y'),
     ]];
     $mapping = $importer->detectMapping(['Chassis No.', 'Model', 'From', 'To', 'Movement Order Date']);
 

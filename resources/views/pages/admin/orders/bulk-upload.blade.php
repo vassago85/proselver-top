@@ -537,7 +537,12 @@ new #[Layout('components.layouts.app')] class extends Component {
                                     <td class="px-3 py-2 text-xs text-slate-500 whitespace-nowrap">
                                         {{ $row['source_sheet'] ?? '—' }} · row {{ $row['source_row'] ?? '?' }}
                                     </td>
-                                    <td class="px-3 py-2 text-xs font-mono text-slate-700">{{ $row['parsed']['vin'] ?? '—' }}</td>
+                                    <td class="px-3 py-2 text-xs font-mono text-slate-700">
+                                        {{ $row['parsed']['vin'] ?? '—' }}
+                                        @if(!empty($row['parsed']['is_urgent']))
+                                            <span class="ml-1 inline-flex items-center rounded-full bg-rose-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-rose-700">URGENT</span>
+                                        @endif
+                                    </td>
                                     <td class="px-3 py-2 text-xs text-slate-700">{{ $row['parsed']['model'] ?? '—' }}</td>
                                     <td class="px-3 py-2 text-xs">
                                         <select wire:change="setRowVehicleClass({{ $index }}, $event.target.value)"

@@ -283,7 +283,24 @@ class JobBulkImporter
 
         $locations = $company->locations()->get();
 
+        // VIN dedup: pull every in-flight job for this customer keyed by
+        // VIN so we can flag re-imports without round-tripping per row.
+        // "In-flight" means anything that hasn't finished its lifecycle —
+        // a delivered/completed/cancelled VIN is fair game to re-book
+        // (it's the next movement for the same physical vehicle).
+        $existingVins = Job::query()
+            ->where('company_id', $company->id)
+            ->whereNotNull('vin')
+            ->whereNotIn('status', [Job::STATUS_COMPLETED, Job::STATUS_CANCELLED, Job::STATUS_DELIVERED])
+            ->pluck('vin')
+            ->map(fn ($v) => strtoupper(trim((string) $v)))
+            ->filter()
+            ->flip();
+
+        $today = now()->startOfDay();
+
         $preview = [];
+        $seenInFile = []; // VIN → first row index that used it
 
         foreach ($rows as $row) {
             $entry = $this->buildPreviewRow($row, $mapping, $locations, $autoCreate);
@@ -297,6 +314,47 @@ class JobBulkImporter
 
             if (!$entry['parsed']['vehicle_class_id']) {
                 $entry['errors'][] = 'Vehicle class needed — set per row in the preview, or pick a default on the previous step';
+            }
+
+            // Past-date guard. FAW-style sheets list "movements required
+            // for that day" with no explicit delivery date, so a date
+            // that's already in the past must be a stale carry-over from
+            // last month's file — refuse it rather than silently book
+            // backdated jobs.
+            if ($entry['parsed']['scheduled_date']) {
+                $sd = Carbon::parse($entry['parsed']['scheduled_date'])->startOfDay();
+                if ($sd->lt($today)) {
+                    $entry['errors'][] = 'Movement date ' . $sd->toDateString() . ' is in the past — historical movements are not imported';
+                }
+            }
+
+            // VIN dedup. Both within the spreadsheet itself (same VIN
+            // listed twice in one upload — operator typo) and against
+            // any in-flight job already on the customer's account.
+            $vin = $entry['parsed']['vin'] ?? null;
+            if ($vin) {
+                $vinKey = strtoupper(trim($vin));
+
+                if (isset($seenInFile[$vinKey])) {
+                    $entry['errors'][] = 'Duplicate VIN in this file — already listed on row ' . $seenInFile[$vinKey];
+                } else {
+                    $seenInFile[$vinKey] = $entry['source_row'];
+                }
+
+                if ($existingVins->has($vinKey)) {
+                    $entry['errors'][] = 'VIN already booked for this customer — skipping re-import';
+                }
+            }
+
+            // "Urgent" flag from the comments column. We carry this onto
+            // the booking as is_emergency so dispatch sees the priority
+            // straight away in the planning queue.
+            $comments = $entry['parsed']['comments'] ?? null;
+            if ($comments && preg_match('/\burgent\b/i', $comments)) {
+                $entry['parsed']['is_urgent'] = true;
+                $entry['warnings'][] = 'Marked URGENT — will create as emergency booking';
+            } else {
+                $entry['parsed']['is_urgent'] = false;
             }
 
             $preview[] = $this->finaliseRowStatus($entry, $includeOnHold);
@@ -543,6 +601,8 @@ class JobBulkImporter
 
                     $createdLocations += (int) $createdPickup + (int) $createdDelivery;
 
+                    $isUrgent = (bool) ($row['parsed']['is_urgent'] ?? false);
+
                     $this->bookingService->createTransportBooking([
                         'company_id' => $company->id,
                         'created_by_user_id' => $createdByUserId,
@@ -554,6 +614,10 @@ class JobBulkImporter
                         'vin' => $row['parsed']['vin'],
                         'scheduled_date' => $row['parsed']['scheduled_date'],
                         'customer_notes' => $this->buildNotes($row['parsed']),
+                        'is_emergency' => $isUrgent,
+                        'emergency_reason' => $isUrgent
+                            ? trim((string) ($row['parsed']['comments'] ?? 'Urgent'))
+                            : null,
                     ]);
 
                     $created++;
