@@ -87,12 +87,19 @@
 
         {{-- Bottom tab bar --}}
         <nav class="fixed inset-x-0 bottom-0 z-40 border-t border-slate-200 bg-white/95 backdrop-blur pb-[env(safe-area-inset-bottom)]">
-            <div class="grid grid-cols-3">
+            <div class="grid grid-cols-4">
                 <a href="{{ route('driver.dashboard') }}"
                    class="flex flex-col items-center gap-0.5 py-2.5 text-[11px] font-semibold
                           {{ request()->routeIs('driver.dashboard') ? 'text-blue-600' : 'text-slate-500' }}">
                     <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
                     Jobs
+                </a>
+
+                <a href="{{ route('driver.expenses') }}"
+                   class="flex flex-col items-center gap-0.5 py-2.5 text-[11px] font-semibold
+                          {{ request()->routeIs('driver.expenses') ? 'text-blue-600' : 'text-slate-500' }}">
+                    <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="14" x="2" y="5" rx="2"/><line x1="2" x2="22" y1="10" y2="10"/></svg>
+                    Expenses
                 </a>
 
                 <button x-data type="button" @click="$dispatch('open-queue')"

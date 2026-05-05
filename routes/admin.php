@@ -31,6 +31,10 @@ Volt::route('wallboard', 'admin.wallboard.index')->name('wallboard');
 Route::redirect('tracking', '/admin/vehicles?bucket=live')->name('tracking');
 Volt::route('deliveries', 'admin.deliveries')->name('deliveries');
 Volt::route('damage', 'admin.damage.index')->name('damage');
+// Petty cash review queue. Phase 2 added structured amount + approval
+// workflow on top of the Phase 1 photo-only slips. Internal staff +
+// platform-owner only; customers must never see this page.
+Volt::route('petty-cash', 'admin.petty-cash.index')->name('petty-cash.index');
 Volt::route('vehicles', 'vehicles.index')->name('vehicles.index');
 Volt::route('documents', 'admin.documents.index')->name('documents.index');
 Volt::route('customers', 'admin.customers.index')->name('customers.index');

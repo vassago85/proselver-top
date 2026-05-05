@@ -77,7 +77,7 @@ test('unknown category is rejected', function () {
     [$driver, $job] = makeDriverWithJob();
 
     $this->actingAs($driver)
-        ->post("/driver/api/jobs/{$job->id}/documents", [
+        ->postJson("/driver/api/jobs/{$job->id}/documents", [
             'file' => UploadedFile::fake()->image('a.jpg'),
             'category' => 'not_a_real_category',
             'client_uuid' => (string) Str::uuid(),
@@ -104,7 +104,7 @@ test('missing client_uuid is rejected', function () {
     [$driver, $job] = makeDriverWithJob();
 
     $this->actingAs($driver)
-        ->post("/driver/api/jobs/{$job->id}/documents", [
+        ->postJson("/driver/api/jobs/{$job->id}/documents", [
             'file' => UploadedFile::fake()->image('a.jpg'),
             'category' => JobDocument::CATEGORY_PHOTO,
         ])
@@ -119,6 +119,7 @@ test('petty cash categories are accepted', function () {
         JobDocument::CATEGORY_FOOD_SLIP,
         JobDocument::CATEGORY_TOLL_SLIP,
         JobDocument::CATEGORY_PARKING_SLIP,
+        JobDocument::CATEGORY_ACCOMMODATION_SLIP,
     ] as $category) {
         $this->actingAs($driver)
             ->post("/driver/api/jobs/{$job->id}/documents", [
@@ -129,5 +130,5 @@ test('petty cash categories are accepted', function () {
             ->assertStatus(201);
     }
 
-    expect(JobDocument::where('job_id', $job->id)->count())->toBe(4);
+    expect(JobDocument::where('job_id', $job->id)->count())->toBe(5);
 });

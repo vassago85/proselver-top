@@ -6,6 +6,9 @@ use Livewire\Volt\Volt;
 
 Volt::route('dashboard', 'driver.dashboard')->name('dashboard');
 Volt::route('jobs/{job}', 'driver.job')->name('job');
+// My-expenses page: consolidates the driver's own petty cash submissions
+// across all their jobs with weekly / monthly / all-time totals.
+Volt::route('expenses', 'driver.expenses')->name('expenses');
 
 /*
  * Driver PWA sync endpoints.

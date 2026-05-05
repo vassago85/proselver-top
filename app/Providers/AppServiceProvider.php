@@ -10,6 +10,7 @@ use App\Observers\JobObserver;
 use App\Policies\CompanyPolicy;
 use App\Policies\JobDocumentPolicy;
 use App\Policies\JobPolicy;
+use App\Policies\PettyCashEntryPolicy;
 use App\Services\TrackSolid\Client as TrackSolidClient;
 use App\Services\TrackSolid\TrackSolidClientInterface;
 use Illuminate\Support\Facades\Config;
@@ -34,6 +35,7 @@ class AppServiceProvider extends ServiceProvider
         Gate::policy(Job::class, JobPolicy::class);
         Gate::policy(Company::class, CompanyPolicy::class);
         Gate::policy(JobDocument::class, JobDocumentPolicy::class);
+        Gate::policy(\App\Models\PettyCashEntry::class, PettyCashEntryPolicy::class);
 
         // Inventory auto-link is opt-in per environment. While this flag is
         // off (the default) no observer is attached and Job writes don't

@@ -94,6 +94,16 @@
                             <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></svg></x-slot:icon>
                             Documents
                         </x-sidebar-link>
+
+                        {{-- Petty cash review queue. Driver-submitted slip
+                             approvals + reimbursement tracking. Internal
+                             staff + platform-owner only — gated by route
+                             middleware AND PettyCashEntryPolicy at the
+                             page level. --}}
+                        <x-sidebar-link :href="route('admin.petty-cash.index')" :active="request()->routeIs('admin.petty-cash.*')">
+                            <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="14" x="2" y="5" rx="2"/><line x1="2" x2="22" y1="10" y2="10"/></svg></x-slot:icon>
+                            Petty Cash
+                        </x-sidebar-link>
                     </ul>
                 </li>
 

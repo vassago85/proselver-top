@@ -32,6 +32,10 @@ class JobDocument extends Model
     const CATEGORY_FOOD_SLIP = 'food_slip';
     const CATEGORY_TOLL_SLIP = 'toll_slip';
     const CATEGORY_PARKING_SLIP = 'parking_slip';
+    // Phase 2 added accommodation for over-night runs (e.g. Cape Town →
+    // Durban does not fit in a single shift). Treated as petty-cash so
+    // the reimbursement workflow is the same as fuel/food/toll/parking.
+    const CATEGORY_ACCOMMODATION_SLIP = 'accommodation_slip';
     const CATEGORY_DAMAGE_PHOTO = 'damage_photo';
     const CATEGORY_PHOTO = 'photo';
     // Dashboard cluster shot — fuel gauge + odometer reading in a single
@@ -59,6 +63,7 @@ class JobDocument extends Model
             self::CATEGORY_FOOD_SLIP,
             self::CATEGORY_TOLL_SLIP,
             self::CATEGORY_PARKING_SLIP,
+            self::CATEGORY_ACCOMMODATION_SLIP,
             self::CATEGORY_DAMAGE_PHOTO,
             self::CATEGORY_PHOTO,
             self::CATEGORY_DASHBOARD,
@@ -68,7 +73,9 @@ class JobDocument extends Model
     }
 
     /**
-     * Petty cash / expense categories (photo + category, no amount in Phase 1).
+     * Petty cash / expense categories. Used both as the JobDocument
+     * category set and as the dropdown options on the driver "add
+     * expense" form (which also creates a PettyCashEntry).
      */
     public static function pettyCashCategories(): array
     {
@@ -77,6 +84,7 @@ class JobDocument extends Model
             self::CATEGORY_FOOD_SLIP,
             self::CATEGORY_TOLL_SLIP,
             self::CATEGORY_PARKING_SLIP,
+            self::CATEGORY_ACCOMMODATION_SLIP,
             self::CATEGORY_OTHER,
         ];
     }
@@ -152,6 +160,7 @@ class JobDocument extends Model
             self::CATEGORY_FOOD_SLIP    => 'Food slip',
             self::CATEGORY_TOLL_SLIP    => 'Toll slip',
             self::CATEGORY_PARKING_SLIP => 'Parking slip',
+            self::CATEGORY_ACCOMMODATION_SLIP => 'Accommodation',
             self::CATEGORY_PO           => 'Purchase order',
             self::CATEGORY_PHOTO        => 'Photo',
             default                     => ucfirst(str_replace('_', ' ', (string) $this->category)),
@@ -184,6 +193,7 @@ class JobDocument extends Model
             self::CATEGORY_FOOD_SLIP,
             self::CATEGORY_TOLL_SLIP,
             self::CATEGORY_PARKING_SLIP,
+            self::CATEGORY_ACCOMMODATION_SLIP,
             self::CATEGORY_OTHER => 'bg-amber-50 text-amber-700 border-amber-200',
             default => 'bg-slate-50 text-slate-700 border-slate-200',
         };
