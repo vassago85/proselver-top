@@ -10,12 +10,13 @@ class Brand extends Model
 {
     use SoftDeletes;
 
-    protected $fillable = ['name', 'is_active'];
+    protected $fillable = ['name', 'is_active', 'needs_review'];
 
     protected function casts(): array
     {
         return [
             'is_active' => 'boolean',
+            'needs_review' => 'boolean',
         ];
     }
 

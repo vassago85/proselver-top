@@ -16,6 +16,9 @@ Route::redirect('executive', '/admin/dashboard')->name('executive');
 // Phase 1 operational routes
 Volt::route('planning', 'admin.planning')->name('planning');
 Volt::route('orders', 'admin.orders.index')->name('orders.index');
+// Bulk upload sits BEFORE the {job} route so the literal segment wins
+// the match — otherwise Laravel would try to bind 'bulk-upload' as a Job.
+Volt::route('orders/bulk-upload', 'admin.orders.bulk-upload')->name('orders.bulk-upload');
 Volt::route('orders/{job}', 'admin.orders.show')->name('orders.show');
 Volt::route('dispatch', 'admin.dispatch')->name('dispatch');
 // /admin/tracking has been merged into /admin/vehicles under the

@@ -44,6 +44,7 @@ class Company extends Model
         'billing_email',
         'phone',
         'is_active',
+        'movement_csv_mapping',
     ];
 
     protected function casts(): array
@@ -51,6 +52,7 @@ class Company extends Model
         return [
             'is_active' => 'boolean',
             'is_platform_owner' => 'boolean',
+            'movement_csv_mapping' => 'array',
         ];
     }
 
