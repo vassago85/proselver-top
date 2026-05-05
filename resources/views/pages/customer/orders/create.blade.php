@@ -26,6 +26,10 @@ new #[Layout('components.layouts.app')] class extends Component {
     public string $registration = '';
     public ?int $vehicleClassId = null;
     public string $scheduledDate = '';
+    // HH:MM, optional. Captures "the truck will be ready for collection
+    // at this time on the requested date" — required for same-day bookings
+    // so dispatch knows whether the driver can roll now or has to wait.
+    public string $scheduledReadyTime = '';
     public string $poNumber = '';
     public ?string $poAmount = null;
     public $poFile = null;
@@ -51,7 +55,13 @@ new #[Layout('components.layouts.app')] class extends Component {
             'vin' => 'required|string|max:50',
             'registration' => 'nullable|string|max:20',
             'vehicleClassId' => 'required|exists:vehicle_classes,id',
-            'scheduledDate' => 'required|date|after:today',
+            // after_or_equal so dealers / OEM customers can book same-day
+            // when a vehicle is ready right now (e.g. dealer collection
+            // happening this afternoon). The next-day cutoff that used
+            // to live in BookingService::canBookForDate is enforced by
+            // ops, not by this form.
+            'scheduledDate' => 'required|date|after_or_equal:today',
+            'scheduledReadyTime' => 'nullable|date_format:H:i',
             'poNumber' => 'nullable|string|max:100',
             'poAmount' => 'nullable|numeric|min:0',
             'poFile' => 'nullable|file|mimes:pdf,jpg,jpeg,png|max:10240',
@@ -68,6 +78,9 @@ new #[Layout('components.layouts.app')] class extends Component {
             'vin' => $this->vin,
             'registration' => $this->registration ?: null,
             'scheduled_date' => $this->scheduledDate,
+            'scheduled_ready_time' => $this->scheduledReadyTime
+                ? $this->scheduledDate . ' ' . $this->scheduledReadyTime
+                : null,
             'po_number' => $this->poNumber ?: null,
             'po_amount' => $this->poAmount,
             'company_id' => $this->company->id,
@@ -295,9 +308,17 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1">Requested Date <span class="text-red-500">*</span></label>
-                        <input wire:model="scheduledDate" type="date" required min="{{ now()->addDay()->format('Y-m-d') }}"
+                        <input wire:model="scheduledDate" type="date" required min="{{ now()->format('Y-m-d') }}"
                             class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:ring-blue-500">
+                        <p class="mt-1 text-xs text-gray-500">Today is allowed if the vehicle is ready for collection now.</p>
                         @error('scheduledDate') <p class="mt-1 text-xs text-red-600">{{ $message }}</p> @enderror
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Vehicle Ready Time</label>
+                        <input wire:model="scheduledReadyTime" type="time"
+                            class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:ring-blue-500">
+                        <p class="mt-1 text-xs text-gray-500">Optional — when the vehicle will be ready for the driver to collect.</p>
+                        @error('scheduledReadyTime') <p class="mt-1 text-xs text-red-600">{{ $message }}</p> @enderror
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1">PO Number</label>
