@@ -147,9 +147,22 @@
                             <span class="h-8 w-8 rounded-lg bg-gradient-to-br from-slate-800 to-slate-900 text-white flex items-center justify-center text-xs font-semibold ring-1 ring-slate-900/10">
                                 {{ strtoupper(substr(auth()->user()->name, 0, 1)) }}{{ strtoupper(substr(strstr(auth()->user()->name, ' ') ?: '', 1, 1)) }}
                             </span>
+                            @php
+                                // Remap "Customer X" → "OEM X" / "Dealer X" when the
+                                // user's primary company is typed as such — see sidebar
+                                // notes; we keep the customer_* role slug for tenanting
+                                // but present an OEM/Dealer label to the human.
+                                $primaryRoleName = auth()->user()->roles->first()?->name ?? 'Member';
+                                $primaryCompanyType = optional(auth()->user()->companies()->first())->type;
+                                if ($primaryCompanyType === \App\Models\Company::TYPE_OEM) {
+                                    $primaryRoleName = str_replace('Customer ', 'OEM ', $primaryRoleName);
+                                } elseif ($primaryCompanyType === \App\Models\Company::TYPE_DEALER) {
+                                    $primaryRoleName = str_replace('Customer ', 'Dealer ', $primaryRoleName);
+                                }
+                            @endphp
                             <span class="hidden md:flex flex-col items-start leading-tight text-left">
                                 <span class="text-sm font-semibold text-slate-900 truncate max-w-[140px]">{{ auth()->user()->name }}</span>
-                                <span class="text-[10px] font-medium tracking-wider uppercase text-slate-400 truncate max-w-[140px]">{{ auth()->user()->roles->first()?->name ?? 'Member' }}</span>
+                                <span class="text-[10px] font-medium tracking-wider uppercase text-slate-400 truncate max-w-[140px]">{{ $primaryRoleName }}</span>
                             </span>
                             <svg viewBox="0 0 24 24" class="hidden md:block h-3.5 w-3.5 text-slate-400" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
                         </button>

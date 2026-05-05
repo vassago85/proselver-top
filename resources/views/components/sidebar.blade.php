@@ -11,6 +11,14 @@
     $isDispatcher = $user->hasRole('dispatcher');
     $isOwner = $user->isOwner();
 
+    // OEMs hold customer-tier roles for tenanting, so $isCustomer is true.
+    // Treat the company type as the source of truth for the *portal* label
+    // we present so an FAW or Isuzu operator sees "OEM" branding even
+    // though the underlying role slug is customer_owner.
+    $userCompanyType = $isCustomer ? optional($user->companies()->first())->type : null;
+    $isOemCustomer = $isCustomer && $userCompanyType === \App\Models\Company::TYPE_OEM;
+    $isDealerCustomer = $isCustomer && $userCompanyType === \App\Models\Company::TYPE_DEALER;
+
     // Portal subtitle for the sidebar brand area
     $portalLabel = match(true) {
         $isDeveloper => 'Developer',
@@ -18,6 +26,8 @@
         $isOpsController => 'Operations',
         $isDispatcher => 'Dispatch',
         $isOwner => 'Owner',
+        $isOemCustomer => 'OEM Portal',
+        $isDealerCustomer => 'Dealer Portal',
         $isCustomer => 'Customer Portal',
         $isDealer => 'Dealer Portal',
         $isOem => 'OEM Portal',

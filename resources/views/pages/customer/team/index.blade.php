@@ -37,6 +37,17 @@ class extends Component
 
     public function edit(int $id): void
     {
+        // Account-owners cannot edit their own row from this screen — name,
+        // password and role changes for the current user must go through
+        // /profile so a single rogue session can't lock its own role to
+        // something it shouldn't have. The Edit button is hidden in the
+        // template too; this guard exists because Livewire wire calls are
+        // tamperable.
+        if ($id === auth()->id()) {
+            session()->flash('error', 'Use the Profile page to edit your own account.');
+            return;
+        }
+
         $user = User::whereHas('companies', fn($q) => $q->where('companies.id', $this->company->id))
             ->findOrFail($id);
 
@@ -74,6 +85,16 @@ class extends Component
         $this->validate($rules);
 
         if ($this->editingId) {
+            // Refuse self-edits (mirrors the guard in edit()). Without this
+            // a tampered editingId pointing at the current user would let
+            // a session bypass the in-template "Edit" hide and rotate its
+            // own role to customer_owner from anywhere.
+            if ($this->editingId === auth()->id()) {
+                session()->flash('error', 'Use the Profile page to edit your own account.');
+                $this->resetForm();
+                return;
+            }
+
             // Re-scope to the current customer's company so a tampered
             // editingId cannot be used to edit a user at another customer.
             // edit() already does this lookup safely, but save() is reachable
@@ -160,7 +181,18 @@ class extends Component
             ->orderBy('name')
             ->get(['id', 'slug', 'name']);
 
-        return compact('members', 'canManage', 'locations', 'customerRoles');
+        // Customer / dealer / OEM all share this team page (the underlying
+        // role slugs are the customer_* family for tenanted customers
+        // regardless of what they manufacture). Remap the user-facing label
+        // when the company self-identifies as an OEM so an FAW or Isuzu
+        // operator doesn't see "Customer Owner" everywhere — the data is
+        // unchanged, only the display.
+        $isOemCompany = $this->company->type === Company::TYPE_OEM;
+        $roleLabel = function (string $name) use ($isOemCompany): string {
+            return $isOemCompany ? str_replace('Customer ', 'OEM ', $name) : $name;
+        };
+
+        return compact('members', 'canManage', 'locations', 'customerRoles', 'roleLabel', 'isOemCompany');
     }
 };
 ?>
@@ -221,7 +253,7 @@ class extends Component
                         <select wire:model="userRole" required
                             class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
                             @foreach($customerRoles as $role)
-                                <option value="{{ $role->slug }}">{{ $role->name }}</option>
+                                <option value="{{ $role->slug }}">{{ $roleLabel($role->name) }}</option>
                             @endforeach
                         </select>
                         @error('userRole') <p class="mt-1 text-xs text-red-600">{{ $message }}</p> @enderror
@@ -280,7 +312,7 @@ class extends Component
                         <td class="whitespace-nowrap px-6 py-3 text-sm text-gray-500">{{ $member->phone ?? '—' }}</td>
                         <td class="whitespace-nowrap px-6 py-3 text-sm">
                             @foreach($member->roles->whereIn('slug', ['customer_owner', 'customer_admin', 'customer_user', 'customer_dispatcher']) as $role)
-                                <span class="inline-flex items-center rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700 mr-1">{{ $role->name }}</span>
+                                <span class="inline-flex items-center rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700 mr-1">{{ $roleLabel($role->name) }}</span>
                             @endforeach
                         </td>
                         <td class="whitespace-nowrap px-6 py-3 text-sm text-gray-500">
@@ -301,8 +333,10 @@ class extends Component
                         @if($canManage)
                         <td class="whitespace-nowrap px-6 py-3 text-sm">
                             <div class="flex items-center gap-2">
-                                <button wire:click="edit({{ $member->id }})" class="text-blue-600 hover:text-blue-800 font-medium">Edit</button>
-                                @if($member->id !== auth()->id())
+                                @if($member->id === auth()->id())
+                                    <a href="{{ route('profile.index') }}" class="text-gray-500 hover:text-gray-700 font-medium" title="Edit your own account in Profile">Profile</a>
+                                @else
+                                    <button wire:click="edit({{ $member->id }})" class="text-blue-600 hover:text-blue-800 font-medium">Edit</button>
                                     <button wire:click="toggleActive({{ $member->id }})"
                                         wire:confirm="Are you sure you want to {{ $member->is_active ? 'deactivate' : 'activate' }} this user?"
                                         class="font-medium {{ $member->is_active ? 'text-red-600 hover:text-red-800' : 'text-green-600 hover:text-green-800' }}">

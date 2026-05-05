@@ -143,8 +143,17 @@ new #[Layout('components.layouts.app')] class extends Component {
                 </span>
                 <div class="min-w-0">
                     <p class="text-base font-semibold text-slate-900 truncate">{{ auth()->user()->name }}</p>
+                    @php
+                        $profileRoleName = auth()->user()->roles->first()?->name ?? 'Member';
+                        $profileCompanyType = optional(auth()->user()->companies()->first())->type;
+                        if ($profileCompanyType === \App\Models\Company::TYPE_OEM) {
+                            $profileRoleName = str_replace('Customer ', 'OEM ', $profileRoleName);
+                        } elseif ($profileCompanyType === \App\Models\Company::TYPE_DEALER) {
+                            $profileRoleName = str_replace('Customer ', 'Dealer ', $profileRoleName);
+                        }
+                    @endphp
                     <p class="text-xs text-slate-500 truncate">
-                        {{ auth()->user()->roles->first()?->name ?? 'Member' }}
+                        {{ $profileRoleName }}
                         @if(auth()->user()->username)
                             · <span class="font-mono">{{ auth()->user()->username }}</span>
                         @endif
