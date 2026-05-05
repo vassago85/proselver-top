@@ -45,11 +45,12 @@ return Application::configure(basePath: dirname(__DIR__))
         // The middleware is a no-op on non-password-reset paths.
         $middleware->appendToGroup('web', \App\Http\Middleware\ThrottlePasswordReset::class);
 
-        // After auth, bounce anyone with `must_change_password=true` to the
-        // profile page until they've rotated their password. The middleware
-        // itself allows-lists /profile and /logout so the user can actually
-        // complete (or bail out of) the flow.
-        $middleware->appendToGroup('web', \App\Http\Middleware\ForceChangePassword::class);
+        // ForceChangePassword middleware temporarily DISABLED (2026-05-05) —
+        // the forced-rotation Livewire flow surfaced a stale-SW issue that
+        // blocked the driver test. Re-enable once the SW retirement has had
+        // time to roll out across all tester devices and the new-user
+        // password change has been verified end-to-end.
+        // $middleware->appendToGroup('web', \App\Http\Middleware\ForceChangePassword::class);
 
         $middleware->alias([
             'role' => \App\Http\Middleware\RoleMiddleware::class,
