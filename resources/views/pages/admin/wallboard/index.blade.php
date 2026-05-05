@@ -348,8 +348,11 @@ new #[Layout('components.layouts.app')] class extends Component {
     {{-- Live JSON payload re-emitted on every wire:poll cycle. The
          Alpine glue further down reads it via getElementById, so its
          position inside the root element is irrelevant — but it has
-         to live INSIDE the root or Livewire flags multiple roots. --}}
-    <script id="wallboard-data" type="application/json">{!! json_encode($wallboardPayload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) !!}</script>
+         to live INSIDE the root or Livewire flags multiple roots.
+         wire:ignore.self lets Livewire re-render the script tag's
+         JSON contents on each poll, but tells it not to mess with
+         the surrounding element identity. --}}
+    <script id="wallboard-data" type="application/json" wire:key="wallboard-data">{!! json_encode($wallboardPayload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) !!}</script>
 
     @if($kiosk)
     {{-- Kiosk overrides: hide the app shell so the wallboard owns the
@@ -549,7 +552,12 @@ new #[Layout('components.layouts.app')] class extends Component {
         {{-- CENTRE · MAP --}}
         <section class="col-span-12 md:col-span-6 lg:col-span-6 relative bg-slate-100">
             @if($mapsApiKey)
-                <div id="wallboard-map" class="absolute inset-0"></div>
+                {{-- wire:ignore is CRITICAL here. Without it Livewire's DOM
+                     morpher diffs the original empty <div> against the
+                     fully-populated map (Google injects hundreds of child
+                     nodes) on every wire:poll cycle and strips them out,
+                     making the map "disappear" every 5 seconds. --}}
+                <div id="wallboard-map" class="absolute inset-0" wire:ignore></div>
             @else
                 <div class="absolute inset-0 flex items-center justify-center text-sm text-slate-500 px-6 text-center">
                     Map disabled — set the Google Maps API key in
@@ -603,7 +611,14 @@ new #[Layout('components.layouts.app')] class extends Component {
          hook, so we inline the script — Alpine.data() is idempotent
          (last registration wins) so a re-render of this fragment is
          safe.
+
+         wire:ignore on the wrapping div: Livewire would otherwise re-run
+         the morph against this <script> tag on every poll, and a partial
+         re-execution can leave the registered Alpine.data and the
+         live `livewire:morph.updated` listener out of sync, which in
+         past iterations caused the map to lose its child nodes.
     ----------------------------------------------------------------- --}}
+    <div wire:ignore>
     <script>
         function _wallboardReadPayload() {
             const el = document.getElementById('wallboard-data');
@@ -784,7 +799,11 @@ new #[Layout('components.layouts.app')] class extends Component {
                 },
 
                 // Lazy-load the @googlemaps/markerclusterer UMD bundle.
-                // Resolves immediately if it's already on window.
+                // Resolves immediately if it's already on window. If the
+                // CDN load fails we resolve anyway and the map falls back
+                // to un-clustered pins — but we log loudly so the operator
+                // realises the "ugly default arrows" they're seeing is the
+                // fallback path, not the real one.
                 loadClusterer() {
                     return new Promise((resolve) => {
                         if (window.markerClusterer) return resolve();
@@ -792,26 +811,36 @@ new #[Layout('components.layouts.app')] class extends Component {
                         s.src = 'https://unpkg.com/@googlemaps/markerclusterer@2.5.3/dist/index.min.js';
                         s.async = true;
                         s.onload = () => resolve();
-                        s.onerror = () => resolve(); // fall back to plain markers
+                        s.onerror = () => {
+                            console.warn('[wallboard] MarkerClusterer CDN failed to load — falling back to plain pins. Check network access to unpkg.com.');
+                            resolve();
+                        };
                         document.head.appendChild(s);
                     });
                 },
 
                 initMap() {
-                    const el = document.getElementById('wallboard-map');
-                    if (!el) return;
-                    this.map = new google.maps.Map(el, {
-                        center: { lat: -28.4793, lng: 24.6727 }, // SA centroid
-                        zoom: 6,
-                        mapTypeControl: false,
-                        streetViewControl: false,
-                        fullscreenControl: false,
-                        clickableIcons: false,
-                        gestureHandling: 'greedy',
-                    });
-                    this._infoWindow = new google.maps.InfoWindow();
-                    this.replaceMarkers();
-                    this.fitToMarkers();
+                    try {
+                        const el = document.getElementById('wallboard-map');
+                        if (!el) {
+                            console.warn('[wallboard] #wallboard-map element not found — aborting initMap.');
+                            return;
+                        }
+                        this.map = new google.maps.Map(el, {
+                            center: { lat: -28.4793, lng: 24.6727 }, // SA centroid
+                            zoom: 6,
+                            mapTypeControl: false,
+                            streetViewControl: false,
+                            fullscreenControl: false,
+                            clickableIcons: false,
+                            gestureHandling: 'greedy',
+                        });
+                        this._infoWindow = new google.maps.InfoWindow();
+                        this.replaceMarkers();
+                        this.fitToMarkers();
+                    } catch (e) {
+                        console.error('[wallboard] initMap failed:', e);
+                    }
                 },
 
                 replaceMarkers() {
@@ -958,8 +987,13 @@ new #[Layout('components.layouts.app')] class extends Component {
             ctx.markers = payload.markers || [];
             ctx.jobMarkers = payload.jobMarkers || [];
             if (typeof ctx.replaceMarkers === 'function') {
-                ctx.replaceMarkers();
+                try {
+                    ctx.replaceMarkers();
+                } catch (e) {
+                    console.error('[wallboard] replaceMarkers failed on poll tick:', e);
+                }
             }
         });
     </script>
+    </div>
 </div>
