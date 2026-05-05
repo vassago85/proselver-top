@@ -66,6 +66,11 @@ COPY docker/nginx.conf /etc/nginx/nginx.conf
 COPY docker/supervisord.conf /etc/supervisord.conf
 COPY docker/php.ini /usr/local/etc/php/conf.d/custom.ini
 
+# FPM pool sizing — overrides the base image's pm.max_children=5 default which
+# starves under concurrent driver photo uploads. See docker/php-fpm-pool.conf
+# header for the full rationale.
+COPY docker/php-fpm-pool.conf /usr/local/etc/php-fpm.d/zz-overrides.conf
+
 RUN mkdir -p /var/log/supervisor /run/nginx
 
 COPY docker/entrypoint.sh /entrypoint.sh
