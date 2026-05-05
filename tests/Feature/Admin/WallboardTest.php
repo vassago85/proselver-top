@@ -222,7 +222,7 @@ it('shows JobEvent rows in the events feed', function () {
     expect($messages)->toContain('New order');
 });
 
-it('synthesises a new-order row for jobs created in the last 6 hours', function () {
+it('synthesises a new-order row for recently created jobs', function () {
     asInternal();
 
     [$company, $pickup] = wbCompanyAndLocation('FAW South Africa', 'Coega Plant');
@@ -236,6 +236,71 @@ it('synthesises a new-order row for jobs created in the last 6 hours', function 
     expect($events)->toHaveCount(1);
     expect($events->first()->kind)->toBe('new_order');
     expect($events->first()->message)->toContain('FAW South Africa');
+});
+
+it('shows job events from earlier in the same operating day (24h window)', function () {
+    asInternal();
+
+    $driver = makeWallboardDriver('Morning Driver', 'IMEI-MORN');
+    [$company, $pickup] = wbCompanyAndLocation('Morning Customer', 'Plant Z');
+    $job = wbJob($company->id, $driver->id, $pickup->id, null, [
+        'created_at' => now()->subHours(20), // outside the new-order list, well within 24h
+    ]);
+
+    // 12 hours ago: would have been hidden by the old 6h window.
+    JobEvent::create([
+        'job_id' => $job->id,
+        'user_id' => $driver->id,
+        'event_type' => JobEvent::TYPE_JOB_COMPLETED,
+        'event_at' => now()->subHours(12),
+    ]);
+    // 30 hours ago: outside the 24h window, must NOT appear.
+    JobEvent::create([
+        'job_id' => $job->id,
+        'user_id' => $driver->id,
+        'event_type' => JobEvent::TYPE_JOB_COMPLETED,
+        'event_at' => now()->subHours(30),
+    ]);
+
+    $events = collect(Volt::test('admin.wallboard.index')->viewData('events'));
+
+    $completedEvents = $events->where('event_type', JobEvent::TYPE_JOB_COMPLETED)->values();
+    expect($completedEvents)->toHaveCount(1);
+    expect($completedEvents->first()->at->lessThan(now()->subHours(11)))->toBeTrue();
+});
+
+it('counts deliveries and completions that finished today using delivered_at / completed_at', function () {
+    asInternal();
+
+    [$company, $pickup] = wbCompanyAndLocation('Stats Customer', 'Stats Plant');
+
+    // 3 jobs delivered today (still pending POD) + 2 jobs fully completed.
+    foreach (range(1, 3) as $i) {
+        wbJob($company->id, null, $pickup->id, null, [
+            'status' => Job::STATUS_DELIVERED,
+            'delivered_at' => now()->subHours($i),
+        ]);
+    }
+    foreach (range(1, 2) as $i) {
+        wbJob($company->id, null, $pickup->id, null, [
+            'status' => Job::STATUS_COMPLETED,
+            'delivered_at' => now()->subHours($i + 3),
+            'completed_at' => now()->subHours($i),
+        ]);
+    }
+
+    // One job delivered yesterday — must NOT count.
+    wbJob($company->id, null, $pickup->id, null, [
+        'status' => Job::STATUS_DELIVERED,
+        'delivered_at' => now()->subDay(),
+    ]);
+
+    $counts = collect(Volt::test('admin.wallboard.index')->viewData('counts'));
+
+    // Both delivered + completed jobs have a delivered_at today, so the
+    // delivered_today count is the union.
+    expect($counts['delivered_today'])->toBe(5);
+    expect($counts['completed_today'])->toBe(2);
 });
 
 it('hides offline drivers when showStale is toggled off', function () {

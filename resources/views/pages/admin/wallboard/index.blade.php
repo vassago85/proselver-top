@@ -131,16 +131,19 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         // ---------------------------------------------------------------
         // EVENTS PANEL
-        // Latest 50 entries: union of JobEvent rows (driver check-ins)
-        // with synthetic "new order" rows derived from the very recent
-        // creates on transport_jobs. Sorted desc on a single timestamp
-        // so the feed reads chronologically without the operator having
-        // to mentally interleave two streams.
+        // Latest 200 entries from the last 24 hours: union of JobEvent
+        // rows (driver check-ins) with synthetic "new order" rows derived
+        // from recent creates on transport_jobs. Sorted desc on a single
+        // timestamp so the feed reads chronologically without the operator
+        // having to mentally interleave two streams.
+        //
+        // 24h window covers an entire operating day end-to-end so an
+        // evening shift supervisor can still see what was delivered in
+        // the morning. Originally 6h, which silently hid the bulk of a
+        // typical day's traffic from anyone checking after lunch.
         // ---------------------------------------------------------------
-        // The merge of two Eloquent collections needs the rows to expose
-        // ->getKey(), so we deliberately collect() them as base Collections
-        // before mapping into stdClass DTOs. The final $events is a plain
-        // Collection that the view iterates with foreach.
+        $eventsSince = now()->subHours(24);
+
         $eventModels = JobEvent::query()
             ->whereIn('event_type', [
                 JobEvent::TYPE_ARRIVED_PICKUP,
@@ -149,10 +152,10 @@ new #[Layout('components.layouts.app')] class extends Component {
                 JobEvent::TYPE_VEHICLE_READY,
                 JobEvent::TYPE_JOB_COMPLETED,
             ])
-            ->where('event_at', '>=', now()->subHours(6))
+            ->where('event_at', '>=', $eventsSince)
             ->with(['user:id,name', 'job.pickupLocation:id,company_name', 'job.deliveryLocation:id,company_name', 'job.company:id,name'])
             ->orderByDesc('event_at')
-            ->limit(60)
+            ->limit(200)
             ->get();
 
         $eventRows = collect($eventModels->all())->map(function (JobEvent $e) {
@@ -170,10 +173,10 @@ new #[Layout('components.layouts.app')] class extends Component {
         });
 
         $newOrderModels = Job::query()
-            ->where('created_at', '>=', now()->subHours(6))
+            ->where('created_at', '>=', $eventsSince)
             ->with(['company:id,name', 'pickupLocation:id,company_name', 'deliveryLocation:id,company_name'])
             ->orderByDesc('created_at')
-            ->limit(30)
+            ->limit(100)
             ->get();
 
         $newOrderRows = collect($newOrderModels->all())->map(function (Job $j) {
@@ -194,7 +197,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         $events = $eventRows->concat($newOrderRows)
             ->sortByDesc(fn ($r) => $r->at?->getTimestamp() ?? 0)
             ->values()
-            ->take(50);
+            ->take(200);
 
         // ---------------------------------------------------------------
         // MAP MARKERS PAYLOAD
@@ -253,12 +256,26 @@ new #[Layout('components.layouts.app')] class extends Component {
             $d->driverProfile?->tracker_id ? $latestPerTracker->get($d->driverProfile->tracker_id) : null,
             $activeJobsByDriver->get($d->id)
         ));
+
+        // "Today" counters use the canonical timestamp columns rather than
+        // events so they are correct even if a driver tapped the button
+        // a long time ago and only synced now (offline → online catch-up).
+        $startOfDay = now()->startOfDay();
+        $deliveredToday = Job::query()
+            ->where('delivered_at', '>=', $startOfDay)
+            ->count();
+        $completedToday = Job::query()
+            ->where('completed_at', '>=', $startOfDay)
+            ->count();
+
         $counts = [
             'total' => $allRows->count(),
             'on_job' => $allRows->filter(fn ($b) => $b === 'on_job')->count(),
             'idle' => $allRows->filter(fn ($b) => $b === 'idle')->count(),
             'stale' => $allRows->filter(fn ($b) => $b === 'stale')->count(),
             'offline' => $allRows->filter(fn ($b) => $b === 'offline')->count(),
+            'delivered_today' => $deliveredToday,
+            'completed_today' => $completedToday,
         ];
 
         return [
@@ -429,6 +446,16 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <span class="font-semibold tabular-nums">{{ $counts['offline'] }}</span> offline
             </span>
 
+            {{-- Daily progress chips. Sourced from delivered_at /
+                 completed_at columns so they are accurate even when the
+                 events feed has rolled past today's older entries. --}}
+            <span class="rounded-full border border-emerald-300 bg-emerald-100 px-3 py-1.5 text-emerald-800" title="Jobs whose delivered_at is today">
+                <span class="font-semibold tabular-nums">{{ $counts['delivered_today'] }}</span> delivered today
+            </span>
+            <span class="rounded-full border border-slate-300 bg-slate-100 px-3 py-1.5 text-slate-700" title="Jobs whose completed_at is today (POD signed off)">
+                <span class="font-semibold tabular-nums">{{ $counts['completed_today'] }}</span> completed today
+            </span>
+
             <label class="ml-auto inline-flex items-center gap-2 text-slate-600">
                 <input type="checkbox" wire:model.live="showStale" class="h-3.5 w-3.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500">
                 Show stale / offline drivers
@@ -570,7 +597,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         {{-- RIGHT · EVENTS --}}
         <aside class="col-span-12 md:col-span-3 lg:col-span-3 border-l border-slate-200 bg-white overflow-y-auto">
             <header class="sticky top-0 bg-white border-b border-slate-200 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500 flex items-center justify-between">
-                <span>Events</span>
+                <span>Events <span class="font-normal text-slate-400 normal-case tracking-normal">· last 24h</span></span>
                 <span class="font-mono text-[10px] text-slate-400">live · 5s</span>
             </header>
             <ul class="divide-y divide-slate-100">
@@ -597,7 +624,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                 @endforeach
 
                 @if(count($events) === 0)
-                    <li class="px-4 py-8 text-center text-sm text-slate-500">No events in the last 6 hours.</li>
+                    <li class="px-4 py-8 text-center text-sm text-slate-500">No events in the last 24 hours.</li>
                 @endif
             </ul>
         </aside>
