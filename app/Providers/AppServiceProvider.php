@@ -10,6 +10,8 @@ use App\Observers\JobObserver;
 use App\Policies\CompanyPolicy;
 use App\Policies\JobDocumentPolicy;
 use App\Policies\JobPolicy;
+use App\Services\TrackSolid\Client as TrackSolidClient;
+use App\Services\TrackSolid\TrackSolidClientInterface;
 use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Schema;
@@ -20,7 +22,11 @@ class AppServiceProvider extends ServiceProvider
 {
     public function register(): void
     {
-        //
+        // GPS tracker integration. The interface is the seam tests
+        // (and any future second vendor) bind against; the concrete
+        // class reads its config from system_settings at runtime so
+        // dev/CI environments without creds still boot cleanly.
+        $this->app->singleton(TrackSolidClientInterface::class, TrackSolidClient::class);
     }
 
     public function boot(): void
@@ -36,7 +42,7 @@ class AppServiceProvider extends ServiceProvider
             Job::observe(JobObserver::class);
         }
 
-        $this->hydrateStorageConfigFromDatabase();
+        static::hydrateStorageConfigFromDatabase();
     }
 
     /**
@@ -50,8 +56,14 @@ class AppServiceProvider extends ServiceProvider
      *
      * Wrapped in try/catch + Schema::hasTable so the app still boots
      * cleanly on a fresh container before the first migration runs.
+     *
+     * Public + static so the Storage settings page can re-run hydration
+     * after a save without having to reinstantiate this provider through
+     * the container (its constructor takes an untyped $app, which Laravel
+     * cannot auto-wire — calling app(self::class) blows up with an
+     * "Unresolvable dependency" BindingResolutionException).
      */
-    protected function hydrateStorageConfigFromDatabase(): void
+    public static function hydrateStorageConfigFromDatabase(): void
     {
         try {
             if (!Schema::hasTable('system_settings')) {

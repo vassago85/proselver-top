@@ -11,7 +11,7 @@ class SystemSetting extends Model
 
     public static function get(string $key, mixed $default = null): mixed
     {
-        return Cache::remember("system_setting.{$key}", 3600, function () use ($key, $default) {
+        $resolve = function () use ($key, $default) {
             $setting = static::where('key', $key)->first();
 
             if (!$setting) {
@@ -25,7 +25,17 @@ class SystemSetting extends Model
                 'json' => json_decode($setting->value, true),
                 default => $setting->value,
             };
-        });
+        };
+
+        // Cache backend can be temporarily unavailable (e.g. Redis restarting,
+        // local dev box without the redis extension). System settings are read
+        // on practically every page boot, so any failure here would cascade
+        // into a 500 across the whole app — fall back to a direct DB read.
+        try {
+            return Cache::remember("system_setting.{$key}", 3600, $resolve);
+        } catch (\Throwable $e) {
+            return $resolve();
+        }
     }
 
     public static function set(string $key, mixed $value, ?string $type = null, ?string $description = null): void
@@ -41,6 +51,10 @@ class SystemSetting extends Model
             ]
         );
 
-        Cache::forget("system_setting.{$key}");
+        try {
+            Cache::forget("system_setting.{$key}");
+        } catch (\Throwable $e) {
+            // see comment in get() — cache failures must not block writes
+        }
     }
 }

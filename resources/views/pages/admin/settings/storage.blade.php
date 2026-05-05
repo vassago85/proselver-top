@@ -220,7 +220,11 @@ new #[Layout('components.layouts.app')] class extends Component {
         \App\Support\StorageDisk::flushCache();
 
         if ($reapply) {
-            app(\App\Providers\AppServiceProvider::class)->boot();
+            // Re-run JUST the storage-config hydration that AppServiceProvider
+            // does at boot. We deliberately don't go through the container
+            // here — `app(AppServiceProvider::class)` blows up because the
+            // base ServiceProvider's untyped $app parameter is unresolvable.
+            \App\Providers\AppServiceProvider::hydrateStorageConfigFromDatabase();
         }
     }
 

@@ -21,6 +21,10 @@ Volt::route('orders', 'admin.orders.index')->name('orders.index');
 Volt::route('orders/bulk-upload', 'admin.orders.bulk-upload')->name('orders.bulk-upload');
 Volt::route('orders/{job}', 'admin.orders.show')->name('orders.show');
 Volt::route('dispatch', 'admin.dispatch')->name('dispatch');
+// Ops Wallboard — second-screen overview (drivers / live events / map).
+// Designed to live on a dispatch TV; uses Livewire wire:poll.5s for the
+// "live" feel rather than Reverb/Echo.
+Volt::route('wallboard', 'admin.wallboard.index')->name('wallboard');
 // /admin/tracking has been merged into /admin/vehicles under the
 // "Live" bucket. Keep the route name so dashboard links and old
 // bookmarks still resolve — just 302 to the merged page.
