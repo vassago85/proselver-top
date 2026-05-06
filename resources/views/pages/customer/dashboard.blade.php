@@ -8,7 +8,8 @@ use Livewire\Attributes\Layout;
 new #[Layout('components.layouts.app')] class extends Component {
     public function with(): array
     {
-        $company = auth()->user()->company();
+        $user = auth()->user();
+        $company = $user?->company();
 
         if (!$company) {
             return [
@@ -26,46 +27,71 @@ new #[Layout('components.layouts.app')] class extends Component {
         $companyId = $company->id;
         $requiresConfirmation = $company->requiresExternalConfirmation();
 
-        $pending = Job::where('company_id', $companyId)
-            ->whereIn('status', [
-                Job::STATUS_PENDING_VERIFICATION,
-                Job::STATUS_RECEIVED,
-                Job::STATUS_AWAITING_CUSTOMER_CONFIRMATION,
-                Job::STATUS_CONFIRMATION_ISSUE,
-            ])
-            ->count();
+        // Depot-pinned dispatcher (FAW Coega, FAW JHB, etc.) sees only the
+        // orders that touch their branch — same rule as customer.orders.index
+        // and customer.orders.show. Without this scope the KPI tiles, the
+        // "X waiting for confirmation" banner and Recent Orders all leak
+        // sister-depot rows into the dashboard, and clicking through to a
+        // sister-depot order detail page 404s. Account-wide roles
+        // (customer_owner / customer_admin) keep the global view.
+        $locationId = $user->isLocationRestricted() ? $user->assignedLocationId() : null;
+        $applyDepotScope = function ($query) use ($locationId) {
+            if ($locationId) {
+                $query->where(function ($q) use ($locationId) {
+                    $q->where('pickup_location_id', $locationId)
+                        ->orWhere('delivery_location_id', $locationId);
+                });
+            }
+            return $query;
+        };
 
-        $inTransit = Job::where('company_id', $companyId)
-            ->whereIn('status', [
-                Job::STATUS_DRIVER_ASSIGNED,
-                Job::STATUS_READY_FOR_COLLECTION,
-                Job::STATUS_COLLECTED,
-                Job::STATUS_IN_TRANSIT,
-            ])
-            ->count();
+        $pending = $applyDepotScope(
+            Job::where('company_id', $companyId)
+                ->whereIn('status', [
+                    Job::STATUS_PENDING_VERIFICATION,
+                    Job::STATUS_RECEIVED,
+                    Job::STATUS_AWAITING_CUSTOMER_CONFIRMATION,
+                    Job::STATUS_CONFIRMATION_ISSUE,
+                ])
+        )->count();
 
-        $deliveredThisMonth = Job::where('company_id', $companyId)
-            ->whereIn('status', [Job::STATUS_DELIVERED, Job::STATUS_COMPLETED])
-            ->where('delivered_at', '>=', now()->startOfMonth())
-            ->count();
+        $inTransit = $applyDepotScope(
+            Job::where('company_id', $companyId)
+                ->whereIn('status', [
+                    Job::STATUS_DRIVER_ASSIGNED,
+                    Job::STATUS_READY_FOR_COLLECTION,
+                    Job::STATUS_COLLECTED,
+                    Job::STATUS_IN_TRANSIT,
+                ])
+        )->count();
 
-        $totalCompleted = Job::where('company_id', $companyId)
-            ->whereIn('status', [Job::STATUS_DELIVERED, Job::STATUS_COMPLETED])
-            ->count();
+        $deliveredThisMonth = $applyDepotScope(
+            Job::where('company_id', $companyId)
+                ->whereIn('status', [Job::STATUS_DELIVERED, Job::STATUS_COMPLETED])
+                ->where('delivered_at', '>=', now()->startOfMonth())
+        )->count();
+
+        $totalCompleted = $applyDepotScope(
+            Job::where('company_id', $companyId)
+                ->whereIn('status', [Job::STATUS_DELIVERED, Job::STATUS_COMPLETED])
+        )->count();
 
         $awaitingMine = $requiresConfirmation
-            ? Job::where('company_id', $companyId)
-                ->where('status', Job::STATUS_AWAITING_CUSTOMER_CONFIRMATION)
-                ->count()
+            ? $applyDepotScope(
+                Job::where('company_id', $companyId)
+                    ->where('status', Job::STATUS_AWAITING_CUSTOMER_CONFIRMATION)
+            )->count()
             : 0;
 
-        $recentJobs = Job::where('company_id', $companyId)
-            ->with([
-                'pickupLocation:id,company_name,city',
-                'deliveryLocation:id,company_name,city',
-                'brand:id,name',
-                'inventory:id,chassis_number,vin',
-            ])
+        $recentJobs = $applyDepotScope(
+            Job::where('company_id', $companyId)
+                ->with([
+                    'pickupLocation:id,company_name,city',
+                    'deliveryLocation:id,company_name,city',
+                    'brand:id,name',
+                    'inventory:id,chassis_number,vin',
+                ])
+        )
             ->orderByDesc('created_at')
             ->limit(8)
             ->get();

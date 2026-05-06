@@ -258,6 +258,18 @@
                         </x-sidebar-link>
                         @endif
 
+                        {{-- Bulk Upload — gated to account-wide roles. Depot
+                             dispatchers can't upload because the file may
+                             span multiple branches and dispatchers are
+                             pinned to a single branch. Same gate enforced
+                             server-side in the Volt component. --}}
+                        @if($user->hasAnyRole(['customer_owner', 'customer_admin']))
+                        <x-sidebar-link :href="route('customer.orders.bulk-upload')" :active="request()->routeIs('customer.orders.bulk-upload')">
+                            <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></svg></x-slot:icon>
+                            Bulk Upload
+                        </x-sidebar-link>
+                        @endif
+
                         <x-sidebar-link :href="route('customer.orders.index')" :active="request()->routeIs('customer.orders.index') || request()->routeIs('customer.orders.show')">
                             <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4"/><path d="M12 16h4"/><path d="M8 11h.01"/><path d="M8 16h.01"/></svg></x-slot:icon>
                             My Orders
