@@ -70,6 +70,13 @@ return [
             'path' => env('MAIL_SENDMAIL_PATH', '/usr/sbin/sendmail -bs -i'),
         ],
 
+        'mailgun' => [
+            'transport' => 'mailgun',
+            // domain / secret / endpoint are pulled from config('services.mailgun.*')
+            // by Symfony's MailgunTransportFactory. Those values are hydrated at
+            // boot from system_settings (see AppServiceProvider).
+        ],
+
         'log' => [
             'transport' => 'log',
             'channel' => env('MAIL_LOG_CHANNEL'),

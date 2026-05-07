@@ -1,7 +1,9 @@
 <?php
 use App\Models\SystemSetting;
+use App\Providers\AppServiceProvider;
 use Livewire\Volt\Component;
 use Livewire\Attributes\Layout;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 
 new #[Layout('components.layouts.app')] class extends Component {
@@ -15,6 +17,7 @@ new #[Layout('components.layouts.app')] class extends Component {
     public string $smtpEncryption = 'tls';
     public string $mailgunDomain = '';
     public string $mailgunSecret = '';
+    public string $mailgunEndpoint = 'api.mailgun.net';
     public string $testEmailAddress = '';
 
     public function mount(): void
@@ -29,6 +32,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         $this->smtpEncryption = (string) SystemSetting::get('mail_smtp_encryption', config('mail.mailers.smtp.encryption', 'tls'));
         $this->mailgunDomain = (string) SystemSetting::get('mail_mailgun_domain', config('services.mailgun.domain', ''));
         $this->mailgunSecret = (string) SystemSetting::get('mail_mailgun_secret', '');
+        $this->mailgunEndpoint = (string) SystemSetting::get('mail_mailgun_endpoint', config('services.mailgun.endpoint', 'api.mailgun.net'));
     }
 
     public function save(): void
@@ -37,6 +41,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             'mailDriver' => 'required|in:smtp,mailgun,log',
             'fromName' => 'required|string|max:255',
             'fromAddress' => 'required|email',
+            'mailgunEndpoint' => 'nullable|string|max:255',
         ]);
 
         SystemSetting::set('mail_driver', $this->mailDriver);
@@ -53,6 +58,14 @@ new #[Layout('components.layouts.app')] class extends Component {
         if ($this->mailgunSecret) {
             SystemSetting::set('mail_mailgun_secret', $this->mailgunSecret);
         }
+        SystemSetting::set('mail_mailgun_endpoint', $this->mailgunEndpoint ?: 'api.mailgun.net');
+
+        // Re-apply the saved values to the live container immediately so the
+        // "Send Test" button below — which fires in the same browser session
+        // but a new HTTP request — picks them up. (Boot-time hydration also
+        // runs every request, this is just defensive in case the user clicks
+        // Send Test before any cache invalidation propagates.)
+        AppServiceProvider::hydrateMailConfigFromDatabase();
 
         session()->flash('success', 'Email settings saved.');
     }
@@ -61,14 +74,41 @@ new #[Layout('components.layouts.app')] class extends Component {
     {
         $this->validate(['testEmailAddress' => 'required|email']);
 
+        // Pull the latest values into config one more time. Cheap, idempotent,
+        // and rules out "stale config" as a cause when diagnosing failures.
+        AppServiceProvider::hydrateMailConfigFromDatabase();
+
+        $driver = config('mail.default');
+
+        // Surface configuration mistakes up front rather than letting the
+        // transport throw a confusing low-level exception.
+        if ($driver === 'mailgun') {
+            if (!config('services.mailgun.domain') || !config('services.mailgun.secret')) {
+                session()->flash('error', 'Mailgun domain or API secret is missing. Save the Mailgun settings before sending a test email.');
+                return;
+            }
+        }
+
         try {
             Mail::raw('This is a test email from TRIDENT Control & Dispatch Center.', function ($message) {
                 $message->to($this->testEmailAddress)
                     ->subject('Test Email - TRIDENT');
             });
-            session()->flash('success', "Test email sent to {$this->testEmailAddress}.");
+
+            $note = $driver === 'log'
+                ? ' (driver is set to "log" — check storage/logs/laravel.log; nothing was actually delivered)'
+                : '';
+
+            session()->flash('success', "Test email sent to {$this->testEmailAddress} via {$driver}." . $note);
         } catch (\Throwable $e) {
-            session()->flash('error', "Failed to send test email: {$e->getMessage()}");
+            // Full stack goes to the log; the UI gets a single-line summary so
+            // operators can still copy/paste it into a support ticket.
+            Log::error('Test email send failed', [
+                'driver' => $driver,
+                'to' => $this->testEmailAddress,
+                'exception' => $e,
+            ]);
+            session()->flash('error', "Failed to send test email via {$driver}: {$e->getMessage()}");
         }
     }
 };
@@ -151,10 +191,20 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">Domain</label>
                     <input wire:model="mailgunDomain" type="text" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:ring-blue-500" placeholder="mg.example.com">
+                    <p class="mt-1 text-xs text-gray-500">Sending domain as it appears in your Mailgun dashboard.</p>
                 </div>
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">API Secret</label>
                     <input wire:model="mailgunSecret" type="password" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:ring-blue-500" placeholder="Leave blank to keep current">
+                    <p class="mt-1 text-xs text-gray-500">Use the <strong>Sending API key</strong> (starts with <code>key-</code> or a long token), not the private API key.</p>
+                </div>
+                <div class="sm:col-span-2">
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Region / API Endpoint</label>
+                    <select wire:model="mailgunEndpoint" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm">
+                        <option value="api.mailgun.net">US — api.mailgun.net</option>
+                        <option value="api.eu.mailgun.net">EU — api.eu.mailgun.net</option>
+                    </select>
+                    <p class="mt-1 text-xs text-gray-500">A 401 / "domain not found" error from Mailgun almost always means the wrong region is selected.</p>
                 </div>
             </div>
         </div>

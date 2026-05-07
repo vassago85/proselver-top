@@ -45,6 +45,7 @@ class AppServiceProvider extends ServiceProvider
         }
 
         static::hydrateStorageConfigFromDatabase();
+        static::hydrateMailConfigFromDatabase();
     }
 
     /**
@@ -99,5 +100,61 @@ class AppServiceProvider extends ServiceProvider
         $apply('r2_backup_region',            'filesystems.disks.r2-backup.region');
         $apply('r2_backup_bucket',            'filesystems.disks.r2-backup.bucket');
         $apply('r2_backup_endpoint',          'filesystems.disks.r2-backup.endpoint');
+    }
+
+    /**
+     * Same pattern as hydrateStorageConfigFromDatabase, but for the mail stack:
+     * lets the Admin → Settings → Email page configure SMTP / Mailgun creds at
+     * runtime without touching .env. Without this, values saved in the UI sit
+     * in system_settings but are never applied to Laravel's mail config, so
+     * Mail::* uses whatever MAIL_MAILER from .env points at (often `log`,
+     * which silently writes to laravel.log and explains "test mail not working").
+     *
+     * Public + static for the same reasons as the storage hydrator.
+     */
+    public static function hydrateMailConfigFromDatabase(): void
+    {
+        try {
+            if (!Schema::hasTable('system_settings')) {
+                return;
+            }
+        } catch (Throwable) {
+            return;
+        }
+
+        $apply = function (string $settingKey, string $configKey) {
+            $value = SystemSetting::get($settingKey, null);
+            if ($value !== null && $value !== '') {
+                Config::set($configKey, $value);
+            }
+        };
+
+        // Active driver + global "from" identity
+        $apply('mail_driver',       'mail.default');
+        $apply('mail_from_name',    'mail.from.name');
+        $apply('mail_from_address', 'mail.from.address');
+
+        // SMTP transport
+        $apply('mail_smtp_host',     'mail.mailers.smtp.host');
+        $apply('mail_smtp_port',     'mail.mailers.smtp.port');
+        $apply('mail_smtp_username', 'mail.mailers.smtp.username');
+        $apply('mail_smtp_password', 'mail.mailers.smtp.password');
+
+        // Symfony's SMTP transport in Laravel 11+ uses `scheme` (smtp / smtps),
+        // not the legacy `encryption` key. Map the UI choice accordingly so
+        // SSL-on-465 selections actually negotiate TLS at connect time.
+        $encryption = SystemSetting::get('mail_smtp_encryption', null);
+        if ($encryption === 'ssl') {
+            Config::set('mail.mailers.smtp.scheme', 'smtps');
+        } elseif ($encryption === 'tls' || $encryption === '') {
+            // tls (STARTTLS) is the default Symfony behaviour on 587 — clearing
+            // the scheme lets Symfony pick the right one based on the port.
+            Config::set('mail.mailers.smtp.scheme', null);
+        }
+
+        // Mailgun transport — read by symfony/mailgun-mailer's transport factory
+        $apply('mail_mailgun_domain',   'services.mailgun.domain');
+        $apply('mail_mailgun_secret',   'services.mailgun.secret');
+        $apply('mail_mailgun_endpoint', 'services.mailgun.endpoint');
     }
 }
