@@ -3,6 +3,7 @@ use App\Models\SystemSetting;
 use App\Support\StorageDisk;
 use Livewire\Volt\Component;
 use Livewire\Attributes\Layout;
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
@@ -32,6 +33,12 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     public bool $hasR2BackupSecret    = false;
     public bool $hasR2BackupConfigAll = false;
+
+    // Backup encryption password — used by `backup:run` to AES-256-CBC the
+    // pg_dump before it leaves the host. Decoupled from APP_KEY so rotating
+    // the app key doesn't lock anyone out of historical backups.
+    public string $backupEncryptionPassword = '';
+    public bool   $hasBackupEncryptionPassword = false;
 
     public function mount(): void
     {
@@ -63,6 +70,12 @@ new #[Layout('components.layouts.app')] class extends Component {
         $this->r2BackupSecretAccessKey = '';
         $this->hasR2BackupSecret    = (bool) SystemSetting::get('r2_backup_secret_access_key', config('filesystems.disks.r2-backup.secret', ''));
         $this->hasR2BackupConfigAll = StorageDisk::isRemoteDiskReady('r2-backup');
+
+        // Encryption password is write-only in the UI: re-rendering an existing
+        // value into the form would let any logged-in admin lift it just by
+        // viewing the page source.
+        $this->backupEncryptionPassword    = '';
+        $this->hasBackupEncryptionPassword = (bool) SystemSetting::get('backup_encryption_password', '');
     }
 
     // --- SAVE ACTIONS -------------------------------------------------------
@@ -162,6 +175,70 @@ new #[Layout('components.layouts.app')] class extends Component {
         $this->forgetDiskCaches();
         session()->flash('success', 'Backup R2 credentials cleared.');
         $this->refreshFromDatabase();
+    }
+
+    // --- BACKUP ENCRYPTION --------------------------------------------------
+
+    public function saveBackupEncryption(): void
+    {
+        $this->validate([
+            // 16+ chars is a defensible floor for a symmetric password used to
+            // protect a database dump that may contain PII for years. We don't
+            // upper-bound it — openssl handles arbitrary lengths.
+            'backupEncryptionPassword' => 'nullable|string|min:16|max:1024',
+        ], [
+            'backupEncryptionPassword.min' => 'Backup password must be at least 16 characters.',
+        ]);
+
+        if ($this->backupEncryptionPassword === '') {
+            $this->addError('backupEncryptionPassword', 'Type the password you want to use to encrypt future backups.');
+            return;
+        }
+
+        SystemSetting::set('backup_encryption_password', $this->backupEncryptionPassword, 'string', 'AES-256-CBC password for encrypted DB backups');
+        session()->flash('success', 'Backup encryption password saved. New nightly dumps will use this password — store it somewhere safe, it is required to restore.');
+        $this->refreshFromDatabase();
+    }
+
+    public function clearBackupEncryption(): void
+    {
+        SystemSetting::set('backup_encryption_password', '', 'string');
+        session()->flash('success', 'Backup encryption password cleared. Future backups will fall back to APP_KEY (legacy behaviour).');
+        $this->refreshFromDatabase();
+    }
+
+    /**
+     * Trigger `backup:run` synchronously so the operator gets immediate
+     * feedback (DB reachable? encryption password set? R2 backup creds
+     * working?). The artisan command itself bumps the time limit, but we
+     * also raise it here for the Livewire request handler.
+     */
+    public function runBackupNow(): void
+    {
+        abort_unless(auth()->user()?->isDeveloper() || auth()->user()?->isSuperAdmin(),
+            403, 'You may not trigger backups.');
+
+        if (!$this->hasR2BackupConfigAll) {
+            session()->flash('error', 'Backup R2 bucket is not fully configured — fill in every backup-bucket field and save first.');
+            return;
+        }
+
+        @set_time_limit(0);
+
+        try {
+            $exitCode = Artisan::call('backup:run');
+            $output   = trim((string) Artisan::output());
+
+            if ($exitCode === 0) {
+                $tail = $output !== '' ? (' Output: ' . Str::limit($output, 240)) : '';
+                session()->flash('success', '✓ Backup completed successfully.' . $tail);
+            } else {
+                $tail = $output !== '' ? (' Last output: ' . Str::limit($output, 400)) : '';
+                session()->flash('error', "Backup command exited with code {$exitCode}." . $tail . ' Check storage/logs/laravel.log for the full trace.');
+            }
+        } catch (\Throwable $e) {
+            session()->flash('error', 'Backup threw an exception: ' . class_basename($e) . ' — ' . $e->getMessage());
+        }
     }
 
     // --- TEST ---------------------------------------------------------------
@@ -449,6 +526,73 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <button wire:click="saveBackup" class="rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-blue-500">
                     <span wire:loading.remove wire:target="saveBackup">Save backup bucket</span>
                     <span wire:loading wire:target="saveBackup">Saving…</span>
+                </button>
+            </div>
+        </div>
+
+        {{-- ─── Backup encryption ─── --}}
+        <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+            <div class="flex items-center gap-3 mb-4">
+                <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-purple-50 text-purple-600">
+                    <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                </div>
+                <div>
+                    <h3 class="text-lg font-semibold text-gray-900">Backup encryption password</h3>
+                    <p class="text-xs text-gray-500">AES-256-CBC password used to encrypt the nightly database dump before it is uploaded to R2.</p>
+                </div>
+                <div class="ml-auto">
+                    @if($hasBackupEncryptionPassword)
+                        <span class="inline-flex items-center gap-1.5 rounded-full bg-green-50 text-green-700 border border-green-200 px-2.5 py-1 text-xs font-medium"><span class="h-1.5 w-1.5 rounded-full bg-green-500"></span>Custom password set</span>
+                    @else
+                        <span class="inline-flex items-center gap-1.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 px-2.5 py-1 text-xs font-medium"><span class="h-1.5 w-1.5 rounded-full bg-amber-500"></span>Falling back to APP_KEY</span>
+                    @endif
+                </div>
+            </div>
+
+            <div class="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900 mb-4">
+                <p class="font-semibold mb-0.5">Important — losing this password loses your backups</p>
+                <p>
+                    Encrypted dumps can only be decrypted with the password used at the time the dump was made.
+                    Store this somewhere outside the server (password manager, sealed envelope, vault).
+                    Changing the password from here only affects <em>future</em> dumps; older dumps stay decryptable with whatever password was active when they were taken.
+                </p>
+            </div>
+
+            <div x-data="{ show: false }" class="max-w-lg">
+                <label class="block text-sm font-medium text-gray-700 mb-1">
+                    Encryption password
+                    @if($hasBackupEncryptionPassword) <span class="text-xs font-normal text-green-600">(currently set)</span> @endif
+                </label>
+                <div class="relative">
+                    <input wire:model="backupEncryptionPassword" :type="show ? 'text' : 'password'" autocomplete="new-password"
+                        placeholder="{{ $hasBackupEncryptionPassword ? 'Leave blank to keep current password' : 'Choose a strong passphrase (16+ chars)' }}"
+                        class="w-full rounded-lg border border-gray-300 px-3 py-2.5 pr-10 text-sm font-mono focus:border-blue-500 focus:ring-blue-500">
+                    <button type="button" @click="show = !show" class="absolute inset-y-0 right-0 flex items-center pr-3 text-gray-400 hover:text-gray-600">
+                        <svg x-show="!show" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
+                        <svg x-show="show" class="h-5 w-5" x-cloak viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/><line x1="2" x2="22" y1="2" y2="22"/></svg>
+                    </button>
+                </div>
+                @error('backupEncryptionPassword')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
+                <p class="mt-1.5 text-xs text-gray-400">Restore with: <code class="font-mono text-[11px]">openssl enc -d -aes-256-cbc -pbkdf2 -in dump.sql.enc -out dump.sql -pass pass:&lt;password&gt;</code></p>
+            </div>
+
+            <div class="mt-5 flex items-center justify-between gap-3">
+                <div class="flex gap-2">
+                    <button wire:click="runBackupNow" wire:confirm="Run a full backup now? This dumps the live database, encrypts it, and uploads to R2. Can take a minute or two."
+                        class="rounded-lg border border-blue-300 bg-white px-4 py-2.5 text-sm font-semibold text-blue-700 hover:bg-blue-50" wire:loading.attr="disabled" wire:target="runBackupNow">
+                        <span wire:loading.remove wire:target="runBackupNow">Run backup now</span>
+                        <span wire:loading wire:target="runBackupNow">Backing up — please wait…</span>
+                    </button>
+                    @if($hasBackupEncryptionPassword)
+                        <button wire:click="clearBackupEncryption" wire:confirm="Clear the custom backup password? Future backups will fall back to APP_KEY. Existing encrypted dumps are unaffected."
+                            class="rounded-lg border border-red-300 bg-white px-4 py-2.5 text-sm font-semibold text-red-600 hover:bg-red-50">
+                            Clear password
+                        </button>
+                    @endif
+                </div>
+                <button wire:click="saveBackupEncryption" class="rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-blue-500">
+                    <span wire:loading.remove wire:target="saveBackupEncryption">Save password</span>
+                    <span wire:loading wire:target="saveBackupEncryption">Saving…</span>
                 </button>
             </div>
         </div>
