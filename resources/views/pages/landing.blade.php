@@ -63,7 +63,42 @@
                     Book a walkthrough
                     <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
                 </a>
+                {{-- Hamburger — only visible on mobile, where the inline nav above is hidden. --}}
+                <button id="mobileMenuToggle" type="button"
+                    aria-label="Open navigation menu" aria-controls="mobileMenu" aria-expanded="false"
+                    class="md:hidden inline-flex items-center justify-center h-10 w-10 rounded-lg text-slate-700 hover:bg-slate-100 hover:text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 transition-colors">
+                    {{-- Hamburger icon (visible when menu is closed) --}}
+                    <svg id="mobileMenuIconOpen" viewBox="0 0 24 24" class="h-6 w-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <line x1="4" y1="6" x2="20" y2="6"/>
+                        <line x1="4" y1="12" x2="20" y2="12"/>
+                        <line x1="4" y1="18" x2="20" y2="18"/>
+                    </svg>
+                    {{-- Close icon (visible when menu is open) --}}
+                    <svg id="mobileMenuIconClose" viewBox="0 0 24 24" class="hidden h-6 w-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <line x1="6" y1="6" x2="18" y2="18"/>
+                        <line x1="18" y1="6" x2="6" y2="18"/>
+                    </svg>
+                </button>
             </div>
+        </div>
+
+        {{-- Mobile menu panel — drops down under the header on small screens.       --}}
+        {{-- We use max-height + opacity so the open/close transition is smooth      --}}
+        {{-- without needing JS measurement. md:hidden keeps it permanently hidden   --}}
+        {{-- on tablet/desktop, where the inline nav is shown instead.               --}}
+        <div id="mobileMenu"
+            class="md:hidden overflow-hidden max-h-0 opacity-0 transition-[max-height,opacity] duration-300 ease-out border-t border-slate-200/70 bg-white/95 backdrop-blur-md">
+            <nav class="px-6 py-4 flex flex-col gap-1 text-sm text-slate-700">
+                <a href="#pillars"  data-mobile-nav class="rounded-lg px-3 py-2.5 hover:bg-slate-100 hover:text-slate-900 transition-colors">Platform</a>
+                <a href="#features" data-mobile-nav class="rounded-lg px-3 py-2.5 hover:bg-slate-100 hover:text-slate-900 transition-colors">Features</a>
+                <a href="#how"      data-mobile-nav class="rounded-lg px-3 py-2.5 hover:bg-slate-100 hover:text-slate-900 transition-colors">How it works</a>
+                <a href="#workflow" data-mobile-nav class="rounded-lg px-3 py-2.5 hover:bg-slate-100 hover:text-slate-900 transition-colors">OEM workflow</a>
+                <a href="#proof"    data-mobile-nav class="rounded-lg px-3 py-2.5 hover:bg-slate-100 hover:text-slate-900 transition-colors">Proof</a>
+                <a href="#contact"  data-mobile-nav class="mt-2 inline-flex items-center justify-center gap-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 px-3.5 py-2.5 text-sm font-semibold text-white transition-colors">
+                    Book a walkthrough
+                    <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+                </a>
+            </nav>
         </div>
     </header>
 
@@ -610,6 +645,61 @@
             entries.forEach(e => { if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); } });
         }, { threshold: 0.08 });
         document.querySelectorAll('.reveal-up').forEach(el => io.observe(el));
+
+        // ── Mobile menu toggle ──────────────────────────────────────────────
+        // Self-contained because this page doesn't pull in Alpine. We animate
+        // via max-height instead of `hidden` so the transition is smooth, and
+        // use a generous max-height (calc(100vh - 4rem)) which is larger than
+        // the menu's natural height on any phone — Tailwind's height transitions
+        // need a numeric ceiling, not `auto`.
+        (function () {
+            const toggle    = document.getElementById('mobileMenuToggle');
+            const menu      = document.getElementById('mobileMenu');
+            const iconOpen  = document.getElementById('mobileMenuIconOpen');
+            const iconClose = document.getElementById('mobileMenuIconClose');
+            if (!toggle || !menu) return;
+
+            const setOpen = (open) => {
+                toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+                toggle.setAttribute('aria-label', open ? 'Close navigation menu' : 'Open navigation menu');
+                iconOpen.classList.toggle('hidden', open);
+                iconClose.classList.toggle('hidden', !open);
+                if (open) {
+                    menu.style.maxHeight = 'calc(100vh - 4rem)';
+                    menu.classList.remove('opacity-0');
+                    menu.classList.add('opacity-100');
+                } else {
+                    menu.style.maxHeight = '0px';
+                    menu.classList.remove('opacity-100');
+                    menu.classList.add('opacity-0');
+                }
+            };
+
+            toggle.addEventListener('click', () => {
+                setOpen(toggle.getAttribute('aria-expanded') !== 'true');
+            });
+
+            // Anchor clicks should jump-and-close so the user lands on the
+            // section without the menu still covering the top of the page.
+            menu.querySelectorAll('[data-mobile-nav]').forEach((a) => {
+                a.addEventListener('click', () => setOpen(false));
+            });
+
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape' && toggle.getAttribute('aria-expanded') === 'true') {
+                    setOpen(false);
+                    toggle.focus();
+                }
+            });
+
+            // If the viewport grows past the md breakpoint while the menu is
+            // open (orientation change, devtools resize), close it — the inline
+            // desktop nav is already taking over.
+            const mq = window.matchMedia('(min-width: 768px)');
+            const onMqChange = (e) => { if (e.matches) setOpen(false); };
+            if (typeof mq.addEventListener === 'function') mq.addEventListener('change', onMqChange);
+            else if (typeof mq.addListener === 'function') mq.addListener(onMqChange);
+        })();
     </script>
 </body>
 </html>
