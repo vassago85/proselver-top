@@ -51,11 +51,24 @@ new #[Layout('components.layouts.app')] class extends Component
         Job::STATUS_AWAITING_CUSTOMER_CONFIRMATION,
         Job::STATUS_CONFIRMATION_ISSUE,
     ];
+    /*
+     * "Ready to dispatch" = the order is confirmed and possibly planned
+     * onto a route, but no driver has been assigned yet — the next
+     * physical action is for a planner to pick a driver. PLANNED
+     * belongs here, NOT under G_DISPATCHED, because the vehicle has
+     * not been handed to anyone.
+     */
     protected const G_TO_DISPATCH = [
         Job::STATUS_CONFIRMED,
-    ];
-    protected const G_DISPATCHED = [
         Job::STATUS_PLANNED,
+    ];
+
+    /*
+     * "Dispatched" = a driver is on the job but the vehicle has not yet
+     * been collected. The moment the driver is unassigned (back to
+     * PLANNED) the row flips back to G_TO_DISPATCH.
+     */
+    protected const G_DISPATCHED = [
         Job::STATUS_DRIVER_ASSIGNED,
         Job::STATUS_READY_FOR_COLLECTION,
     ];
@@ -350,7 +363,7 @@ new #[Layout('components.layouts.app')] class extends Component
                 'label'    => 'Confirmed · no driver',
                 'sublabel' => "> {$th['to_dispatch_hours']}h",
                 'count'    => (clone $this->baseJobsQuery())
-                    ->where('status', Job::STATUS_CONFIRMED)
+                    ->whereIn('status', self::G_TO_DISPATCH)
                     ->where('updated_at', '<=', now()->subHours($th['to_dispatch_hours']))
                     ->count(),
                 'severity' => 'amber',
