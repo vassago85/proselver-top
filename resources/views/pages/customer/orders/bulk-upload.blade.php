@@ -236,7 +236,13 @@ new #[Layout('components.layouts.app')] class extends Component {
      * jobs that might be sat at pending_verification for legitimate
      * reasons (rare, but cheap to be careful).
      */
-    public function commit(JobBulkImporter $importer): void
+    /*
+     * NB: do NOT name this method `commit()` — Livewire 3 reserves
+     * `$commit` as an internal magic action (state-sync). A method
+     * literally called `commit` is silently shadowed by it and never
+     * runs, so the Import button looks dead.
+     */
+    public function commitImport(JobBulkImporter $importer): void
     {
         $result = $importer->commit(
             company: $this->company,
@@ -516,9 +522,9 @@ new #[Layout('components.layouts.app')] class extends Component {
                 </div>
 
                 <div class="mt-6 flex items-center gap-3">
-                    <button wire:click="commit" class="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-60" wire:loading.attr="disabled" wire:confirm="Import {{ $previewStats['ready'] ?? 0 }} order(s)?">
-                        <span wire:loading.remove wire:target="commit">Import {{ $previewStats['ready'] ?? 0 }} order(s)</span>
-                        <span wire:loading wire:target="commit">Importing...</span>
+                    <button wire:click="commitImport" class="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-60" wire:loading.attr="disabled" wire:confirm="Import {{ $previewStats['ready'] ?? 0 }} order(s)?">
+                        <span wire:loading.remove wire:target="commitImport">Import {{ $previewStats['ready'] ?? 0 }} order(s)</span>
+                        <span wire:loading wire:target="commitImport">Importing...</span>
                     </button>
                     <button type="button" wire:click="backToMap" class="text-sm font-medium text-slate-500 hover:text-slate-800">Cancel</button>
                 </div>
