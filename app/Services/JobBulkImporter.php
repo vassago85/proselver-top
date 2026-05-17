@@ -281,6 +281,14 @@ class JobBulkImporter
         // class). Without it we just rely on the default class id.
         $vehicleClasses = $options['vehicle_classes'] ?? collect();
 
+        // Remembered model → vehicle_class_id hints from previous imports
+        // for this customer. The customer gets a smarter default each
+        // time they upload because we capture every per-row class choice
+        // on commit and replay it here as a guess. Lookup is keyed by
+        // a normalised model string so "NPS300SWA" and " nps300swa "
+        // both hit the same hint.
+        $savedHints = (array) ($company->movement_csv_mapping['model_class_hints'] ?? []);
+
         $locations = $company->locations()->get();
 
         // VIN dedup: pull every in-flight job for this customer keyed by
@@ -306,10 +314,14 @@ class JobBulkImporter
             $entry = $this->buildPreviewRow($row, $mapping, $locations, $autoCreate);
 
             // Per-row vehicle class: prefer the operator-set default;
+            // otherwise honour a remembered hint for this exact model;
             // otherwise try to infer from the model description so the
             // preview screen lights up green for the rows we recognise
             // and only flags the unfamiliar ones for manual review.
+            $hintKey = $this->normaliseModelKey($entry['parsed']['model'] ?? null);
+            $hintClassId = $hintKey ? ($savedHints[$hintKey] ?? null) : null;
             $entry['parsed']['vehicle_class_id'] = $defaultClassId
+                ?: $hintClassId
                 ?: $this->guessVehicleClassId($entry['parsed']['model'] ?? null, $vehicleClasses);
 
             if (!$entry['parsed']['vehicle_class_id']) {
@@ -550,6 +562,11 @@ class JobBulkImporter
         $skipped = 0;
         $errors = [];
 
+        // Captures model → vehicle_class_id pairs from rows the operator
+        // actually approved & imported, so the next upload for this
+        // customer can pre-fill the same class automatically.
+        $modelHints = [];
+
         DB::transaction(function () use (
             $company,
             $createdByUserId,
@@ -561,6 +578,7 @@ class JobBulkImporter
             &$createdLocations,
             &$skipped,
             &$errors,
+            &$modelHints,
         ) {
             foreach ($previewRows as $row) {
                 if ($row['status'] === 'error' || $row['status'] === 'skipped') {
@@ -620,6 +638,14 @@ class JobBulkImporter
                             : null,
                     ]);
 
+                    // Capture the operator-approved model → class pair so
+                    // the next upload can pre-fill it. Keyed by the
+                    // normalised model name (trimmed & uppercased).
+                    $modelKey = $this->normaliseModelKey($row['parsed']['model'] ?? null);
+                    if ($modelKey) {
+                        $modelHints[$modelKey] = (int) $vehicleClassId;
+                    }
+
                     $created++;
                 } catch (\Throwable $e) {
                     $skipped++;
@@ -631,6 +657,15 @@ class JobBulkImporter
             }
         });
 
+        // Merge the newly-learned hints into whatever was already saved
+        // for this customer and persist back. We merge (not replace) so
+        // models that didn't appear in this upload keep their previous
+        // hint. A single upload that overrides a model's class wins —
+        // we always trust the most recent operator choice.
+        if (!empty($modelHints)) {
+            $this->rememberModelClassHints($company, $modelHints);
+        }
+
         return [
             'created' => $created,
             'created_locations' => $createdLocations,
@@ -639,9 +674,40 @@ class JobBulkImporter
         ];
     }
 
+    /**
+     * Merge the supplied model → class_id hints into the company's saved
+     * mapping so future imports auto-fill the same vehicle class.
+     * The merge is biased toward $hints, so if the operator switched a
+     * model's class in this upload the new value replaces the old one.
+     */
+    public function rememberModelClassHints(Company $company, array $hints): void
+    {
+        $mapping = (array) ($company->movement_csv_mapping ?? []);
+        $existing = (array) ($mapping['model_class_hints'] ?? []);
+
+        $mapping['model_class_hints'] = array_merge($existing, $hints);
+
+        $company->forceFill(['movement_csv_mapping' => $mapping])->save();
+    }
+
     // ---------------------------------------------------------------------
     // INTERNALS
     // ---------------------------------------------------------------------
+
+    /*
+     * Normalise a model string into a stable lookup key. Trim + upper-case
+     * but DO NOT collapse internal whitespace — "NPS300 CREW CAB SWA" is
+     * a different vehicle from "NPS300SWA" and we want the hints to
+     * distinguish them.
+     */
+    private function normaliseModelKey(?string $model): ?string
+    {
+        if ($model === null) {
+            return null;
+        }
+        $key = strtoupper(trim($model));
+        return $key === '' ? null : $key;
+    }
 
     private function buildPreviewRow(
         array $row,
