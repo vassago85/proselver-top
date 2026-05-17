@@ -12,6 +12,15 @@ new #[Layout('components.layouts.app')] class extends Component {
     public string $cancelReason = '';
     public bool $showCancelModal = false;
 
+    /*
+     * Inline editing for the scheduled (collection) date. Ops needs this
+     * because the bulk upload may set the wrong date, or operational
+     * reasons (truck unavailable, customer reschedule, etc.) force a
+     * change. We keep the edit modal-free for speed.
+     */
+    public bool $editingScheduledDate = false;
+    public ?string $scheduledDateInput = null;
+
     public function mount(Job $job): void
     {
         $this->job = $job->load([
@@ -212,6 +221,85 @@ new #[Layout('components.layouts.app')] class extends Component {
         session()->flash('success', $previousDriverName
             ? "Driver {$previousDriverName} unassigned. Pick a new driver to continue."
             : 'Driver unassigned. Pick a new driver to continue.');
+    }
+
+    /*
+     * Inline edit for the scheduled collection date.
+     *   startEditScheduledDate()  – swap the read-only label for an input
+     *   saveScheduledDate()       – validate, persist, audit log
+     *   cancelEditScheduledDate() – discard
+     *
+     * Blocked once the order is in flight or terminal so we don't
+     * accidentally rewrite history on completed jobs.
+     */
+    public function startEditScheduledDate(): void
+    {
+        if ($this->isScheduledDateLocked()) {
+            session()->flash('error', 'Scheduled date cannot be changed at this stage.');
+            return;
+        }
+
+        $this->scheduledDateInput = $this->job->scheduled_date?->format('Y-m-d');
+        $this->editingScheduledDate = true;
+    }
+
+    public function cancelEditScheduledDate(): void
+    {
+        $this->editingScheduledDate = false;
+        $this->scheduledDateInput = null;
+    }
+
+    public function saveScheduledDate(): void
+    {
+        if ($this->isScheduledDateLocked()) {
+            session()->flash('error', 'Scheduled date cannot be changed at this stage.');
+            $this->cancelEditScheduledDate();
+            return;
+        }
+
+        $this->validate([
+            'scheduledDateInput' => ['required', 'date'],
+        ], [
+            'scheduledDateInput.required' => 'Pick a date.',
+            'scheduledDateInput.date'     => 'Enter a valid date.',
+        ]);
+
+        $oldDate = $this->job->scheduled_date?->format('Y-m-d');
+        $newDate = $this->scheduledDateInput;
+
+        if ($oldDate === $newDate) {
+            $this->cancelEditScheduledDate();
+            return;
+        }
+
+        $this->job->scheduled_date = $newDate;
+        $this->job->save();
+
+        AuditService::log('scheduled_date_changed', 'job', $this->job->id, null, [
+            'from' => $oldDate,
+            'to'   => $newDate,
+        ]);
+
+        $this->job->refresh();
+        $this->cancelEditScheduledDate();
+        session()->flash('success', "Collection date updated to " . $this->job->scheduled_date->format('d M Y') . ".");
+    }
+
+    /*
+     * Lock the scheduled date once the vehicle is physically in the
+     * pipeline — changing it after the driver has touched the asset
+     * would invalidate POD / paperwork and timestamps. Public so the
+     * blade template can call it to show/hide the Change button.
+     */
+    public function isScheduledDateLocked(): bool
+    {
+        return in_array($this->job->status, [
+            Job::STATUS_COLLECTED,
+            Job::STATUS_IN_TRANSIT,
+            Job::STATUS_DELIVERED,
+            Job::STATUS_COMPLETED,
+            Job::STATUS_CANCELLED,
+        ], true);
     }
 
     public function markCollected(): void
@@ -824,7 +912,37 @@ new #[Layout('components.layouts.app')] class extends Component {
                     @if($job->registration)
                     <div><dt class="text-gray-500">Registration</dt><dd class="font-medium">{{ $job->registration }}</dd></div>
                     @endif
-                    <div><dt class="text-gray-500">Scheduled Date</dt><dd class="font-medium">{{ $job->scheduled_date?->format('d M Y') ?? '—' }}</dd></div>
+                    <div>
+                        <dt class="text-gray-500">Scheduled Date</dt>
+                        <dd class="font-medium">
+                            @if($editingScheduledDate)
+                                <form wire:submit.prevent="saveScheduledDate" class="flex items-center gap-2">
+                                    <input
+                                        type="date"
+                                        wire:model="scheduledDateInput"
+                                        class="rounded-md border-gray-300 px-2 py-1 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                                        autofocus
+                                    />
+                                    <button type="submit" class="rounded-md bg-blue-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-blue-500">Save</button>
+                                    <button type="button" wire:click="cancelEditScheduledDate" class="text-xs font-medium text-gray-500 hover:text-gray-800">Cancel</button>
+                                </form>
+                                @error('scheduledDateInput')
+                                    <p class="mt-1 text-xs text-red-600">{{ $message }}</p>
+                                @enderror
+                            @else
+                                <span>{{ $job->scheduled_date?->format('d M Y') ?? '—' }}</span>
+                                @if(! $this->isScheduledDateLocked())
+                                    <button type="button"
+                                        wire:click="startEditScheduledDate"
+                                        class="ml-2 inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-800"
+                                        title="Change collection date">
+                                        <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5Z"/></svg>
+                                        Change
+                                    </button>
+                                @endif
+                            @endif
+                        </dd>
+                    </div>
                 </dl>
             </div>
 
