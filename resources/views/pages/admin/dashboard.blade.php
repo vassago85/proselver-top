@@ -857,10 +857,20 @@ new #[Layout('components.layouts.app')] class extends Component
                                         <div class="text-[12px] text-slate-700 truncate max-w-[160px]">{{ $r->company?->name ?? '—' }}</div>
                                     </td>
                                     <td class="px-4 py-2.5">
-                                        <div class="text-[12px] text-slate-700 flex items-center gap-1">
-                                            <span>{{ $r->pickupLocation?->city ?? '—' }}</span>
-                                            <svg viewBox="0 0 24 24" class="h-3 w-3 text-slate-300" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
-                                            <span>{{ $r->deliveryLocation?->city ?? '—' }}</span>
+                                        <div class="flex items-center gap-2">
+                                            <div class="min-w-0">
+                                                <div class="text-[12px] text-slate-700 truncate">{{ $r->pickupLocation?->city ?? '—' }}</div>
+                                                @if($r->pickupLocation?->province)
+                                                    <div class="text-[10px] text-slate-400 truncate">{{ $r->pickupLocation->province }}</div>
+                                                @endif
+                                            </div>
+                                            <svg viewBox="0 0 24 24" class="h-3 w-3 shrink-0 text-slate-300" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+                                            <div class="min-w-0">
+                                                <div class="text-[12px] text-slate-700 truncate">{{ $r->deliveryLocation?->city ?? '—' }}</div>
+                                                @if($r->deliveryLocation?->province)
+                                                    <div class="text-[10px] text-slate-400 truncate">{{ $r->deliveryLocation->province }}</div>
+                                                @endif
+                                            </div>
                                         </div>
                                     </td>
                                     <td class="px-4 py-2.5 text-[12px] text-slate-700">{{ $r->driver?->name ?? '—' }}</td>
