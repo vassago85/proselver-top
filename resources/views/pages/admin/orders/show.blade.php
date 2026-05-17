@@ -181,6 +181,39 @@ new #[Layout('components.layouts.app')] class extends Component {
         session()->flash('success', "Driver {$driver->name} assigned.");
     }
 
+    /*
+     * Roll the order back to PLANNED so a different driver can be picked.
+     * Allowed while the driver hasn't physically taken possession of the
+     * vehicle yet (DRIVER_ASSIGNED / READY_FOR_COLLECTION). The previous
+     * driver is recorded in the audit log so we keep a history of who
+     * was on the job.
+     */
+    public function unassignDriver(): void
+    {
+        $previousDriverId = $this->job->driver_user_id;
+        $previousDriverName = $this->job->driver?->name;
+
+        $this->job->driver_user_id = null;
+        $this->job->save();
+
+        if (!$this->job->transitionTo(Job::STATUS_PLANNED)) {
+            session()->flash('error', 'Cannot unassign the driver at this stage.');
+            return;
+        }
+
+        AuditService::log('driver_unassigned', 'job', $this->job->id, null, [
+            'previous_driver_id' => $previousDriverId,
+            'previous_driver_name' => $previousDriverName,
+            'reason' => 'Reverted to planning to reassign driver',
+        ]);
+
+        $this->driverId = null;
+        $this->job->load(['driver', 'driver.driverProfile']);
+        session()->flash('success', $previousDriverName
+            ? "Driver {$previousDriverName} unassigned. Pick a new driver to continue."
+            : 'Driver unassigned. Pick a new driver to continue.');
+    }
+
     public function markCollected(): void
     {
         if (!$this->job->transitionTo(Job::STATUS_COLLECTED)) {
@@ -581,6 +614,16 @@ new #[Layout('components.layouts.app')] class extends Component {
                         <button wire:click="markCollected" wire:confirm="Has the driver arrived at the pickup location with the paperwork signed?"
                             class="inline-flex items-center gap-2 rounded-lg border border-teal-600 bg-white px-4 py-2.5 text-sm font-semibold text-teal-700 hover:bg-teal-50 transition-colors">
                             Mark Driver Arrived at Pickup
+                        </button>
+                        {{-- Safety net: ops can roll back to PLANNED to pick a
+                             different driver if the wrong one was assigned.
+                             Only available before the driver has physically
+                             collected the vehicle. --}}
+                        <button wire:click="unassignDriver"
+                            wire:confirm="Unassign {{ $job->driver?->name ?? 'the current driver' }} and send this order back to the planning queue so a different driver can be picked?"
+                            class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors">
+                            <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>
+                            Change Driver
                         </button>
                     @elseif($job->status === Job::STATUS_COLLECTED)
                         <button wire:click="markInTransit" wire:confirm="Has the driver departed with the vehicle? Mark as in transit?"

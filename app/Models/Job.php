@@ -137,8 +137,13 @@ class Job extends Model
         // only as a legacy terminal-ish state for in-flight orders created before
         // the workflow was simplified — those rows still need to be able to move to
         // COLLECTED or CANCELLED, hence the entry below.
-        self::STATUS_DRIVER_ASSIGNED => [self::STATUS_COLLECTED, self::STATUS_CANCELLED],
-        self::STATUS_READY_FOR_COLLECTION => [self::STATUS_COLLECTED, self::STATUS_CANCELLED],
+        //
+        // PLANNED is also a legal target so ops can unassign / swap the driver
+        // (e.g. they picked the wrong driver, or the driver is no longer
+        // available). This is a soft rollback — the previous `assigned_at`
+        // is preserved for audit, only `driver_user_id` is cleared.
+        self::STATUS_DRIVER_ASSIGNED => [self::STATUS_COLLECTED, self::STATUS_CANCELLED, self::STATUS_PLANNED],
+        self::STATUS_READY_FOR_COLLECTION => [self::STATUS_COLLECTED, self::STATUS_CANCELLED, self::STATUS_PLANNED],
         self::STATUS_COLLECTED => [self::STATUS_IN_TRANSIT],
         self::STATUS_IN_TRANSIT => [self::STATUS_DELIVERED],
         self::STATUS_DELIVERED => [self::STATUS_COMPLETED],
