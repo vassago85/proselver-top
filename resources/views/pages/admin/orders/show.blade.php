@@ -565,9 +565,14 @@ new #[Layout('components.layouts.app')] class extends Component {
              Merges the old "header card" and the old right-hand Actions
              panel into one hero so ops never has to choose between two
              primary buttons; the next move is always one click from the
-             top of the page. --}}
-        <div class="rounded-2xl border {{ $v['ring'] }} bg-white shadow-sm overflow-hidden">
-            <div class="flex flex-wrap items-start justify-between gap-4 px-6 py-5 border-b border-gray-100">
+             top of the page.
+
+             NOTE: overflow MUST be visible so the searchable-select
+             dropdown used by "Assign driver" isn't clipped by the
+             card's rounded box. Inner sections carry their own
+             border-radius so visual rounding is preserved. --}}
+        <div class="rounded-2xl border {{ $v['ring'] }} bg-white shadow-sm overflow-visible">
+            <div class="flex flex-wrap items-start justify-between gap-4 px-6 py-5 border-b border-gray-100 rounded-t-2xl">
                 <div class="min-w-0">
                     <div class="flex items-center gap-2 flex-wrap">
                         <h2 class="text-xl font-semibold text-gray-900 tracking-tight">{{ $job->job_number ?? $job->uuid }}</h2>
@@ -591,7 +596,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                 @endif
             </div>
 
-            <div class="{{ $v['bg'] }} px-6 py-5">
+            <div class="{{ $v['bg'] }} px-6 py-5 rounded-b-2xl">
                 {{-- Ops-only badge: if this order was confirmed via the
                      manual override (we stamp confirmation_note when
                      ops bypass the customer portal sign-off) make it
