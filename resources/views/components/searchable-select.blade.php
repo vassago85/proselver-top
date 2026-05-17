@@ -228,7 +228,10 @@
                 disabled: !!config.disabled,
 
                 hydrate() {
-                    const initial = this.$refs.hiddenInput?.value ?? '';
+                    const hidden = this.$refs.hiddenInput;
+                    if (!hidden) return;
+
+                    const initial = hidden.value ?? '';
                     if (initial) {
                         this.applyValue(initial, false);
                     }
@@ -237,14 +240,22 @@
                      * Track outside changes (Livewire validation, parent
                      * setting the property, etc.) so the visible label
                      * stays consistent.
+                     *
+                     * Guard against the hidden input being removed from
+                     * the DOM (e.g. Livewire re-render), otherwise the
+                     * observer callback throws and breaks other JS on
+                     * the page (Alpine, wire:click handlers, etc.).
                      */
                     const observer = new MutationObserver(() => {
-                        const v = this.$refs.hiddenInput.value;
+                        const ref = this.$refs.hiddenInput;
+                        if (!ref) return;
+                        const v = ref.value;
                         if (v !== this.value) {
                             this.applyValue(v, false);
                         }
                     });
-                    observer.observe(this.$refs.hiddenInput, { attributes: true, attributeFilter: ['value'] });
+                    observer.observe(hidden, { attributes: true, attributeFilter: ['value'] });
+                    this._observer = observer;
 
                     /*
                      * If the parent/Livewire writes via `.value =` the
@@ -252,12 +263,19 @@
                      * doesn't change the attribute. Hook the input
                      * event too as a safety net.
                      */
-                    this.$refs.hiddenInput.addEventListener('input', () => {
-                        const v = this.$refs.hiddenInput.value;
+                    hidden.addEventListener('input', () => {
+                        const ref = this.$refs.hiddenInput;
+                        if (!ref) return;
+                        const v = ref.value;
                         if (v !== this.value) {
                             this.applyValue(v, false);
                         }
                     });
+                },
+
+                destroy() {
+                    this._observer?.disconnect();
+                    this._observer = null;
                 },
 
                 get flatOptions() {
