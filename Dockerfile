@@ -1,5 +1,11 @@
 FROM php:8.3-fpm-alpine
 
+# Runtime + build deps in a single apk fetch. We bundle the PHP build
+# toolchain (autoconf/make/g++/re2c/file/dpkg-dev) here even though
+# docker-php-ext-install would otherwise install them on the fly, because
+# this CDN connection is unreliable from our network and a second apk
+# round-trip in a later RUN keeps failing with TLS errors. One fetch =
+# one chance to fail.
 RUN apk add --no-cache \
     nginx \
     supervisor \
@@ -18,7 +24,15 @@ RUN apk add --no-cache \
     postgresql-client \
     nodejs \
     npm \
-    openssl
+    openssl \
+    autoconf \
+    make \
+    g++ \
+    re2c \
+    file \
+    dpkg-dev \
+    dpkg \
+    pkgconfig
 
 RUN docker-php-ext-configure gd --with-freetype --with-jpeg \
     && docker-php-ext-install -j$(nproc) \
@@ -32,10 +46,10 @@ RUN docker-php-ext-configure gd --with-freetype --with-jpeg \
     zip \
     intl
 
-RUN apk add --no-cache --virtual .build-deps $PHPIZE_DEPS \
-    && pecl install redis \
-    && docker-php-ext-enable redis \
-    && apk del .build-deps
+# Build deps for the Redis extension are already installed above, so
+# we don't need the apk virtual package + cleanup dance. Just build it.
+RUN pecl install redis \
+    && docker-php-ext-enable redis
 
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 
