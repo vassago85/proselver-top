@@ -108,30 +108,46 @@
         {!! $wireAttrString !!}
     />
 
-    <button
-        type="button"
+    {{-- Combined trigger + search input.
+         When closed and a value is picked, the input shows the selected
+         label as its visible text. When focused/open, the user can just
+         start typing to filter; results drop below.
+         A single block — no separate search panel. --}}
+    <div
         x-ref="trigger"
-        :disabled="disabled"
-        @click="toggle()"
-        @keydown.down.prevent="open ? moveActive(1) : openAndFocus()"
-        @keydown.up.prevent="open ? moveActive(-1) : openAndFocus()"
-        @keydown.enter.prevent="open && active >= 0 ? selectActive() : openAndFocus()"
+        @click="!disabled && (open ? $refs.search.focus() : openAndFocus())"
         :class="[
-            'group flex w-full items-center justify-between rounded-lg border bg-white px-3 py-2.5 text-left text-sm transition',
+            'group flex w-full items-center justify-between gap-2 rounded-lg border bg-white px-3 py-2 text-sm transition cursor-text',
             disabled
                 ? 'cursor-not-allowed border-gray-200 bg-gray-50 text-gray-400'
-                : 'border-gray-300 hover:border-gray-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500',
+                : (open
+                    ? 'border-blue-500 ring-1 ring-blue-500'
+                    : 'border-gray-300 hover:border-gray-400'),
         ]"
         :aria-expanded="open ? 'true' : 'false'"
         aria-haspopup="listbox"
+        role="combobox"
     >
-        <span x-show="value !== ''" class="truncate text-gray-900" x-text="label"></span>
-        <span x-show="value === ''" class="truncate text-gray-400" x-text="placeholder"></span>
-        <span class="ml-2 flex shrink-0 items-center gap-1.5">
+        <input
+            x-ref="search"
+            type="text"
+            autocomplete="off"
+            :disabled="disabled"
+            :placeholder="open ? (value ? label : placeholder) : (value ? label : placeholder)"
+            :value="open ? query : (value ? label : '')"
+            @input="query = $event.target.value; openAndFocus()"
+            @focus="openAndFocus()"
+            @keydown.down.prevent="open ? moveActive(1) : openAndFocus()"
+            @keydown.up.prevent="open ? moveActive(-1) : openAndFocus()"
+            @keydown.enter.prevent="open && active >= 0 ? selectActive() : openAndFocus()"
+            @keydown.escape.stop.prevent="close()"
+            class="min-w-0 flex-1 bg-transparent text-gray-900 placeholder:text-gray-400 focus:outline-none disabled:cursor-not-allowed disabled:text-gray-400"
+        />
+        <span class="flex shrink-0 items-center gap-1.5">
             <button
                 type="button"
                 x-show="allowClear && value !== '' && !disabled"
-                @click.stop="clear()"
+                @click.stop="clear(); $refs.search.focus()"
                 class="flex h-4 w-4 items-center justify-center rounded text-gray-400 hover:bg-gray-100 hover:text-gray-600"
                 title="Clear"
             >
@@ -143,7 +159,7 @@
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
             </svg>
         </span>
-    </button>
+    </div>
 
     <div
         x-show="open"
@@ -151,25 +167,6 @@
         x-transition.opacity.duration.100ms
         class="absolute z-50 mt-1 w-full rounded-lg border border-gray-200 bg-white shadow-lg"
     >
-        <div class="border-b border-gray-100 p-2">
-            <div class="relative">
-                <svg class="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M11 17a6 6 0 100-12 6 6 0 000 12z" />
-                </svg>
-                <input
-                    type="text"
-                    x-ref="search"
-                    x-model="query"
-                    @keydown.down.prevent="moveActive(1)"
-                    @keydown.up.prevent="moveActive(-1)"
-                    @keydown.enter.prevent="selectActive()"
-                    @keydown.escape.stop.prevent="close()"
-                    placeholder="{{ $searchPlaceholder }}"
-                    class="w-full rounded-md border border-gray-200 bg-white py-1.5 pl-8 pr-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                />
-            </div>
-        </div>
-
         <ul class="max-h-64 overflow-y-auto py-1" role="listbox">
             <template x-for="(group, gi) in filteredGroups" :key="'g' + gi">
                 <li>
