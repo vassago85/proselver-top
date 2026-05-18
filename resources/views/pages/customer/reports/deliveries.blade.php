@@ -337,11 +337,30 @@ new #[Layout('components.layouts.app')] class extends Component {
             </div>
         </div>
 
-        @if($brandId || $vehicleClassId || $executorType || $destinationType || $archivedFilter !== 'all')
-            <div class="border-t border-gray-100 px-5 py-2 text-right">
-                <button wire:click="resetFilters" class="text-xs font-medium text-gray-500 hover:text-gray-800">Clear filters</button>
-            </div>
-        @endif
+        @php
+            $hasActiveFilters = $brandId || $vehicleClassId || $executorType || $destinationType || $archivedFilter !== 'all';
+        @endphp
+        <div class="flex items-center justify-between border-t border-gray-100 px-5 py-2">
+            <p class="text-xs text-gray-500">
+                @if($hasActiveFilters)
+                    Filters applied — click below to reset everything.
+                @else
+                    Tip: each dropdown has an &times; to clear it, or reset the whole panel below.
+                @endif
+            </p>
+            <button
+                wire:click="resetFilters"
+                @class([
+                    'inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-semibold transition',
+                    'border-rose-300 bg-rose-50 text-rose-700 hover:bg-rose-100' => $hasActiveFilters,
+                    'border-gray-200 bg-white text-gray-400 cursor-default' => ! $hasActiveFilters,
+                ])
+                @disabled(! $hasActiveFilters)
+            >
+                <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                Clear filters
+            </button>
+        </div>
     </div>
 
     {{-- KPI cards --}}

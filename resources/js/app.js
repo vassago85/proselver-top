@@ -52,16 +52,54 @@ document.addEventListener('alpine:init', () => {
                 }
             }
 
-            let initial = '';
-            if (wireProp && this.$wire) {
-                try { initial = this.$wire.get(wireProp) ?? ''; } catch (e) { /* not in livewire scope */ }
-            }
-            if (initial === '' || initial == null) {
-                initial = hidden.value ?? '';
-            }
-            if (initial !== '' && initial != null) {
-                this.applyValue(initial, false);
-            }
+            // Read-and-apply pass we re-run at several lifecycle moments.
+            // Always non-propagating (passes false) — we're MIRRORING the
+            // Livewire state visually, not changing it, so this never
+            // triggers a roundtrip back to the server.
+            const readAndApply = () => {
+                let v = '';
+                if (wireProp && this.$wire) {
+                    try { v = this.$wire.get(wireProp) ?? ''; } catch (e) { /* not in livewire scope */ }
+                }
+                if (v === '' || v == null) {
+                    v = hidden.value ?? '';
+                }
+                if (String(v ?? '') !== String(this.value ?? '')) {
+                    this.applyValue(v ?? '', false);
+                }
+            };
+
+            // Pass 1 — synchronous, catches the wire:navigate case where
+            // Livewire is already alive when this component mounts.
+            readAndApply();
+
+            // Pass 2 — next animation frame, catches the case where
+            // Livewire's JS-side state is set *after* the synchronous
+            // x-init pass but inside the same paint (often the case on
+            // SPA navigations with Volt-heavy pages).
+            requestAnimationFrame(readAndApply);
+
+            // Pass 3 — first full page load.  Alpine's x-init fires
+            // BEFORE the global `livewire:initialized` event on a fresh
+            // page; until that event fires, $wire.get() returns the
+            // schema default rather than the URL-decoded value
+            // (?executorType=proselver shows "All executors" until the
+            // user clicks the dropdown).  Re-reading here paints the
+            // right label on first frame after Livewire boots.  The
+            // listener is harmless on wire:navigate because the event
+            // already fired earlier — addEventListener silently no-ops
+            // and the synchronous pass above already did the work.
+            document.addEventListener('livewire:initialized', readAndApply, { once: true });
+
+            // Pass 4 — every subsequent wire:navigate landing.  Without
+            // this, navigating away and back to the same page with a
+            // different URL filter leaves the visible label stuck on
+            // the previous value (Alpine re-uses the component instance,
+            // $wire points at a fresh Livewire backing component, but
+            // no event tells us to re-read).  We track the listener so
+            // destroy() can detach it cleanly.
+            this._onNavigated = () => readAndApply();
+            document.addEventListener('livewire:navigated', this._onNavigated);
 
             // Reactive sync: any time Livewire's property changes (URL
             // param updates, server-side reset, a sibling component
@@ -106,6 +144,10 @@ document.addEventListener('alpine:init', () => {
         destroy() {
             this._observer?.disconnect();
             this._observer = null;
+            if (this._onNavigated) {
+                document.removeEventListener('livewire:navigated', this._onNavigated);
+                this._onNavigated = null;
+            }
         },
 
         get flatOptions() {
