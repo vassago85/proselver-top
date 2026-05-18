@@ -30,7 +30,14 @@ class EnsureCustomerAccess
             return $next($request);
         }
 
-        if ($user->isCustomer() || $user->isDealer() || $user->isOem()) {
+        // Every modern tenant — dealer-customers, OEM-customers, body
+        // builders — sits on a customer-tier role.  The legacy
+        // isDealer() / isOem() ROLE checks (dealer_owner, oem_admin,
+        // ...) were dropped when the /dealer/* and /oem/* portals
+        // were retired; OEM-vs-dealer differentiation now lives on
+        // Company::$type and is enforced inside the customer Volt
+        // pages themselves.
+        if ($user->isCustomer()) {
             return $next($request);
         }
 

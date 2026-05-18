@@ -16,16 +16,11 @@ return Application::configure(basePath: dirname(__DIR__))
                 ->name('admin.')
                 ->group(base_path('routes/admin.php'));
 
-            Route::middleware(['web', 'auth', 'dealer'])
-                ->prefix('dealer')
-                ->name('dealer.')
-                ->group(base_path('routes/dealer.php'));
-
-            Route::middleware(['web', 'auth', 'oem'])
-                ->prefix('oem')
-                ->name('oem.')
-                ->group(base_path('routes/oem.php'));
-
+            // /dealer/* and /oem/* prefixes (with EnsureDealerAccess /
+            // EnsureOemAccess middleware) were retired — every modern
+            // tenant lives under /customer/* and the OEM-vs-dealer
+            // distinction is driven by Company::$type inside those
+            // pages, not by a separate route prefix.
             Route::middleware(['web', 'auth', 'customer'])
                 ->prefix('customer')
                 ->name('customer.')
@@ -60,11 +55,8 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->alias([
             'role' => \App\Http\Middleware\RoleMiddleware::class,
             'internal' => \App\Http\Middleware\EnsureInternalAccess::class,
-            'dealer' => \App\Http\Middleware\EnsureDealerAccess::class,
             'driver.access' => \App\Http\Middleware\EnsureDriverAccess::class,
-            'company' => \App\Http\Middleware\EnsureCompanyAccess::class,
             'permission' => \App\Http\Middleware\EnsurePermission::class,
-            'oem' => \App\Http\Middleware\EnsureOemAccess::class,
             'customer' => \App\Http\Middleware\EnsureCustomerAccess::class,
             'body_builder' => \App\Http\Middleware\EnsureBodyBuilderAccess::class,
         ]);

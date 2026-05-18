@@ -32,16 +32,16 @@ if (!function_exists('resolveUserHomePath')) {
         if ($user->isCustomer()) {
             return route('customer.dashboard');
         }
-        if ($user->isDealer()) {
-            return route('dealer.dashboard');
-        }
-        if ($user->isOem()) {
-            return route('oem.dashboard');
-        }
         if ($user->isDriver()) {
             return route('driver.dashboard');
         }
 
+        // Legacy dealer-tier / oem-tier role users (dealer_owner,
+        // dealer_admin, oem_owner, oem_admin, ...) no longer have a
+        // dedicated portal — the /dealer/* and /oem/* prefixes were
+        // retired with no production tenants on them.  Anything that
+        // still holds one of those role slugs falls through to login
+        // and will need to be re-seeded onto a customer-tier role.
         return route('login');
     }
 }

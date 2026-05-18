@@ -1,6 +1,5 @@
 <?php
 
-use App\Http\Middleware\EnsureDealerAccess;
 use App\Http\Middleware\EnsureDriverAccess;
 use App\Http\Middleware\EnsureInternalAccess;
 use App\Models\Company;
@@ -44,31 +43,13 @@ test('internal middleware blocks dealer users', function () {
     $middleware->handle($request, fn () => response('ok'));
 });
 
-test('dealer middleware allows dealer users', function () {
-    $user = User::factory()->create(['is_active' => true]);
-    $user->assignRole('dealer_admin');
+// The legacy "dealer" middleware (EnsureDealerAccess) was retired
+// when the /dealer/* portal prefix was removed.  Every modern tenant
+// lives under /customer/* with Company::$type driving dealer-vs-OEM
+// behaviour, and access control is enforced by EnsureCustomerAccess
+// (covered indirectly by every Customer\* feature test in the suite).
 
-    $middleware = new EnsureDealerAccess;
-    $request = Request::create('/dealer/dashboard', 'GET');
-    $request->setUserResolver(fn () => $user->fresh());
-
-    $response = $middleware->handle($request, fn () => response('ok'));
-    expect($response->getContent())->toBe('ok');
-});
-
-test('dealer middleware blocks internal users', function () {
-    $user = User::factory()->create(['is_active' => true]);
-    $user->assignRole('super_admin');
-
-    $middleware = new EnsureDealerAccess;
-    $request = Request::create('/dealer/dashboard', 'GET');
-    $request->setUserResolver(fn () => $user->fresh());
-
-    $this->expectException(\Symfony\Component\HttpKernel\Exception\HttpException::class);
-    $middleware->handle($request, fn () => response('ok'));
-});
-
-test('driver middleware blocks non-drivers', function () {
+test('driver middleware redirects non-drivers to their own home', function () {
     $user = User::factory()->create(['is_active' => true]);
     $user->assignRole('super_admin');
 
@@ -76,8 +57,12 @@ test('driver middleware blocks non-drivers', function () {
     $request = Request::create('/driver/dashboard', 'GET');
     $request->setUserResolver(fn () => $user->fresh());
 
-    $this->expectException(\Symfony\Component\HttpKernel\Exception\HttpException::class);
-    $middleware->handle($request, fn () => response('ok'));
+    // PWA refuses non-driver logins by bouncing them back to the
+    // role-appropriate home (admin dashboard for super_admin) with a
+    // flash message, rather than slamming a 403 in their face.
+    $response = $middleware->handle($request, fn () => response('ok'));
+    expect($response->isRedirect(route('admin.dashboard')))->toBeTrue();
+    expect($response->getSession()->get('pwa_access_denied'))->toContain('Driver app');
 });
 
 test('user can have multiple roles', function () {
