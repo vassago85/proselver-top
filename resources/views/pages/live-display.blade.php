@@ -259,9 +259,9 @@ new #[Layout('components.layouts.display')] class extends Component {
         // Overdue = scheduled to be ready before now and still moving.
         $overdue = false;
         if (in_array($lane, ['waiting', 'transit'], true) && $job->scheduled_date) {
-            $cutoff = Carbon\Carbon::parse($job->scheduled_date)->startOfDay();
+            $cutoff = Carbon::parse($job->scheduled_date)->startOfDay();
             if ($job->scheduled_ready_time) {
-                $t = Carbon\Carbon::parse($job->scheduled_ready_time);
+                $t = Carbon::parse($job->scheduled_ready_time);
                 $cutoff = $cutoff->setTime($t->hour, $t->minute);
             } else {
                 $cutoff = $cutoff->endOfDay();
