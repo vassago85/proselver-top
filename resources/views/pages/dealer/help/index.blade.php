@@ -45,7 +45,7 @@ new #[Layout('components.layouts.app')] class extends Component {};
             <p><a class="text-blue-600 hover:underline dark:text-blue-400" href="{{ route('customer.orders.create') }}">New Movement</a> <span class="text-zinc-500">&mdash; sidebar Movements &gt; New Movement</span></p>
             <p><a class="text-blue-600 hover:underline dark:text-blue-400" href="{{ route('dealer.bookings.create') }}">ProSelver Booking (legacy)</a> <span class="text-zinc-500">&mdash; classic ProSelver-only form</span></p>
             <p><a class="text-blue-600 hover:underline dark:text-blue-400" href="{{ route('dealer.bookings.index') }}">Bookings list</a> <span class="text-zinc-500">&mdash; every order for your dealership</span></p>
-            <p><a class="text-blue-600 hover:underline dark:text-blue-400" href="{{ route('customer.stock.at-body-builder') }}">At Body Builder</a> <span class="text-zinc-500">&mdash; vehicles parked at a body builder</span></p>
+            <p><a class="text-blue-600 hover:underline dark:text-blue-400" href="{{ route('customer.stock.at-body-builder') }}">Stock In Transit</a> <span class="text-zinc-500">&mdash; vehicles at body builder, yard, or on the road</span></p>
             <p><a class="text-blue-600 hover:underline dark:text-blue-400" href="{{ route('customer.trips.index') }}">Trip Planner</a> <span class="text-zinc-500">&mdash; chain stops for one driver</span></p>
             <p><a class="text-blue-600 hover:underline dark:text-blue-400" href="{{ route('customer.trips.my-day') }}">My Day</a> <span class="text-zinc-500">&mdash; mobile driver view</span></p>
             <p><a class="text-blue-600 hover:underline dark:text-blue-400" href="{{ route('customer.drivers.index') }}">My Drivers</a> <span class="text-zinc-500">&mdash; CRUD for your driver pool</span></p>
@@ -113,13 +113,19 @@ new #[Layout('components.layouts.app')] class extends Component {};
             <ol class="list-decimal list-inside space-y-2 pl-2">
                 <li><strong>Pick the executor</strong> &mdash; click one of the four radio cards (ProSelver / My Driver / 3rd-Party / Self-Collect). The form below adjusts to show only the fields relevant to that choice.</li>
                 <li><strong>Pickup &amp; delivery locations</strong> &mdash; from your address book, or add a new one inline.</li>
-                <li><strong>Destination type</strong> &mdash; "Dealer / handover" for a normal final delivery; "Body Builder" if the vehicle is going to a body builder and will need a return movement later (see <a class="underline" href="#body-builder">Body Builder Stock</a>).</li>
+                <li><strong>Destination type</strong> &mdash; "Standard" for a normal final delivery; "Body Builder" or "Yard" if the vehicle is going somewhere it'll wait before moving on (these rows show on <a class="underline" href="#body-builder">Stock In Transit</a>).</li>
+                <li><strong>Round trip (optional)</strong> &mdash; tick this when the driver heads out, waits at the destination, and comes straight back without a separate return booking. Use it for <strong>COF checks, weighbridge runs, bank drops, etc.</strong> The trip distance is doubled for reporting.</li>
                 <li><strong>Vehicle</strong> &mdash; VIN is required, brand / model / class / registration as needed.</li>
                 <li><strong>Collection date &amp; time</strong> &mdash; respects the same cutoff rules as before.</li>
                 <li><strong>Executor-specific details</strong> &mdash; pick the driver from your pool (My Driver), enter the courier name + waybill (3rd-Party), or the collector's contact details (Self-Collect). ProSelver has no extra fields.</li>
                 <li><strong>Submit</strong> &mdash; the order lands in your bookings list immediately.</li>
             </ol>
             <p class="text-xs text-zinc-500 dark:text-zinc-400">Tip: the classic ProSelver-only form lives at <em>"ProSelver Booking (legacy)"</em> in the sidebar &mdash; use it if you're 100% sure the move is ProSelver and don't want the executor picker to appear.</p>
+
+            <div class="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-800 dark:border-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-200">
+                <p class="font-semibold">No PO needed when you're using your own driver</p>
+                <p class="mt-1">If the executor is <em>My Driver</em> or <em>Self-Collect</em>, the form hides the PO Number / PO Amount / PO Document fields entirely &mdash; there's no third party to raise a PO against. PO fields only appear for <em>ProSelver</em> (you're paying us) and <em>3rd-Party Courier</em> (you're paying them).</p>
+            </div>
         </div>
     </section>
 
@@ -174,17 +180,19 @@ new #[Layout('components.layouts.app')] class extends Component {};
         </div>
     </section>
 
-    {{-- Body builder --}}
+    {{-- Stock in transit --}}
     <section id="body-builder" class="scroll-mt-24 rounded-xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-700 dark:bg-zinc-800">
-        <h2 class="text-lg font-semibold text-zinc-900 dark:text-white">Body builder stock</h2>
+        <h2 class="text-lg font-semibold text-zinc-900 dark:text-white">Stock in transit</h2>
         <div class="mt-3 space-y-3 text-sm text-zinc-700 dark:text-zinc-300">
-            <p>When a movement's destination is a body builder, the system treats the vehicle as <strong>still being your stock</strong> &mdash; it hasn't left for good, it's just parked at the body builder waiting for work. So once the delivery completes, the vehicle stays visible on <a class="underline" href="{{ route('customer.stock.at-body-builder') }}">At Body Builder</a> until you book a return movement.</p>
+            <p>If a vehicle isn't sitting at your dealership right now, it still belongs to you &mdash; and you need a single place to see where it actually is. That's the <a class="underline" href="{{ route('customer.stock.at-body-builder') }}">Stock In Transit</a> page. It rolls up three buckets:</p>
             <ul class="list-disc list-inside space-y-1 pl-2">
-                <li>Pick <em>Destination type = Body Builder</em> when booking the outbound leg.</li>
-                <li>Once it arrives, it appears on the <strong>At Body Builder</strong> list with a one-click <em>Book Return</em> button that pre-fills the return-leg form (swap pickup / delivery, executor, VIN preserved).</li>
-                <li>The row drops off the body-builder list automatically once the return movement is delivered.</li>
+                <li><strong>At body builder</strong> &mdash; you delivered the vehicle to a body builder; it's waiting for work to finish and a return movement.</li>
+                <li><strong>At yard / holding</strong> &mdash; you delivered to a yard or other holding location (transit stop); the vehicle hasn't reached its final dealer yet.</li>
+                <li><strong>In transit</strong> &mdash; an active movement that's been collected or is on the road right now (any executor type).</li>
             </ul>
-            <p class="text-xs text-zinc-500 dark:text-zinc-400">Body-builder rows are also kept out of the <em>Archive</em> flow on purpose &mdash; archiving a vehicle that hasn't actually left your stock would hide it from view while it's still your problem.</p>
+            <p>Each row shows the current location, the driver (for in-transit), and a one-click <em>Book Return / Next Move</em> button on the parked rows that pre-fills the create-order form with pickup = current location, VIN preserved.</p>
+            <p>A row drops off automatically once the next movement is delivered to a final dealer destination, or when the order is archived.</p>
+            <p class="text-xs text-zinc-500 dark:text-zinc-400">Body-builder + yard rows are kept out of the <em>Archive</em> flow on purpose &mdash; archiving a vehicle that hasn't actually left your stock would hide it while it's still your problem.</p>
         </div>
     </section>
 
@@ -312,8 +320,8 @@ new #[Layout('components.layouts.app')] class extends Component {};
                 <p>The spreadsheet had a driver name that doesn't match anyone in your pool. Either correct the spelling in the file and re-upload, or use the per-row dropdown on the preview screen to pick the right driver before clicking Import.</p>
             </div>
             <div>
-                <h3 class="font-medium text-zinc-900 dark:text-white">A vehicle is still showing on At Body Builder after it came back</h3>
-                <p>The return movement needs to be marked <code>DELIVERED</code> &mdash; once that happens, the row drops off the body-builder list automatically. If the return move was completed but doesn't drop off, ping ops.</p>
+                <h3 class="font-medium text-zinc-900 dark:text-white">A vehicle is still showing on Stock In Transit after it came back</h3>
+                <p>The return movement needs to be marked <code>DELIVERED</code> &mdash; once that happens, the row drops off the body-builder / yard list automatically. If the return move was completed but doesn't drop off, ping ops.</p>
             </div>
             <div>
                 <h3 class="font-medium text-zinc-900 dark:text-white">Can't find a delivered order in my Bookings list</h3>

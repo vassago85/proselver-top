@@ -286,7 +286,7 @@
 
                         <x-sidebar-link :href="route('customer.stock.at-body-builder')" :active="request()->routeIs('customer.stock.*')">
                             <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" x2="12" y1="22.08" y2="12"/></svg></x-slot:icon>
-                            At Body Builder
+                            Stock In Transit
                         </x-sidebar-link>
                     </ul>
                 </li>
@@ -404,7 +404,7 @@
 
                         <x-sidebar-link :href="route('customer.stock.at-body-builder')" :active="request()->routeIs('customer.stock.at-body-builder')">
                             <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V7"/><polyline points="3 7 12 13 21 7"/><line x1="12" x2="12" y1="13" y2="21"/></svg></x-slot:icon>
-                            At Body Builder
+                            Stock In Transit
                         </x-sidebar-link>
                     </ul>
                 </li>
@@ -539,7 +539,7 @@
 
                         <x-sidebar-link :href="route('customer.stock.at-body-builder')" :active="request()->routeIs('customer.stock.at-body-builder')">
                             <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V7"/><polyline points="3 7 12 13 21 7"/><line x1="12" x2="12" y1="13" y2="21"/></svg></x-slot:icon>
-                            At Body Builder
+                            Stock In Transit
                         </x-sidebar-link>
                     </ul>
                 </li>

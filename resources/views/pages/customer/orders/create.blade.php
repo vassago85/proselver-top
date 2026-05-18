@@ -49,6 +49,13 @@ new #[Layout('components.layouts.app')] class extends Component {
     public string $selfCollectPhone = '';
     public string $selfCollectIdNumber = '';
 
+    // Driver-waits round-trip flag — for COF checks, weighbridge runs,
+    // bank drops etc. where the driver heads out, waits at the
+    // destination, and comes straight back without a separate return
+    // booking. is_round_trip on the Job model has existed since day
+    // one; we're just exposing it on the dealer create form.
+    public bool $isRoundTrip = false;
+
     public function mount(): void
     {
         $this->company = auth()->user()->company();
@@ -154,8 +161,17 @@ new #[Layout('components.layouts.app')] class extends Component {
             'scheduled_ready_time' => $this->scheduledReadyTime
                 ? $this->scheduledDate . ' ' . $this->scheduledReadyTime
                 : null,
-            'po_number' => $this->poNumber ?: null,
-            'po_amount' => $this->poAmount,
+            // PO fields only apply when we have a third-party to pay
+            // (ProSelver or a courier). For My-Driver / Self-Collect
+            // the dealer isn't raising a PO against anyone, so we drop
+            // whatever stale value the form happened to carry.
+            'po_number' => in_array($this->executorType, [Job::EXECUTOR_PROSELVER, Job::EXECUTOR_THIRD_PARTY], true)
+                ? ($this->poNumber ?: null)
+                : null,
+            'po_amount' => in_array($this->executorType, [Job::EXECUTOR_PROSELVER, Job::EXECUTOR_THIRD_PARTY], true)
+                ? $this->poAmount
+                : null,
+            'is_round_trip' => $this->isRoundTrip,
             'company_id' => $this->company->id,
             'created_by_user_id' => auth()->id(),
             'customer_notes' => $this->notes ?: null,
@@ -298,17 +314,17 @@ new #[Layout('components.layouts.app')] class extends Component {
             'executorChoices' => [
                 Job::EXECUTOR_PROSELVER => [
                     'label' => 'ProSelver',
-                    'description' => 'A ProSelver-supplied driver and truck.',
+                    'description' => 'A ProSelver driver collects and delivers the vehicle for you.',
                     'icon' => 'truck',
                 ],
                 Job::EXECUTOR_INTERNAL => [
-                    'label' => 'Internal Driver',
-                    'description' => 'One of your own drivers will move this vehicle.',
+                    'label' => 'My Driver',
+                    'description' => "One of your own drivers will move the vehicle.",
                     'icon' => 'user',
                 ],
                 Job::EXECUTOR_THIRD_PARTY => [
                     'label' => '3rd-Party Courier',
-                    'description' => 'An outside courier company is handling the move.',
+                    'description' => 'An outside courier company is moving the vehicle.',
                     'icon' => 'building',
                 ],
                 Job::EXECUTOR_SELF_COLLECT => [
@@ -368,10 +384,15 @@ new #[Layout('components.layouts.app')] class extends Component {
 
                 {{-- Internal driver --}}
                 @if($executorType === \App\Models\Job::EXECUTOR_INTERNAL)
-                    <div class="mt-4 rounded-lg bg-gray-50 border border-gray-200 p-4">
+                    <div class="mt-4 rounded-lg bg-blue-50 border border-blue-200 p-4">
+                        <p class="text-xs text-blue-800 mb-3">
+                            <span class="font-semibold">No PO needed</span> &mdash; you're using your own driver,
+                            so no purchase order or document upload is required. Just pick the driver (or assign later)
+                            and the movement will land straight on their My&nbsp;Day list.
+                        </p>
                         <label class="block text-sm font-medium text-gray-700 mb-1">Driver (optional)</label>
                         @if(empty($internalDriverOptions))
-                            <p class="text-sm text-gray-600">You haven't added any internal drivers yet. You can still submit the order and assign a driver later, or go to <a class="font-medium text-blue-600 hover:underline" href="{{ route('customer.drivers.index') }}">Drivers</a> to add one now.</p>
+                            <p class="text-sm text-gray-600">You haven't added any internal drivers yet. You can still submit the movement and assign a driver later, or go to <a class="font-medium text-blue-600 hover:underline" href="{{ route('customer.drivers.index') }}">Drivers</a> to add one now.</p>
                         @else
                             <x-searchable-select
                                 wire:model="internalDriverId"
@@ -487,8 +508,27 @@ new #[Layout('components.layouts.app')] class extends Component {
                     </div>
                     @if($destinationType === \App\Models\Job::DESTINATION_BODY_BUILDER)
                         <p class="mt-2 text-xs text-amber-700">Body-builder deliveries stay visible in your stock view until a return movement is booked.</p>
+                    @elseif($destinationType === \App\Models\Job::DESTINATION_YARD)
+                        <p class="mt-2 text-xs text-amber-700">Yard / holding deliveries keep the vehicle in your in-transit stock view until it's booked out again.</p>
                     @endif
                     @error('destinationType') <p class="mt-1 text-xs text-red-600">{{ $message }}</p> @enderror
+                </div>
+
+                {{-- Round-trip flag — for COF checks, weighbridge runs,
+                     bank drops, etc. where the driver heads out, waits
+                     for the work to be done, and comes straight back
+                     without a separate return booking. We surface the
+                     option on every executor type because a 3rd-party
+                     courier can also wait; in practice it's mostly
+                     used for internal-driver runs. --}}
+                <div class="mt-4">
+                    <label class="flex items-start gap-2 cursor-pointer rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 hover:bg-gray-100 transition-colors">
+                        <input type="checkbox" wire:model.live="isRoundTrip" class="mt-0.5 h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500">
+                        <div>
+                            <span class="block text-sm font-semibold text-gray-900">Round trip &mdash; driver waits at destination</span>
+                            <span class="block text-xs text-gray-500 mt-0.5">For COF checks, weighbridge runs, bank drops, etc. where the driver waits for the job to be done and comes straight back. Doubles the route distance for reporting.</span>
+                        </div>
+                    </label>
                 </div>
             </div>
 
@@ -555,9 +595,15 @@ new #[Layout('components.layouts.app')] class extends Component {
                 </div>
             </div>
 
-            {{-- Scheduling & PO --}}
+            {{-- Scheduling & PO. PO fields only render when there's a
+                 third-party we're paying — ProSelver (we invoice the
+                 dealer) or a 3rd-party courier (the dealer pays them).
+                 For My-Driver and Self-Collect there's no third party
+                 to raise a PO against, so the entire PO block hides
+                 and the section title simplifies to just "Scheduling". --}}
+            @php($needsPo = in_array($executorType, [Job::EXECUTOR_PROSELVER, Job::EXECUTOR_THIRD_PARTY], true))
             <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-                <h3 class="text-lg font-semibold text-gray-900 mb-4">Scheduling & Reference</h3>
+                <h3 class="text-lg font-semibold text-gray-900 mb-4">{{ $needsPo ? 'Scheduling & Reference' : 'Scheduling' }}</h3>
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1">Requested Date <span class="text-red-500">*</span></label>
@@ -573,6 +619,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                         <p class="mt-1 text-xs text-gray-500">Optional — when the vehicle will be ready for the driver to collect.</p>
                         @error('scheduledReadyTime') <p class="mt-1 text-xs text-red-600">{{ $message }}</p> @enderror
                     </div>
+                    @if($needsPo)
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1">PO Number</label>
                         <input wire:model="poNumber" type="text"
@@ -587,9 +634,13 @@ new #[Layout('components.layouts.app')] class extends Component {
                             placeholder="0.00">
                         @error('poAmount') <p class="mt-1 text-xs text-red-600">{{ $message }}</p> @enderror
                     </div>
+                    @endif
                 </div>
 
-                {{-- PO Document Upload --}}
+                {{-- PO Document Upload — same gate as the PO number /
+                     amount fields above. Internal-driver / self-collect
+                     bookings skip the whole block. --}}
+                @if($needsPo)
                 <div class="mt-4" x-data="{ uploading: false, progress: 0 }"
                     x-on:livewire-upload-start="uploading = true"
                     x-on:livewire-upload-finish="uploading = false"
@@ -628,6 +679,7 @@ new #[Layout('components.layouts.app')] class extends Component {
 
                     @error('poFile') <p class="mt-1 text-xs text-red-600">{{ $message }}</p> @enderror
                 </div>
+                @endif
 
                 <div class="mt-4">
                     <label class="block text-sm font-medium text-gray-700 mb-1">Notes</label>

@@ -6,18 +6,29 @@ use Livewire\Attributes\Layout;
 use Livewire\Volt\Component;
 
 /*
- * "At body builder" stock view — vehicles the dealer has delivered to
- * a body builder but hasn't booked a return movement for. Stitching is
- * deliberately one-VIN-one-trip: a vehicle is "still at body builder X"
- * if its most recent delivered job for that VIN had destination_type =
- * body_builder AND there is no newer movement (delivered or in-flight)
- * that picks it up from there. Archived rows are excluded — once a
- * vehicle has come back and the return is archived, the stock entry
- * disappears.
+ * "Stock in transit" — every vehicle the dealer still has on their
+ * books but isn't sitting at their own dealership right now. Three
+ * buckets, all unified into one table:
  *
- * One-click "Book return / next move" populates the create-order form
- * with pickup_location_id = previous delivery_location_id + VIN /
- * brand / model carried over (handled by orders/create.mount).
+ *   1. At body builder   — delivered, destination_type = body_builder
+ *                          (the original "at body builder" view).
+ *   2. At yard / holding — delivered, destination_type = yard / other
+ *                          (vehicle parked off-site, not finalised).
+ *   3. In transit        — any active job not yet delivered (status
+ *                          NEW / READY_FOR_COLLECTION / COLLECTED /
+ *                          IN_TRANSIT / DRIVER_ASSIGNED etc.). The
+ *                          driver hasn't dropped it yet.
+ *
+ * A vehicle is "no longer in stock" when its latest delivered job is
+ * to a DEALER destination, or when the row is archived (the dealer
+ * has explicitly hidden it after final delivery). Both cases drop
+ * out of this view.
+ *
+ * One-click "Book return / next move" populates the create-order
+ * form with pickup = previous delivery location + VIN/brand/model
+ * carried over (orders/create.mount handles the prefill). It only
+ * surfaces for parked-vehicle rows; in-transit rows show "Track" /
+ * "View" actions instead since a return can't be planned yet.
  */
 new #[Layout('components.layouts.app')]
 class extends Component
@@ -25,7 +36,8 @@ class extends Component
     public ?Company $company = null;
 
     public string $search = '';
-    public ?int $bodyBuilderId = null;
+    public ?int $locationId = null;
+    public string $bucket = 'all'; // all | body_builder | yard | in_transit
 
     public function mount(): void
     {
@@ -33,30 +45,43 @@ class extends Component
         abort_unless($this->company, 403);
     }
 
+    public function setBucket(string $bucket): void
+    {
+        $this->bucket = in_array($bucket, ['all', 'body_builder', 'yard', 'in_transit'], true)
+            ? $bucket
+            : 'all';
+        $this->locationId = null;
+    }
+
     public function with(): array
     {
-        // Step 1: for the dealer's company, find every VIN whose most
-        // recent COMPLETED-or-DELIVERED transport job is a body-builder
-        // delivery AND is still active (not archived).
-        $candidates = Job::query()
+        // -----------------------------------------------------------
+        // Step 1: delivered-but-parked rows (body builder + yard /
+        // other). One row per VIN, take the latest delivered job and
+        // drop any VIN that already has a newer movement booked
+        // (return is in flight or completed).
+        // -----------------------------------------------------------
+        $parkedDestinations = [
+            Job::DESTINATION_BODY_BUILDER,
+            Job::DESTINATION_YARD,
+            Job::DESTINATION_OTHER,
+        ];
+
+        $parkedCandidates = Job::query()
             ->where('company_id', $this->company->id)
-            ->where('destination_type', Job::DESTINATION_BODY_BUILDER)
+            ->whereIn('destination_type', $parkedDestinations)
             ->whereIn('status', [Job::STATUS_DELIVERED, Job::STATUS_COMPLETED])
             ->whereNull('archived_at')
             ->whereNotNull('vin')
-            ->with(['deliveryLocation', 'brand:id,name', 'pickupLocation'])
+            ->with(['deliveryLocation', 'pickupLocation', 'brand:id,name'])
             ->orderByDesc('delivered_at')
             ->get();
 
-        // Step 2: for each VIN keep ONLY the latest job, then drop any
-        // VIN that has a more recent active job that uses this body-
-        // builder location as pickup (i.e. the return has already been
-        // booked or is in flight).
-        $latestPerVin = $candidates->unique('vin');
+        $latestParkedPerVin = $parkedCandidates->unique('vin');
 
-        $returnedVins = Job::query()
+        $vinsWithNewerMovement = Job::query()
             ->where('company_id', $this->company->id)
-            ->whereIn('vin', $latestPerVin->pluck('vin')->all())
+            ->whereIn('vin', $latestParkedPerVin->pluck('vin')->all())
             ->whereNull('archived_at')
             ->whereNotIn('status', [Job::STATUS_CANCELLED, Job::STATUS_DELIVERED, Job::STATUS_COMPLETED])
             ->pluck('vin')
@@ -64,10 +89,70 @@ class extends Component
             ->values()
             ->all();
 
-        $rows = $latestPerVin
-            ->reject(fn ($j) => in_array($j->vin, $returnedVins, true))
+        $parkedRows = $latestParkedPerVin
+            ->reject(fn ($j) => in_array($j->vin, $vinsWithNewerMovement, true))
+            ->map(function (Job $j) {
+                $j->bucket_key = $j->destination_type === Job::DESTINATION_BODY_BUILDER
+                    ? 'body_builder'
+                    : 'yard';
+                $j->bucket_label = $j->destination_type === Job::DESTINATION_BODY_BUILDER
+                    ? 'At body builder'
+                    : 'At yard / holding';
+                return $j;
+            })
+            ->values();
+
+        // -----------------------------------------------------------
+        // Step 2: in-transit rows — any active job that hasn't been
+        // delivered yet. Latest job per VIN, ignore archived.
+        // -----------------------------------------------------------
+        $activeStatuses = [
+            Job::STATUS_RECEIVED,
+            Job::STATUS_READY_FOR_COLLECTION,
+            Job::STATUS_DRIVER_ASSIGNED,
+            Job::STATUS_COLLECTED,
+            Job::STATUS_IN_TRANSIT,
+        ];
+
+        $inTransitCandidates = Job::query()
+            ->where('company_id', $this->company->id)
+            ->whereIn('status', $activeStatuses)
+            ->whereNull('archived_at')
+            ->whereNotNull('vin')
+            ->with(['deliveryLocation', 'pickupLocation', 'brand:id,name', 'driver:id,name'])
+            ->orderByDesc('scheduled_date')
+            ->orderByDesc('id')
+            ->get()
+            ->unique('vin')
+            ->map(function (Job $j) {
+                $j->bucket_key = 'in_transit';
+                $j->bucket_label = match ($j->status) {
+                    Job::STATUS_IN_TRANSIT => 'In transit',
+                    Job::STATUS_COLLECTED => 'Collected',
+                    Job::STATUS_DRIVER_ASSIGNED => 'Driver assigned',
+                    Job::STATUS_READY_FOR_COLLECTION => 'Ready for collection',
+                    default => 'Awaiting collection',
+                };
+                return $j;
+            })
+            ->values();
+
+        // -----------------------------------------------------------
+        // Step 3: merge + apply UI filters (bucket, location, search).
+        // -----------------------------------------------------------
+        $all = $parkedRows->concat($inTransitCandidates);
+
+        $bucketCounts = [
+            'all' => $all->count(),
+            'body_builder' => $parkedRows->where('bucket_key', 'body_builder')->count(),
+            'yard' => $parkedRows->where('bucket_key', 'yard')->count(),
+            'in_transit' => $inTransitCandidates->count(),
+        ];
+
+        $rows = $all
+            ->when($this->bucket !== 'all', fn ($c) => $c->where('bucket_key', $this->bucket)->values())
             ->filter(function ($j) {
-                if ($this->bodyBuilderId && $j->delivery_location_id !== $this->bodyBuilderId) {
+                if ($this->locationId && $j->delivery_location_id !== $this->locationId) {
                     return false;
                 }
                 if ($this->search === '') {
@@ -76,13 +161,15 @@ class extends Component
                 $needle = strtolower($this->search);
                 return str_contains(strtolower((string) $j->vin), $needle)
                     || str_contains(strtolower((string) ($j->model_name ?? '')), $needle)
+                    || str_contains(strtolower((string) ($j->registration ?? '')), $needle)
                     || str_contains(strtolower((string) ($j->brand?->name ?? '')), $needle)
                     || str_contains(strtolower((string) ($j->deliveryLocation?->company_name ?? '')), $needle);
             })
             ->values();
 
-        // Distinct body-builder locations to power the filter dropdown.
-        $bodyBuilderOptions = $latestPerVin
+        // Distinct delivery locations across the current view, for
+        // the secondary filter dropdown.
+        $locationOptions = $all
             ->pluck('deliveryLocation')
             ->filter()
             ->unique('id')
@@ -95,8 +182,8 @@ class extends Component
 
         return [
             'rows' => $rows,
-            'totalAtBodyBuilder' => $rows->count(),
-            'bodyBuilderOptions' => $bodyBuilderOptions,
+            'bucketCounts' => $bucketCounts,
+            'locationOptions' => $locationOptions,
         ];
     }
 };
@@ -104,47 +191,83 @@ class extends Component
 ?>
 
 <div>
-    <x-slot:header>Stock at Body Builders</x-slot:header>
+    <x-slot:header>Stock In Transit</x-slot:header>
 
+    <div class="mb-2 text-sm text-gray-600">
+        Vehicles you still own but aren't sitting at your dealership right now &mdash; at a body builder, parked in a yard, or actively on the road.
+        Anything delivered to a final dealer destination drops out of this view automatically.
+    </div>
+
+    {{-- Bucket tabs --}}
+    <div class="mb-4 flex flex-wrap gap-2">
+        @php($tabs = [
+            'all' => ['label' => 'All', 'colour' => 'gray'],
+            'body_builder' => ['label' => 'At body builder', 'colour' => 'amber'],
+            'yard' => ['label' => 'At yard / holding', 'colour' => 'sky'],
+            'in_transit' => ['label' => 'In transit', 'colour' => 'indigo'],
+        ])
+        @foreach($tabs as $key => $cfg)
+            @php
+                $active = $bucket === $key;
+                $base = 'inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-medium transition-colors';
+                $cls = $active
+                    ? match ($cfg['colour']) {
+                        'amber' => 'bg-amber-50 border-amber-300 text-amber-800',
+                        'sky'   => 'bg-sky-50 border-sky-300 text-sky-800',
+                        'indigo'=> 'bg-indigo-50 border-indigo-300 text-indigo-800',
+                        default => 'bg-gray-100 border-gray-300 text-gray-900',
+                    }
+                    : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50';
+            @endphp
+            <button type="button" wire:click="setBucket('{{ $key }}')" class="{{ $base }} {{ $cls }}">
+                {{ $cfg['label'] }}
+                <span class="rounded-full bg-white/70 px-1.5 text-xs font-semibold text-gray-700">{{ $bucketCounts[$key] ?? 0 }}</span>
+            </button>
+        @endforeach
+    </div>
+
+    {{-- Filters --}}
     <div class="mb-4 rounded-xl border border-gray-200 bg-white p-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
         <div>
-            <p class="text-[10px] font-semibold uppercase tracking-wide text-gray-500">At body builder</p>
-            <p class="mt-1 text-2xl font-semibold text-gray-900 tabular-nums">{{ $totalAtBodyBuilder }}</p>
-            <p class="mt-0.5 text-xs text-gray-500">Vehicles delivered to a body builder, awaiting return.</p>
+            <label class="block text-xs font-medium text-gray-700 mb-1">Search</label>
+            <input wire:model.live.debounce.300ms="search" type="text"
+                class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500"
+                placeholder="VIN, model, brand, location…">
         </div>
-        <div class="sm:col-span-2 flex flex-col sm:flex-row items-stretch sm:items-end gap-2">
-            <div class="flex-1">
-                <label class="block text-xs font-medium text-gray-700 mb-1">Body builder</label>
-                <x-searchable-select
-                    wire:model.live="bodyBuilderId"
-                    :options="$bodyBuilderOptions"
-                    placeholder="All body builders"
-                    search-placeholder="Search body builders…"
-                />
-            </div>
-            <div class="flex-1">
-                <label class="block text-xs font-medium text-gray-700 mb-1">Search</label>
-                <input wire:model.live.debounce.300ms="search" type="text"
-                    class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500"
-                    placeholder="VIN, model, brand, location…">
-            </div>
+        <div class="sm:col-span-2">
+            <label class="block text-xs font-medium text-gray-700 mb-1">Destination / current location</label>
+            <x-searchable-select
+                wire:model.live="locationId"
+                :options="$locationOptions"
+                placeholder="All locations"
+                search-placeholder="Search locations…"
+            />
         </div>
     </div>
 
+    {{-- Table --}}
     <div class="rounded-xl bg-white shadow-sm border border-gray-200 overflow-x-auto">
         <table class="min-w-full divide-y divide-gray-200">
             <thead class="bg-gray-50">
                 <tr>
                     <th class="px-4 py-3 text-left text-xs font-medium uppercase text-gray-500">Vehicle</th>
                     <th class="px-4 py-3 text-left text-xs font-medium uppercase text-gray-500">VIN</th>
-                    <th class="px-4 py-3 text-left text-xs font-medium uppercase text-gray-500">Body Builder</th>
-                    <th class="px-4 py-3 text-left text-xs font-medium uppercase text-gray-500">Delivered</th>
-                    <th class="px-4 py-3 text-left text-xs font-medium uppercase text-gray-500">Origin</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium uppercase text-gray-500">Status</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium uppercase text-gray-500">Where</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium uppercase text-gray-500">Last update</th>
                     <th class="px-4 py-3 text-right text-xs font-medium uppercase text-gray-500">Actions</th>
                 </tr>
             </thead>
             <tbody class="divide-y divide-gray-200 bg-white">
                 @forelse($rows as $row)
+                    @php
+                        $isParked = in_array($row->bucket_key, ['body_builder', 'yard'], true);
+                        $badgeCls = match ($row->bucket_key) {
+                            'body_builder' => 'bg-amber-50 text-amber-800 border-amber-200',
+                            'yard'         => 'bg-sky-50 text-sky-800 border-sky-200',
+                            default        => 'bg-indigo-50 text-indigo-800 border-indigo-200',
+                        };
+                    @endphp
                     <tr>
                         <td class="px-4 py-3 text-sm">
                             <div class="font-medium text-gray-900">{{ $row->brand?->name }} {{ $row->model_name }}</div>
@@ -153,40 +276,49 @@ class extends Component
                             @endif
                         </td>
                         <td class="px-4 py-3 text-sm font-mono text-gray-700">{{ $row->vin }}</td>
+                        <td class="px-4 py-3 text-sm">
+                            <span class="inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold {{ $badgeCls }}">
+                                {{ $row->bucket_label }}
+                            </span>
+                            @if(! $isParked && $row->driver)
+                                <div class="mt-1 text-[11px] text-gray-500">Driver: {{ $row->driver->name }}</div>
+                            @endif
+                        </td>
                         <td class="px-4 py-3 text-sm text-gray-700">
                             <div>{{ $row->deliveryLocation?->company_name ?? '—' }}</div>
                             @if($row->deliveryLocation?->city)
                                 <div class="text-xs text-gray-500">{{ $row->deliveryLocation->city }}{{ $row->deliveryLocation->province ? ', ' . $row->deliveryLocation->province : '' }}</div>
                             @endif
+                            @if(! $isParked && $row->pickupLocation)
+                                <div class="mt-1 text-[11px] text-gray-500">From: {{ $row->pickupLocation->company_name }}</div>
+                            @endif
                         </td>
                         <td class="px-4 py-3 text-sm text-gray-700">
-                            {{ $row->delivered_at?->format('d M Y') ?? $row->updated_at->format('d M Y') }}
-                            <div class="text-xs text-gray-400">
-                                {{ ($row->delivered_at ?? $row->updated_at)->diffForHumans() }}
-                            </div>
+                            @php($ts = $isParked ? ($row->delivered_at ?? $row->updated_at) : $row->updated_at)
+                            {{ $ts->format('d M Y') }}
+                            <div class="text-xs text-gray-400">{{ $ts->diffForHumans() }}</div>
                         </td>
-                        <td class="px-4 py-3 text-sm text-gray-700">
-                            {{ $row->pickupLocation?->company_name ?? '—' }}
-                        </td>
-                        <td class="px-4 py-3 text-sm text-right">
-                            <a href="{{ route('customer.orders.create', [
-                                'pickup_location_id' => $row->delivery_location_id,
-                                'vin' => $row->vin,
-                                'brand_id' => $row->brand_id,
-                                'model_name' => $row->model_name,
-                                'vehicle_class_id' => $row->vehicle_class_id,
-                            ]) }}"
-                               class="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-500">
-                                <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
-                                Book Return / Next Move
-                            </a>
+                        <td class="px-4 py-3 text-sm text-right whitespace-nowrap">
+                            @if($isParked)
+                                <a href="{{ route('customer.orders.create', [
+                                    'pickup_location_id' => $row->delivery_location_id,
+                                    'vin' => $row->vin,
+                                    'brand_id' => $row->brand_id,
+                                    'model_name' => $row->model_name,
+                                    'vehicle_class_id' => $row->vehicle_class_id,
+                                ]) }}"
+                                   class="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-500">
+                                    <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+                                    Book Return / Next Move
+                                </a>
+                            @endif
                             <a href="{{ route('customer.orders.show', $row) }}" class="ml-2 text-xs font-medium text-gray-600 hover:text-gray-900">View order</a>
                         </td>
                     </tr>
                 @empty
                     <tr>
                         <td colspan="6" class="px-4 py-12 text-center text-sm text-gray-500">
-                            No vehicles at body builders right now.
+                            Nothing in this view right now &mdash; all your vehicles are either at home or already delivered to their final destination.
                         </td>
                     </tr>
                 @endforelse

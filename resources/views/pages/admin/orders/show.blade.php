@@ -735,6 +735,12 @@ new #[Layout('components.layouts.app')] class extends Component {
                         @if($job->isArchived())
                             <span class="inline-flex items-center gap-1 rounded-full border border-gray-300 bg-gray-100 px-2 py-0.5 text-[11px] font-semibold text-gray-700">Archived</span>
                         @endif
+                        @if($job->is_round_trip)
+                            <span class="inline-flex items-center gap-1 rounded-full border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-[11px] font-semibold text-indigo-700" title="Driver waits at the destination and returns on the same trip (e.g. COF, weighbridge)">
+                                <svg class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+                                Round trip
+                            </span>
+                        @endif
                     </div>
                     <p class="mt-1 text-sm text-gray-500 truncate">
                         {{ $job->company?->name ?? '—' }}
