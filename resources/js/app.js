@@ -34,16 +34,54 @@ document.addEventListener('alpine:init', () => {
             const hidden = this.$refs.hiddenInput;
             if (!hidden) return;
 
-            const initial = hidden.value ?? '';
-            if (initial) {
+            // Find the bound Livewire property name from any wire:model*
+            // attribute on the hidden input.  We need this because
+            // Livewire 3 does NOT serialize a value="…" attribute into
+            // the initial HTML for hidden inputs bound via wire:model —
+            // it only sets element.value client-side via JS, which races
+            // against our Alpine x-init=hydrate().  Pulling the value
+            // straight from $wire.get(prop) sidesteps that race so a
+            // URL-driven filter (?executorType=proselver, ?brandId=42)
+            // shows the right label on first paint instead of looking
+            // empty until the user clicks.
+            let wireProp = null;
+            for (const attr of hidden.getAttributeNames()) {
+                if (attr === 'wire:model' || attr.startsWith('wire:model.')) {
+                    wireProp = hidden.getAttribute(attr);
+                    break;
+                }
+            }
+
+            let initial = '';
+            if (wireProp && this.$wire) {
+                try { initial = this.$wire.get(wireProp) ?? ''; } catch (e) { /* not in livewire scope */ }
+            }
+            if (initial === '' || initial == null) {
+                initial = hidden.value ?? '';
+            }
+            if (initial !== '' && initial != null) {
                 this.applyValue(initial, false);
             }
 
-            // Track outside changes (Livewire validation, parent setting
-            // the property, etc.) so the visible label stays consistent.
+            // Reactive sync: any time Livewire's property changes (URL
+            // param updates, server-side reset, a sibling component
+            // touching the same prop, wire:click="$set(...)"), the
+            // visible label follows.  Covers both wire:model and
+            // wire:model.live — we only care about value changes.
+            if (wireProp && this.$wire?.$watch) {
+                this.$wire.$watch(wireProp, (v) => {
+                    if (String(v ?? '') !== String(this.value ?? '')) {
+                        this.applyValue(v ?? '', false);
+                    }
+                });
+            }
+
+            // Legacy DOM-level sync — still useful when the component is
+            // bound to a plain hidden input with no wire:model (form
+            // helper / inline JS scenarios) or when $wire isn't in scope.
             // Guard against the hidden input being removed from the DOM
-            // (Livewire re-render) otherwise the observer callback throws
-            // and breaks other JS on the page.
+            // (Livewire re-render) so the observer callback can't throw
+            // and break other JS on the page.
             const observer = new MutationObserver(() => {
                 const ref = this.$refs.hiddenInput;
                 if (!ref) return;
@@ -55,9 +93,6 @@ document.addEventListener('alpine:init', () => {
             observer.observe(hidden, { attributes: true, attributeFilter: ['value'] });
             this._observer = observer;
 
-            // If the parent / Livewire writes via `.value =` the
-            // MutationObserver above won't fire (that doesn't change
-            // the attribute). Hook the input event too as a safety net.
             hidden.addEventListener('input', () => {
                 const ref = this.$refs.hiddenInput;
                 if (!ref) return;
