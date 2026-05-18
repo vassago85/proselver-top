@@ -290,7 +290,7 @@ new #[Layout('components.layouts.display')] class extends Component {
     };
 @endphp
 
-<div class="min-h-screen flex flex-col"
+<div class="h-screen overflow-hidden flex flex-col"
      wire:poll.30s
      x-data="wallboard()"
      x-init="boot()">
