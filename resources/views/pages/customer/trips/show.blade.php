@@ -46,6 +46,11 @@ class extends Component
         $user = auth()->user();
         $this->company = $user?->company();
         abort_unless($this->company, 403);
+        abort_if(
+            $this->company->isOem(),
+            403,
+            'Your account is configured to use ProSelver drivers only — trip planning is not available.'
+        );
 
         // Trips are scoped to the authenticated user's company. The
         // dedicated admin/trips route serves cross-company access.

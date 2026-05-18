@@ -52,6 +52,16 @@ class extends Component
             403,
             'Only the account owner or admin can manage drivers.'
         );
+        // OEM tenants currently book ProSelver only — they don't run
+        // their own driver pool, so this page is hidden from them in
+        // the sidebar.  Defence-in-depth abort here too in case the
+        // URL is guessed.  Re-enabling for OEMs later is a one-line
+        // change: remove this guard.
+        abort_if(
+            $this->company->isOem(),
+            403,
+            'Your account is configured to use ProSelver drivers only. Please contact ProSelver to enable an internal driver pool.'
+        );
     }
 
     public function create(): void

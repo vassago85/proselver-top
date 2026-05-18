@@ -41,6 +41,14 @@ class extends Component
             403,
             'You don\'t have permission to plan trips.'
         );
+        // OEM tenants book ProSelver only — they don't own internal drivers
+        // or trips. Mirror the sidebar gate with a hard server-side abort
+        // so a guessed URL or stale bookmark can't slip past.
+        abort_if(
+            $this->company->isOem(),
+            403,
+            'Your account is configured to use ProSelver drivers only — trip planning is not available.'
+        );
 
         $this->tripDate = now()->addDay()->toDateString();
 

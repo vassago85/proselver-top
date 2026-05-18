@@ -171,9 +171,15 @@ class JobPolicy
         // sales_manager_*, stock_controller) and OEM (oem_admin, oem_planner)
         // roles get the same authority as their unified-customer peers
         // until they're migrated to the customer_* tier.
+        //
+        // OEM tenants are explicitly excluded here: their jobs are
+        // ProSelver-only by company policy, so even an OEM-side
+        // owner / admin can't reassign drivers — only ProSelver ops
+        // can, via the canAssignDrivers() branch above.
         if ($job->executor_type === Job::EXECUTOR_INTERNAL
             && $user->canPlanMovements()
             && $user->companies->pluck('id')->contains($job->company_id)
+            && ! ($job->company?->isOem())
         ) {
             return true;
         }
@@ -198,8 +204,14 @@ class JobPolicy
             return true;
         }
 
+        // Dealer-side admin / owner / dispatcher can flip executor on
+        // their own jobs. OEM tenants are deliberately blocked here:
+        // they book ProSelver only, so we don't expose the "Change
+        // executor" action for them even though they could otherwise
+        // satisfy canPlanMovements() + own the company_id.
         if ($user->canPlanMovements()
             && $user->companies->pluck('id')->contains($job->company_id)
+            && ! ($job->company?->isOem())
         ) {
             return true;
         }

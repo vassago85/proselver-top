@@ -57,6 +57,16 @@ new #[Layout('components.layouts.app')] class extends Component {
         $this->company = auth()->user()->company();
         abort_unless($this->company, 403, 'No company associated with your account.');
 
+        // OEM tenants currently book ProSelver only — we don't surface the
+        // internal-driver / third-party / self-collect choice for them.
+        // Force-pin the executor on mount so even tampered Livewire payloads
+        // can't slip another value through the submit handler. The feature
+        // code below stays intact so we can flip a single flag to re-enable
+        // it for OEMs later (e.g. when we expose third-party couriers).
+        if ($this->company->isOem()) {
+            $this->executorType = Job::EXECUTOR_PROSELVER;
+        }
+
         $this->hasLocations = Location::where('company_id', $this->company->id)
             ->where('is_active', true)
             ->exists();
@@ -87,6 +97,22 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     public function submit(): void
     {
+        // Server-side enforcement of the OEM-only-ProSelver rule. Mount
+        // pre-fills the property and the UI hides the picker, but a
+        // tampered Livewire payload could still arrive with a different
+        // executor — pin it again here before validation so the value
+        // can't slip through.
+        if ($this->company?->isOem()) {
+            $this->executorType = Job::EXECUTOR_PROSELVER;
+            $this->internalDriverId = null;
+            $this->thirdPartyCourierName = '';
+            $this->thirdPartyWaybill = '';
+            $this->thirdPartyExpectedDate = '';
+            $this->selfCollectName = '';
+            $this->selfCollectPhone = '';
+            $this->selfCollectIdNumber = '';
+        }
+
         $rules = [
             'pickupLocationId' => 'required|exists:locations,id',
             'deliveryLocationId' => 'required|exists:locations,id|different:pickupLocationId',
@@ -370,7 +396,14 @@ new #[Layout('components.layouts.app')] class extends Component {
         </div>
     @else
         <form wire:submit="submit" class="space-y-6">
-            {{-- Executor: who is moving this vehicle? --}}
+            {{-- Executor: who is moving this vehicle?
+                 OEM tenants are pinned to ProSelver — we skip the chooser
+                 entirely for them so the page is a single-purpose booking
+                 form.  Dealer / generic-customer tenants see the full
+                 four-option picker. Everything below the chooser is
+                 conditionally rendered, so hiding it on the OEM path is
+                 enough — no other markup needs gating. --}}
+            @if(!$company->isOem())
             <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
                 <h3 class="text-lg font-semibold text-gray-900 mb-1">Who is moving this vehicle?</h3>
                 <p class="text-sm text-gray-500 mb-4">Pick how this movement will be done. You can change this later if plans shift.</p>
@@ -468,6 +501,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                     </div>
                 @endif
             </div>
+            @endif {{-- !$company->isOem() --}}
 
             {{-- Locations --}}
             <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">

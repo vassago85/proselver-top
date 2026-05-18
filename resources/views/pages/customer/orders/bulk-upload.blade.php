@@ -75,6 +75,16 @@ new #[Layout('components.layouts.app')] class extends Component {
             403,
             'Bulk upload is restricted to account owners and admins.',
         );
+
+        // OEM tenants always book ProSelver — they don't run their own
+        // driver pool or contract couriers through the portal yet. Pin
+        // the default executor on mount so the picker can be hidden in
+        // the UI without leaving the property at a stale dealer value.
+        // (Server-side enforcement in buildPreview() guarantees this
+        // sticks even if the property is somehow flipped client-side.)
+        if ($this->company->isOem()) {
+            $this->defaultExecutorType = Job::EXECUTOR_PROSELVER;
+        }
     }
 
     public function with(): array
@@ -162,6 +172,16 @@ new #[Layout('components.layouts.app')] class extends Component {
             'mapping.pickup.required' => 'You must map the pickup / origin column.',
             'mapping.delivery.required' => 'You must map the delivery / destination column.',
         ]);
+
+        // OEM tenants are ProSelver-only. Also clear any executor column
+        // mapping so a stray "Executor" header in the spreadsheet can't
+        // create internal-driver rows behind the operator's back.
+        if ($this->company->isOem()) {
+            $this->defaultExecutorType = Job::EXECUTOR_PROSELVER;
+            foreach (['executor_type', 'driver_name', 'courier_name', 'waybill', 'collector_name', 'collector_phone'] as $k) {
+                unset($this->mapping[$k]);
+            }
+        }
 
         $preview = $importer->preview($this->company, $this->parsedRows, $this->mapping, [
             'include_on_hold' => $this->includeOnHold,
@@ -457,6 +477,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                     @error('defaultVehicleClassId')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
                 </div>
 
+                @if(!$company->isOem())
                 <div class="sm:col-span-2">
                     <label class="block text-sm font-medium text-slate-700">Default executor</label>
                     <div class="mt-1">
@@ -472,6 +493,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                         (use values like <code>proselver</code>, <code>internal</code>, <code>3rd_party</code>, <code>self_collect</code>).
                     </p>
                 </div>
+                @endif
             </div>
 
             <div class="mt-5 space-y-2">

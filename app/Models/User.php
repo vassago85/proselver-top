@@ -65,6 +65,23 @@ class User extends Authenticatable
     }
 
     /**
+     * "Does this user's primary company act as an OEM tenant?"
+     *
+     * Used to gate the dealer-only executor / drivers / trips
+     * surfaces.  OEM-tenant customers (FAW South Africa, Isuzu South
+     * Africa, …) book through ProSelver only — they don't run their
+     * own driver pool or contract third-party couriers from this
+     * portal, so we hide those choices for them.  The underlying
+     * feature code stays in place (we may resell it to OEMs as a
+     * third-party / direct option later); only the UI + policy gates
+     * change.
+     */
+    public function companyIsOem(): bool
+    {
+        return (bool) $this->company()?->isOem();
+    }
+
+    /**
      * True when the user is linked to the platform-owner company. Used by the
      * visibility scopes on Job / Inventory so platform-owner users can see
      * everything, regardless of which other companies they may also belong to.

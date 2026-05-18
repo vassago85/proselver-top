@@ -298,7 +298,10 @@
                 <li>
                     <p class="mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">Trips</p>
                     <ul role="list" class="space-y-0.5">
-                        @if($user->canPlanMovements())
+                        {{-- Trip Planner is for dealers running their own driver pool.
+                             OEM tenants book ProSelver only — they don't dispatch
+                             their own drivers, so the planner has nothing to plan. --}}
+                        @if($user->canPlanMovements() && !$isOemCustomer)
                             <x-sidebar-link :href="route('customer.trips.index')" :active="request()->routeIs('customer.trips.index') || request()->routeIs('customer.trips.show') || request()->routeIs('customer.trips.create')">
                                 <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></svg></x-slot:icon>
                                 Trip Planner
@@ -348,10 +351,15 @@
                             Team
                         </x-sidebar-link>
 
+                        {{-- Internal driver pool — dealer-only feature.
+                             OEM tenants don't run their own drivers; everything
+                             goes through ProSelver. --}}
+                        @if(!$isOemCustomer)
                         <x-sidebar-link :href="route('customer.drivers.index')" :active="request()->routeIs('customer.drivers.*')">
                             <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg></x-slot:icon>
                             Drivers
                         </x-sidebar-link>
+                        @endif
                     </ul>
                 </li>
                 @endif
@@ -554,23 +562,19 @@
                     </ul>
                 </li>
 
-                {{-- TRIPS --}}
-                @if($user->canPlanMovements() || $user->isDriver())
+                {{-- TRIPS — legacy OEM users get the planner only if they
+                     somehow have a dealer-style flow (e.g. ProSelver-managed
+                     OEMs in mixed tenancy). For pure OEM tenants the
+                     ProSelver-only rule means there are no internal drivers
+                     to plan trips for, so the link is hidden by default. --}}
+                @if($user->isDriver())
                 <li>
                     <p class="mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">Trips</p>
                     <ul role="list" class="space-y-0.5">
-                        @if($user->canPlanMovements())
-                            <x-sidebar-link :href="route('customer.trips.index')" :active="request()->routeIs('customer.trips.index') || request()->routeIs('customer.trips.show') || request()->routeIs('customer.trips.create')">
-                                <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M9 19c-5 0-8-3-8-6s3-6 8-6h6c5 0 8 3 8 6s-3 6-8 6"/><path d="M5 13h.01"/><path d="M19 13h.01"/></svg></x-slot:icon>
-                                Trip Planner
-                            </x-sidebar-link>
-                        @endif
-                        @if($user->isDriver())
-                            <x-sidebar-link :href="route('customer.trips.my-day')" :active="request()->routeIs('customer.trips.my-day')">
-                                <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg></x-slot:icon>
-                                My Day
-                            </x-sidebar-link>
-                        @endif
+                        <x-sidebar-link :href="route('customer.trips.my-day')" :active="request()->routeIs('customer.trips.my-day')">
+                            <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg></x-slot:icon>
+                            My Day
+                        </x-sidebar-link>
                     </ul>
                 </li>
                 @endif
@@ -586,7 +590,8 @@
                     </ul>
                 </li>
 
-                {{-- WORKSPACE --}}
+                {{-- WORKSPACE — no internal-driver pool for OEM tenants,
+                     so the "My Drivers" link is omitted from this branch. --}}
                 <li>
                     <p class="mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">Workspace</p>
                     <ul role="list" class="space-y-0.5">
@@ -599,13 +604,6 @@
                             <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></x-slot:icon>
                             Team
                         </x-sidebar-link>
-
-                        @if($user->canManageCompanyData())
-                            <x-sidebar-link :href="route('customer.drivers.index')" :active="request()->routeIs('customer.drivers.index')">
-                                <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 11l-3 3-1.5-1.5"/></svg></x-slot:icon>
-                                My Drivers
-                            </x-sidebar-link>
-                        @endif
                     </ul>
                 </li>
 

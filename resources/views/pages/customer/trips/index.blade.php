@@ -33,6 +33,14 @@ class extends Component
         $user = auth()->user();
         $this->company = $user?->company();
         abort_unless($this->company, 403);
+        // OEM tenants are ProSelver-only — no internal driver pool, no
+        // trips to plan. Hidden from the sidebar; 403 here as the
+        // URL-guess safety net.
+        abort_if(
+            $this->company->isOem(),
+            403,
+            'Your account is configured to use ProSelver drivers only — trip planning is not available.'
+        );
 
         if (!$this->dateFrom) { $this->dateFrom = now()->subDays(7)->toDateString(); }
         if (!$this->dateTo)   { $this->dateTo   = now()->addDays(14)->toDateString(); }

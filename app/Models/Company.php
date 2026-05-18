@@ -32,6 +32,14 @@ class Company extends Model
         self::TYPE_CUSTOMER,
     ];
 
+    // Type predicates — single source of truth for the "what kind of
+    // company is this?" question, so every view / policy / service
+    // asks the same way and a future re-shuffle of the type column
+    // (e.g. adding OEM-subsidiary) only has to be taught here.
+    public function isOem(): bool { return $this->type === self::TYPE_OEM; }
+    public function isDealer(): bool { return $this->type === self::TYPE_DEALER; }
+    public function isInternal(): bool { return $this->type === self::TYPE_INTERNAL; }
+
     protected $fillable = [
         'uuid',
         'name',
