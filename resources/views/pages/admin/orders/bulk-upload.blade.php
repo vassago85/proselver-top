@@ -192,6 +192,24 @@ new #[Layout('components.layouts.app')] class extends Component {
     }
 
     /**
+     * Flip an "active duplicate" row between blocked and overridden.
+     * Driven by the per-row checkbox on the preview table — see
+     * JobBulkImporter::setDuplicateOverride for the guard logic.
+     */
+    public function toggleDuplicateOverride(int $index, bool $ack, JobBulkImporter $importer): void
+    {
+        if (!isset($this->previewRows[$index])) {
+            return;
+        }
+        $this->previewRows[$index] = $importer->setDuplicateOverride(
+            $this->previewRows[$index],
+            $ack,
+            $this->includeOnHold,
+        );
+        $this->previewStats = $importer->aggregateStats($this->previewRows);
+    }
+
+    /**
      * Apply a vehicle class to every row that doesn't already have one.
      * The "set 1117 trucks to '8t Rigid'" button — kept conservative
      * (only fills blanks, doesn't overwrite) so a heuristic guess that
@@ -502,18 +520,75 @@ new #[Layout('components.layouts.app')] class extends Component {
                     <button type="button" wire:click="backToMap" class="text-sm font-medium text-slate-500 hover:text-slate-800">← Edit columns</button>
                 </div>
 
-                <div class="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-3">
+                @php
+                    $blocked  = (int) ($previewStats['duplicates_blocked']  ?? 0);
+                    $override = (int) ($previewStats['duplicates_override'] ?? 0);
+                    $importCount = (int) ($previewStats['ready'] ?? 0);
+                    $confirmMsg = $override > 0
+                        ? "You are about to import {$importCount} job(s) for this customer, and {$override} of them are DUPLICATES of an active order. Continue?"
+                        : "Import {$importCount} job(s) for this customer?";
+                @endphp
+
+                @if($blocked > 0)
+                    <div class="mt-5 rounded-xl border-2 border-rose-300 bg-rose-50 p-4">
+                        <div class="flex items-start gap-3">
+                            <svg class="h-6 w-6 flex-none text-rose-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/>
+                                <line x1="12" y1="9" x2="12" y2="13"/>
+                                <line x1="12" y1="17" x2="12.01" y2="17"/>
+                            </svg>
+                            <div>
+                                <h3 class="text-sm font-bold uppercase tracking-wider text-rose-800">
+                                    {{ $blocked }} row{{ $blocked === 1 ? '' : 's' }} blocked — duplicate of an ACTIVE order
+                                </h3>
+                                <p class="mt-1 text-sm text-rose-700">
+                                    {{ $blocked === 1 ? 'This row' : 'These rows' }} would create a second movement for {{ $blocked === 1 ? 'a vehicle' : 'vehicles' }} that {{ $blocked === 1 ? 'is' : 'are' }} already on an open job for this customer.
+                                    They will <strong>not</strong> import as-is.
+                                </p>
+                                <p class="mt-2 text-xs text-rose-700">
+                                    If a vehicle genuinely needs another movement (returning from storage, body builder collection, etc.), tick
+                                    <span class="font-semibold">"Override — create duplicate"</span> on each row you want to import.
+                                    Otherwise leave them un-ticked and they'll be skipped.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                @endif
+
+                @if($override > 0)
+                    <div class="mt-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-800">
+                        <strong>{{ $override }}</strong> duplicate row{{ $override === 1 ? '' : 's' }} marked for override — they'll import as a second movement on top of the existing active order.
+                    </div>
+                @endif
+
+                <div class="mt-4 grid grid-cols-2 sm:grid-cols-5 gap-3">
                     <div class="rounded-lg border border-slate-200 bg-slate-50 p-3">
                         <p class="text-[11px] font-medium uppercase tracking-wider text-slate-500">Total</p>
                         <p class="mt-1 text-2xl font-semibold text-slate-900 tabular-nums">{{ $previewStats['total'] ?? 0 }}</p>
                     </div>
                     <div class="rounded-lg border border-emerald-200 bg-emerald-50 p-3">
                         <p class="text-[11px] font-medium uppercase tracking-wider text-emerald-700">Ready</p>
-                        <p class="mt-1 text-2xl font-semibold text-emerald-900 tabular-nums">{{ $previewStats['ready'] ?? 0 }}</p>
+                        <p class="mt-1 text-2xl font-semibold text-emerald-900 tabular-nums">{{ $importCount }}</p>
                     </div>
                     <div class="rounded-lg border border-amber-200 bg-amber-50 p-3">
                         <p class="text-[11px] font-medium uppercase tracking-wider text-amber-700">Warnings</p>
                         <p class="mt-1 text-2xl font-semibold text-amber-900 tabular-nums">{{ $previewStats['warnings'] ?? 0 }}</p>
+                    </div>
+                    <div @class([
+                        'rounded-lg border p-3',
+                        'border-rose-300 bg-rose-50' => $blocked > 0,
+                        'border-slate-200 bg-slate-50' => $blocked === 0,
+                    ])>
+                        <p @class([
+                            'text-[11px] font-medium uppercase tracking-wider',
+                            'text-rose-700' => $blocked > 0,
+                            'text-slate-500' => $blocked === 0,
+                        ])>Duplicates blocked</p>
+                        <p @class([
+                            'mt-1 text-2xl font-semibold tabular-nums',
+                            'text-rose-900' => $blocked > 0,
+                            'text-slate-700' => $blocked === 0,
+                        ])>{{ $blocked }}</p>
                     </div>
                     <div class="rounded-lg border border-rose-200 bg-rose-50 p-3">
                         <p class="text-[11px] font-medium uppercase tracking-wider text-rose-700">Skipped</p>
@@ -524,8 +599,8 @@ new #[Layout('components.layouts.app')] class extends Component {
                 </div>
 
                 <div class="mt-6 flex items-center gap-3">
-                    <button wire:click="commitImport" class="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-60" wire:loading.attr="disabled" wire:confirm="Import {{ $previewStats['ready'] ?? 0 }} job(s) for this customer?">
-                        <span wire:loading.remove wire:target="commitImport">Import {{ $previewStats['ready'] ?? 0 }} job(s)</span>
+                    <button wire:click="commitImport" class="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-60" wire:loading.attr="disabled" wire:confirm="{{ $confirmMsg }}">
+                        <span wire:loading.remove wire:target="commitImport">Import {{ $importCount }} job(s)</span>
                         <span wire:loading wire:target="commitImport">Importing...</span>
                     </button>
                     <button type="button" wire:click="backToMap" class="text-sm font-medium text-slate-500 hover:text-slate-800">Cancel</button>
@@ -575,19 +650,29 @@ new #[Layout('components.layouts.app')] class extends Component {
                             @foreach(array_slice($previewRows, 0, 200) as $index => $row)
                                 @php
                                     $status = $row['status'];
+                                    $isDuplicate = !empty($row['requires_override']);
+                                    $isOverridden = !empty($row['override_acknowledged']);
                                     $pillClass = match($status) {
-                                        'ready' => 'bg-emerald-50 text-emerald-700 border-emerald-200',
-                                        'warning' => 'bg-amber-50 text-amber-800 border-amber-200',
-                                        'error' => 'bg-rose-50 text-rose-700 border-rose-200',
-                                        'skipped' => 'bg-slate-100 text-slate-600 border-slate-200',
-                                        default => 'bg-slate-50 text-slate-600 border-slate-200',
+                                        'ready'     => 'bg-emerald-50 text-emerald-700 border-emerald-200',
+                                        'warning'   => 'bg-amber-50 text-amber-800 border-amber-200',
+                                        'error'     => 'bg-rose-50 text-rose-700 border-rose-200',
+                                        'duplicate' => 'bg-rose-100 text-rose-800 border-rose-400 ring-2 ring-rose-200',
+                                        'skipped'   => 'bg-slate-100 text-slate-600 border-slate-200',
+                                        default     => 'bg-slate-50 text-slate-600 border-slate-200',
                                     };
+                                    $statusLabel = $status === 'duplicate' ? 'duplicate · blocked' : $status;
                                 @endphp
-                                <tr class="hover:bg-slate-50">
+                                <tr @class([
+                                    'hover:bg-slate-50',
+                                    'bg-rose-50/40' => $status === 'duplicate',
+                                ])>
                                     <td class="px-3 py-2">
                                         <span class="inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium uppercase tracking-wider {{ $pillClass }}">
-                                            {{ $status }}
+                                            {{ $statusLabel }}
                                         </span>
+                                        @if($isDuplicate && $isOverridden)
+                                            <span class="ml-1 inline-flex items-center rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-800">override</span>
+                                        @endif
                                     </td>
                                     <td class="px-3 py-2 text-xs text-slate-500 whitespace-nowrap">
                                         {{ $row['source_sheet'] ?? '—' }} · row {{ $row['source_row'] ?? '?' }}
@@ -646,7 +731,28 @@ new #[Layout('components.layouts.app')] class extends Component {
                                     </td>
                                     <td class="px-3 py-2 text-xs text-slate-700 whitespace-nowrap">{{ $row['parsed']['scheduled_date'] ?? '—' }}</td>
                                     <td class="px-3 py-2 text-xs text-slate-500 max-w-xs">
-                                        @if(!empty($row['errors']))
+                                        @if($isDuplicate)
+                                            <div class="rounded-lg border-2 border-rose-300 bg-rose-50 p-2">
+                                                <p class="text-[11px] font-bold uppercase tracking-wider text-rose-800">
+                                                    Duplicate of active order
+                                                    @if(!empty($row['duplicate_of']['job_number']))
+                                                        — {{ $row['duplicate_of']['job_number'] }}
+                                                    @endif
+                                                </p>
+                                                @if(!empty($row['duplicate_of']['status_label']))
+                                                    <p class="mt-0.5 text-[11px] text-rose-700">Existing status: {{ $row['duplicate_of']['status_label'] }}</p>
+                                                @endif
+                                                <label class="mt-2 flex items-start gap-2 cursor-pointer">
+                                                    <input type="checkbox"
+                                                           class="mt-0.5 rounded border-rose-400 text-rose-600 focus:ring-rose-500"
+                                                           {{ $isOverridden ? 'checked' : '' }}
+                                                           wire:change="toggleDuplicateOverride({{ $index }}, $event.target.checked)">
+                                                    <span class="text-[11px] font-semibold text-rose-800">
+                                                        Override — create duplicate movement anyway
+                                                    </span>
+                                                </label>
+                                            </div>
+                                        @elseif(!empty($row['errors']))
                                             <ul class="list-disc list-inside text-rose-600">
                                                 @foreach($row['errors'] as $err)<li>{{ $err }}</li>@endforeach
                                             </ul>

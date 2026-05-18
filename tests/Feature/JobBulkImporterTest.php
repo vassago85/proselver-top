@@ -372,7 +372,7 @@ it('preview() flags duplicate VINs within the same spreadsheet', function () {
         ->toContain('Duplicate VIN in this file');
 });
 
-it('preview() warns (does not block) VINs already in flight for the customer', function () {
+it('preview() flags VINs on an active job as duplicates requiring an override before they import', function () {
     $brand = Brand::create(['name' => 'FAW']);
     $vehicleClass = VehicleClass::create(['name' => 'Truck Class 4']);
     $company = setUpOemCompany('FAW SA', ['PE Plant', 'GB Bodies']);
@@ -413,15 +413,32 @@ it('preview() warns (does not block) VINs already in flight for the customer', f
         'default_vehicle_class_id' => $vehicleClass->id,
     ]);
 
-    // A vehicle that's already been moved once legitimately needs to
-    // be moved again (returning from storage / body builder etc.), so
-    // this is a WARNING, not a blocking error.  The warning carries
-    // the existing job number + status so the operator can decide.
-    expect($preview['rows'][0]['status'])->toBe('warning');
+    // VIN is on an ACTIVE job for the same customer → the row sits in
+    // 'duplicate' status (a soft block).  The structured `duplicate_of`
+    // payload carries the existing job number + status so the UI can
+    // render an explicit override prompt without the operator having
+    // to read a warning line.  The warning string is also there so the
+    // notes column has something to render even with JS disabled.
+    expect($preview['rows'][0]['status'])->toBe('duplicate');
+    expect($preview['rows'][0]['requires_override'])->toBeTrue();
+    expect($preview['rows'][0]['override_acknowledged'])->toBeFalse();
+    expect($preview['rows'][0]['duplicate_of']['job_number'])->toBe('TST-001');
+    expect($preview['rows'][0]['duplicate_of']['status'])->toBe(Job::STATUS_RECEIVED);
     expect(implode(' ', $preview['rows'][0]['warnings']))
-        ->toContain('TST-001');
-    expect(implode(' ', $preview['rows'][0]['warnings']))
-        ->toContain('already on in-flight job');
+        ->toContain('DUPLICATE OF ACTIVE ORDER TST-001');
+
+    // Ticking the override flips the row into 'warning' (still imports,
+    // still surfaces the warning in the notes column) and bumps the
+    // override counter on the aggregate stats so the confirm dialog
+    // can call out how many duplicates are about to be created.
+    $importer = app(JobBulkImporter::class);
+    $acked = $importer->setDuplicateOverride($preview['rows'][0], true);
+    expect($acked['status'])->toBe('warning');
+    expect($acked['override_acknowledged'])->toBeTrue();
+    $stats = $importer->aggregateStats([$acked]);
+    expect($stats['ready'])->toBe(1);
+    expect($stats['duplicates_blocked'])->toBe(0);
+    expect($stats['duplicates_override'])->toBe(1);
 });
 
 it('preview() does not block VINs that have already been delivered or completed', function () {

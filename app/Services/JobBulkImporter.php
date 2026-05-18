@@ -400,19 +400,23 @@ class JobBulkImporter
                 }
             }
 
-            // VIN dedup. Two different shapes here:
+            // VIN dedup. Three different shapes here:
             //   - Same VIN listed twice in this upload → hard ERROR
             //     (an operator typo, importing both would create a
             //     guaranteed duplicate booking).
-            //   - VIN matches an in-flight job already on the
-            //     customer's account → WARNING.  A vehicle that's
-            //     already been moved once legitimately needs to be
-            //     moved again (returning from storage, body builder
-            //     to dealer, dealer to customer, etc.), so we surface
-            //     the existing job so the operator can decide whether
-            //     to import-and-create or skip.  The legacy "skip
-            //     re-import" behaviour was blocking that flow.
+            //   - VIN matches an ACTIVE job on the customer's account
+            //     → BLOCKED until the operator ticks the override
+            //     checkbox (status='duplicate').  A vehicle that's
+            //     genuinely on its next leg (returning from storage,
+            //     body builder to dealer, etc.) needs to be importable
+            //     but it must be a deliberate choice, never an
+            //     accident — the bulk path used to silently re-import.
+            //   - VIN matches a delivered/completed/cancelled job →
+            //     no flag at all; that's a clean re-book.
             $vin = $entry['parsed']['vin'] ?? null;
+            $entry['requires_override'] = false;
+            $entry['override_acknowledged'] = false;
+            $entry['duplicate_of'] = null;
             if ($vin) {
                 $vinKey = strtoupper(trim($vin));
 
@@ -424,10 +428,23 @@ class JobBulkImporter
 
                 if ($existingVins->has($vinKey)) {
                     $existing = $existingVins->get($vinKey);
-                    $entry['warnings'][] = 'VIN is already on in-flight job '
-                        . ($existing->job_number ?: '#?')
-                        . ' (' . str_replace('_', ' ', $existing->status) . ')'
-                        . ' — importing will create a follow-up movement for the same vehicle';
+                    $statusLabel = ucfirst(str_replace('_', ' ', $existing->status));
+                    $jobNo = $existing->job_number ?: '#?';
+
+                    $entry['requires_override'] = true;
+                    $entry['duplicate_of'] = [
+                        'job_number'   => $jobNo,
+                        'status'       => $existing->status,
+                        'status_label' => $statusLabel,
+                    ];
+                    // Single, loud warning line that doubles as the
+                    // tooltip / inline explanation next to the override
+                    // checkbox.  We deliberately emphasise ACTIVE so an
+                    // operator skimming the preview can't mistake it
+                    // for a past order.
+                    $entry['warnings'][] = 'DUPLICATE OF ACTIVE ORDER ' . $jobNo
+                        . ' (' . $statusLabel . ') — this VIN is already on an open job for this account.'
+                        . ' Tick the override box if you really want to create a second movement.';
                 }
             }
 
@@ -467,6 +484,28 @@ class JobBulkImporter
             $row['errors'][] = 'Vehicle class needed — set per row in the preview, or pick a default on the previous step';
         }
 
+        // Make sure the new override fields exist on legacy preview
+        // arrays (e.g. rows in flight when this code shipped) so the
+        // status finaliser doesn't trip on missing keys.
+        $row['requires_override']     = $row['requires_override']     ?? false;
+        $row['override_acknowledged'] = $row['override_acknowledged'] ?? false;
+        $row['duplicate_of']          = $row['duplicate_of']          ?? null;
+
+        return $this->finaliseRowStatus($row, $includeOnHold);
+    }
+
+    /**
+     * Flip the operator's "yes I really want to import this duplicate"
+     * decision on a preview row.  No-op for rows that aren't flagged as
+     * duplicates (so the UI can call this blindly without first asking
+     * the importer whether the toggle is meaningful).
+     */
+    public function setDuplicateOverride(array $row, bool $acknowledged, bool $includeOnHold = false): array
+    {
+        if (empty($row['requires_override'])) {
+            return $row;
+        }
+        $row['override_acknowledged'] = $acknowledged;
         return $this->finaliseRowStatus($row, $includeOnHold);
     }
 
@@ -484,6 +523,16 @@ class JobBulkImporter
             'warnings' => 0,
             'errors' => 0,
             'on_hold' => 0,
+            // Rows blocked because the VIN is already on an active
+            // order and the operator hasn't ticked the override.  They
+            // don't count toward "ready" — the Import button refuses
+            // to create them until the override fires.
+            'duplicates_blocked' => 0,
+            // Rows the operator explicitly chose to override (they'll
+            // import as duplicate movements).  Surfaced separately so
+            // the confirm dialog can highlight how many "I really mean
+            // this" rows are about to land.
+            'duplicates_override' => 0,
         ];
 
         foreach ($rows as $row) {
@@ -494,6 +543,12 @@ class JobBulkImporter
                 case 'warning':
                     $stats['warnings']++;
                     $stats['ready']++;
+                    if (!empty($row['override_acknowledged'])) {
+                        $stats['duplicates_override']++;
+                    }
+                    break;
+                case 'duplicate':
+                    $stats['duplicates_blocked']++;
                     break;
                 case 'error':
                     $stats['errors']++;
@@ -591,9 +646,24 @@ class JobBulkImporter
             return $entry;
         }
 
+        // Hard errors always win over the duplicate gate — if a row can
+        // never import anyway (missing VIN, past date, etc.) there's no
+        // value in showing the override toggle.
         if (!empty($entry['errors'])) {
             $entry['status'] = 'error';
-        } elseif (!empty($entry['warnings'])) {
+            return $entry;
+        }
+
+        // Active-duplicate row that the operator hasn't explicitly
+        // overridden → block import.  Once the override checkbox is
+        // ticked the row falls through to the warning/ready branch and
+        // commit() lets it through.
+        if (!empty($entry['requires_override']) && empty($entry['override_acknowledged'])) {
+            $entry['status'] = 'duplicate';
+            return $entry;
+        }
+
+        if (!empty($entry['warnings'])) {
             $entry['status'] = 'warning';
         } else {
             $entry['status'] = 'ready';
@@ -654,7 +724,12 @@ class JobBulkImporter
             &$modelHints,
         ) {
             foreach ($previewRows as $row) {
-                if ($row['status'] === 'error' || $row['status'] === 'skipped') {
+                // 'duplicate' is a soft block — the row only flips out
+                // of this status when the operator ticks the override
+                // on the preview screen.  Treat it exactly like
+                // 'skipped' here so an un-acknowledged active-duplicate
+                // VIN never sneaks into the database.
+                if (in_array($row['status'] ?? null, ['error', 'skipped', 'duplicate'], true)) {
                     $skipped++;
                     continue;
                 }
