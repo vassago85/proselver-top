@@ -122,11 +122,39 @@ new #[Layout('components.layouts.app')] class extends Component {
             ? Role::forCompany($company->id)->withCount('users')->with('permissions')->orderBy('name')->get()
             : collect();
 
-        $permissions = Permission::orderBy('group')->orderBy('name')->get()->groupBy('group');
+        // Permission slugs that are intentionally hidden from the customer-side
+        // roles editor. Single source of truth for both the create / edit
+        // checkbox grid AND the per-role chip list below so we never drift.
+        //
+        // Always hidden:
+        //   view_bookings  -- legacy, replaced by view_all/own_bookings
+        //   upload_po      -- ProSelver-side ingest, never a dealer surface
+        //
+        // Dealers only (true dealer tier, not OEM):
+        //   view_po / generate_po -- POs are raised in the dealer's own
+        //     accounting system; surfacing them here implies a workflow we
+        //     don't actually run.
+        //   confirm_customer_order -- the "FAW-type" readiness gate is an
+        //     OEM concept (FAW themselves are an OEM); dealers running
+        //     their own local movements have no such handshake.
+        $hiddenPermissionSlugs = ['view_bookings', 'upload_po'];
+        if (auth()->user()->isDealer() && !auth()->user()->isOem()) {
+            $hiddenPermissionSlugs = array_merge($hiddenPermissionSlugs, [
+                'view_po', 'generate_po', 'confirm_customer_order',
+            ]);
+        }
+
+        // Filter then re-group so an entirely-hidden group (e.g. Purchase
+        // Orders for a dealer) doesn't render an empty card with just a
+        // section heading.
+        $permissions = Permission::orderBy('group')->orderBy('name')->get()
+            ->reject(fn ($p) => in_array($p->slug, $hiddenPermissionSlugs, true))
+            ->groupBy('group');
 
         return [
             'roles' => $roles,
             'permissionGroups' => $permissions,
+            'hiddenPermissionSlugs' => $hiddenPermissionSlugs,
         ];
     }
 };
@@ -170,7 +198,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                         <h4 class="text-xs font-semibold text-gray-500 uppercase mb-3">{{ $group }}</h4>
                         <div class="space-y-2">
                             @foreach($perms as $perm)
-                                @if(!in_array($perm->slug, ['view_bookings', 'upload_po']))
+                                @if(!in_array($perm->slug, $hiddenPermissionSlugs, true))
                                 <label class="flex items-start gap-2 text-sm">
                                     <input wire:model="selectedPermissions" type="checkbox" value="{{ $perm->id }}" class="mt-0.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500">
                                     <div>
@@ -213,7 +241,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                     @endif
                     <div class="mt-3 flex flex-wrap gap-1.5">
                         @foreach($role->permissions->sortBy('group') as $perm)
-                            @if(!in_array($perm->slug, ['view_bookings', 'upload_po']))
+                            @if(!in_array($perm->slug, $hiddenPermissionSlugs, true))
                             <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-blue-50 text-blue-700">{{ $perm->name }}</span>
                             @endif
                         @endforeach
