@@ -566,8 +566,9 @@
                         @if($user->hasPermission('view_all_bookings'))
                             {{-- Opens in a new tab so the dispatcher can drop it on
                                  the wall-mounted monitor without losing their main
-                                 working session. Chromeless layout, auto-refresh. --}}
-                            <x-sidebar-link :href="route('dealer.display')" target="_blank" rel="noopener" :active="request()->routeIs('dealer.display')">
+                                 working session.  Same shared component the
+                                 customer + admin portals use. --}}
+                            <x-sidebar-link :href="route('customer.display')" target="_blank" rel="noopener" :active="request()->routeIs('customer.display')">
                                 <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg></x-slot:icon>
                                 Live Display
                             </x-sidebar-link>
@@ -737,7 +738,7 @@
                         </x-sidebar-link>
 
                         @if($user->hasPermission('view_all_bookings'))
-                            <x-sidebar-link :href="route('oem.display')" target="_blank" rel="noopener" :active="request()->routeIs('oem.display')">
+                            <x-sidebar-link :href="route('customer.display')" target="_blank" rel="noopener" :active="request()->routeIs('customer.display')">
                                 <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg></x-slot:icon>
                                 Live Display
                             </x-sidebar-link>

@@ -1,20 +1,17 @@
 <?php
 /**
- * "Live Movements" board — shared across every portal that wants a TV
- * view of what's moving right now.
+ * "Live Movements" board — single shared component across every
+ * portal that wants a TV view of what's moving right now.
  *
  * Audiences:
- *   - Dealer admins / dispatchers (own dealership's bookings).
- *   - OEM admins / planners (own OEM's bookings — same code path,
- *     same scoping by $user->company()->id).
- *   - Internal ops controllers, owners, super admins (system-wide —
- *     every active job across every customer, capped per lane).
+ *   - Customer-tier tenants (dealer-customers, OEM-customers, body
+ *     builders) via /customer/display — scoped by $user->company()->id.
+ *   - Internal ops controllers, owners, super admins and developers
+ *     via /admin/live-display — runs system-wide with the owning
+ *     customer name on each card.
  *
  * Renders with the chromeless `display` layout (no sidebar, no top
- * bar), dark theme, auto-refreshes every 30 seconds.  Mounted from
- * routes/dealer.php, routes/oem.php and routes/admin.php; the file
- * lives under pages/dealer/ for historical reasons but is portal-
- * agnostic.
+ * bar), dark theme, auto-refreshes every 30 seconds.
  *
  * Three lanes, ordered left-to-right the same way a movement actually
  * progresses through the day:

@@ -4,13 +4,6 @@ use Illuminate\Support\Facades\Route;
 use Livewire\Volt\Volt;
 
 Volt::route('dashboard', 'oem.dashboard')->name('dashboard');
-
-// Live Movements board — chromeless TV view, shared Volt component
-// with the dealer / admin portals (pages/dealer/display.blade.php
-// scopes itself by the user's company for tenant audiences and
-// system-wide for internal users).  Permission gated on
-// view_all_bookings inside the component, same as the dealer route.
-Volt::route('display', 'dealer.display')->name('display');
 Volt::route('bookings', 'oem.bookings.index')->name('bookings.index');
 Volt::route('bookings/create', 'oem.bookings.create')->name('bookings.create');
 Volt::route('bookings/{job}', 'oem.bookings.show')->name('bookings.show');

@@ -6,11 +6,11 @@ use Livewire\Volt\Volt;
 Volt::route('dashboard', 'customer.dashboard')->name('dashboard');
 
 // Live Movements board — chromeless TV view, shared Volt component
-// with the dealer / OEM / admin portals.  Covers the modern
-// customer-tier audience: dealer-customers, oem-customers, body-
-// builder tenants.  Scoped to the user's company by the component,
-// permission-gated on view_all_bookings inside mount().
-Volt::route('display', 'dealer.display')->name('display');
+// with the admin portal.  Covers every customer-tier tenant
+// (dealer-customers, OEM-customers, body builders).  Scoped to the
+// user's company by the component, permission-gated on
+// view_all_bookings inside mount().
+Volt::route('display', 'live-display')->name('display');
 Volt::route('orders', 'customer.orders.index')->name('orders.index');
 Volt::route('orders/create', 'customer.orders.create')->name('orders.create');
 // Bulk upload sits BEFORE orders/{job} so the literal segment wins the
