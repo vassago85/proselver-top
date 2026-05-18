@@ -1,0 +1,19 @@
+bulk-upload: turn in-flight-VIN block into a warning so re-moves can import
+
+A vehicle that's already been moved once legitimately needs to be
+moved again (returning from storage, body builder, or onward to a
+customer).  The previous behaviour flagged any in-flight VIN match
+as a hard ERROR and refused to import the row, which forced operators
+to cancel the original job before they could load the next movement
+for the same physical vehicle.
+
+The dedup query already ignores delivered/completed/cancelled jobs
+(those are fair game), so the in-file duplicate guard remains an
+error (a single upload listing the same VIN twice is still a typo),
+but in-flight matches now become a warning that names the existing
+job_number + status — e.g. "VIN is already on in-flight job FAW-12345
+(in transit) — importing will create a follow-up movement for the
+same vehicle".  Operators can scan the warnings and choose to import
+or skip per row.
+
+Test updated to reflect the new warning shape.

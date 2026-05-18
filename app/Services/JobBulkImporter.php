@@ -349,18 +349,21 @@ class JobBulkImporter
         $locations = $company->locations()->get();
 
         // VIN dedup: pull every in-flight job for this customer keyed by
-        // VIN so we can flag re-imports without round-tripping per row.
-        // "In-flight" means anything that hasn't finished its lifecycle —
-        // a delivered/completed/cancelled VIN is fair game to re-book
-        // (it's the next movement for the same physical vehicle).
+        // VIN so we can warn operators about re-imports without
+        // round-tripping per row.  "In-flight" means anything that
+        // hasn't finished its lifecycle — a delivered/completed/cancelled
+        // VIN is fair game to re-book (it's the next movement for the
+        // same physical vehicle, e.g. coming back from storage or a
+        // body builder).  We carry the existing job_number + status
+        // forward so the per-row warning is informative ("already on
+        // FAW-12345, in_transit") rather than just a vague "duplicate".
         $existingVins = Job::query()
             ->where('company_id', $company->id)
             ->whereNotNull('vin')
             ->whereNotIn('status', [Job::STATUS_COMPLETED, Job::STATUS_CANCELLED, Job::STATUS_DELIVERED])
-            ->pluck('vin')
-            ->map(fn ($v) => strtoupper(trim((string) $v)))
-            ->filter()
-            ->flip();
+            ->orderByDesc('id') // newest match wins if a VIN somehow has multiple in-flight rows
+            ->get(['vin', 'job_number', 'status'])
+            ->keyBy(fn ($j) => strtoupper(trim((string) $j->vin)));
 
         $today = now()->startOfDay();
 
@@ -397,9 +400,18 @@ class JobBulkImporter
                 }
             }
 
-            // VIN dedup. Both within the spreadsheet itself (same VIN
-            // listed twice in one upload — operator typo) and against
-            // any in-flight job already on the customer's account.
+            // VIN dedup. Two different shapes here:
+            //   - Same VIN listed twice in this upload → hard ERROR
+            //     (an operator typo, importing both would create a
+            //     guaranteed duplicate booking).
+            //   - VIN matches an in-flight job already on the
+            //     customer's account → WARNING.  A vehicle that's
+            //     already been moved once legitimately needs to be
+            //     moved again (returning from storage, body builder
+            //     to dealer, dealer to customer, etc.), so we surface
+            //     the existing job so the operator can decide whether
+            //     to import-and-create or skip.  The legacy "skip
+            //     re-import" behaviour was blocking that flow.
             $vin = $entry['parsed']['vin'] ?? null;
             if ($vin) {
                 $vinKey = strtoupper(trim($vin));
@@ -411,7 +423,11 @@ class JobBulkImporter
                 }
 
                 if ($existingVins->has($vinKey)) {
-                    $entry['errors'][] = 'VIN already booked for this customer — skipping re-import';
+                    $existing = $existingVins->get($vinKey);
+                    $entry['warnings'][] = 'VIN is already on in-flight job '
+                        . ($existing->job_number ?: '#?')
+                        . ' (' . str_replace('_', ' ', $existing->status) . ')'
+                        . ' — importing will create a follow-up movement for the same vehicle';
                 }
             }
 

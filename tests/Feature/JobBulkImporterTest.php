@@ -372,7 +372,7 @@ it('preview() flags duplicate VINs within the same spreadsheet', function () {
         ->toContain('Duplicate VIN in this file');
 });
 
-it('preview() flags VINs already in flight for the customer', function () {
+it('preview() warns (does not block) VINs already in flight for the customer', function () {
     $brand = Brand::create(['name' => 'FAW']);
     $vehicleClass = VehicleClass::create(['name' => 'Truck Class 4']);
     $company = setUpOemCompany('FAW SA', ['PE Plant', 'GB Bodies']);
@@ -413,9 +413,15 @@ it('preview() flags VINs already in flight for the customer', function () {
         'default_vehicle_class_id' => $vehicleClass->id,
     ]);
 
-    expect($preview['rows'][0]['status'])->toBe('error');
-    expect(implode(' ', $preview['rows'][0]['errors']))
-        ->toContain('VIN already booked for this customer');
+    // A vehicle that's already been moved once legitimately needs to
+    // be moved again (returning from storage / body builder etc.), so
+    // this is a WARNING, not a blocking error.  The warning carries
+    // the existing job number + status so the operator can decide.
+    expect($preview['rows'][0]['status'])->toBe('warning');
+    expect(implode(' ', $preview['rows'][0]['warnings']))
+        ->toContain('TST-001');
+    expect(implode(' ', $preview['rows'][0]['warnings']))
+        ->toContain('already on in-flight job');
 });
 
 it('preview() does not block VINs that have already been delivered or completed', function () {
