@@ -4,8 +4,12 @@ use App\Models\Brand;
 use App\Models\Company;
 use App\Models\Job;
 use App\Models\Location;
+use App\Models\Role;
+use App\Models\User;
 use Livewire\Volt\Component;
 use Livewire\Attributes\Layout;
+use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Str;
 
 new #[Layout('components.layouts.app')] class extends Component {
     public Company $company;
@@ -22,10 +26,38 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     public bool $editing = false;
 
+    // ----- Inline "Add user" form state ---------------------------------
+    // The Volt component on /admin/users/create handles standalone user
+    // creation; we mirror its essential fields here so admin doesn't
+    // have to bounce out of the Companies page just to add the org's
+    // primary contact (or a second / third teammate later on).
+    public bool $showAddUser = false;
+    public string $newUserName = '';
+    public string $newUserEmail = '';
+    public string $newUserPhone = '';
+    public string $newUserPassword = '';
+    public bool $generateNewUserPassword = true;
+    public string $newUserRoleSlug = '';
+
+    // ----- Inline "Add location" form state -----------------------------
+    // Google Places autocomplete populates address/city/province/lat/lng
+    // via the placesAutocomplete Alpine helper in app.blade.php.
+    public bool $showAddLocation = false;
+    public string $newLocName = '';
+    public string $newLocAddress = '';
+    public string $newLocCity = '';
+    public string $newLocProvince = '';
+    public string $newLocLatitude = '';
+    public string $newLocLongitude = '';
+    public string $newLocContactName = '';
+    public string $newLocContactPhone = '';
+
     public function mount(Company $company): void
     {
         $this->company = $company;
         $this->fillForm();
+        $this->newUserRoleSlug = $this->defaultRoleSlugForType($this->company->type ?? '');
+        $this->newUserPassword = Str::random(12);
     }
 
     protected function fillForm(): void
@@ -39,6 +71,15 @@ new #[Layout('components.layouts.app')] class extends Component {
         $this->phone = $this->company->phone ?? '';
         $this->isActive = $this->company->is_active;
         $this->selectedBrandIds = $this->company->brands()->pluck('brands.id')->map(fn($id) => (string) $id)->toArray();
+    }
+
+    protected function defaultRoleSlugForType(string $type): string
+    {
+        return match ($type) {
+            Company::TYPE_BODY_BUILDER => 'body_builder_owner',
+            Company::TYPE_DEALER, Company::TYPE_OEM, Company::TYPE_CUSTOMER => 'customer_owner',
+            default => '',
+        };
     }
 
     public function toggleEdit(): void
@@ -84,8 +125,153 @@ new #[Layout('components.layouts.app')] class extends Component {
         session()->flash('success', 'Company updated.');
     }
 
+    // ----- Inline add-user actions --------------------------------------
+
+    public function toggleAddUser(): void
+    {
+        $this->showAddUser = !$this->showAddUser;
+        if (!$this->showAddUser) {
+            $this->resetAddUserForm();
+        }
+    }
+
+    public function updatedGenerateNewUserPassword(): void
+    {
+        $this->newUserPassword = $this->generateNewUserPassword
+            ? Str::random(12)
+            : '';
+    }
+
+    protected function resetAddUserForm(): void
+    {
+        $this->newUserName = '';
+        $this->newUserEmail = '';
+        $this->newUserPhone = '';
+        $this->newUserPassword = Str::random(12);
+        $this->generateNewUserPassword = true;
+        $this->newUserRoleSlug = $this->defaultRoleSlugForType($this->company->type ?? '');
+        $this->resetErrorBag(['newUserName', 'newUserEmail', 'newUserPhone', 'newUserPassword', 'newUserRoleSlug']);
+    }
+
+    public function addUser(): void
+    {
+        $actor = auth()->user();
+        abort_unless($actor?->canManageInternalUsers(), 403, 'You may not create users.');
+
+        $data = $this->validate([
+            'newUserName'     => 'required|string|max:255',
+            'newUserEmail'    => 'required|email|max:255|unique:users,email',
+            'newUserPhone'    => 'nullable|string|max:30',
+            'newUserPassword' => 'required|string|min:8',
+            'newUserRoleSlug' => 'required|exists:roles,slug',
+        ]);
+
+        abort_unless(
+            $actor->canAssignRole($data['newUserRoleSlug']),
+            403,
+            "You may not grant the {$data['newUserRoleSlug']} role."
+        );
+
+        $username = Str::lower(Str::before($data['newUserEmail'], '@'));
+        $base = $username;
+        $suffix = 0;
+        while (User::where('username', $username)->exists()) {
+            $suffix++;
+            $username = $base . $suffix;
+        }
+
+        $user = User::create([
+            'name'                 => $data['newUserName'],
+            'email'                => $data['newUserEmail'],
+            'phone'                => $data['newUserPhone'] ?: null,
+            'username'             => $username,
+            'password'             => $data['newUserPassword'],
+            'must_change_password' => true,
+        ]);
+
+        $role = Role::where('slug', $data['newUserRoleSlug'])->firstOrFail();
+        $user->roles()->sync([$role->id]);
+        $user->companies()->syncWithoutDetaching([$this->company->id]);
+
+        session()->flash(
+            'success',
+            "Invited {$user->name} as " . $role->name . " (initial password: {$data['newUserPassword']})."
+        );
+
+        $this->showAddUser = false;
+        $this->resetAddUserForm();
+    }
+
+    // ----- Inline add-location actions ----------------------------------
+
+    public function toggleAddLocation(): void
+    {
+        $this->showAddLocation = !$this->showAddLocation;
+        if (!$this->showAddLocation) {
+            $this->resetAddLocationForm();
+        }
+    }
+
+    protected function resetAddLocationForm(): void
+    {
+        $this->newLocName = '';
+        $this->newLocAddress = '';
+        $this->newLocCity = '';
+        $this->newLocProvince = '';
+        $this->newLocLatitude = '';
+        $this->newLocLongitude = '';
+        $this->newLocContactName = '';
+        $this->newLocContactPhone = '';
+        $this->resetErrorBag(['newLocName', 'newLocAddress', 'newLocCity', 'newLocProvince', 'newLocLatitude', 'newLocLongitude']);
+    }
+
+    public function addLocation(): void
+    {
+        abort_unless(Gate::allows('update', $this->company), 403);
+
+        $data = $this->validate([
+            'newLocName'         => 'required|string|max:255',
+            'newLocAddress'      => 'required|string|max:500',
+            'newLocCity'         => 'nullable|string|max:255',
+            'newLocProvince'     => 'nullable|string|max:255',
+            'newLocLatitude'     => 'nullable|numeric',
+            'newLocLongitude'    => 'nullable|numeric',
+            'newLocContactName'  => 'nullable|string|max:255',
+            'newLocContactPhone' => 'nullable|string|max:50',
+        ]);
+
+        Location::create([
+            'company_id'     => $this->company->id,
+            'company_name'   => $data['newLocName'],
+            'type'           => $this->locationTypeForCompanyType($this->company->type ?? ''),
+            'address'        => $data['newLocAddress'],
+            'city'           => $data['newLocCity'] ?: null,
+            'province'       => $data['newLocProvince'] ?: null,
+            'latitude'       => $data['newLocLatitude'] !== '' ? $data['newLocLatitude'] : null,
+            'longitude'      => $data['newLocLongitude'] !== '' ? $data['newLocLongitude'] : null,
+            'customer_name'  => $data['newLocContactName'] ?: null,
+            'customer_phone' => $data['newLocContactPhone'] ?: null,
+            'is_active'      => true,
+        ]);
+
+        session()->flash('success', "Added location \"{$data['newLocName']}\".");
+        $this->showAddLocation = false;
+        $this->resetAddLocationForm();
+    }
+
+    protected function locationTypeForCompanyType(string $companyType): string
+    {
+        return match ($companyType) {
+            Company::TYPE_BODY_BUILDER => Location::TYPE_BODY_BUILDER,
+            Company::TYPE_YARD         => Location::TYPE_YARD,
+            default                    => Location::TYPE_DEALER,
+        };
+    }
+
     public function with(): array
     {
+        $actor = auth()->user();
+
         $users = $this->company->users()
             ->with(['roles', 'companies' => fn($q) => $q->where('companies.id', $this->company->id)])
             ->orderByDesc('is_active')
@@ -119,7 +305,27 @@ new #[Layout('components.layouts.app')] class extends Component {
             Company::TYPE_CUSTOMER     => 'Customer',
         ];
 
-        return compact('users', 'orderStats', 'locations', 'allBrands', 'companyBrands', 'typeLabels');
+        // Roles the actor is permitted to grant for the inline
+        // "Add user" form.  Same canAssignRole() gate the
+        // standalone /admin/users/create page uses.
+        $assignableRoles = Role::orderByRaw(
+            "FIELD(tier, 'customer', 'dealer', 'oem', 'driver', 'internal')"
+        )->orderBy('name')
+            ->get()
+            ->filter(fn ($r) => $actor?->canAssignRole($r->slug))
+            ->values();
+
+        return [
+            'users'            => $users,
+            'orderStats'       => $orderStats,
+            'locations'        => $locations,
+            'allBrands'        => $allBrands,
+            'companyBrands'    => $companyBrands,
+            'typeLabels'       => $typeLabels,
+            'assignableRoles'  => $assignableRoles,
+            'canCreateUsers'   => (bool) $actor?->canManageInternalUsers(),
+            'canManageCompany' => Gate::allows('update', $this->company),
+        ];
     }
 };
 ?>
@@ -202,9 +408,21 @@ new #[Layout('components.layouts.app')] class extends Component {
                             <label class="block text-sm font-medium text-gray-700 mb-1">VAT Number</label>
                             <input wire:model="vatNumber" type="text" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
                         </div>
-                        <div class="sm:col-span-2">
-                            <label class="block text-sm font-medium text-gray-700 mb-1">Address</label>
-                            <input wire:model="address" type="text" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
+                        {{-- Address with Google Places autocomplete.  We
+                             only populate $address here (city / province /
+                             coords for individual workshops live on
+                             $locations rows; the Company.address column is
+                             only the primary contact / billing address).
+                             Use the placesAutocomplete Alpine helper from
+                             components/layouts/app.blade.php. --}}
+                        <div class="sm:col-span-2" x-data="placesAutocomplete({ addressModel: 'address' })">
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Primary address</label>
+                            <input x-ref="addressInput" wire:model="address" type="text" autocomplete="off" placeholder="Start typing to search Google Maps…" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
+                            @if($company->type === \App\Models\Company::TYPE_BODY_BUILDER)
+                                <p class="mt-1 text-xs text-amber-700">
+                                    This is just the primary / billing address. Add each manufacturing plant and satellite repair station separately under <strong>Locations</strong> below.
+                                </p>
+                            @endif
                         </div>
                         <div>
                             <label class="flex items-center gap-2">
@@ -304,9 +522,63 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         {{-- Users --}}
         <div class="rounded-xl border border-gray-200 bg-white shadow-sm">
-            <div class="border-b border-gray-200 px-6 py-4">
+            <div class="flex items-center justify-between border-b border-gray-200 px-6 py-4">
                 <h3 class="text-lg font-semibold text-gray-900">Users ({{ $users->count() }})</h3>
+                @if($canCreateUsers && $assignableRoles->isNotEmpty())
+                    <button wire:click="toggleAddUser" class="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-500 transition-colors">
+                        <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+                        {{ $showAddUser ? 'Cancel' : 'Add user' }}
+                    </button>
+                @endif
             </div>
+
+            @if($showAddUser && $canCreateUsers)
+                <div class="border-b border-gray-200 bg-blue-50/40 px-6 py-5">
+                    <form wire:submit.prevent="addUser" class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-xs font-medium text-gray-700 mb-1">Full name *</label>
+                            <input wire:model="newUserName" type="text" class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
+                            @error('newUserName') <p class="mt-0.5 text-xs text-red-600">{{ $message }}</p> @enderror
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-700 mb-1">Email *</label>
+                            <input wire:model="newUserEmail" type="email" class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
+                            @error('newUserEmail') <p class="mt-0.5 text-xs text-red-600">{{ $message }}</p> @enderror
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-700 mb-1">Phone</label>
+                            <input wire:model="newUserPhone" type="text" class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-700 mb-1">Role *</label>
+                            <select wire:model="newUserRoleSlug" class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
+                                <option value="">— select —</option>
+                                @foreach($assignableRoles as $role)
+                                    <option value="{{ $role->slug }}">{{ $role->name }} ({{ $role->tier }})</option>
+                                @endforeach
+                            </select>
+                            @error('newUserRoleSlug') <p class="mt-0.5 text-xs text-red-600">{{ $message }}</p> @enderror
+                        </div>
+                        <div class="sm:col-span-2">
+                            <label class="block text-xs font-medium text-gray-700 mb-1">Initial password *</label>
+                            <input wire:model="newUserPassword" type="text" class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm font-mono focus:border-blue-500 focus:ring-blue-500" {{ $generateNewUserPassword ? 'readonly' : '' }}>
+                            <label class="mt-2 flex items-center gap-2 text-xs text-gray-600">
+                                <input wire:model.live="generateNewUserPassword" type="checkbox" class="h-4 w-4 rounded border-gray-300 text-blue-600">
+                                Auto-generate password
+                            </label>
+                            <p class="mt-1 text-xs text-gray-500">
+                                The user will be forced to change this on first sign-in. Share it over a secure channel.
+                            </p>
+                            @error('newUserPassword') <p class="mt-0.5 text-xs text-red-600">{{ $message }}</p> @enderror
+                        </div>
+                        <div class="sm:col-span-2 flex justify-end gap-2">
+                            <button type="button" wire:click="toggleAddUser" class="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50">Cancel</button>
+                            <button type="submit" class="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-500">Invite user</button>
+                        </div>
+                    </form>
+                </div>
+            @endif
+
             <table class="min-w-full divide-y divide-gray-200">
                 <thead class="bg-gray-50">
                     <tr>
@@ -355,19 +627,86 @@ new #[Layout('components.layouts.app')] class extends Component {
                     </tr>
                     @empty
                     <tr>
-                        <td colspan="8" class="px-6 py-8 text-center text-sm text-gray-500">No users linked to this company yet. Use the Admin → Users page to invite team members.</td>
+                        <td colspan="8" class="px-6 py-8 text-center text-sm text-gray-500">
+                            No users linked yet.
+                            @if($canCreateUsers && $assignableRoles->isNotEmpty() && !$showAddUser)
+                                <button wire:click="toggleAddUser" class="text-blue-600 hover:text-blue-800 font-medium">Invite the first user →</button>
+                            @endif
+                        </td>
                     </tr>
                     @endforelse
                 </tbody>
             </table>
         </div>
 
-        {{-- Locations --}}
-        @if($locations->isNotEmpty())
+        {{-- Locations — always visible so the "Add location" CTA is
+             discoverable.  Body builders especially need this: a single
+             tenant often has a head-office plant plus satellite repair
+             stations plus secondary plants in other cities. --}}
         <div class="rounded-xl border border-gray-200 bg-white shadow-sm">
-            <div class="border-b border-gray-200 px-6 py-4">
-                <h3 class="text-lg font-semibold text-gray-900">Locations ({{ $locations->count() }})</h3>
+            <div class="flex items-center justify-between border-b border-gray-200 px-6 py-4">
+                <div>
+                    <h3 class="text-lg font-semibold text-gray-900">Locations ({{ $locations->count() }})</h3>
+                    @if($company->type === \App\Models\Company::TYPE_BODY_BUILDER)
+                        <p class="mt-0.5 text-xs text-gray-500">
+                            Add every site — main manufacturing plants, satellite repair stations, and plants in other cities. Each address becomes a pickable destination on incoming movement requests.
+                        </p>
+                    @endif
+                </div>
+                @if($canManageCompany)
+                    <button wire:click="toggleAddLocation" class="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-500 transition-colors">
+                        <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+                        {{ $showAddLocation ? 'Cancel' : 'Add location' }}
+                    </button>
+                @endif
             </div>
+
+            @if($showAddLocation && $canManageCompany)
+                <div class="border-b border-gray-200 bg-blue-50/40 px-6 py-5">
+                    <form wire:submit.prevent="addLocation" class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div class="sm:col-span-2">
+                            <label class="block text-xs font-medium text-gray-700 mb-1">Location name *</label>
+                            <input wire:model="newLocName" type="text" placeholder="e.g. Pretoria Plant, Cape Town Satellite, Durban Repair Station" class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
+                            @error('newLocName') <p class="mt-0.5 text-xs text-red-600">{{ $message }}</p> @enderror
+                        </div>
+
+                        {{-- Google Places autocomplete: place_changed fills
+                             address + city + province + lat + lng on the
+                             Livewire component in one shot. --}}
+                        <div class="sm:col-span-2" x-data="placesAutocomplete({ addressModel: 'newLocAddress', cityModel: 'newLocCity', provinceModel: 'newLocProvince', latModel: 'newLocLatitude', lngModel: 'newLocLongitude' })">
+                            <label class="block text-xs font-medium text-gray-700 mb-1">Address *</label>
+                            <input x-ref="addressInput" wire:model="newLocAddress" type="text" autocomplete="off" placeholder="Start typing to search Google Maps…" class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
+                            @error('newLocAddress') <p class="mt-0.5 text-xs text-red-600">{{ $message }}</p> @enderror
+                        </div>
+
+                        <div>
+                            <label class="block text-xs font-medium text-gray-700 mb-1">City</label>
+                            <input wire:model="newLocCity" type="text" class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm bg-gray-50">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-700 mb-1">Province</label>
+                            <input wire:model="newLocProvince" type="text" class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm bg-gray-50">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-700 mb-1">Site contact name</label>
+                            <input wire:model="newLocContactName" type="text" class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-700 mb-1">Site contact phone</label>
+                            <input wire:model="newLocContactPhone" type="text" class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm">
+                        </div>
+
+                        <input type="hidden" wire:model="newLocLatitude">
+                        <input type="hidden" wire:model="newLocLongitude">
+
+                        <div class="sm:col-span-2 flex justify-end gap-2">
+                            <button type="button" wire:click="toggleAddLocation" class="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50">Cancel</button>
+                            <button type="submit" class="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-500">Save location</button>
+                        </div>
+                    </form>
+                </div>
+            @endif
+
             <table class="min-w-full divide-y divide-gray-200">
                 <thead class="bg-gray-50">
                     <tr>
@@ -379,7 +718,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-gray-200 bg-white">
-                    @foreach($locations as $location)
+                    @forelse($locations as $location)
                     <tr>
                         <td class="whitespace-nowrap px-6 py-3 text-sm font-medium text-gray-900">{{ $location->company_name }}</td>
                         <td class="px-6 py-3 text-sm text-gray-500">{{ $location->address }}</td>
@@ -391,11 +730,19 @@ new #[Layout('components.layouts.app')] class extends Component {
                             </span>
                         </td>
                     </tr>
-                    @endforeach
+                    @empty
+                    <tr>
+                        <td colspan="5" class="px-6 py-8 text-center text-sm text-gray-500">
+                            No locations yet.
+                            @if($canManageCompany && !$showAddLocation)
+                                <button wire:click="toggleAddLocation" class="text-blue-600 hover:text-blue-800 font-medium">Add the first one →</button>
+                            @endif
+                        </td>
+                    </tr>
+                    @endforelse
                 </tbody>
             </table>
         </div>
-        @endif
 
     </div>
 </div>
