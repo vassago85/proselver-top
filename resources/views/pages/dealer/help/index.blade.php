@@ -118,7 +118,7 @@ new #[Layout('components.layouts.app')] class extends Component {};
                 <li><strong>Destination type</strong> &mdash; one of four:
                     <ul class="list-disc list-inside ml-4 mt-1 space-y-0.5 text-xs">
                         <li><strong>Delivery</strong> &mdash; final hand-over to another dealer or to a customer. Only these orders can be archived once complete.</li>
-                        <li><strong>Body Builder</strong> &mdash; vehicle goes for fitment; stays on <a class="underline" href="#body-builder">Stock In Transit</a> until you book the return.</li>
+                        <li><strong>Body Builder or Fitment</strong> &mdash; vehicle goes for any third-party work (full body builder, radio fitment, canopy on an LCV, accessories, etc.); stays on <a class="underline" href="#body-builder">Stock In Transit</a> until you book the return.</li>
                         <li><strong>Round Trip</strong> &mdash; COF, weighbridge, bank drop &mdash; driver waits and brings the vehicle straight back. Route distance is doubled automatically.</li>
                         <li><strong>Other Storage Facility</strong> &mdash; any off-site holding location (not body builder, not final). Stays on Stock In Transit until booked out.</li>
                     </ul>
@@ -194,7 +194,7 @@ new #[Layout('components.layouts.app')] class extends Component {};
         <div class="mt-3 space-y-3 text-sm text-zinc-700 dark:text-zinc-300">
             <p>If a vehicle isn't sitting at your dealership right now, it still belongs to you &mdash; and you need a single place to see where it actually is. That's the <a class="underline" href="{{ route('customer.stock.at-body-builder') }}">Stock In Transit</a> page. It rolls up three buckets:</p>
             <ul class="list-disc list-inside space-y-1 pl-2">
-                <li><strong>At body builder</strong> &mdash; you delivered the vehicle to a body builder; it's waiting for work to finish and a return movement.</li>
+                <li><strong>At body builder / fitment</strong> &mdash; you delivered the vehicle for body-builder work, radio / canopy / accessory fitment, or any other third-party work; it's waiting for the work to finish and a return movement.</li>
                 <li><strong>At yard / holding</strong> &mdash; you delivered to a yard or other holding location (transit stop); the vehicle hasn't reached its final dealer yet.</li>
                 <li><strong>In transit</strong> &mdash; an active movement that's been collected or is on the road right now (any executor type).</li>
             </ul>

@@ -231,7 +231,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                 ->values()->all(),
             'destinationOptions' => collect([
                 Job::DESTINATION_DEALER       => 'Delivery',
-                Job::DESTINATION_BODY_BUILDER => 'Body Builder',
+                Job::DESTINATION_BODY_BUILDER => 'Body Builder or Fitment',
                 Job::DESTINATION_ROUND_TRIP   => 'Round Trip',
                 Job::DESTINATION_YARD         => 'Other Storage Facility',
                 // Legacy bucket — kept so ops can still filter old rows.

@@ -508,7 +508,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                     <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
                         @foreach([
                             \App\Models\Job::DESTINATION_DEALER => ['label' => 'Delivery', 'sub' => 'To another dealer or customer (final)'],
-                            \App\Models\Job::DESTINATION_BODY_BUILDER => ['label' => 'Body Builder', 'sub' => 'Vehicle goes for fitment'],
+                            \App\Models\Job::DESTINATION_BODY_BUILDER => ['label' => 'Body Builder or Fitment', 'sub' => 'Body builder, radio / canopy fitment, accessories'],
                             \App\Models\Job::DESTINATION_ROUND_TRIP => ['label' => 'Round Trip', 'sub' => 'COF / weighbridge / bank drop — driver waits'],
                             \App\Models\Job::DESTINATION_YARD => ['label' => 'Other Storage Facility', 'sub' => 'Off-site storage / holding'],
                         ] as $value => $opts)
@@ -521,7 +521,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                         @endforeach
                     </div>
                     @if($destinationType === \App\Models\Job::DESTINATION_BODY_BUILDER)
-                        <p class="mt-2 text-xs text-amber-700">Body-builder movements keep the vehicle in your <strong>Stock In Transit</strong> view and can't be archived &mdash; book a return movement once the fitment is done.</p>
+                        <p class="mt-2 text-xs text-amber-700">Body builder / fitment movements (radio, canopy, accessories, full body) keep the vehicle in your <strong>Stock In Transit</strong> view and can't be archived &mdash; book a return movement once the fitment is done.</p>
                     @elseif($destinationType === \App\Models\Job::DESTINATION_ROUND_TRIP)
                         <p class="mt-2 text-xs text-indigo-700">Round trips automatically double the route distance for reporting. The vehicle returns to pickup, so the order isn't archivable but also doesn't park anywhere.</p>
                     @elseif($destinationType === \App\Models\Job::DESTINATION_YARD)

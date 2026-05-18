@@ -100,7 +100,7 @@ class extends Component
                     ? 'body_builder'
                     : 'other_storage';
                 $j->bucket_label = $j->destination_type === Job::DESTINATION_BODY_BUILDER
-                    ? 'At body builder'
+                    ? 'At body builder / fitment'
                     : 'At other storage facility';
                 return $j;
             })
@@ -210,7 +210,7 @@ class extends Component
         @php
             $tabs = [
                 'all' => ['label' => 'All', 'colour' => 'gray'],
-                'body_builder' => ['label' => 'At body builder', 'colour' => 'amber'],
+                'body_builder' => ['label' => 'At body builder / fitment', 'colour' => 'amber'],
                 'other_storage' => ['label' => 'At other storage facility', 'colour' => 'sky'],
                 'in_transit' => ['label' => 'In transit', 'colour' => 'indigo'],
             ];
