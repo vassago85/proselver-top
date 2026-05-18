@@ -165,7 +165,13 @@ new #[Layout('components.layouts.app')] class extends Component {
         // shows the same rows in detail. We cap the breakdown to the
         // top 10 customers so it stays glanceable; everything else
         // rolls into an "Other" bucket.
+        //
+        // reorder() clears the orderByDesc('delivered_at') that the
+        // base query carries — Postgres won't ORDER BY a non-aggregated
+        // column once we GROUP BY company_id, and that order is
+        // meaningless for the per-customer roll-up anyway.
         $customerBreakdown = (clone $base)
+            ->reorder()
             ->select('company_id', DB::raw('count(*) as deliveries'))
             ->groupBy('company_id')
             ->orderByDesc('deliveries')
