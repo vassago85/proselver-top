@@ -119,7 +119,7 @@ new #[Layout('components.layouts.app')] class extends Component {};
                     <ul class="list-disc list-inside ml-4 mt-1 space-y-0.5 text-xs">
                         <li><strong>Delivery</strong> &mdash; final hand-over to another dealer or to a customer. Only these orders can be archived once complete.</li>
                         <li><strong>Body Builder or Fitment</strong> &mdash; vehicle goes for any third-party work (full body builder, radio fitment, canopy on an LCV, accessories, etc.); stays on <a class="underline" href="#body-builder">Stock In Transit</a> until you book the return.</li>
-                        <li><strong>Round Trip</strong> &mdash; COF, weighbridge, bank drop &mdash; driver waits and brings the vehicle straight back. Route distance is doubled automatically.</li>
+                        <li><strong>Round Trip</strong> &mdash; COF, weighbridge, pre-delivery inspection &mdash; driver waits and brings the vehicle straight back. Route distance is doubled automatically.</li>
                         <li><strong>Other Storage Facility</strong> &mdash; any off-site holding location (not body builder, not final). Stays on Stock In Transit until booked out.</li>
                     </ul>
                 </li>

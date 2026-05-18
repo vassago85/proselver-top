@@ -178,11 +178,12 @@ class Job extends Model
     // movement takes it to a Delivery destination.
     //
     // DESTINATION_ROUND_TRIP = "Round Trip" — COF check, weighbridge
-    // run, bank drop, etc. The driver waits at the destination and
-    // brings the vehicle straight back to pickup, so once the job is
-    // delivered the vehicle is "back at base" and drops out of stock
-    // views. Choosing this destination auto-sets is_round_trip = true
-    // so the route distance is doubled for reporting / pricing.
+    // run, pre-delivery inspection, etc. The driver waits at the
+    // destination and brings the vehicle straight back to pickup, so
+    // once the job is delivered the vehicle is "back at base" and
+    // drops out of stock views. Choosing this destination auto-sets
+    // is_round_trip = true so the route distance is doubled for
+    // reporting / pricing.
     //
     // DESTINATION_YARD remains the storage backing for "Other Storage
     // Facility" in the UI — generic non-final holding location, not

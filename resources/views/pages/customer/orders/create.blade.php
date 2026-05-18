@@ -214,7 +214,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             ]);
         }
 
-        session()->flash('success', 'Order submitted successfully — reference ' . $job->job_number);
+        session()->flash('success', 'Movement submitted successfully — reference ' . $job->job_number);
         $this->redirect(route('customer.orders.show', $job), navigate: true);
     }
 
@@ -349,7 +349,7 @@ new #[Layout('components.layouts.app')] class extends Component {
 ?>
 
 <div>
-    <x-slot:header>New Order</x-slot:header>
+    <x-slot:header>New Movement</x-slot:header>
 
     <div class="mb-4">
         <a href="{{ route('customer.orders.index') }}" class="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700">
@@ -509,7 +509,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                         @foreach([
                             \App\Models\Job::DESTINATION_DEALER => ['label' => 'Delivery', 'sub' => 'To another dealer or customer (final)'],
                             \App\Models\Job::DESTINATION_BODY_BUILDER => ['label' => 'Body Builder or Fitment', 'sub' => 'Body builder, radio / canopy fitment, accessories'],
-                            \App\Models\Job::DESTINATION_ROUND_TRIP => ['label' => 'Round Trip', 'sub' => 'COF / weighbridge / bank drop — driver waits'],
+                            \App\Models\Job::DESTINATION_ROUND_TRIP => ['label' => 'Round Trip', 'sub' => 'COF / weighbridge / pre-delivery — driver waits'],
                             \App\Models\Job::DESTINATION_YARD => ['label' => 'Other Storage Facility', 'sub' => 'Off-site storage / holding'],
                         ] as $value => $opts)
                             <label class="cursor-pointer rounded-lg border-2 px-3 py-2 transition-colors hover:border-blue-300
@@ -697,7 +697,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                     Cancel
                 </a>
                 <button type="submit" class="rounded-lg bg-blue-600 px-6 py-2.5 text-sm font-semibold text-white hover:bg-blue-500 transition-colors">
-                    Submit Order
+                    Submit Movement
                 </button>
             </div>
         </form>
