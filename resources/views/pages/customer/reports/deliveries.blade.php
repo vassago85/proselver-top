@@ -194,6 +194,14 @@ new #[Layout('components.layouts.app')] class extends Component {
         $archivedInWindow = (clone $base)->whereNotNull('archived_at')->count();
 
         // Per-destination breakdown ordered by volume.
+        //
+        // MUST mirror the same filter set as $base / $total — otherwise the
+        // breakdown shows rows that aren't counted in the denominator and
+        // every percentage in the Share column reads 0.0% (or, worse, > 100%
+        // when the denominator happens to be smaller). The previous version
+        // forgot destinationType + tripId, which is why a FAW dealer
+        // filtering by destinationType=round_trip saw 0 KPI deliveries but
+        // a full table of depot destinations underneath with 0% shares.
         $destinationBreakdown = Job::query()
             ->where('company_id', $this->company->id)
             ->whereIn('status', [Job::STATUS_DELIVERED, Job::STATUS_COMPLETED])
@@ -202,6 +210,8 @@ new #[Layout('components.layouts.app')] class extends Component {
             ->when($this->brandId,         fn ($q) => $q->where('brand_id', $this->brandId))
             ->when($this->vehicleClassId,  fn ($q) => $q->where('vehicle_class_id', $this->vehicleClassId))
             ->when($this->executorType,    fn ($q) => $q->where('executor_type', $this->executorType))
+            ->when($this->destinationType, fn ($q) => $q->where('destination_type', $this->destinationType))
+            ->when($this->tripId,          fn ($q) => $q->where('trip_id', $this->tripId))
             ->when($this->archivedFilter === 'only',    fn ($q) => $q->whereNotNull('archived_at'))
             ->when($this->archivedFilter === 'exclude', fn ($q) => $q->whereNull('archived_at'))
             ->select('delivery_location_id', DB::raw('count(*) as deliveries'))
