@@ -20,8 +20,16 @@ class CollectionNoteService
         $profile = $driver?->driverProfile;
         $verificationUrl = $this->buildVerificationUrl($job);
         $qrDataUri = $this->buildQrDataUri($verificationUrl);
-        $carrierLogoUri = $this->buildCarrierLogoDataUri();
         $inspectionDiagramUri = $this->buildImageDataUri(public_path('inspection-diagram.png'));
+
+        // Resolve which company / firm is actually moving the vehicle
+        // so the masthead, "Carrier" rows and signature blocks reflect
+        // that. ProSelver-executed jobs keep the existing branded PDF;
+        // dealer-internal / 3rd-party-courier / self-collect jobs swap
+        // the carrier name, doc title, and footer to match the actual
+        // executor — the dealer is the one issuing the paperwork to
+        // their own driver, not us.
+        $carrier = $this->resolveCarrier($job);
 
         $html = view('documents.collection-note', [
             'job' => $job,
@@ -29,8 +37,11 @@ class CollectionNoteService
             'profile' => $profile,
             'qrUrl' => $qrDataUri,
             'verificationUrl' => $verificationUrl,
-            'carrierLogoUri' => $carrierLogoUri,
+            'carrierLogoUri' => $carrier['logo_uri'],
             'inspectionDiagramUri' => $inspectionDiagramUri,
+            'carrierName' => $carrier['name'],
+            'docTitle' => $carrier['doc_title'],
+            'footerLine' => $carrier['footer'],
         ])->render();
 
         $options = new Options();
@@ -78,15 +89,48 @@ class CollectionNoteService
     }
 
     /**
-     * Executing-carrier logo (currently Proselver Technologies — the company
-     * physically performing every movement on the platform today). Embedded
-     * as a base64 data URI so Dompdf can render it without `isRemoteEnabled`.
-     * Returns null if the logo file is missing, and the view falls back to
-     * a text-only masthead.
+     * Decide the carrier identity for the PDF based on executor_type.
+     * Keeps the template generic so the same document can serve
+     * ProSelver-executed jobs, dealer-internal jobs, 3rd-party
+     * courier jobs and self-collect releases.
+     *
+     * @return array{name:string, doc_title:string, footer:string, logo_uri:?string}
      */
-    protected function buildCarrierLogoDataUri(): ?string
+    protected function resolveCarrier(Job $job): array
     {
-        return $this->buildImageDataUri(public_path('proselverlogo-2.png'));
+        $proselverLogo = $this->buildImageDataUri(public_path('proselverlogo-2.png'));
+
+        return match ($job->executor_type) {
+            Job::EXECUTOR_INTERNAL => [
+                'name'      => $job->company?->name ?: 'Dealer-managed movement',
+                'doc_title' => 'Delivery Note',
+                'footer'    => ($job->company?->name ?: 'Dealer') . ' — issued via TRIDENT Control & Dispatch Center',
+                // We deliberately drop the ProSelver logo for dealer-
+                // managed paperwork — no carrier logo for internal
+                // moves until we wire a per-company logo field on
+                // Company. The text masthead falls back cleanly.
+                'logo_uri'  => null,
+            ],
+            Job::EXECUTOR_THIRD_PARTY => [
+                'name'      => $job->third_party_courier_name ?: '3rd-Party Courier',
+                'doc_title' => 'Delivery Note',
+                'footer'    => 'Movement by ' . ($job->third_party_courier_name ?: '3rd-party courier') . ' — issued via TRIDENT Control & Dispatch Center',
+                'logo_uri'  => null,
+            ],
+            Job::EXECUTOR_SELF_COLLECT => [
+                'name'      => $job->company?->name ?: 'Self-collect release',
+                'doc_title' => 'Vehicle Release Note',
+                'footer'    => ($job->company?->name ?: 'Dealer') . ' — issued via TRIDENT Control & Dispatch Center',
+                'logo_uri'  => null,
+            ],
+            // ProSelver (default) — preserves the original branded PDF.
+            default => [
+                'name'      => 'Proselver Technologies',
+                'doc_title' => 'Collection Note',
+                'footer'    => 'Proselver Technologies (Pty) Ltd — dispatched via TRIDENT Control & Dispatch Center',
+                'logo_uri'  => $proselverLogo,
+            ],
+        };
     }
 
     /**

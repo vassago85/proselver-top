@@ -293,6 +293,21 @@ new #[Layout('components.layouts.driver')] class extends Component {
                 <span class="font-mono">VIN {{ substr($job->vin, -8) }}</span>
             @endif
         </div>
+
+        {{-- Download paperwork — PDF the driver can pull on-device
+             before leaving the depot if it wasn't printed for them.
+             Available the moment a driver is assigned. Gate matches
+             JobPolicy::generateCollectionNote. --}}
+        @can('generateCollectionNote', $job)
+            <div class="mt-3 border-t border-slate-100 pt-3">
+                <a href="{{ route('collection-note.download', $job) }}" target="_blank"
+                    class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 active:bg-slate-100">
+                    <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    {{ $job->executor_type === \App\Models\Job::EXECUTOR_PROSELVER ? 'Collection Note PDF' : 'Delivery Note PDF' }}
+                </a>
+                <p class="mt-1 text-[11px] text-slate-500">5-page paperwork &middot; print before you leave, get it signed at pickup &amp; delivery.</p>
+            </div>
+        @endcan
     </section>
 
     @if(trim($job->customer_notes ?? '') !== '')

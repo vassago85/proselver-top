@@ -50,6 +50,7 @@ new #[Layout('components.layouts.app')] class extends Component {};
             <p><a class="text-blue-600 hover:underline dark:text-blue-400" href="{{ route('customer.trips.my-day') }}">My Day</a> <span class="text-zinc-500">&mdash; mobile driver view</span></p>
             <p><a class="text-blue-600 hover:underline dark:text-blue-400" href="{{ route('customer.drivers.index') }}">My Drivers</a> <span class="text-zinc-500">&mdash; CRUD for your driver pool</span></p>
             <p><a class="text-blue-600 hover:underline dark:text-blue-400" href="{{ route('customer.reports.deliveries') }}">Deliveries Report</a> <span class="text-zinc-500">&mdash; KPIs + CSV export</span></p>
+            <p><a class="text-blue-600 hover:underline dark:text-blue-400" href="#delivery-note">Delivery Note PDF</a> <span class="text-zinc-500">&mdash; on each order page once a driver is assigned</span></p>
             <p><a class="text-blue-600 hover:underline dark:text-blue-400" href="{{ route('dealer.locations.index') }}">Address Book</a> <span class="text-zinc-500">&mdash; locations / depots</span></p>
             <p><a class="text-blue-600 hover:underline dark:text-blue-400" href="{{ route('dealer.team.index') }}">Team</a> <span class="text-zinc-500">&mdash; users in your account</span></p>
         </div>
@@ -70,6 +71,7 @@ new #[Layout('components.layouts.app')] class extends Component {};
                 <li><a href="#change-executor" class="text-blue-600 hover:underline dark:text-blue-400">Changing the executor or driver</a></li>
                 <li><a href="#deliveries" class="text-blue-600 hover:underline dark:text-blue-400">Deliveries report</a></li>
                 <li><a href="#driver-pwa" class="text-blue-600 hover:underline dark:text-blue-400">Driver PWA</a></li>
+                <li><a href="#delivery-note" class="text-blue-600 hover:underline dark:text-blue-400">Delivery paperwork (PDF)</a></li>
                 <li><a href="#locations" class="text-blue-600 hover:underline dark:text-blue-400">Managing locations</a></li>
                 <li><a href="#cutoff" class="text-blue-600 hover:underline dark:text-blue-400">Collection date &amp; cutoff</a></li>
                 <li><a href="#roles" class="text-blue-600 hover:underline dark:text-blue-400">Roles &amp; permissions</a></li>
@@ -256,6 +258,24 @@ new #[Layout('components.layouts.app')] class extends Component {};
                 <li><strong>My Day</strong> &mdash; the trip-planner view when you've grouped multiple stops onto the driver.</li>
             </ul>
             <p class="text-xs text-zinc-500 dark:text-zinc-400">There's no separate dealer-driver app &mdash; same software, same features, just scoped to whatever jobs you've assigned them.</p>
+        </div>
+    </section>
+
+    {{-- Delivery paperwork --}}
+    <section id="delivery-note" class="scroll-mt-24 rounded-xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-700 dark:bg-zinc-800">
+        <h2 class="text-lg font-semibold text-zinc-900 dark:text-white">Delivery paperwork</h2>
+        <div class="mt-3 space-y-3 text-sm text-zinc-700 dark:text-zinc-300">
+            <p>Whenever a driver is assigned to a movement that <strong>your dealership is running</strong> (My Driver / 3rd-Party / Self-Collect), the system can generate a 5-page <strong>Delivery Note</strong> PDF for the driver / courier / collector to take with them. It contains:</p>
+            <ol class="list-decimal list-inside space-y-1 pl-2">
+                <li><strong>Delivery Note</strong> &mdash; movement reference, driver details, vehicle (VIN / reg / model), pickup &amp; delivery sites, special instructions, "Released By" signature block + dispatcher's stamp box, "Received By (Driver)" signature block, and a QR code linking to the verification page.</li>
+                <li><strong>Manual Inspection Report</strong> &mdash; full Motorvia-style exterior / interior / accessories checklist + a damage diagram. Drivers use this only if the PWA isn't available; otherwise the photos in the app are the inspection record.</li>
+                <li><strong>Proof of Delivery (Customer Copy)</strong> &mdash; signed at delivery, leaves with the receiving site.</li>
+                <li>Blank back page so the Customer Copy walks away clean if you print double-sided.</li>
+                <li><strong>Proof of Delivery (Office Copy)</strong> &mdash; signed at delivery, stays with you.</li>
+            </ol>
+            <p>The masthead, "Carrier" rows and footer all carry <strong>your dealership's name</strong> (not ProSelver's) on My-Driver / 3rd-Party / Self-Collect movements &mdash; so the paperwork is unambiguously yours when it lands at the customer.</p>
+            <p>You'll see a <em>Delivery Note PDF</em> button on the order page (next to the executor badge) the moment a driver is assigned. The same PDF is downloadable from the Driver PWA so the driver can pull it themselves if you didn't print it for them.</p>
+            <p class="text-xs text-zinc-500 dark:text-zinc-400">For ProSelver-executed jobs the button still reads <em>"Collection Note PDF"</em> and is restricted to ProSelver ops &mdash; ProSelver issues that paperwork, not your dealership.</p>
         </div>
     </section>
 

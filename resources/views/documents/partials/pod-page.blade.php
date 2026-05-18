@@ -5,14 +5,14 @@
     captured at the destination, signed on delivery.
 --}}
 
-{{-- Masthead --}}
+{{-- Masthead — $carrierName is supplied by the parent template. --}}
 <table class="masthead">
     <tr>
         <td style="width: 60%;">
             @if($carrierLogoUri)
-                <img src="{{ $carrierLogoUri }}" alt="Proselver Technologies" class="carrier-logo">
+                <img src="{{ $carrierLogoUri }}" alt="{{ $carrierName }}" class="carrier-logo">
             @else
-                <div class="carrier-fallback">Proselver Technologies</div>
+                <div class="carrier-fallback">{{ $carrierName }}</div>
             @endif
         </td>
         <td style="width: 40%;">
@@ -46,7 +46,7 @@
             <table class="detail">
                 <tr><td class="label">Job No.</td><td class="value">{{ $job->job_number }}</td></tr>
                 <tr><td class="label">Customer</td><td class="value">{{ $job->company?->name ?? '—' }}</td></tr>
-                <tr><td class="label">Carrier</td><td class="value">Proselver Technologies</td></tr>
+                <tr><td class="label">Carrier</td><td class="value">{{ $carrierName }}</td></tr>
                 <tr><td class="label">Driver</td><td class="value">{{ $driver?->name ?? '—' }}</td></tr>
             </table>
         </td>
@@ -125,7 +125,7 @@
                     <tr><td class="label">Name</td><td class="value">{{ $driver?->name ?? '—' }}</td></tr>
                     <tr><td class="label">Licence</td><td class="value">{{ $profile?->drivers_licence_number ?? '—' }}</td></tr>
                     <tr><td class="label">Cellphone</td><td class="value">{{ $profile?->cellphone ?? $driver?->phone ?? '—' }}</td></tr>
-                    <tr><td class="label">Carrier</td><td class="value">Proselver Technologies</td></tr>
+                    <tr><td class="label">Carrier</td><td class="value">{{ $carrierName }}</td></tr>
                 </table>
                 <div style="font-size: 8px; color: #6b7280; margin-top: 6px; line-height: 1.3;">
                     Tick each line on the Condition on Delivery list below. Anything

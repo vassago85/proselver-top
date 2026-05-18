@@ -274,6 +274,13 @@ new #[Layout('components.layouts.app')] class extends Component {
                 && $this->job->executor_type === Job::EXECUTOR_INTERNAL,
             'canArchive' => $user->can('archive', $this->job),
             'canUnarchive' => $user->can('unarchive', $this->job),
+            // Delivery Note / Collection Note PDF. The same gate
+            // (JobPolicy::generateCollectionNote) covers ProSelver
+            // ops, dealer planners on their own non-ProSelver jobs,
+            // and the assigned driver. The UI label switches based
+            // on executor — ProSelver jobs stay "Collection Note",
+            // dealer-issued paperwork reads "Delivery Note".
+            'canGenerateDeliveryNote' => $user->can('generateCollectionNote', $this->job),
             'internalDrivers' => $internalDrivers,
             'internalDriverOptions' => $internalDriverOptions,
             'executorChoices' => Job::EXECUTOR_LABELS,
@@ -566,6 +573,22 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <span class="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold {{ $executorBadgeClass }}">
                     {{ $job->executorLabel() }}
                 </span>
+
+                @if($canGenerateDeliveryNote)
+                    @php
+                        $isProselver = $job->executor_type === \App\Models\Job::EXECUTOR_PROSELVER;
+                        $noteLabel = $isProselver ? 'Collection Note' : 'Delivery Note';
+                        $noteHint  = $isProselver
+                            ? 'Standard ProSelver paperwork (5 pages: collection note, manual inspection, two PODs).'
+                            : 'Delivery paperwork for your driver to take with them — 5 pages: delivery note, manual inspection, two PODs. Branded with your company name, not ProSelver.';
+                    @endphp
+                    <a href="{{ route('collection-note.download', $job) }}" target="_blank"
+                        class="ml-1 inline-flex items-center gap-1.5 rounded-full border border-blue-300 bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-800 hover:bg-blue-100"
+                        title="{{ $noteHint }}">
+                        <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                        {{ $noteLabel }} PDF
+                    </a>
+                @endif
 
                 @if($job->is_round_trip)
                     <span class="ml-1 inline-flex items-center gap-1 rounded-full border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-[11px] font-semibold text-indigo-700" title="Driver waits at the destination and returns on the same trip (e.g. COF, weighbridge)">

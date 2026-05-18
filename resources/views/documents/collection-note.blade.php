@@ -1,8 +1,23 @@
+@php
+    /*
+     * Dynamic carrier identity — set by CollectionNoteService::resolveCarrier()
+     * based on $job->executor_type. ProSelver-executed jobs keep the
+     * historical "Collection Note" branding; dealer-internal / courier
+     * / self-collect jobs render the same template with the dealer's
+     * (or courier's) name in the masthead, Carrier rows and footer.
+     *
+     * Defaults below keep the partial render-safe if the variable is
+     * ever passed through without going via the service.
+     */
+    $carrierName  = $carrierName  ?? 'Proselver Technologies';
+    $docTitle     = $docTitle     ?? 'Collection Note';
+    $footerLine   = $footerLine   ?? 'Proselver Technologies (Pty) Ltd — dispatched via TRIDENT Control & Dispatch Center';
+@endphp
 <!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>Collection Note - {{ $job->job_number }}</title>
+    <title>{{ $docTitle }} - {{ $job->job_number }}</title>
     <style>
         @page { margin: 28px 32px 56px 32px; }
 
@@ -222,13 +237,13 @@
         <tr>
             <td style="width: 60%;">
                 @if($carrierLogoUri)
-                    <img src="{{ $carrierLogoUri }}" alt="Proselver Technologies" class="carrier-logo">
+                    <img src="{{ $carrierLogoUri }}" alt="{{ $carrierName }}" class="carrier-logo">
                 @else
-                    <div class="carrier-fallback">Proselver Technologies</div>
+                    <div class="carrier-fallback">{{ $carrierName }}</div>
                 @endif
             </td>
             <td style="width: 40%;">
-                <div class="doc-title">Collection Note</div>
+                <div class="doc-title">{{ $docTitle }}</div>
                 <div class="doc-number">{{ $job->job_number }}</div>
             </td>
         </tr>
@@ -258,7 +273,7 @@
                     <tr><td class="label">Job No.</td><td class="value">{{ $job->job_number }}</td></tr>
                     <tr><td class="label">Date</td><td class="value">{{ $job->scheduled_date?->format('d M Y') ?? '—' }}</td></tr>
                     <tr><td class="label">Customer</td><td class="value">{{ $job->company?->name ?? '—' }}</td></tr>
-                    <tr><td class="label">Carrier</td><td class="value">Proselver Technologies</td></tr>
+                    <tr><td class="label">Carrier</td><td class="value">{{ $carrierName }}</td></tr>
                 </table>
             </td>
             <td>
@@ -408,9 +423,9 @@
         <tr>
             <td style="width: 60%;">
                 @if($carrierLogoUri)
-                    <img src="{{ $carrierLogoUri }}" alt="Proselver Technologies" class="carrier-logo">
+                    <img src="{{ $carrierLogoUri }}" alt="{{ $carrierName }}" class="carrier-logo">
                 @else
-                    <div class="carrier-fallback">Proselver Technologies</div>
+                    <div class="carrier-fallback">{{ $carrierName }}</div>
                 @endif
             </td>
             <td style="width: 40%;">
@@ -585,7 +600,7 @@
     <div class="mi-section">
         <div class="mi-section-title">Signatures</div>
         @php($_sigDate = ($job->scheduled_date ?? now())->format('d M Y'))
-        @php($_carrierName = 'Proselver Technologies')
+        @php($_carrierName = $carrierName)
         <table class="mi-sig">
             <tr>
                 <td class="role">Dispatch</td>
@@ -644,7 +659,7 @@
 
     {{-- Fixed footer — lives inside the @page bottom margin --}}
     <div class="page-footer">
-        Proselver Technologies (Pty) Ltd &mdash; dispatched via TRIDENT Control &amp; Dispatch Center
+        {{ $footerLine }}
     </div>
 
 </body>

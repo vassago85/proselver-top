@@ -328,14 +328,48 @@ class JobPolicy
 
     public function generateCollectionNote(User $user, Job $job): bool
     {
-        return $user->canGenerateCollectionNote() && in_array($job->status, [
+        $allowedStatuses = [
             Job::STATUS_DRIVER_ASSIGNED,
             Job::STATUS_READY_FOR_COLLECTION,
             Job::STATUS_COLLECTED,
             Job::STATUS_IN_TRANSIT,
             Job::STATUS_DELIVERED,
             Job::STATUS_COMPLETED,
-        ]);
+        ];
+
+        if (! in_array($job->status, $allowedStatuses, true)) {
+            return false;
+        }
+
+        // ProSelver ops staff can always pull the paperwork — same
+        // rule as before the dealer-executor work.
+        if ($user->canGenerateCollectionNote()) {
+            return true;
+        }
+
+        // Dealer planners (canPlanMovements) can pull the delivery
+        // note for their OWN non-ProSelver movements. They issue the
+        // paperwork to their own driver / courier / self-collector,
+        // so we let them generate the PDF inside their company scope.
+        // ProSelver-executed jobs stay locked to ProSelver ops — the
+        // dealer's copy of that paperwork comes from us, not from
+        // their tenant.
+        if (
+            $user->canPlanMovements()
+            && $job->executor_type !== Job::EXECUTOR_PROSELVER
+            && $this->view($user, $job)
+        ) {
+            return true;
+        }
+
+        // Assigned internal driver pulling their own delivery note
+        // from the PWA. Already gated by view() — drivers can only
+        // see jobs assigned to them.
+        if ($user->isDriver() && $job->driver_user_id === $user->id) {
+            return true;
+        }
+
+        return false;
     }
 
     /**
