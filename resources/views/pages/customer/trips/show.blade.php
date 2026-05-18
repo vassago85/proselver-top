@@ -53,7 +53,7 @@ class extends Component
 
         $this->trip = $trip->load(['driver', 'stops.job.brand', 'stops.job.pickupLocation', 'stops.job.deliveryLocation', 'stops.location', 'startLocation', 'endLocation']);
 
-        $this->canEdit = $user->hasAnyRole(['customer_owner', 'customer_admin', 'customer_dispatcher'])
+        $this->canEdit = $user->canPlanMovements()
             && !in_array($trip->status, [Trip::STATUS_COMPLETED, Trip::STATUS_CANCELLED], true);
     }
 
@@ -225,7 +225,7 @@ class extends Component
 
     public function completeTrip(): void
     {
-        if (auth()->user()->hasAnyRole(['customer_owner', 'customer_admin', 'customer_dispatcher'])) {
+        if (auth()->user()->canPlanMovements()) {
             $this->trip->complete();
             $this->refreshTrip();
         }

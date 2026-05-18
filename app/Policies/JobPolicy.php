@@ -167,8 +167,12 @@ class JobPolicy
         // driver pool). They must NOT be able to touch executor_type
         // = proselver / third_party / self_collect jobs — those have
         // either ProSelver doing the assignment or no driver at all.
+        // Use canPlanMovements() so legacy dealer (dealer_principal,
+        // sales_manager_*, stock_controller) and OEM (oem_admin, oem_planner)
+        // roles get the same authority as their unified-customer peers
+        // until they're migrated to the customer_* tier.
         if ($job->executor_type === Job::EXECUTOR_INTERNAL
-            && $user->hasAnyRole(['customer_owner', 'customer_admin', 'customer_dispatcher'])
+            && $user->canPlanMovements()
             && $user->companies->pluck('id')->contains($job->company_id)
         ) {
             return true;
@@ -194,7 +198,7 @@ class JobPolicy
             return true;
         }
 
-        if ($user->hasAnyRole(['customer_owner', 'customer_admin', 'customer_dispatcher'])
+        if ($user->canPlanMovements()
             && $user->companies->pluck('id')->contains($job->company_id)
         ) {
             return true;
@@ -221,7 +225,7 @@ class JobPolicy
             return true;
         }
 
-        if ($user->hasAnyRole(['customer_owner', 'customer_admin'])
+        if ($user->canManageCompanyData()
             && $user->companies->pluck('id')->contains($job->company_id)
         ) {
             return true;
@@ -240,7 +244,7 @@ class JobPolicy
             return true;
         }
 
-        if ($user->hasAnyRole(['customer_owner', 'customer_admin'])
+        if ($user->canManageCompanyData()
             && $user->companies->pluck('id')->contains($job->company_id)
         ) {
             return true;

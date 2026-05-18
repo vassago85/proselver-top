@@ -48,7 +48,7 @@ class extends Component
         $this->company = auth()->user()->companies()->first();
         abort_unless($this->company, 403);
         abort_unless(
-            auth()->user()->hasAnyRole(['customer_owner', 'customer_admin']),
+            auth()->user()->canManageCompanyData(),
             403,
             'Only the account owner or admin can manage drivers.'
         );

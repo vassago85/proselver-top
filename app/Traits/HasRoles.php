@@ -190,6 +190,44 @@ trait HasRoles
         return $this->hasAnyRole(['customer_dispatcher', 'customer_owner']);
     }
 
+    /**
+     * Company-side "admin" — can run CRUD on the company's settings, users,
+     * drivers, locations, and is the audience for the manage-archive /
+     * change-executor surfaces in the customer portal.
+     *
+     * Includes BOTH the modern unified-customer roles (customer_owner /
+     * customer_admin) AND the legacy dealer / OEM equivalents so a dealer
+     * principal or OEM admin who hasn't yet been migrated to the customer
+     * tier still gets the same surfaces as their migrated peers. Without
+     * this bridge, anyone landing on /dealer/dashboard would hit a wall
+     * of 403s the moment they clicked into a new feature.
+     */
+    public function canManageCompanyData(): bool
+    {
+        return $this->hasAnyRole([
+            'customer_owner', 'customer_admin',
+            'dealer_principal', 'stock_controller',
+            'sales_manager_new', 'sales_manager_used',
+            'oem_admin',
+        ]);
+    }
+
+    /**
+     * Company-side "dispatcher and above" — can plan and execute
+     * movements: book orders, assign drivers, plan trips, confirm
+     * readiness, archive deliveries. Strict superset of
+     * canManageCompanyData() with dispatcher-grade roles added on top.
+     */
+    public function canPlanMovements(): bool
+    {
+        return $this->canManageCompanyData()
+            || $this->hasAnyRole([
+                'customer_dispatcher',
+                'sales_person_new', 'sales_person_used',
+                'oem_planner',
+            ]);
+    }
+
     public function canPlanOrders(): bool
     {
         return $this->hasAnyRole(['super_admin', 'developer', 'operations_controller']);

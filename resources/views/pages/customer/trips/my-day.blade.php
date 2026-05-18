@@ -24,7 +24,7 @@ class extends Component
         $user = auth()->user();
         abort_unless($user, 403);
         abort_unless(
-            $user->hasAnyRole(['driver', 'customer_dispatcher', 'customer_admin', 'customer_owner']),
+            $user->isDriver() || $user->canPlanMovements(),
             403,
             'My Day is for drivers and their dispatchers.'
         );

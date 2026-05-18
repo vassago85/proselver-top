@@ -107,16 +107,42 @@ new #[Layout('components.layouts.app')] class extends Component {
                     <p class="mt-1 text-sm text-slate-300">{{ auth()->user()->company()?->name ?? '—' }}</p>
                 </div>
                 <div class="flex flex-wrap gap-2">
-                    <a href="{{ route('dealer.bookings.create') }}"
+                    {{-- Primary CTA: the unified booking flow with the
+                         executor selector. This is what most dealer users
+                         will reach for now that they can run local
+                         movements with their own drivers / a courier /
+                         self-collect. The legacy ProSelver-only flow
+                         stays one click away under "View Bookings". --}}
+                    <a href="{{ route('customer.orders.create') }}"
                        class="inline-flex items-center gap-2 rounded-lg bg-white px-4 py-2.5 text-sm font-semibold text-slate-900 hover:bg-slate-100 transition">
                         <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
-                        New Booking
+                        New Movement
+                    </a>
+                    <a href="{{ route('dealer.bookings.create') }}"
+                       class="inline-flex items-center gap-2 rounded-lg bg-white/10 ring-1 ring-white/20 px-4 py-2.5 text-sm font-semibold text-white hover:bg-white/15 transition">
+                        <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3h5v5"/><path d="M21 3 9 15"/></svg>
+                        ProSelver Booking
                     </a>
                     <a href="{{ route('dealer.bookings.index') }}"
                        class="inline-flex items-center gap-2 rounded-lg bg-white/10 ring-1 ring-white/20 px-4 py-2.5 text-sm font-semibold text-white hover:bg-white/15 transition">
                         View Bookings
                     </a>
                 </div>
+
+                {{-- Help banner pointing dealers at the new movement types
+                     they can now book themselves (their own driver /
+                     3rd-party courier / self-collect / body builder /
+                     archive / drivers CRUD / deliveries report). The
+                     content shows once and is dismissable so it doesn't
+                     get in the way after the team has discovered it. --}}
+                @if(auth()->user()->canPlanMovements())
+                <details class="sm:basis-full mt-2 rounded-lg bg-white/10 ring-1 ring-white/15 text-white text-xs px-3 py-2">
+                    <summary class="cursor-pointer font-semibold text-blue-100 select-none">What's new for dealers? <span class="text-blue-200/60 font-normal">(local movements, my drivers, body builder)</span></summary>
+                    <div class="mt-2 text-blue-50/90 leading-relaxed">
+                        You can now book a movement with your <span class="font-semibold text-white">own driver</span>, a <span class="font-semibold text-white">3rd-party courier</span>, or as a <span class="font-semibold text-white">self-collect</span> — pick the executor on the "New Movement" form. Your internal drivers live under <a href="{{ route('customer.drivers.index') }}" class="underline">My Drivers</a>; vehicles parked at a body builder show on <a href="{{ route('customer.stock.at-body-builder') }}" class="underline">At Body Builder</a>; finished deliveries can be archived from each order's page; the <a href="{{ route('customer.reports.deliveries') }}" class="underline">Deliveries Report</a> ties it all together. <span class="text-blue-200/70">The classic "ProSelver Booking" button is still there for jobs you want us to execute.</span>
+                    </div>
+                </details>
+                @endif
             </div>
         </div>
 

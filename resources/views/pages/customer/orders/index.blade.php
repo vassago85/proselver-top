@@ -58,7 +58,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             ->latest('created_at');
 
         $locationId = $user->assignedLocationId();
-        $isRestricted = $locationId && !$user->hasAnyRole(['customer_owner', 'customer_admin']);
+        $isRestricted = $locationId && !$user->canManageCompanyData();
         if ($isRestricted) {
             $query->where(function ($q) use ($locationId) {
                 $q->where('pickup_location_id', $locationId)

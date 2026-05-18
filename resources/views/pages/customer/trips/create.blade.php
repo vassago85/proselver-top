@@ -37,7 +37,7 @@ class extends Component
 
         abort_unless($this->company, 403, 'No customer account is associated with your user.');
         abort_unless(
-            $user->hasAnyRole(['customer_owner', 'customer_admin', 'customer_dispatcher']),
+            $user->canPlanMovements(),
             403,
             'You don\'t have permission to plan trips.'
         );

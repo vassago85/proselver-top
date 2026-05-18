@@ -71,7 +71,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         // get to do it. Depot-pinned dispatchers (customer_dispatcher) and
         // generic users (customer_user) are blocked here.
         abort_unless(
-            $user->hasAnyRole(['customer_owner', 'customer_admin']),
+            $user->canManageCompanyData(),
             403,
             'Bulk upload is restricted to account owners and admins.',
         );

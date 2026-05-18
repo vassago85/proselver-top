@@ -43,10 +43,17 @@ new #[Layout('components.layouts.app')] class extends Component {
         <x-stat-card label="Completed" :value="$stats['completed'] ?? 0" color="green" />
     </div>
 
-    <div class="flex justify-end mb-4">
+    <div class="flex justify-end mb-4 gap-2 flex-wrap">
         @if(auth()->user()->hasPermission('submit_booking'))
-        <a href="{{ route('oem.bookings.create') }}" class="inline-flex items-center rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-500 transition-colors">
-            + New Booking
+        {{-- Primary CTA: the unified order-create flow with executor
+             selector (your driver / 3rd-party / self-collect / ProSelver).
+             The legacy ProSelver-only booking is kept one click away
+             for OEMs who only ever raise pure-ProSelver jobs. --}}
+        <a href="{{ route('customer.orders.create') }}" class="inline-flex items-center rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-500 transition-colors">
+            + New Movement
+        </a>
+        <a href="{{ route('oem.bookings.create') }}" class="inline-flex items-center rounded-lg bg-white ring-1 ring-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-colors">
+            ProSelver Booking
         </a>
         @endif
     </div>
