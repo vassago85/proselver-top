@@ -326,7 +326,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             ? Location::visibleTo($company)->active()->orderBy('company_name')->get(['id', 'company_name', 'city', 'address'])
             : collect();
 
-        $vehicleClasses = VehicleClass::where('is_active', true)->orderBy('name')->get(['id', 'name']);
+        $vehicleClasses = VehicleClass::where('is_active', true)->ordered()->get(['id', 'name']);
 
         $locationOptions = $locations->map(fn ($l) => [
             'value' => (string) $l->id,

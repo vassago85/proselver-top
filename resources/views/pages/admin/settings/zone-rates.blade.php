@@ -122,7 +122,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         return [
             'rates' => $query->paginate(30),
             'zones' => Zone::active()->orderBy('name')->get(),
-            'vehicleClasses' => VehicleClass::where('is_active', true)->orderBy('name')->get(),
+            'vehicleClasses' => VehicleClass::where('is_active', true)->ordered()->get(),
         ];
     }
 };
