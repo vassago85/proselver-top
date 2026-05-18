@@ -194,6 +194,43 @@ class JobPolicy
      * Sales-only roles (customer_user) can pick the executor at booking
      * time via the create form but can't flip after the fact.
      */
+    /**
+     * Body-builder-side "confirm vehicle has arrived at our workshop"
+     * gate.  Only BB-tenant users whose company owns the job's delivery
+     * location AND has an active link to the source dealer can confirm.
+     * The job must also still be in-transit / out-for-delivery — once
+     * delivered/completed the action is a no-op (and is hidden in UI).
+     */
+    public function confirmReceiptAtBodyBuilder(User $user, Job $job): bool
+    {
+        if (! $user->isBodyBuilderTenant()) {
+            return false;
+        }
+        if (! $user->hasPermission('bb_confirm_receipt')) {
+            return false;
+        }
+        if (! in_array($job->status, [
+            Job::STATUS_IN_TRANSIT,
+            Job::STATUS_ASSIGNED,
+            Job::STATUS_PLANNED,
+        ], true)) {
+            return false;
+        }
+
+        $bb = $user->company();
+        if (! $bb) {
+            return false;
+        }
+
+        $deliveryAtMine = $job->deliveryLocation?->company_id === $bb->id;
+        $linkedToDealer = $bb->linkedDealers()
+            ->wherePivot('is_active', true)
+            ->whereKey($job->company_id)
+            ->exists();
+
+        return $deliveryAtMine && $linkedToDealer;
+    }
+
     public function changeExecutor(User $user, Job $job): bool
     {
         if (! $job->canChangeExecutor()) {

@@ -135,6 +135,53 @@ class Company extends Model
         return $this->hasMany(Job::class, 'executing_company_id');
     }
 
+    /**
+     * Body-builder companies this dealer has authorised to confirm
+     * receipts and raise movement requests against their inventory.
+     * Pivot carries the link's active/notes/audit metadata so the
+     * dealer "Linked Body Builders" page can show pause / reactivate
+     * affordances without joining the link model explicitly.
+     */
+    public function linkedBodyBuilders(): BelongsToMany
+    {
+        return $this->belongsToMany(
+            Company::class,
+            'body_builder_dealer_links',
+            'dealer_company_id',
+            'body_builder_company_id',
+        )
+            ->withPivot(['id', 'is_active', 'linked_by_user_id', 'notes', 'created_at', 'updated_at'])
+            ->withTimestamps();
+    }
+
+    /**
+     * Inverse: dealer companies that have authorised THIS body builder.
+     * Used by the BB portal's "My Linked Dealers" list and to scope the
+     * BB's job-visibility query (only jobs from companies that have an
+     * active link to us).
+     */
+    public function linkedDealers(): BelongsToMany
+    {
+        return $this->belongsToMany(
+            Company::class,
+            'body_builder_dealer_links',
+            'body_builder_company_id',
+            'dealer_company_id',
+        )
+            ->withPivot(['id', 'is_active', 'linked_by_user_id', 'notes', 'created_at', 'updated_at'])
+            ->withTimestamps();
+    }
+
+    public function movementRequestsSent(): HasMany
+    {
+        return $this->hasMany(MovementRequest::class, 'requesting_company_id');
+    }
+
+    public function movementRequestsReceived(): HasMany
+    {
+        return $this->hasMany(MovementRequest::class, 'target_company_id');
+    }
+
     public function requiresExternalConfirmation(): bool
     {
         return $this->workflow_type !== 'standard';

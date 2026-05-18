@@ -28,3 +28,11 @@ Volt::route('trips', 'customer.trips.index')->name('trips.index');
 Volt::route('trips/create', 'customer.trips.create')->name('trips.create');
 Volt::route('trips/my-day', 'customer.trips.my-day')->name('trips.my-day');
 Volt::route('trips/{trip}', 'customer.trips.show')->name('trips.show');
+
+// Dealer ↔ body-builder management. Dealers add / pause body-builder
+// companies that can confirm receipts and raise movement requests
+// against their inventory.  Companion movement-requests queue handles
+// the approve / reject side.
+Volt::route('body-builders', 'customer.body-builders.index')->name('body-builders.index');
+Volt::route('movement-requests', 'customer.movement-requests.index')->name('movement-requests.index');
+Volt::route('movement-requests/{request}', 'customer.movement-requests.show')->name('movement-requests.show');

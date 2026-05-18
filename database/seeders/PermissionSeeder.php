@@ -44,6 +44,12 @@ class PermissionSeeder extends Seeder
             ['name' => 'Generate Collection Note', 'slug' => 'generate_collection_note', 'group' => 'Documents', 'description' => 'Generate collection note PDFs'],
             ['name' => 'Manage Locations', 'slug' => 'manage_locations', 'group' => 'Locations', 'description' => 'Add/edit/deactivate locations'],
             ['name' => 'View Locations', 'slug' => 'view_locations', 'group' => 'Locations', 'description' => 'View location list'],
+
+            // Body-builder portal + dealer-side body-builder admin perms.
+            ['name' => 'Confirm BB Receipt', 'slug' => 'bb_confirm_receipt', 'group' => 'Body Builder', 'description' => 'Mark a vehicle as received at the body builder'],
+            ['name' => 'Raise BB Movement Request', 'slug' => 'bb_request_movement', 'group' => 'Body Builder', 'description' => 'Raise a next-fitment or collection request back to the dealer'],
+            ['name' => 'Approve BB Movement Requests', 'slug' => 'dealer_approve_bb_requests', 'group' => 'Body Builder', 'description' => 'Approve or reject body-builder movement requests against your inventory'],
+            ['name' => 'Manage BB Links', 'slug' => 'manage_bb_links', 'group' => 'Body Builder', 'description' => 'Link / pause / unlink authorised body builders for your dealership'],
         ];
 
         foreach ($permissions as $perm) {
@@ -73,10 +79,35 @@ class PermissionSeeder extends Seeder
         ];
 
         // Phase 1 role-permission mappings (customer tier)
-        $rolePermissions['customer_owner'] = array_merge($fullAccess, ['confirm_customer_order', 'manage_locations', 'view_locations']);
-        $rolePermissions['customer_admin'] = ['view_all_bookings', 'view_own_bookings', 'edit_all_bookings', 'submit_booking', 'cancel_booking', 'upload_documents', 'view_po', 'generate_po', 'upload_po', 'view_invoices', 'manage_dealer_users', 'manage_locations', 'view_locations'];
+        // Dealer-tier customer roles gain the dealer-side BB approval +
+        // link-management perms so they can authorise BBs and respond
+        // to their requests; rank-and-file customer_user keeps the
+        // existing minimal set.
+        $rolePermissions['customer_owner'] = array_merge($fullAccess, [
+            'confirm_customer_order', 'manage_locations', 'view_locations',
+            'dealer_approve_bb_requests', 'manage_bb_links',
+        ]);
+        $rolePermissions['customer_admin'] = [
+            'view_all_bookings', 'view_own_bookings', 'edit_all_bookings', 'submit_booking', 'cancel_booking',
+            'upload_documents', 'view_po', 'generate_po', 'upload_po', 'view_invoices',
+            'manage_dealer_users', 'manage_locations', 'view_locations',
+            'dealer_approve_bb_requests', 'manage_bb_links',
+        ];
         $rolePermissions['customer_user'] = ['view_own_bookings', 'submit_booking', 'upload_documents', 'view_locations'];
-        $rolePermissions['customer_dispatcher'] = ['view_all_bookings', 'view_own_bookings', 'confirm_customer_order', 'upload_documents', 'view_locations'];
+        $rolePermissions['customer_dispatcher'] = ['view_all_bookings', 'view_own_bookings', 'confirm_customer_order', 'upload_documents', 'view_locations', 'dealer_approve_bb_requests'];
+
+        // Body-builder-tier roles.  Owner can do everything inside the
+        // BB tenant (manage users + locations + raise requests); user
+        // can confirm and request but not edit the tenant itself.
+        $rolePermissions['body_builder_owner'] = [
+            'view_all_bookings', 'view_own_bookings', 'view_stock',
+            'manage_dealer_users', 'manage_locations', 'view_locations',
+            'bb_confirm_receipt', 'bb_request_movement',
+        ];
+        $rolePermissions['body_builder_user'] = [
+            'view_own_bookings', 'view_stock', 'view_locations',
+            'bb_confirm_receipt', 'bb_request_movement',
+        ];
 
         // Phase 1 role-permission mappings (internal tier)
         // Super Admin and Developer bypass permission checks in HasRoles, but we still assign
@@ -108,6 +139,7 @@ class PermissionSeeder extends Seeder
         $rolePermissions['super_admin'] = array_merge($fullAccess, [
             'confirm_customer_order', 'view_planning_queue', 'plan_orders', 'assign_drivers',
             'generate_collection_note', 'manage_locations', 'view_locations',
+            'dealer_approve_bb_requests', 'manage_bb_links',
         ]);
         $rolePermissions['developer'] = $rolePermissions['super_admin'];
         $rolePermissions['operations_controller'] = $opsControllerPerms;

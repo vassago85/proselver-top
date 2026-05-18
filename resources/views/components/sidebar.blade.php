@@ -14,10 +14,14 @@
     // OEMs hold customer-tier roles for tenanting, so $isCustomer is true.
     // Treat the company type as the source of truth for the *portal* label
     // we present so an FAW or Isuzu operator sees "OEM" branding even
-    // though the underlying role slug is customer_owner.
+    // though the underlying role slug is customer_owner.  Same trick for
+    // body-builder tenants — their roles are tier=customer so they also
+    // pass $isCustomer, but the portal label / sidebar branch they get
+    // is BB-specific.
     $userCompanyType = $isCustomer ? optional($user->companies()->first())->type : null;
     $isOemCustomer = $isCustomer && $userCompanyType === \App\Models\Company::TYPE_OEM;
     $isDealerCustomer = $isCustomer && $userCompanyType === \App\Models\Company::TYPE_DEALER;
+    $isBodyBuilderTenant = $userCompanyType === \App\Models\Company::TYPE_BODY_BUILDER;
 
     // Portal subtitle for the sidebar brand area
     $portalLabel = match(true) {
@@ -26,6 +30,7 @@
         $isOpsController => 'Operations',
         $isDispatcher => 'Dispatch',
         $isOwner => 'Owner',
+        $isBodyBuilderTenant => 'Body Builder',
         $isOemCustomer => 'OEM Portal',
         $isDealerCustomer => 'Dealer Portal',
         $isCustomer => 'Customer Portal',
@@ -248,9 +253,85 @@
             @endif
 
             {{-- ============================================================ --}}
+            {{-- BODY BUILDER PORTAL                                           --}}
+            {{-- ============================================================ --}}
+            {{-- BB tenants pass $isCustomer (their roles are tier=customer),
+                 so this branch MUST come before the customer one and is
+                 mutually exclusive — once we render the BB sidebar we skip
+                 everything else with the matching @elseif chain below. --}}
+            @if($isBodyBuilderTenant)
+
+                <li>
+                    <p class="mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">Workshop</p>
+                    <ul role="list" class="space-y-0.5">
+                        <x-sidebar-link :href="route('body-builder.dashboard')" :active="request()->routeIs('body-builder.dashboard')">
+                            <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg></x-slot:icon>
+                            Dashboard
+                        </x-sidebar-link>
+
+                        <x-sidebar-link :href="route('body-builder.jobs.index')" :active="request()->routeIs('body-builder.jobs.*')">
+                            <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M14 16H9m10 0h3v-3.15a1 1 0 0 0-.84-.99L16 11l-2.7-3.6a1 1 0 0 0-.8-.4H5.24a2 2 0 0 0-1.8 1.1l-.8 1.63A6 6 0 0 0 2 12.42V16h2"/><circle cx="6.5" cy="16.5" r="2.5"/><circle cx="16.5" cy="16.5" r="2.5"/></svg></x-slot:icon>
+                            Vehicles
+                        </x-sidebar-link>
+
+                        <x-sidebar-link :href="route('body-builder.requests.index')" :active="request()->routeIs('body-builder.requests.*')">
+                            <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/></svg></x-slot:icon>
+                            My Requests
+                        </x-sidebar-link>
+                    </ul>
+                </li>
+
+                <li>
+                    <p class="mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">Relationships</p>
+                    <ul role="list" class="space-y-0.5">
+                        <x-sidebar-link :href="route('body-builder.dealers.index')" :active="request()->routeIs('body-builder.dealers.*')">
+                            <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18"/><path d="M5 21V7l8-4v18"/><path d="M19 21V11l-6-4"/></svg></x-slot:icon>
+                            Linked Dealers
+                        </x-sidebar-link>
+                    </ul>
+                </li>
+
+                @if($user->canManageCompanyData())
+                <li>
+                    <p class="mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">Workspace</p>
+                    <ul role="list" class="space-y-0.5">
+                        {{-- Reuses the tenant-scoped customer team /
+                             locations Volt pages — they auto-scope on
+                             the user's primary company, so a BB tenant
+                             editing here only sees / mutates their own
+                             workshops + their own users.  Saves us
+                             duplicating two full CRUD pages. --}}
+                        <x-sidebar-link :href="route('customer.locations.index')" :active="request()->routeIs('customer.locations.*')">
+                            <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg></x-slot:icon>
+                            Locations
+                        </x-sidebar-link>
+                        <x-sidebar-link :href="route('customer.team.index')" :active="request()->routeIs('customer.team.*')">
+                            <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></x-slot:icon>
+                            Team
+                        </x-sidebar-link>
+                    </ul>
+                </li>
+                @endif
+
+                <li>
+                    <p class="mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">Help</p>
+                    <ul role="list" class="space-y-0.5">
+                        <x-sidebar-link :href="route('body-builder.help')" :active="request()->routeIs('body-builder.help')">
+                            <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" x2="12.01" y1="17" y2="17"/></svg></x-slot:icon>
+                            Help
+                        </x-sidebar-link>
+                    </ul>
+                </li>
+
+            @endif
+
+            {{-- ============================================================ --}}
             {{-- CUSTOMER PORTAL                                                --}}
             {{-- ============================================================ --}}
-            @if($isCustomer)
+            {{-- BB tenants are excluded explicitly because their roles also
+                 satisfy $isCustomer; the BB branch above is the right one
+                 for them. --}}
+            @if($isCustomer && !$isBodyBuilderTenant)
 
                 <li>
                     <p class="mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">Orders</p>
@@ -341,6 +422,47 @@
                         </x-sidebar-link>
                     </ul>
                 </li>
+
+                {{-- Body-builder integration — dealer-side hub.
+                     Movement Requests page (linked dealers' BBs raise
+                     next-fitment / collection requests here) sits in its
+                     own Workflow section so the pending-count badge has
+                     a stable home.  Linked Body Builders sits with team
+                     management because it's an admin-level setup task. --}}
+                @php
+                    $pendingBbRequests = $isOemCustomer ? 0 : (
+                        $user->canApproveBbRequests()
+                            ? \App\Models\MovementRequest::query()
+                                ->whereIn('target_company_id', $user->companies->pluck('id'))
+                                ->where('status', \App\Models\MovementRequest::STATUS_PENDING)
+                                ->count()
+                            : 0
+                    );
+                @endphp
+
+                @if(!$isOemCustomer && ($user->canApproveBbRequests() || $user->canManageBbLinks()))
+                <li>
+                    <p class="mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">Body Builders</p>
+                    <ul role="list" class="space-y-0.5">
+                        @if($user->canApproveBbRequests())
+                        <x-sidebar-link :href="route('customer.movement-requests.index')" :active="request()->routeIs('customer.movement-requests.*')">
+                            <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg></x-slot:icon>
+                            Movement Requests
+                            @if($pendingBbRequests > 0)
+                                <span class="ml-auto inline-flex items-center justify-center rounded-full bg-amber-500 px-1.5 py-0.5 text-[10px] font-semibold text-white">{{ $pendingBbRequests }}</span>
+                            @endif
+                        </x-sidebar-link>
+                        @endif
+
+                        @if($user->canManageBbLinks())
+                        <x-sidebar-link :href="route('customer.body-builders.index')" :active="request()->routeIs('customer.body-builders.*')">
+                            <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18"/><path d="M5 21V7l8-4v18"/><path d="M19 21V11l-6-4"/></svg></x-slot:icon>
+                            Linked Body Builders
+                        </x-sidebar-link>
+                        @endif
+                    </ul>
+                </li>
+                @endif
 
                 @if($user->canManageCompanyData())
                 <li>

@@ -67,6 +67,7 @@ new #[Layout('components.layouts.app')] class extends Component {};
                 <li><a href="#my-drivers" class="text-blue-600 hover:underline dark:text-blue-400">My Drivers</a></li>
                 <li><a href="#trips" class="text-blue-600 hover:underline dark:text-blue-400">Trip Planner &amp; My Day</a></li>
                 <li><a href="#body-builder" class="text-blue-600 hover:underline dark:text-blue-400">Body builder stock</a></li>
+                <li><a href="#bb-links" class="text-blue-600 hover:underline dark:text-blue-400">Linked body builders &amp; movement requests</a></li>
                 <li><a href="#archive" class="text-blue-600 hover:underline dark:text-blue-400">Archiving deliveries</a></li>
                 <li><a href="#change-executor" class="text-blue-600 hover:underline dark:text-blue-400">Changing the executor or driver</a></li>
                 <li><a href="#deliveries" class="text-blue-600 hover:underline dark:text-blue-400">Deliveries report</a></li>
@@ -201,6 +202,44 @@ new #[Layout('components.layouts.app')] class extends Component {};
             <p>Each row shows the current location, the driver (for in-transit), and a one-click <em>Book Return / Next Move</em> button on the parked rows that pre-fills the create-order form with pickup = current location, VIN preserved.</p>
             <p>A row drops off automatically once the next movement is delivered (destination = <strong>Delivery</strong>), or when the order is archived.</p>
             <p class="text-xs text-zinc-500 dark:text-zinc-400">Body builder / round trip / other-storage rows are kept out of the <em>Archive</em> flow on purpose &mdash; archiving a vehicle that hasn't actually left your stock would hide it while it's still your problem.</p>
+        </div>
+    </section>
+
+    {{-- Linked body builders + movement requests --}}
+    <section id="bb-links" class="scroll-mt-24 rounded-xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-700 dark:bg-zinc-800">
+        <h2 class="text-lg font-semibold text-zinc-900 dark:text-white">Linked body builders &amp; movement requests</h2>
+        <div class="mt-3 space-y-3 text-sm text-zinc-700 dark:text-zinc-300">
+            <p>
+                Body builders / fitment shops can now log in with their own accounts and work directly with you,
+                instead of phoning every time a unit is ready. The flow has two parts.
+            </p>
+
+            <h3 class="font-semibold text-zinc-900 dark:text-white">1. Authorise the body builder</h3>
+            <p>
+                Open <a class="underline" href="{{ route('customer.body-builders.index') }}">Linked Body Builders</a>
+                (sidebar &rarr; Body Builders), search the directory, and add them. From that moment on:
+            </p>
+            <ul class="list-disc list-inside space-y-1 pl-2">
+                <li>The BB's users can see every vehicle you deliver to one of their workshops.</li>
+                <li>They can confirm receipt the moment the truck rolls into their yard &mdash; this updates the order in your Bookings list and on <a class="underline" href="{{ route('customer.stock.at-body-builder') }}">Stock In Transit</a>.</li>
+                <li>They can raise <em>next-fitment</em> or <em>collection</em> requests against any on-site vehicle.</li>
+            </ul>
+            <p>You can <em>Pause</em> a link at any time &mdash; the BB stays in the directory and you can re-activate later without losing history.</p>
+
+            <h3 class="font-semibold text-zinc-900 dark:text-white">2. Approve or reject their requests</h3>
+            <p>
+                When a BB asks for a movement, it lands in your
+                <a class="underline" href="{{ route('customer.movement-requests.index') }}">Movement Requests</a> queue
+                with a badge on the sidebar. Open the request to see who, which vehicle, where it's going, and any notes.
+                You can:
+            </p>
+            <ul class="list-disc list-inside space-y-1 pl-2">
+                <li><strong>Approve</strong> &mdash; tweak any details (pickup, delivery, class, date) and confirm. This creates a real transport job on the ProSelver executor, which you can then assign or hand to ops as normal.</li>
+                <li><strong>Reject</strong> &mdash; a reason is required so the BB knows why.</li>
+            </ul>
+            <p class="text-xs text-zinc-500 dark:text-zinc-400">
+                BB confirm-receipt is read-only on your side &mdash; you'll see "Received at &lt;workshop&gt; by &lt;BB user&gt;" on the order timeline. Only your team can mark an order <em>delivered</em> through any other route.
+            </p>
         </div>
     </section>
 

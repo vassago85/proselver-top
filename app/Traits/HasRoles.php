@@ -238,6 +238,40 @@ trait HasRoles
         return $this->hasAnyRole(['super_admin', 'developer', 'operations_controller', 'dispatcher']);
     }
 
+    // -----------------------------------------------------------------
+    // Body-builder portal shortcuts
+    // -----------------------------------------------------------------
+
+    /**
+     * True for users whose role lives in the body-builder portal
+     * (BB owner / BB user). These are the only roles that should land
+     * on /body-builder/* routes; the EnsureBodyBuilderAccess middleware
+     * gates on this + on the user's company.type=body_builder.
+     */
+    public function isBodyBuilderTenant(): bool
+    {
+        return $this->hasAnyRole(['body_builder_owner', 'body_builder_user']);
+    }
+
+    /**
+     * Dealer-side: can this user approve / reject movement requests
+     * from linked body builders? Owner / admin / dispatcher tier get
+     * the permission via the seeder, plus ops + super-admin / dev.
+     */
+    public function canApproveBbRequests(): bool
+    {
+        return $this->hasPermission('dealer_approve_bb_requests');
+    }
+
+    /**
+     * Dealer-side: can this user link / pause / remove body builders
+     * authorised to confirm receipts on their behalf?
+     */
+    public function canManageBbLinks(): bool
+    {
+        return $this->hasPermission('manage_bb_links');
+    }
+
     // --- Role mutation ---
 
     public function assignRole(string $roleSlug): void

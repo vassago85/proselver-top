@@ -82,6 +82,21 @@ class User extends Authenticatable
     }
 
     /**
+     * "Does this user's primary company act as a body-builder tenant?"
+     *
+     * Body builders are independent companies (type=body_builder) that
+     * dealers authorise via the body_builder_dealer_links table.  Used
+     * by the sidebar to swap to the BB-only branch, by middleware to
+     * gate the /body-builder/* routes, and by policies to scope
+     * job-visibility queries to "delivery_location_id ∈ this company's
+     * locations AND source dealer is linked".
+     */
+    public function companyIsBodyBuilder(): bool
+    {
+        return $this->company()?->type === Company::TYPE_BODY_BUILDER;
+    }
+
+    /**
      * True when the user is linked to the platform-owner company. Used by the
      * visibility scopes on Job / Inventory so platform-owner users can see
      * everything, regardless of which other companies they may also belong to.

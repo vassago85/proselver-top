@@ -22,6 +22,13 @@ if (!function_exists('resolveUserHomePath')) {
         if ($user->isInternal() || $user->isDeveloper()) {
             return route('admin.dashboard');
         }
+        // Body-builder tenants land on their dedicated portal regardless
+        // of the underlying customer-tier role they hold (BB owner / BB
+        // user both have customer-tier slugs so $user->isCustomer() is
+        // also true for them — must come BEFORE the customer branch).
+        if (method_exists($user, 'companyIsBodyBuilder') && $user->companyIsBodyBuilder()) {
+            return route('body-builder.dashboard');
+        }
         if ($user->isCustomer()) {
             return route('customer.dashboard');
         }

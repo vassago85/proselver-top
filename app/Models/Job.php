@@ -887,6 +887,38 @@ class Job extends Model
         return $saved;
     }
 
+    /**
+     * Body-builder-side "vehicle arrived at our workshop" action.
+     *
+     * Promotes the job from in-transit / out-for-delivery to delivered
+     * with a BB-tagged audit entry so the dealer's order timeline
+     * shows "Received at FAW Body Builders by Jane on 18 May 14:32"
+     * rather than the generic STATUS change.  No-op if the job is
+     * already delivered/completed — keeps the action idempotent
+     * against double-click on a flaky mobile connection.
+     */
+    public function confirmReceiptAtBodyBuilder(User $bbUser): bool
+    {
+        if (in_array($this->status, [self::STATUS_DELIVERED, self::STATUS_COMPLETED], true)) {
+            return false;
+        }
+
+        $before = ['status' => $this->status];
+        $this->status = self::STATUS_DELIVERED;
+        $saved = $this->save();
+
+        if ($saved) {
+            $this->auditCustom('bb_receipt_confirmed', $before, [
+                'status'        => $this->status,
+                'confirmed_by'  => $bbUser->id,
+                'confirmed_at'  => now()->toIso8601String(),
+                'bb_company_id' => $bbUser->company()?->id,
+            ]);
+        }
+
+        return $saved;
+    }
+
     public function unarchive(): bool
     {
         if (! $this->isArchived()) {

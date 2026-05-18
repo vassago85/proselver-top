@@ -27,6 +27,27 @@ class extends Component
     {
         $this->company = auth()->user()->companies()->first();
         abort_unless($this->company, 403);
+
+        // Body-builder tenants share this team page but pick from
+        // body_builder_* roles instead of customer_*.  Default the
+        // new-row role accordingly so the form's first impression is
+        // valid; the role list itself flips in with()/template via
+        // $tenantRoles / $tenantRoleSlugs below.
+        if ($this->company->type === Company::TYPE_BODY_BUILDER) {
+            $this->userRole = 'body_builder_user';
+        }
+    }
+
+    /**
+     * Allowed role slugs for the user's tenant type.  Used by edit()
+     * to filter what role(s) we recognise on an existing user, by
+     * save() to validate, and by with() to populate the role picker.
+     */
+    protected function tenantRoleSlugs(): array
+    {
+        return $this->company?->type === Company::TYPE_BODY_BUILDER
+            ? ['body_builder_owner', 'body_builder_user']
+            : ['customer_owner', 'customer_admin', 'customer_user', 'customer_dispatcher'];
     }
 
     public function create(): void
@@ -56,7 +77,9 @@ class extends Component
         $this->userEmail = $user->email ?? '';
         $this->userPhone = $user->phone ?? '';
         $this->userPassword = '';
-        $this->userRole = $user->roles->whereIn('slug', ['customer_owner', 'customer_admin', 'customer_user', 'customer_dispatcher'])->first()?->slug ?? 'customer_user';
+        $tenantSlugs = $this->tenantRoleSlugs();
+        $defaultRole = $this->company?->type === Company::TYPE_BODY_BUILDER ? 'body_builder_user' : 'customer_user';
+        $this->userRole = $user->roles->whereIn('slug', $tenantSlugs)->first()?->slug ?? $defaultRole;
 
         $pivot = $user->companies()->where('companies.id', $this->company->id)->first();
         $this->userLocationId = $pivot?->pivot?->location_id;
@@ -70,7 +93,7 @@ class extends Component
             'userName' => 'required|string|max:255',
             'userEmail' => 'required|email|max:255',
             'userPhone' => 'nullable|string|max:50',
-            'userRole' => 'required|in:customer_owner,customer_admin,customer_user,customer_dispatcher',
+            'userRole' => 'required|in:' . implode(',', $this->tenantRoleSlugs()),
             'userLocationId' => 'nullable|exists:locations,id',
         ];
 
@@ -164,7 +187,7 @@ class extends Component
     public function with(): array
     {
         $user = auth()->user();
-        $canManage = $user->hasAnyRole(['customer_owner', 'customer_admin']);
+        $canManage = $user->hasAnyRole(['customer_owner', 'customer_admin', 'body_builder_owner']);
 
         $members = User::whereHas('companies', fn($q) => $q->where('companies.id', $this->company->id))
             ->with(['roles', 'companies' => fn($q) => $q->where('companies.id', $this->company->id)])
@@ -177,7 +200,7 @@ class extends Component
             ->orderBy('company_name')
             ->get(['id', 'company_name', 'city']);
 
-        $customerRoles = Role::whereIn('slug', ['customer_owner', 'customer_admin', 'customer_user', 'customer_dispatcher'])
+        $customerRoles = Role::whereIn('slug', $this->tenantRoleSlugs())
             ->orderBy('name')
             ->get(['id', 'slug', 'name']);
 
@@ -202,9 +225,12 @@ class extends Component
             'label' => $loc->company_name . ($loc->city ? " — {$loc->city}" : ''),
         ])->values()->all();
 
+        $tenantRoleSlugs = $this->tenantRoleSlugs();
+
         return compact(
             'members', 'canManage', 'locations', 'customerRoles',
-            'roleLabel', 'isOemCompany', 'roleOptions', 'locationOptions'
+            'roleLabel', 'isOemCompany', 'roleOptions', 'locationOptions',
+            'tenantRoleSlugs'
         );
     }
 };
@@ -324,7 +350,7 @@ class extends Component
                         <td class="whitespace-nowrap px-6 py-3 text-sm text-gray-500">{{ $member->email ?? '—' }}</td>
                         <td class="whitespace-nowrap px-6 py-3 text-sm text-gray-500">{{ $member->phone ?? '—' }}</td>
                         <td class="whitespace-nowrap px-6 py-3 text-sm">
-                            @foreach($member->roles->whereIn('slug', ['customer_owner', 'customer_admin', 'customer_user', 'customer_dispatcher']) as $role)
+                            @foreach($member->roles->whereIn('slug', $tenantRoleSlugs) as $role)
                                 <span class="inline-flex items-center rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700 mr-1">{{ $roleLabel($role->name) }}</span>
                             @endforeach
                         </td>

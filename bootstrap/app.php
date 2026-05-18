@@ -35,6 +35,11 @@ return Application::configure(basePath: dirname(__DIR__))
                 ->prefix('driver')
                 ->name('driver.')
                 ->group(base_path('routes/driver.php'));
+
+            Route::middleware(['web', 'auth', 'body_builder'])
+                ->prefix('body-builder')
+                ->name('body-builder.')
+                ->group(base_path('routes/body-builder.php'));
         },
     )
     ->withMiddleware(function (Middleware $middleware) {
@@ -61,6 +66,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'permission' => \App\Http\Middleware\EnsurePermission::class,
             'oem' => \App\Http\Middleware\EnsureOemAccess::class,
             'customer' => \App\Http\Middleware\EnsureCustomerAccess::class,
+            'body_builder' => \App\Http\Middleware\EnsureBodyBuilderAccess::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {

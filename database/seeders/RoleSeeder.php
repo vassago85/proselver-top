@@ -27,6 +27,15 @@ class RoleSeeder extends Seeder
             ['name' => 'Customer User', 'slug' => 'customer_user', 'tier' => 'customer', 'description' => 'Submit and view own orders'],
             ['name' => 'Customer Dispatcher', 'slug' => 'customer_dispatcher', 'tier' => 'customer', 'description' => 'Confirm readiness for FAW-type workflows'],
 
+            // Body-builder roles (live on customer-tier so they can use
+            // the same auth + tenancy plumbing).  A BB tenant is an
+            // independent company that a dealer authorises via
+            // body_builder_dealer_links; their users see only inbound
+            // / on-site jobs from linked dealers and can raise movement
+            // requests that the dealer must approve.
+            ['name' => 'Body Builder Owner', 'slug' => 'body_builder_owner', 'tier' => 'customer', 'description' => 'Manage the body-builder company, locations, team, and confirm receipts / raise requests'],
+            ['name' => 'Body Builder User',  'slug' => 'body_builder_user',  'tier' => 'customer', 'description' => 'Confirm vehicle receipts and raise next-move / collection requests'],
+
             // Legacy dealer roles (kept for migration compatibility)
             ['name' => 'Dealer Principal', 'slug' => 'dealer_principal', 'tier' => 'dealer', 'description' => '[Legacy] Full dealership access and user management'],
             ['name' => 'Sales Manager (New)', 'slug' => 'sales_manager_new', 'tier' => 'dealer', 'description' => '[Legacy] Manages new vehicle sales team and bookings'],
