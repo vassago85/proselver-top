@@ -307,12 +307,14 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         // Roles the actor is permitted to grant for the inline
         // "Add user" form.  Same canAssignRole() gate the
-        // standalone /admin/users/create page uses.
-        $assignableRoles = Role::orderByRaw(
-            "FIELD(tier, 'customer', 'dealer', 'oem', 'driver', 'internal')"
-        )->orderBy('name')
+        // standalone /admin/users/create page uses.  Tier ordering
+        // is done PHP-side (not SQL ORDER BY FIELD()) because the
+        // production DB is PostgreSQL and FIELD() is MySQL-only.
+        $tierOrder = ['customer' => 0, 'dealer' => 1, 'oem' => 2, 'driver' => 3, 'internal' => 4];
+        $assignableRoles = Role::orderBy('name')
             ->get()
             ->filter(fn ($r) => $actor?->canAssignRole($r->slug))
+            ->sortBy(fn ($r) => ($tierOrder[$r->tier] ?? 99) . '|' . $r->name)
             ->values();
 
         return [

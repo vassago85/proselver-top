@@ -306,13 +306,15 @@ new #[Layout('components.layouts.app')] class extends Component {
         // "first user" section of the modal.  Same canAssignRole()
         // gate the standalone /admin/users/create page uses, so a
         // dispatcher can't sneak a super_admin assignment in
-        // through this side door.
+        // through this side door.  Tier ordering is done PHP-side
+        // (not SQL ORDER BY FIELD()) because the production DB is
+        // PostgreSQL and FIELD() is MySQL-only.
         $actor = auth()->user();
-        $firstUserRoles = Role::orderByRaw(
-            "FIELD(tier, 'customer', 'dealer', 'oem', 'driver', 'internal')"
-        )->orderBy('name')
+        $tierOrder = ['customer' => 0, 'dealer' => 1, 'oem' => 2, 'driver' => 3, 'internal' => 4];
+        $firstUserRoles = Role::orderBy('name')
             ->get()
             ->filter(fn ($r) => $actor?->canAssignRole($r->slug))
+            ->sortBy(fn ($r) => ($tierOrder[$r->tier] ?? 99) . '|' . $r->name)
             ->values();
 
         return [

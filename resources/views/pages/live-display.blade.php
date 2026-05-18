@@ -211,8 +211,6 @@ new #[Layout('components.layouts.display')] class extends Component {
 ?>
 
 @php
-    use App\Models\Job;
-
     // Map each Phase-1 / legacy status to a high-contrast lane colour.
     // Bright accents work better than the muted in-app badges at TV
     // viewing distance — read across a 5m room.
