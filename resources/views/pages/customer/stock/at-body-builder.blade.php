@@ -207,12 +207,14 @@ class extends Component
 
     {{-- Bucket tabs --}}
     <div class="mb-4 flex flex-wrap gap-2">
-        @php($tabs = [
-            'all' => ['label' => 'All', 'colour' => 'gray'],
-            'body_builder' => ['label' => 'At body builder', 'colour' => 'amber'],
-            'other_storage' => ['label' => 'At other storage facility', 'colour' => 'sky'],
-            'in_transit' => ['label' => 'In transit', 'colour' => 'indigo'],
-        ])
+        @php
+            $tabs = [
+                'all' => ['label' => 'All', 'colour' => 'gray'],
+                'body_builder' => ['label' => 'At body builder', 'colour' => 'amber'],
+                'other_storage' => ['label' => 'At other storage facility', 'colour' => 'sky'],
+                'in_transit' => ['label' => 'In transit', 'colour' => 'indigo'],
+            ];
+        @endphp
         @foreach($tabs as $key => $cfg)
             @php
                 $active = $bucket === $key;
