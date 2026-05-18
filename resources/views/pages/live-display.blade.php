@@ -168,7 +168,7 @@ new #[Layout('components.layouts.display')] class extends Component {
         // by definition had a driver (somebody completed them), so
         // we only count Waiting here.  In-Transit rows also need a
         // driver to be in transit so they're always assigned.
-        $unassignedCount = $waiting->whereNull('driver_id')->count();
+        $unassignedCount = $waiting->whereNull('driver_user_id')->count();
 
         // Delayed = the scheduled ready time is in the past and the
         // movement still hasn't finished moving.  Falls back to
@@ -269,9 +269,11 @@ new #[Layout('components.layouts.display')] class extends Component {
             $overdue = $cutoff->lt($now);
         }
 
-        // Unassigned = waiting lane only.  No driver_id and no
-        // driver relation loaded => not assigned.
-        $unassigned = $lane === 'waiting' && empty($job->driver_id);
+        // Unassigned = waiting lane only.  The Job model's driver
+        // FK is `driver_user_id` (it points at users.id, not a
+        // separate drivers table) -- using `driver_id` here was the
+        // bug that lit every assigned waiting card as "NO DRIVER".
+        $unassigned = $lane === 'waiting' && empty($job->driver_user_id);
 
         // Pick the most severe flag for the badge / glow (overdue
         // outranks unassigned outranks stale).  Multiple flags can
