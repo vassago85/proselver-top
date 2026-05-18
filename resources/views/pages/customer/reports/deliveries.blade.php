@@ -182,10 +182,13 @@ new #[Layout('components.layouts.app')] class extends Component {
             ->where('destination_type', Job::DESTINATION_BODY_BUILDER)
             ->whereNull('archived_at')
             ->count();
+        // "Final" deliveries == destination is Delivery (DEALER) or
+        // legacy null. Body builder / round trip / yard / other are
+        // non-final and still in stock — they don't count here.
         $finalDelivered = (clone $base)
             ->where(function ($w) {
                 $w->whereNull('destination_type')
-                  ->orWhereNotIn('destination_type', [Job::DESTINATION_BODY_BUILDER, Job::DESTINATION_YARD]);
+                  ->orWhereNotIn('destination_type', Job::NON_FINAL_DESTINATION_TYPES);
             })
             ->count();
         $archivedInWindow = (clone $base)->whereNotNull('archived_at')->count();
@@ -227,10 +230,14 @@ new #[Layout('components.layouts.app')] class extends Component {
                 ->map(fn ($label, $value) => ['value' => $value, 'label' => $label])
                 ->values()->all(),
             'destinationOptions' => collect([
-                Job::DESTINATION_DEALER       => 'Dealer / handover',
+                Job::DESTINATION_DEALER       => 'Delivery',
                 Job::DESTINATION_BODY_BUILDER => 'Body Builder',
-                Job::DESTINATION_YARD         => 'Yard',
-                Job::DESTINATION_OTHER        => 'Other',
+                Job::DESTINATION_ROUND_TRIP   => 'Round Trip',
+                Job::DESTINATION_YARD         => 'Other Storage Facility',
+                // DESTINATION_OTHER is the legacy bucket — kept as a
+                // filter option so old rows can still be drilled into,
+                // but new bookings can't be set to it.
+                Job::DESTINATION_OTHER        => 'Other (legacy)',
             ])->map(fn ($label, $value) => ['value' => $value, 'label' => $label])->values()->all(),
         ];
     }

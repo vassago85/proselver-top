@@ -35,13 +35,17 @@ class InventoryLifecycleService
     }
 
     /**
-     * Job reached delivered / completed. Decide the new inventory state based
-     * on destination_type:
+     * Job reached delivered / completed. Decide the new inventory state
+     * based on destination_type:
      *   - dealer / body_builder  → delivered (drops out of active stock)
      *   - yard                   → at_yard  (still active, sitting at a yard)
+     *   - round_trip             → no-op    (vehicle came back to pickup;
+     *                              location unchanged, inventory stays
+     *                              wherever it was before this job)
      *   - other / null           → at_storage (safe default, still active)
      *
-     * Also snaps current_location_id to the job's delivery_location_id.
+     * Also snaps current_location_id to the job's delivery_location_id
+     * EXCEPT for round trips, where the vehicle ends back at pickup.
      */
     public function onJobCompleted(Job $job): void
     {
@@ -51,6 +55,13 @@ class InventoryLifecycleService
 
         $inventory = $job->inventory;
         if (!$inventory) {
+            return;
+        }
+
+        // Round trips leave the vehicle exactly where it was before
+        // the job started — the driver brought it back to pickup. No
+        // inventory state change needed.
+        if ($job->destination_type === Job::DESTINATION_ROUND_TRIP) {
             return;
         }
 

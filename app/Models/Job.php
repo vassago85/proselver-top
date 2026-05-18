@@ -170,14 +170,47 @@ class Job extends Model
     // Where the vehicle is going. Dealer + body_builder are both "delivered"
     // outcomes from an inventory perspective (see InventoryLifecycleService);
     // yard is a transit stop, other is a catch-all.
+    // DESTINATION_DEALER == "Delivery" in the user-facing copy — final
+    // hand-over to another dealer or to an end customer. These are the
+    // only rows that can be archived; every other destination type
+    // means the vehicle is still in the dealer's stock somewhere off-
+    // site, so it stays on the Stock In Transit view until a follow-up
+    // movement takes it to a Delivery destination.
+    //
+    // DESTINATION_ROUND_TRIP = "Round Trip" — COF check, weighbridge
+    // run, bank drop, etc. The driver waits at the destination and
+    // brings the vehicle straight back to pickup, so once the job is
+    // delivered the vehicle is "back at base" and drops out of stock
+    // views. Choosing this destination auto-sets is_round_trip = true
+    // so the route distance is doubled for reporting / pricing.
+    //
+    // DESTINATION_YARD remains the storage backing for "Other Storage
+    // Facility" in the UI — generic non-final holding location, not
+    // dealer, not body builder.
+    //
+    // DESTINATION_OTHER is kept ONLY for legacy rows; it is no longer
+    // offered in the create-order picker. Treated identically to YARD
+    // in stock / archive logic.
     const DESTINATION_DEALER = 'dealer';
     const DESTINATION_BODY_BUILDER = 'body_builder';
+    const DESTINATION_ROUND_TRIP = 'round_trip';
     const DESTINATION_YARD = 'yard';
     const DESTINATION_OTHER = 'other';
 
     const DESTINATION_TYPES = [
         self::DESTINATION_DEALER,
         self::DESTINATION_BODY_BUILDER,
+        self::DESTINATION_ROUND_TRIP,
+        self::DESTINATION_YARD,
+        self::DESTINATION_OTHER,
+    ];
+
+    // Destination types that keep the vehicle "in stock somewhere
+    // off-site" — i.e. not a final delivery. Used by Stock In Transit
+    // and by canArchive() (archive blocked for non-final types).
+    const NON_FINAL_DESTINATION_TYPES = [
+        self::DESTINATION_BODY_BUILDER,
+        self::DESTINATION_ROUND_TRIP,
         self::DESTINATION_YARD,
         self::DESTINATION_OTHER,
     ];
@@ -816,9 +849,12 @@ class Job extends Model
 
     /**
      * Eligible-to-archive == job has reached delivered/completed AND
-     * it's a final delivery (not a body-builder leg, which by design
-     * is "still in stock"). Ops can override this guard from the admin
-     * surface; the customer-facing UI hides the button otherwise.
+     * the destination type is a final Delivery (dealer / customer). A
+     * non-final destination (body builder, round trip, other storage)
+     * means the vehicle is still in the dealer's stock somewhere, so
+     * the row stays on the Stock In Transit view and the Archive
+     * action is hidden in the customer UI. Ops can still override
+     * from the admin surface if a row is genuinely stuck.
      */
     public function canArchive(bool $opsOverride = false): bool
     {
@@ -828,7 +864,7 @@ class Job extends Model
         if (! in_array($this->status, [self::STATUS_DELIVERED, self::STATUS_COMPLETED], true)) {
             return false;
         }
-        if ($this->destination_type === self::DESTINATION_BODY_BUILDER && ! $opsOverride) {
+        if (in_array($this->destination_type, self::NON_FINAL_DESTINATION_TYPES, true) && ! $opsOverride) {
             return false;
         }
         return true;

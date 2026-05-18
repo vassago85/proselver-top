@@ -230,10 +230,12 @@ new #[Layout('components.layouts.app')] class extends Component {
                 ->map(fn ($label, $value) => ['value' => $value, 'label' => $label])
                 ->values()->all(),
             'destinationOptions' => collect([
-                Job::DESTINATION_DEALER       => 'Dealer / handover',
+                Job::DESTINATION_DEALER       => 'Delivery',
                 Job::DESTINATION_BODY_BUILDER => 'Body Builder',
-                Job::DESTINATION_YARD         => 'Yard',
-                Job::DESTINATION_OTHER        => 'Other',
+                Job::DESTINATION_ROUND_TRIP   => 'Round Trip',
+                Job::DESTINATION_YARD         => 'Other Storage Facility',
+                // Legacy bucket — kept so ops can still filter old rows.
+                Job::DESTINATION_OTHER        => 'Other (legacy)',
             ])->map(fn ($label, $value) => ['value' => $value, 'label' => $label])->values()->all(),
         ];
     }

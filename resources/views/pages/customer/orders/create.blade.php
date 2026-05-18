@@ -21,7 +21,10 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     public ?int $pickupLocationId = null;
     public ?int $deliveryLocationId = null;
-    public ?string $destinationType = null;
+    // Default to "Delivery" — the most common case. Sales staff opt
+    // in to Body Builder / Round Trip / Other Storage Facility for
+    // non-final movements that should stay on Stock In Transit.
+    public ?string $destinationType = \App\Models\Job::DESTINATION_DEALER;
     public ?int $brandId = null;
     public string $modelName = '';
     public string $vin = '';
@@ -48,13 +51,6 @@ new #[Layout('components.layouts.app')] class extends Component {
     public string $selfCollectName = '';
     public string $selfCollectPhone = '';
     public string $selfCollectIdNumber = '';
-
-    // Driver-waits round-trip flag — for COF checks, weighbridge runs,
-    // bank drops etc. where the driver heads out, waits at the
-    // destination, and comes straight back without a separate return
-    // booking. is_round_trip on the Job model has existed since day
-    // one; we're just exposing it on the dealer create form.
-    public bool $isRoundTrip = false;
 
     public function mount(): void
     {
@@ -94,7 +90,16 @@ new #[Layout('components.layouts.app')] class extends Component {
         $rules = [
             'pickupLocationId' => 'required|exists:locations,id',
             'deliveryLocationId' => 'required|exists:locations,id|different:pickupLocationId',
-            'destinationType' => 'nullable|in:' . implode(',', Job::DESTINATION_TYPES),
+            // Only the four user-facing destination types are accepted
+            // from the form. The legacy DESTINATION_OTHER value is
+            // still valid in the DB for old rows but the picker no
+            // longer offers it, so we don't accept it from this form.
+            'destinationType' => 'nullable|in:' . implode(',', [
+                Job::DESTINATION_DEALER,
+                Job::DESTINATION_BODY_BUILDER,
+                Job::DESTINATION_ROUND_TRIP,
+                Job::DESTINATION_YARD,
+            ]),
             'brandId' => 'nullable|exists:brands,id',
             'modelName' => 'nullable|string|max:255',
             'vin' => 'required|string|max:50',
@@ -171,7 +176,11 @@ new #[Layout('components.layouts.app')] class extends Component {
             'po_amount' => in_array($this->executorType, [Job::EXECUTOR_PROSELVER, Job::EXECUTOR_THIRD_PARTY], true)
                 ? $this->poAmount
                 : null,
-            'is_round_trip' => $this->isRoundTrip,
+            // Round-trip behaviour is now inferred from the destination
+            // type instead of a separate checkbox — picking "Round Trip"
+            // doubles the route distance and tells reporting the vehicle
+            // came back to pickup.
+            'is_round_trip' => $this->destinationType === Job::DESTINATION_ROUND_TRIP,
             'company_id' => $this->company->id,
             'created_by_user_id' => auth()->id(),
             'customer_notes' => $this->notes ?: null,
@@ -486,17 +495,22 @@ new #[Layout('components.layouts.app')] class extends Component {
                     </div>
                 </div>
 
-                {{-- Destination type — drives the body-builder stock view
-                     and the archive button on the order page. Leave blank
-                     when it's an ordinary dealer-to-dealer move. --}}
+                {{-- Destination type — drives Stock In Transit + the
+                     archive rule. ONLY "Delivery" (DESTINATION_DEALER
+                     / null) can be archived once the job is complete;
+                     every other type means the vehicle is still in the
+                     dealer's stock somewhere off-site and the order
+                     stays active until a follow-up movement delivers
+                     it for real. "Round Trip" auto-sets is_round_trip
+                     on submit so the route distance is doubled. --}}
                 <div class="mt-4">
                     <label class="block text-sm font-medium text-gray-700 mb-2">What kind of destination is this?</label>
                     <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
                         @foreach([
-                            null => ['label' => 'Standard', 'sub' => 'Dealer-to-dealer / handover'],
+                            \App\Models\Job::DESTINATION_DEALER => ['label' => 'Delivery', 'sub' => 'To another dealer or customer (final)'],
                             \App\Models\Job::DESTINATION_BODY_BUILDER => ['label' => 'Body Builder', 'sub' => 'Vehicle goes for fitment'],
-                            \App\Models\Job::DESTINATION_YARD => ['label' => 'Yard', 'sub' => 'Transit / holding'],
-                            \App\Models\Job::DESTINATION_OTHER => ['label' => 'Other', 'sub' => 'One-off destination'],
+                            \App\Models\Job::DESTINATION_ROUND_TRIP => ['label' => 'Round Trip', 'sub' => 'COF / weighbridge / bank drop — driver waits'],
+                            \App\Models\Job::DESTINATION_YARD => ['label' => 'Other Storage Facility', 'sub' => 'Off-site storage / holding'],
                         ] as $value => $opts)
                             <label class="cursor-pointer rounded-lg border-2 px-3 py-2 transition-colors hover:border-blue-300
                                 {{ (string) $destinationType === (string) $value ? 'border-blue-500 bg-blue-50' : 'border-gray-200 bg-white' }}">
@@ -507,28 +521,15 @@ new #[Layout('components.layouts.app')] class extends Component {
                         @endforeach
                     </div>
                     @if($destinationType === \App\Models\Job::DESTINATION_BODY_BUILDER)
-                        <p class="mt-2 text-xs text-amber-700">Body-builder deliveries stay visible in your stock view until a return movement is booked.</p>
+                        <p class="mt-2 text-xs text-amber-700">Body-builder movements keep the vehicle in your <strong>Stock In Transit</strong> view and can't be archived &mdash; book a return movement once the fitment is done.</p>
+                    @elseif($destinationType === \App\Models\Job::DESTINATION_ROUND_TRIP)
+                        <p class="mt-2 text-xs text-indigo-700">Round trips automatically double the route distance for reporting. The vehicle returns to pickup, so the order isn't archivable but also doesn't park anywhere.</p>
                     @elseif($destinationType === \App\Models\Job::DESTINATION_YARD)
-                        <p class="mt-2 text-xs text-amber-700">Yard / holding deliveries keep the vehicle in your in-transit stock view until it's booked out again.</p>
+                        <p class="mt-2 text-xs text-amber-700">Off-site storage keeps the vehicle in your <strong>Stock In Transit</strong> view until you book it out to a final Delivery destination.</p>
+                    @elseif($destinationType === \App\Models\Job::DESTINATION_DEALER)
+                        <p class="mt-2 text-xs text-gray-500">Final delivery to a dealer or customer &mdash; the order can be archived once completed, which hides it from the active list but keeps it in reports.</p>
                     @endif
                     @error('destinationType') <p class="mt-1 text-xs text-red-600">{{ $message }}</p> @enderror
-                </div>
-
-                {{-- Round-trip flag — for COF checks, weighbridge runs,
-                     bank drops, etc. where the driver heads out, waits
-                     for the work to be done, and comes straight back
-                     without a separate return booking. We surface the
-                     option on every executor type because a 3rd-party
-                     courier can also wait; in practice it's mostly
-                     used for internal-driver runs. --}}
-                <div class="mt-4">
-                    <label class="flex items-start gap-2 cursor-pointer rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 hover:bg-gray-100 transition-colors">
-                        <input type="checkbox" wire:model.live="isRoundTrip" class="mt-0.5 h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500">
-                        <div>
-                            <span class="block text-sm font-semibold text-gray-900">Round trip &mdash; driver waits at destination</span>
-                            <span class="block text-xs text-gray-500 mt-0.5">For COF checks, weighbridge runs, bank drops, etc. where the driver waits for the job to be done and comes straight back. Doubles the route distance for reporting.</span>
-                        </div>
-                    </label>
                 </div>
             </div>
 

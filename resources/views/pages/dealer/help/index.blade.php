@@ -113,8 +113,14 @@ new #[Layout('components.layouts.app')] class extends Component {};
             <ol class="list-decimal list-inside space-y-2 pl-2">
                 <li><strong>Pick the executor</strong> &mdash; click one of the four radio cards (ProSelver / My Driver / 3rd-Party / Self-Collect). The form below adjusts to show only the fields relevant to that choice.</li>
                 <li><strong>Pickup &amp; delivery locations</strong> &mdash; from your address book, or add a new one inline.</li>
-                <li><strong>Destination type</strong> &mdash; "Standard" for a normal final delivery; "Body Builder" or "Yard" if the vehicle is going somewhere it'll wait before moving on (these rows show on <a class="underline" href="#body-builder">Stock In Transit</a>).</li>
-                <li><strong>Round trip (optional)</strong> &mdash; tick this when the driver heads out, waits at the destination, and comes straight back without a separate return booking. Use it for <strong>COF checks, weighbridge runs, bank drops, etc.</strong> The trip distance is doubled for reporting.</li>
+                <li><strong>Destination type</strong> &mdash; one of four:
+                    <ul class="list-disc list-inside ml-4 mt-1 space-y-0.5 text-xs">
+                        <li><strong>Delivery</strong> &mdash; final hand-over to another dealer or to a customer. Only these orders can be archived once complete.</li>
+                        <li><strong>Body Builder</strong> &mdash; vehicle goes for fitment; stays on <a class="underline" href="#body-builder">Stock In Transit</a> until you book the return.</li>
+                        <li><strong>Round Trip</strong> &mdash; COF, weighbridge, bank drop &mdash; driver waits and brings the vehicle straight back. Route distance is doubled automatically.</li>
+                        <li><strong>Other Storage Facility</strong> &mdash; any off-site holding location (not body builder, not final). Stays on Stock In Transit until booked out.</li>
+                    </ul>
+                </li>
                 <li><strong>Vehicle</strong> &mdash; VIN is required, brand / model / class / registration as needed.</li>
                 <li><strong>Collection date &amp; time</strong> &mdash; respects the same cutoff rules as before.</li>
                 <li><strong>Executor-specific details</strong> &mdash; pick the driver from your pool (My Driver), enter the courier name + waybill (3rd-Party), or the collector's contact details (Self-Collect). ProSelver has no extra fields.</li>
@@ -191,8 +197,8 @@ new #[Layout('components.layouts.app')] class extends Component {};
                 <li><strong>In transit</strong> &mdash; an active movement that's been collected or is on the road right now (any executor type).</li>
             </ul>
             <p>Each row shows the current location, the driver (for in-transit), and a one-click <em>Book Return / Next Move</em> button on the parked rows that pre-fills the create-order form with pickup = current location, VIN preserved.</p>
-            <p>A row drops off automatically once the next movement is delivered to a final dealer destination, or when the order is archived.</p>
-            <p class="text-xs text-zinc-500 dark:text-zinc-400">Body-builder + yard rows are kept out of the <em>Archive</em> flow on purpose &mdash; archiving a vehicle that hasn't actually left your stock would hide it while it's still your problem.</p>
+            <p>A row drops off automatically once the next movement is delivered (destination = <strong>Delivery</strong>), or when the order is archived.</p>
+            <p class="text-xs text-zinc-500 dark:text-zinc-400">Body builder / round trip / other-storage rows are kept out of the <em>Archive</em> flow on purpose &mdash; archiving a vehicle that hasn't actually left your stock would hide it while it's still your problem.</p>
         </div>
     </section>
 
@@ -200,9 +206,9 @@ new #[Layout('components.layouts.app')] class extends Component {};
     <section id="archive" class="scroll-mt-24 rounded-xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-700 dark:bg-zinc-800">
         <h2 class="text-lg font-semibold text-zinc-900 dark:text-white">Archiving deliveries</h2>
         <div class="mt-3 space-y-3 text-sm text-zinc-700 dark:text-zinc-300">
-            <p>When a final delivery is done and dusted &mdash; the vehicle has left your books for good &mdash; you can <strong>archive</strong> it. Archiving hides the order from your active Bookings list so the day-to-day view stays clean, but the row stays in the database and still shows up on the <a class="underline" href="{{ route('customer.reports.deliveries') }}">Deliveries Report</a>.</p>
+            <p>When a final <strong>Delivery</strong> is done and dusted &mdash; the vehicle has left your books for good &mdash; you can <strong>archive</strong> it. Archiving hides the order from your active Bookings list so the day-to-day view stays clean, but the row stays in the database and still shows up on the <a class="underline" href="{{ route('customer.reports.deliveries') }}">Deliveries Report</a>.</p>
             <ul class="list-disc list-inside space-y-1 pl-2">
-                <li>Open the order, click <em>Archive</em> (available once the job is in a <code>DELIVERED</code> / <code>COMPLETED</code> state and the destination isn't a body builder).</li>
+                <li>Open the order, click <em>Archive</em> &mdash; available once the job is in a <code>DELIVERED</code> / <code>COMPLETED</code> state <strong>and</strong> the destination type is <em>Delivery</em>. Body Builder / Round Trip / Other Storage Facility orders can't be archived because the vehicle hasn't really left your stock yet.</li>
                 <li>To bring it back, your Bookings list has a <em>"Show archived"</em> toggle &mdash; flip it on, open the order, click <em>Unarchive</em>.</li>
                 <li>Only dealer admin / owner can archive or unarchive; sales staff can see the action but not perform it.</li>
             </ul>

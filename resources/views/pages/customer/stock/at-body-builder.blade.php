@@ -37,7 +37,7 @@ class extends Component
 
     public string $search = '';
     public ?int $locationId = null;
-    public string $bucket = 'all'; // all | body_builder | yard | in_transit
+    public string $bucket = 'all'; // all | body_builder | other_storage | in_transit
 
     public function mount(): void
     {
@@ -47,7 +47,7 @@ class extends Component
 
     public function setBucket(string $bucket): void
     {
-        $this->bucket = in_array($bucket, ['all', 'body_builder', 'yard', 'in_transit'], true)
+        $this->bucket = in_array($bucket, ['all', 'body_builder', 'other_storage', 'in_transit'], true)
             ? $bucket
             : 'all';
         $this->locationId = null;
@@ -56,10 +56,14 @@ class extends Component
     public function with(): array
     {
         // -----------------------------------------------------------
-        // Step 1: delivered-but-parked rows (body builder + yard /
-        // other). One row per VIN, take the latest delivered job and
-        // drop any VIN that already has a newer movement booked
-        // (return is in flight or completed).
+        // Step 1: delivered-but-parked rows (body builder + other
+        // storage facility). DESTINATION_YARD + the legacy
+        // DESTINATION_OTHER both back the "Other Storage Facility"
+        // bucket in the UI. Round-trip rows are NEVER parked — once
+        // delivered, the vehicle is back at pickup.
+        // One row per VIN, take the latest delivered job and drop
+        // any VIN that already has a newer movement booked (return is
+        // in flight or completed).
         // -----------------------------------------------------------
         $parkedDestinations = [
             Job::DESTINATION_BODY_BUILDER,
@@ -94,10 +98,10 @@ class extends Component
             ->map(function (Job $j) {
                 $j->bucket_key = $j->destination_type === Job::DESTINATION_BODY_BUILDER
                     ? 'body_builder'
-                    : 'yard';
+                    : 'other_storage';
                 $j->bucket_label = $j->destination_type === Job::DESTINATION_BODY_BUILDER
                     ? 'At body builder'
-                    : 'At yard / holding';
+                    : 'At other storage facility';
                 return $j;
             })
             ->values();
@@ -126,11 +130,14 @@ class extends Component
             ->unique('vin')
             ->map(function (Job $j) {
                 $j->bucket_key = 'in_transit';
-                $j->bucket_label = match ($j->status) {
-                    Job::STATUS_IN_TRANSIT => 'In transit',
-                    Job::STATUS_COLLECTED => 'Collected',
-                    Job::STATUS_DRIVER_ASSIGNED => 'Driver assigned',
-                    Job::STATUS_READY_FOR_COLLECTION => 'Ready for collection',
+                $isRoundTrip = $j->destination_type === Job::DESTINATION_ROUND_TRIP
+                    || $j->is_round_trip;
+                $j->bucket_label = match (true) {
+                    $isRoundTrip => 'Round trip in progress',
+                    $j->status === Job::STATUS_IN_TRANSIT => 'In transit',
+                    $j->status === Job::STATUS_COLLECTED => 'Collected',
+                    $j->status === Job::STATUS_DRIVER_ASSIGNED => 'Driver assigned',
+                    $j->status === Job::STATUS_READY_FOR_COLLECTION => 'Ready for collection',
                     default => 'Awaiting collection',
                 };
                 return $j;
@@ -145,7 +152,7 @@ class extends Component
         $bucketCounts = [
             'all' => $all->count(),
             'body_builder' => $parkedRows->where('bucket_key', 'body_builder')->count(),
-            'yard' => $parkedRows->where('bucket_key', 'yard')->count(),
+            'other_storage' => $parkedRows->where('bucket_key', 'other_storage')->count(),
             'in_transit' => $inTransitCandidates->count(),
         ];
 
@@ -203,7 +210,7 @@ class extends Component
         @php($tabs = [
             'all' => ['label' => 'All', 'colour' => 'gray'],
             'body_builder' => ['label' => 'At body builder', 'colour' => 'amber'],
-            'yard' => ['label' => 'At yard / holding', 'colour' => 'sky'],
+            'other_storage' => ['label' => 'At other storage facility', 'colour' => 'sky'],
             'in_transit' => ['label' => 'In transit', 'colour' => 'indigo'],
         ])
         @foreach($tabs as $key => $cfg)
@@ -261,11 +268,11 @@ class extends Component
             <tbody class="divide-y divide-gray-200 bg-white">
                 @forelse($rows as $row)
                     @php
-                        $isParked = in_array($row->bucket_key, ['body_builder', 'yard'], true);
+                        $isParked = in_array($row->bucket_key, ['body_builder', 'other_storage'], true);
                         $badgeCls = match ($row->bucket_key) {
-                            'body_builder' => 'bg-amber-50 text-amber-800 border-amber-200',
-                            'yard'         => 'bg-sky-50 text-sky-800 border-sky-200',
-                            default        => 'bg-indigo-50 text-indigo-800 border-indigo-200',
+                            'body_builder'  => 'bg-amber-50 text-amber-800 border-amber-200',
+                            'other_storage' => 'bg-sky-50 text-sky-800 border-sky-200',
+                            default         => 'bg-indigo-50 text-indigo-800 border-indigo-200',
                         };
                     @endphp
                     <tr>
