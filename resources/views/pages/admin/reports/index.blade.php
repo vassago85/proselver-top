@@ -161,17 +161,19 @@ new #[Layout('components.layouts.app')] class extends Component {
             ->distinct('model_name')
             ->count('model_name');
 
-        // Per-customer breakdown ordered by volume; the table below
-        // shows the same rows in detail. We cap the breakdown to the
-        // top 10 customers so it stays glanceable; everything else
-        // rolls into an "Other" bucket.
-        //
-        // reorder() clears the orderByDesc('delivered_at') that the
-        // base query carries — Postgres won't ORDER BY a non-aggregated
-        // column once we GROUP BY company_id, and that order is
-        // meaningless for the per-customer roll-up anyway.
-        $customerBreakdown = (clone $base)
-            ->reorder()
+        // Per-customer breakdown ordered by volume. Built from a fresh
+        // query (not a clone of $base) so we don't drag along the
+        // base's orderByDesc('delivered_at') or eager-loaded relations,
+        // either of which break a GROUP BY company_id on Postgres
+        // (it rejects ORDER BY on a non-aggregated column). Capped to
+        // the top 10 customers for glanceability.
+        $customerBreakdown = Job::query()
+            ->whereIn('status', [Job::STATUS_DELIVERED, Job::STATUS_COMPLETED])
+            ->whereNotNull('delivered_at')
+            ->whereBetween('delivered_at', [$from, $to])
+            ->when($this->companyId,      fn ($q) => $q->where('company_id', $this->companyId))
+            ->when($this->brandId,        fn ($q) => $q->where('brand_id', $this->brandId))
+            ->when($this->vehicleClassId, fn ($q) => $q->where('vehicle_class_id', $this->vehicleClassId))
             ->select('company_id', DB::raw('count(*) as deliveries'))
             ->groupBy('company_id')
             ->orderByDesc('deliveries')
