@@ -159,6 +159,20 @@
                             <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/></svg></x-slot:icon>
                             Wallboard
                         </x-sidebar-link>
+
+                        {{-- Live Display — chromeless 3-lane board (waiting /
+                             in transit / delivered today) the dealer and OEM
+                             portals also expose.  For ops / owner / super
+                             admin / developer it runs system-wide (every
+                             customer's active jobs in one TV view), with the
+                             owning customer name on each card.  Opens in a
+                             new tab so the dispatcher can drop it on a
+                             wall-mounted monitor without losing their main
+                             session. --}}
+                        <x-sidebar-link :href="route('admin.live-display')" target="_blank" rel="noopener" :active="request()->routeIs('admin.live-display')">
+                            <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg></x-slot:icon>
+                            Live Display
+                        </x-sidebar-link>
                     </ul>
                 </li>
                 @endif
@@ -405,6 +419,18 @@
                             <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg></x-slot:icon>
                             Deliveries
                         </x-sidebar-link>
+
+                        @if($user->hasPermission('view_all_bookings'))
+                            {{-- Opens in a new tab so a dispatcher can drop it on
+                                 the wall-mounted monitor without losing their main
+                                 working session.  Scoped to this customer-tier
+                                 tenant; same chromeless component the dealer /
+                                 OEM portals use. --}}
+                            <x-sidebar-link :href="route('customer.display')" target="_blank" rel="noopener" :active="request()->routeIs('customer.display')">
+                                <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg></x-slot:icon>
+                                Live Display
+                            </x-sidebar-link>
+                        @endif
                     </ul>
                 </li>
 
@@ -709,6 +735,13 @@
                             <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg></x-slot:icon>
                             Deliveries
                         </x-sidebar-link>
+
+                        @if($user->hasPermission('view_all_bookings'))
+                            <x-sidebar-link :href="route('oem.display')" target="_blank" rel="noopener" :active="request()->routeIs('oem.display')">
+                                <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg></x-slot:icon>
+                                Live Display
+                            </x-sidebar-link>
+                        @endif
                     </ul>
                 </li>
 

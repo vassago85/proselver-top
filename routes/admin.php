@@ -25,6 +25,12 @@ Volt::route('dispatch', 'admin.dispatch')->name('dispatch');
 // Designed to live on a dispatch TV; uses Livewire wire:poll.5s for the
 // "live" feel rather than Reverb/Echo.
 Volt::route('wallboard', 'admin.wallboard.index')->name('wallboard');
+// Live Movements board — system-wide 3-lane view (waiting / in
+// transit / delivered today) for ops controllers, owners, super
+// admins and developers.  Same Volt component as the dealer / OEM
+// live displays; the component scopes itself by tenant for tenant
+// users and runs unscoped (every customer) for internal users.
+Volt::route('live-display', 'dealer.display')->name('live-display');
 // /admin/tracking has been merged into /admin/vehicles under the
 // "Live" bucket. Keep the route name so dashboard links and old
 // bookmarks still resolve — just 302 to the merged page.

@@ -1,10 +1,20 @@
 <?php
 /**
- * Dealer "Live Movements" board.
+ * "Live Movements" board — shared across every portal that wants a TV
+ * view of what's moving right now.
  *
- * Designed for a TV / large monitor in the dealer's dispatch office.
+ * Audiences:
+ *   - Dealer admins / dispatchers (own dealership's bookings).
+ *   - OEM admins / planners (own OEM's bookings — same code path,
+ *     same scoping by $user->company()->id).
+ *   - Internal ops controllers, owners, super admins (system-wide —
+ *     every active job across every customer, capped per lane).
+ *
  * Renders with the chromeless `display` layout (no sidebar, no top
- * bar), dark theme, auto-refreshes every 30 seconds.
+ * bar), dark theme, auto-refreshes every 30 seconds.  Mounted from
+ * routes/dealer.php, routes/oem.php and routes/admin.php; the file
+ * lives under pages/dealer/ for historical reasons but is portal-
+ * agnostic.
  *
  * Three lanes, ordered left-to-right the same way a movement actually
  * progresses through the day:
@@ -18,8 +28,9 @@
  * is for live operations, not the audit trail).
  *
  * Permission gate: `view_all_bookings`. A CSO who only sees their own
- * bookings would get a misleading board; restrict to dealer admin /
- * dispatcher / principal. Sidebar link is gated the same way.
+ * bookings would get a misleading board; the sidebar links are gated
+ * the same way.  Internal users are always allowed (they implicitly
+ * have everything via tier=internal).
  */
 
 use App\Models\Job;
@@ -29,18 +40,29 @@ use Livewire\Attributes\Layout;
 new #[Layout('components.layouts.display')] class extends Component {
     public function mount(): void
     {
-        if (!auth()->user()->hasPermission('view_all_bookings')) {
-            abort(403, 'The live display is for dealer admins and dispatchers.');
+        $user = auth()->user();
+        if (!$user->isInternal() && !$user->hasPermission('view_all_bookings')) {
+            abort(403, 'The live display needs the "View all bookings" permission.');
         }
     }
 
     public function with(): array
     {
         $user = auth()->user();
-        $company = $user->company();
-        if (!$company) {
+        // Internal users (ops / owner / super admin / developer) get a
+        // system-wide board — they're not pinned to a single tenant, so
+        // filtering by $user->company() would just show the internal
+        // ProSelver "company" row which is empty.
+        //
+        // Tenant users (dealer / OEM / customer / body-builder) get the
+        // single-company board they've always had.
+        $isInternal = $user->isInternal();
+        $company = $isInternal ? null : $user->company();
+
+        if (!$isInternal && !$company) {
             return [
                 'company' => null,
+                'isInternal' => false,
                 'waiting' => collect(),
                 'inTransit' => collect(),
                 'deliveredToday' => collect(),
@@ -81,22 +103,38 @@ new #[Layout('components.layouts.display')] class extends Component {
             'driver:id,name',
             'brand:id,name',
         ];
+        // Internal users also pull the owning customer onto each card so
+        // an ops controller looking at the system-wide board can tell at
+        // a glance which dealer/OEM the row belongs to.
+        if ($isInternal) {
+            $relations[] = 'company:id,name';
+        }
 
-        $base = Job::where('company_id', $company->id)
+        $base = Job::query()
             ->whereNull('archived_at')
             ->with($relations);
+
+        if (!$isInternal) {
+            $base->where('company_id', $company->id);
+        }
+
+        // Lane caps are bigger for the system-wide ops view because a
+        // single dealer board rarely needs more than 30-40 cards but
+        // ProSelver-wide traffic easily exceeds that.  Still bounded —
+        // the lane is supposed to scroll, not stream forever.
+        $lanePerCap = $isInternal ? 80 : 40;
 
         $waiting = (clone $base)
             ->whereIn('status', $waitingStatuses)
             ->orderByRaw('scheduled_date IS NULL, scheduled_date ASC')
             ->orderBy('scheduled_ready_time')
-            ->limit(40)
+            ->limit($lanePerCap)
             ->get();
 
         $inTransit = (clone $base)
             ->whereIn('status', $inTransitStatuses)
             ->orderByDesc('updated_at')
-            ->limit(40)
+            ->limit($lanePerCap)
             ->get();
 
         // Delivered TODAY only — use the most recent of delivered_at /
@@ -112,11 +150,12 @@ new #[Layout('components.layouts.display')] class extends Component {
                   ->orWhereDate('scheduled_date', $today);
             })
             ->orderByDesc('updated_at')
-            ->limit(30)
+            ->limit($isInternal ? 60 : 30)
             ->get();
 
         return [
             'company' => $company,
+            'isInternal' => $isInternal,
             'waiting' => $waiting,
             'inTransit' => $inTransit,
             'deliveredToday' => $deliveredToday,
@@ -151,12 +190,17 @@ new #[Layout('components.layouts.display')] class extends Component {
     {{-- ============ HEADER ============ --}}
     <header class="flex items-center gap-4 border-b border-slate-800/80 bg-slate-900/60 px-6 py-4 backdrop-blur">
         <img src="/favicon-192.png?v=3" alt="" class="h-10 w-10 shrink-0">
-        <div class="min-w-0">
+            <div class="min-w-0">
             <div class="flex items-baseline gap-3">
                 <span class="text-2xl font-bold tracking-tight text-white">TRIDENT</span>
                 <span class="text-sm font-semibold uppercase tracking-[0.25em] text-cyan-400">Live Movements</span>
+                @if($isInternal)
+                    <span class="rounded-md border border-cyan-500/40 bg-cyan-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.2em] text-cyan-300">All customers</span>
+                @endif
             </div>
-            <div class="truncate text-sm text-slate-400">{{ $company?->name ?? '—' }}</div>
+            <div class="truncate text-sm text-slate-400">
+                {{ $isInternal ? 'System-wide ops view' : ($company?->name ?? '—') }}
+            </div>
         </div>
 
         <div class="ml-auto flex items-center gap-6">
@@ -179,7 +223,7 @@ new #[Layout('components.layouts.display')] class extends Component {
                     <path d="M8 3v4H4"/><path d="M16 3v4h4"/><path d="M8 21v-4H4"/><path d="M16 21v-4h4"/>
                 </svg>
             </button>
-            <a href="{{ route('dealer.dashboard') }}"
+            <a href="{{ resolveUserHomePath(auth()->user()) }}"
                class="rounded-lg border border-slate-700 bg-slate-900/40 px-3 py-2 text-xs font-semibold text-slate-300 hover:text-white hover:border-slate-500">
                 Exit board
             </a>
@@ -229,6 +273,9 @@ new #[Layout('components.layouts.display')] class extends Component {
                             <div class="min-w-0">
                                 <div class="text-base font-bold text-white truncate">{{ $job->job_number ?? '—' }}</div>
                                 <div class="text-xs text-slate-300 truncate">{{ trim(($job->brand?->name ?? '') . ' ' . ($job->model_name ?? '')) ?: 'Vehicle TBD' }}</div>
+                                @if($isInternal)
+                                    <div class="mt-0.5 text-[10px] uppercase tracking-[0.15em] text-cyan-300/80 truncate">{{ $job->company?->name ?? '—' }}</div>
+                                @endif
                             </div>
                             <span class="shrink-0 rounded-md px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide {{ $style[1] }}">{{ $style[2] }}</span>
                         </div>
@@ -270,6 +317,9 @@ new #[Layout('components.layouts.display')] class extends Component {
                             <div class="min-w-0">
                                 <div class="text-base font-bold text-white truncate">{{ $job->job_number ?? '—' }}</div>
                                 <div class="text-xs text-slate-300 truncate">{{ trim(($job->brand?->name ?? '') . ' ' . ($job->model_name ?? '')) ?: 'Vehicle TBD' }}</div>
+                                @if($isInternal)
+                                    <div class="mt-0.5 text-[10px] uppercase tracking-[0.15em] text-cyan-300/80 truncate">{{ $job->company?->name ?? '—' }}</div>
+                                @endif
                             </div>
                             <span class="shrink-0 rounded-md px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide {{ $style[1] }}">{{ $style[2] }}</span>
                         </div>
@@ -310,6 +360,9 @@ new #[Layout('components.layouts.display')] class extends Component {
                             <div class="min-w-0">
                                 <div class="text-base font-bold text-white truncate">{{ $job->job_number ?? '—' }}</div>
                                 <div class="text-xs text-slate-300 truncate">{{ trim(($job->brand?->name ?? '') . ' ' . ($job->model_name ?? '')) ?: 'Vehicle TBD' }}</div>
+                                @if($isInternal)
+                                    <div class="mt-0.5 text-[10px] uppercase tracking-[0.15em] text-cyan-300/80 truncate">{{ $job->company?->name ?? '—' }}</div>
+                                @endif
                             </div>
                             <span class="shrink-0 rounded-md px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide {{ $style[1] }}">{{ $style[2] }}</span>
                         </div>
