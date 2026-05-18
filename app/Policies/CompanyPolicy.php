@@ -23,12 +23,23 @@ class CompanyPolicy
 
     public function create(User $user): bool
     {
-        return $user->isSuperAdmin() || $user->hasRole('ops_manager');
+        // Mirror the sidebar's "Companies" section gate so the people
+        // who can see the menu can also use the Add Company button —
+        // developer, super admin, owner, ops controller, ops manager.
+        return $user->isDeveloper()
+            || $user->isSuperAdmin()
+            || $user->isOwner()
+            || $user->hasRole('ops_controller')
+            || $user->hasRole('ops_manager');
     }
 
     public function update(User $user, Company $company): bool
     {
-        return $user->isSuperAdmin() || $user->hasRole('ops_manager');
+        return $user->isDeveloper()
+            || $user->isSuperAdmin()
+            || $user->isOwner()
+            || $user->hasRole('ops_controller')
+            || $user->hasRole('ops_manager');
     }
 
     public function delete(User $user, Company $company): bool

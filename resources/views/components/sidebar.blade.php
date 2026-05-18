@@ -182,14 +182,14 @@
                     </ul>
                 </li>
 
-                {{-- CUSTOMERS --}}
+                {{-- COMPANIES (dealers, OEMs, body builders, internal tenants, etc.) --}}
                 @if($isDeveloper || $isSuperAdmin || $isOpsController || $isOwner)
                 <li>
-                    <p class="mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">Customers</p>
+                    <p class="mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">Companies</p>
                     <ul role="list" class="space-y-0.5">
-                        <x-sidebar-link :href="route('admin.customers.index')" :active="request()->routeIs('admin.customers.*')">
+                        <x-sidebar-link :href="route('admin.companies.index')" :active="request()->routeIs('admin.companies.*') || request()->routeIs('admin.customers.*')">
                             <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z"/><path d="M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2"/><path d="M18 9h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2"/><path d="M10 6h4"/><path d="M10 10h4"/><path d="M10 14h4"/><path d="M10 18h4"/></svg></x-slot:icon>
-                            Customers
+                            Companies
                         </x-sidebar-link>
                     </ul>
                 </li>

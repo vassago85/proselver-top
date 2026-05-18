@@ -37,8 +37,16 @@ Volt::route('damage', 'admin.damage.index')->name('damage');
 Volt::route('petty-cash', 'admin.petty-cash.index')->name('petty-cash.index');
 Volt::route('vehicles', 'vehicles.index')->name('vehicles.index');
 Volt::route('documents', 'admin.documents.index')->name('documents.index');
-Volt::route('customers', 'admin.customers.index')->name('customers.index');
-Volt::route('customers/{company}', 'admin.customers.show')->name('customers.show');
+// Companies (formerly "Customers" — the model has always been Company,
+// the menu just used to call it Customers).  Old /admin/customers and
+// /admin/customers/{id} URLs redirect below so deep-links keep working.
+Volt::route('companies', 'admin.companies.index')->name('companies.index');
+Volt::route('companies/{company}', 'admin.companies.show')->name('companies.show');
+
+Route::redirect('customers', '/admin/companies')->name('customers.index');
+Route::get('customers/{company}', function (\App\Models\Company $company) {
+    return redirect()->route('admin.companies.show', $company);
+})->name('customers.show');
 
 // Impersonation
 Route::post('impersonate/{user}', function (\App\Models\User $user) {
@@ -93,9 +101,6 @@ Volt::route('drivers/{user}/edit', 'admin.drivers.edit')->name('drivers.edit');
 
 // Invoices
 Volt::route('invoices', 'admin.invoices.index')->name('invoices.index');
-
-// Companies
-Volt::route('companies', 'admin.companies.index')->name('companies.index');
 
 // Users
 Volt::route('users', 'admin.users.index')->name('users.index');

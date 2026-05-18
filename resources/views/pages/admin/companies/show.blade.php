@@ -31,7 +31,7 @@ new #[Layout('components.layouts.app')] class extends Component {
     protected function fillForm(): void
     {
         $this->name = $this->company->name;
-        $this->type = $this->company->type ?? 'dealer';
+        $this->type = $this->company->type ?? Company::TYPE_DEALER;
         $this->workflowType = $this->company->workflow_type ?? 'standard';
         $this->address = $this->company->address ?? '';
         $this->vatNumber = $this->company->vat_number ?? '';
@@ -51,9 +51,13 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     public function save(): void
     {
+        // Type whitelist is the full Company::TYPES list now (dealer,
+        // oem, body_builder, transporter, yard, internal, customer)
+        // rather than the old 3-value subset, so admin can promote /
+        // change a company without surgery on the DB.
         $this->validate([
             'name' => 'required|string|max:255',
-            'type' => 'required|in:dealer,oem,customer',
+            'type' => 'required|in:' . implode(',', Company::TYPES),
             'workflowType' => 'required|in:standard,faw',
             'address' => 'nullable|string|max:500',
             'vatNumber' => 'nullable|string|max:20',
@@ -77,7 +81,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         $this->company->brands()->sync(array_map('intval', $this->selectedBrandIds));
 
         $this->editing = false;
-        session()->flash('success', 'Customer updated.');
+        session()->flash('success', 'Company updated.');
     }
 
     public function with(): array
@@ -105,7 +109,17 @@ new #[Layout('components.layouts.app')] class extends Component {
         $allBrands = Brand::where('is_active', true)->orderBy('name')->get(['id', 'name']);
         $companyBrands = $this->company->brands()->pluck('brands.id')->toArray();
 
-        return compact('users', 'orderStats', 'locations', 'allBrands', 'companyBrands');
+        $typeLabels = [
+            Company::TYPE_DEALER       => 'Dealer',
+            Company::TYPE_OEM          => 'OEM',
+            Company::TYPE_BODY_BUILDER => 'Body Builder',
+            Company::TYPE_TRANSPORTER  => 'Transporter',
+            Company::TYPE_YARD         => 'Yard / Storage',
+            Company::TYPE_INTERNAL     => 'Internal (ProSelver)',
+            Company::TYPE_CUSTOMER     => 'Customer',
+        ];
+
+        return compact('users', 'orderStats', 'locations', 'allBrands', 'companyBrands', 'typeLabels');
     }
 };
 ?>
@@ -113,7 +127,7 @@ new #[Layout('components.layouts.app')] class extends Component {
 <div>
     <x-slot:header>
         <div class="flex items-center gap-3">
-            <a href="{{ route('admin.customers.index') }}" class="text-gray-400 hover:text-gray-600">
+            <a href="{{ route('admin.companies.index') }}" class="text-gray-400 hover:text-gray-600">
                 <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
             </a>
             {{ $company->name }}
@@ -121,6 +135,10 @@ new #[Layout('components.layouts.app')] class extends Component {
     </x-slot:header>
 
     <div class="space-y-6">
+
+        @if(session('success'))
+            <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{{ session('success') }}</div>
+        @endif
 
         {{-- Order Stats --}}
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -158,10 +176,11 @@ new #[Layout('components.layouts.app')] class extends Component {
                         <div>
                             <label class="block text-sm font-medium text-gray-700 mb-1">Type</label>
                             <select wire:model="type" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
-                                <option value="dealer">Dealer</option>
-                                <option value="oem">OEM</option>
-                                <option value="customer">Customer</option>
+                                @foreach($typeLabels as $value => $label)
+                                    <option value="{{ $value }}">{{ $label }}</option>
+                                @endforeach
                             </select>
+                            @error('type') <p class="text-red-600 text-xs mt-1">{{ $message }}</p> @enderror
                         </div>
                         <div>
                             <label class="block text-sm font-medium text-gray-700 mb-1">Workflow Type</label>
@@ -195,7 +214,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                         </div>
                         <div class="sm:col-span-2">
                             <label class="block text-sm font-medium text-gray-700 mb-1">Assigned Brands</label>
-                            <p class="text-xs text-gray-500 mb-2">Select which brands this customer can use when creating orders. Leave empty to allow all brands.</p>
+                            <p class="text-xs text-gray-500 mb-2">Select which brands this company can use when creating orders. Leave empty to allow all brands.</p>
                             <div class="grid grid-cols-2 sm:grid-cols-3 gap-2">
                                 @foreach($allBrands as $brand)
                                 <label class="flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 cursor-pointer hover:bg-gray-50">
@@ -221,11 +240,17 @@ new #[Layout('components.layouts.app')] class extends Component {
                     <div>
                         <dt class="text-sm text-gray-500">Type</dt>
                         <dd class="mt-0.5">
-                            <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium
-                                {{ $company->type === 'oem' ? 'bg-purple-100 text-purple-700' : '' }}
-                                {{ $company->type === 'dealer' ? 'bg-blue-100 text-blue-700' : '' }}
-                                {{ $company->type === 'customer' ? 'bg-green-100 text-green-700' : '' }}
-                            ">{{ ucfirst($company->type ?? 'unknown') }}</span>
+                            <span @class([
+                                'inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium',
+                                'bg-purple-100 text-purple-700'   => $company->type === Company::TYPE_OEM,
+                                'bg-blue-100 text-blue-700'       => $company->type === Company::TYPE_DEALER,
+                                'bg-amber-100 text-amber-800'     => $company->type === Company::TYPE_BODY_BUILDER,
+                                'bg-slate-100 text-slate-700'     => $company->type === Company::TYPE_INTERNAL,
+                                'bg-cyan-100 text-cyan-700'       => $company->type === Company::TYPE_TRANSPORTER,
+                                'bg-orange-100 text-orange-700'   => $company->type === Company::TYPE_YARD,
+                                'bg-green-100 text-green-700'     => $company->type === Company::TYPE_CUSTOMER,
+                                'bg-gray-100 text-gray-600'       => ! in_array($company->type, Company::TYPES, true),
+                            ])>{{ $typeLabels[$company->type] ?? ucfirst($company->type ?? 'unknown') }}</span>
                         </dd>
                     </div>
                     <div>
@@ -330,7 +355,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                     </tr>
                     @empty
                     <tr>
-                        <td colspan="8" class="px-6 py-8 text-center text-sm text-gray-500">No users linked to this customer.</td>
+                        <td colspan="8" class="px-6 py-8 text-center text-sm text-gray-500">No users linked to this company yet. Use the Admin → Users page to invite team members.</td>
                     </tr>
                     @endforelse
                 </tbody>
