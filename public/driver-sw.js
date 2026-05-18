@@ -16,13 +16,14 @@
  *    would otherwise leak between users on shared devices.
  */
 
-const CACHE_VERSION = 'v3';
+const CACHE_VERSION = 'v4';
 const SHELL_CACHE = `trident-driver-shell-${CACHE_VERSION}`;
 
 // Only static, non-authenticated, unchanging assets belong in the shell.
 // Hashed build assets are cached opportunistically at runtime below.
 const APP_SHELL = [
-    '/logo.png?v=2',
+    '/favicon-192.png?v=3',
+    '/apple-touch-icon.png?v=3',
     '/manifest.webmanifest',
 ];
 

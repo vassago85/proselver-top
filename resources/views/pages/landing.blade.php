@@ -5,7 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="description" content="TRIDENT Control &amp; Dispatch Center — the operational command center for vehicle movement. Control and dispatch with precision.">
     <title>TRIDENT — Control &amp; Dispatch Center</title>
-    <link rel="icon" href="/favicon.ico">
+    <link rel="icon" href="/favicon.ico?v=3" sizes="any">
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png?v=3">
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png?v=3">
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=3">
     @vite(['resources/css/app.css', 'resources/js/app.js'])
     <style>
         :root { --brand: #2563eb; --brand-dark: #1e3a8a; --ink: #0b1220; }
