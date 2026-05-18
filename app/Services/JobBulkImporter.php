@@ -6,6 +6,7 @@ use App\Models\Brand;
 use App\Models\Company;
 use App\Models\Job;
 use App\Models\Location;
+use App\Models\User;
 use App\Models\VehicleClass;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -65,6 +66,17 @@ class JobBulkImporter
         'delivery'        => 'Delivery location (destination)',
         'movement_date'   => 'Movement / scheduled date',
         'comments'        => 'Comments / notes',
+        // Optional executor-aware columns. Customers using their own
+        // drivers / 3rd-party couriers / self-collect can express that
+        // intent inline in the spreadsheet instead of editing each
+        // booking individually after import. All blank for a row =
+        // falls back to the page-level default executor.
+        'executor_type'   => 'Executor (proselver / internal / 3rd_party / self_collect)',
+        'driver_name'     => 'Internal driver name (for executor=internal)',
+        'courier_name'    => '3rd-party courier name (for executor=3rd_party)',
+        'waybill'         => '3rd-party waybill / tracking number',
+        'collector_name'  => 'Self-collect collector name',
+        'collector_phone' => 'Self-collect collector phone',
     ];
 
     /**
@@ -78,12 +90,46 @@ class JobBulkImporter
      * lines up. First match wins.
      */
     private const HEADER_HINTS = [
-        'vin'           => ['vin', 'chassis', 'chassis no', 'chassis number'],
-        'model'         => ['model', 'model description', 'vehicle model'],
-        'pickup'        => ['from', 'departure', 'origin', 'pickup', 'collection from'],
-        'delivery'      => ['to', 'destination', 'delivery', 'deliver to', 'collection to'],
-        'movement_date' => ['movement date', 'movement order date', 'scheduled date', 'collection date', 'date'],
-        'comments'      => ['comments', 'comment', 'notes', 'remarks'],
+        'vin'             => ['vin', 'chassis', 'chassis no', 'chassis number'],
+        'model'           => ['model', 'model description', 'vehicle model'],
+        'pickup'          => ['from', 'departure', 'origin', 'pickup', 'collection from'],
+        'delivery'        => ['to', 'destination', 'delivery', 'deliver to', 'collection to'],
+        'movement_date'   => ['movement date', 'movement order date', 'scheduled date', 'collection date', 'date'],
+        'comments'        => ['comments', 'comment', 'notes', 'remarks'],
+        'executor_type'   => ['executor', 'executor type', 'movement type', 'transporter'],
+        'driver_name'     => ['driver', 'driver name', 'internal driver'],
+        'courier_name'    => ['courier', 'courier name', '3rd party', 'third party courier'],
+        'waybill'         => ['waybill', 'waybill no', 'tracking', 'tracking number', 'consignment'],
+        'collector_name'  => ['collector', 'collector name', 'self collect', 'collected by'],
+        'collector_phone' => ['collector phone', 'collector mobile', 'collector cell'],
+    ];
+
+    /**
+     * Map free-form executor strings the operator might type in a
+     * spreadsheet cell onto Job::EXECUTOR_* values.  We lower-case +
+     * trim before matching.  Anything unrecognised falls through to the
+     * page-level default, so a typo never silently flips an entire
+     * customer's executor pool.
+     */
+    private const EXECUTOR_ALIASES = [
+        'proselver'          => Job::EXECUTOR_PROSELVER,
+        'proseltech'         => Job::EXECUTOR_PROSELVER,
+        'us'                 => Job::EXECUTOR_PROSELVER,
+        'internal'           => Job::EXECUTOR_INTERNAL,
+        'own'                => Job::EXECUTOR_INTERNAL,
+        'in-house'           => Job::EXECUTOR_INTERNAL,
+        'inhouse'            => Job::EXECUTOR_INTERNAL,
+        'dealer driver'      => Job::EXECUTOR_INTERNAL,
+        '3rd party'          => Job::EXECUTOR_THIRD_PARTY,
+        '3rd-party'          => Job::EXECUTOR_THIRD_PARTY,
+        'third party'        => Job::EXECUTOR_THIRD_PARTY,
+        'third-party'        => Job::EXECUTOR_THIRD_PARTY,
+        'courier'            => Job::EXECUTOR_THIRD_PARTY,
+        'self collect'       => Job::EXECUTOR_SELF_COLLECT,
+        'self-collect'       => Job::EXECUTOR_SELF_COLLECT,
+        'collection'         => Job::EXECUTOR_SELF_COLLECT,
+        'customer collect'   => Job::EXECUTOR_SELF_COLLECT,
+        'customer'           => Job::EXECUTOR_SELF_COLLECT,
     ];
 
     /**
@@ -275,6 +321,17 @@ class JobBulkImporter
         $includeOnHold = (bool) ($options['include_on_hold'] ?? false);
         $autoCreate = (bool) ($options['auto_create_locations'] ?? true);
         $defaultClassId = $options['default_vehicle_class_id'] ?? null;
+        // Page-level executor default — applied when a row leaves the
+        // executor column blank.  Defaults to ProSelver so any existing
+        // import that doesn't know about executors keeps working.
+        $defaultExecutor = $this->normaliseExecutor($options['default_executor_type'] ?? null) ?: Job::EXECUTOR_PROSELVER;
+
+        // Internal-driver lookup keyed by lower-cased name. Built once
+        // per preview so we don't hit the DB per row when a customer's
+        // sheet has dozens of internal-driver rows.
+        $driverIndex = User::driversForCompany($company->id)
+            ->get(['users.id', 'users.name'])
+            ->mapWithKeys(fn ($u) => [Str::lower(trim($u->name)) => (int) $u->id]);
 
         // The vehicle-class collection is optional. When provided we can
         // run a model-name heuristic per row (e.g. "28.290FL" → 28-tonne
@@ -311,7 +368,7 @@ class JobBulkImporter
         $seenInFile = []; // VIN → first row index that used it
 
         foreach ($rows as $row) {
-            $entry = $this->buildPreviewRow($row, $mapping, $locations, $autoCreate);
+            $entry = $this->buildPreviewRow($row, $mapping, $locations, $autoCreate, $defaultExecutor, $driverIndex);
 
             // Per-row vehicle class: prefer the operator-set default;
             // otherwise honour a remembered hint for this exact model;
@@ -621,6 +678,8 @@ class JobBulkImporter
 
                     $isUrgent = (bool) ($row['parsed']['is_urgent'] ?? false);
 
+                    $executorType = $row['parsed']['executor_type'] ?? Job::EXECUTOR_PROSELVER;
+
                     $this->bookingService->createTransportBooking([
                         'company_id' => $company->id,
                         'created_by_user_id' => $createdByUserId,
@@ -636,6 +695,12 @@ class JobBulkImporter
                         'emergency_reason' => $isUrgent
                             ? trim((string) ($row['parsed']['comments'] ?? 'Urgent'))
                             : null,
+                        'executor_type' => $executorType,
+                        'driver_user_id' => $row['parsed']['driver_user_id'] ?? null,
+                        'third_party_courier_name' => $row['parsed']['third_party_courier_name'] ?? null,
+                        'third_party_waybill' => $row['parsed']['third_party_waybill'] ?? null,
+                        'self_collect_name' => $row['parsed']['self_collect_name'] ?? null,
+                        'self_collect_phone' => $row['parsed']['self_collect_phone'] ?? null,
                     ]);
 
                     // Capture the operator-approved model → class pair so
@@ -714,6 +779,8 @@ class JobBulkImporter
         array $mapping,
         \Illuminate\Support\Collection $locations,
         bool $autoCreate,
+        string $defaultExecutor = Job::EXECUTOR_PROSELVER,
+        ?\Illuminate\Support\Collection $driverIndex = null,
     ): array {
         $vin = $this->stringValue($row, $mapping['vin'] ?? null);
         $model = $this->stringValue($row, $mapping['model'] ?? null);
@@ -722,8 +789,47 @@ class JobBulkImporter
         $rawDate = $row[$mapping['movement_date'] ?? '_unset_'] ?? null;
         $comments = $this->stringValue($row, $mapping['comments'] ?? null);
 
+        $rawExecutor    = $this->stringValue($row, $mapping['executor_type'] ?? null);
+        $driverName     = $this->stringValue($row, $mapping['driver_name'] ?? null);
+        $courierName    = $this->stringValue($row, $mapping['courier_name'] ?? null);
+        $waybill        = $this->stringValue($row, $mapping['waybill'] ?? null);
+        $collectorName  = $this->stringValue($row, $mapping['collector_name'] ?? null);
+        $collectorPhone = $this->stringValue($row, $mapping['collector_phone'] ?? null);
+
         $errors = [];
         $warnings = [];
+
+        // Resolve executor: explicit cell wins, otherwise fall back to
+        // the page-level default.  Unknown values get flagged with a
+        // warning and silently fall back to the default — the import
+        // still proceeds rather than erroring out the whole row.
+        $executorType = $defaultExecutor;
+        if ($rawExecutor !== null && $rawExecutor !== '') {
+            $resolved = $this->normaliseExecutor($rawExecutor);
+            if ($resolved) {
+                $executorType = $resolved;
+            } else {
+                $warnings[] = "Unrecognised executor “{$rawExecutor}” — defaulted to " . (Job::EXECUTOR_LABELS[$defaultExecutor] ?? $defaultExecutor);
+            }
+        }
+
+        // Internal driver resolution — only attempted when the row
+        // actually wants an internal executor and a name was supplied.
+        $driverUserId = null;
+        if ($executorType === Job::EXECUTOR_INTERNAL && $driverName) {
+            $key = Str::lower(trim($driverName));
+            $driverUserId = $driverIndex?->get($key);
+            if (!$driverUserId) {
+                $warnings[] = "Driver “{$driverName}” isn't on this customer's roster — row will import unassigned";
+            }
+        }
+
+        if ($executorType === Job::EXECUTOR_THIRD_PARTY && !$courierName) {
+            $warnings[] = '3rd-party row has no courier name — set it on the booking after import';
+        }
+        if ($executorType === Job::EXECUTOR_SELF_COLLECT && !$collectorName) {
+            $warnings[] = 'Self-collect row has no collector name — set it on the booking after import';
+        }
 
         // Required fields
         foreach (self::REQUIRED_FIELDS as $required) {
@@ -778,8 +884,35 @@ class JobBulkImporter
                 'delivery_match' => $deliveryMatch,
                 'scheduled_date' => $scheduledDate?->toDateString(),
                 'comments' => $comments,
+                'executor_type' => $executorType,
+                'driver_user_id' => $driverUserId,
+                'driver_name_raw' => $driverName,
+                'third_party_courier_name' => $courierName,
+                'third_party_waybill' => $waybill,
+                'self_collect_name' => $collectorName,
+                'self_collect_phone' => $collectorPhone,
             ],
         ];
+    }
+
+    /**
+     * Map a free-form executor cell value onto Job::EXECUTOR_*. Returns
+     * null when the value isn't recognised so callers can decide
+     * whether to warn-and-default or hard-error.
+     */
+    public function normaliseExecutor(?string $raw): ?string
+    {
+        if ($raw === null) {
+            return null;
+        }
+        $key = Str::lower(trim($raw));
+        if ($key === '') {
+            return null;
+        }
+        if (in_array($key, Job::EXECUTOR_TYPES, true)) {
+            return $key;
+        }
+        return self::EXECUTOR_ALIASES[$key] ?? null;
     }
 
     /**

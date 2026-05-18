@@ -3,6 +3,7 @@
 use App\Models\Job;
 use App\Models\Company;
 use App\Models\JobDocument;
+use App\Models\User;
 use Livewire\Volt\Component;
 use Livewire\Attributes\Layout;
 
@@ -13,6 +14,21 @@ new #[Layout('components.layouts.app')] class extends Component {
     public bool $showIssuePanel = false;
     public string $issueReason = '';
     public string $issueNote = '';
+
+    // Executor change modal state
+    public bool $showExecutorPanel = false;
+    public string $newExecutorType = '';
+    public ?int $newInternalDriverId = null;
+    public string $newThirdPartyCourierName = '';
+    public string $newThirdPartyWaybill = '';
+    public string $newThirdPartyExpectedDate = '';
+    public string $newSelfCollectName = '';
+    public string $newSelfCollectPhone = '';
+    public string $newSelfCollectIdNumber = '';
+
+    // Inline driver assignment for internal-executor jobs
+    public bool $showAssignDriverPanel = false;
+    public ?int $assignDriverId = null;
 
     public function mount(Job $job): void
     {
@@ -41,6 +57,145 @@ new #[Layout('components.layouts.app')] class extends Component {
         ]);
 
         $this->requiresConfirmation = $company->requiresExternalConfirmation();
+        $this->newExecutorType = $job->executor_type ?: Job::EXECUTOR_PROSELVER;
+    }
+
+    /* ----------------------------------------------------------------
+     | Executor change — flip who is moving this vehicle. Resets driver
+     | / meta fields per Job::changeExecutor() and audit-logs the flip.
+     |-----------------------------------------------------------------*/
+
+    public function openExecutorPanel(): void
+    {
+        $this->authorize('changeExecutor', $this->job);
+        $this->newExecutorType = $this->job->executor_type ?: Job::EXECUTOR_PROSELVER;
+        $this->newInternalDriverId = null;
+        $this->newThirdPartyCourierName = (string) ($this->job->third_party_courier_name ?? '');
+        $this->newThirdPartyWaybill = (string) ($this->job->third_party_waybill ?? '');
+        $this->newThirdPartyExpectedDate = $this->job->third_party_expected_date?->toDateString() ?? '';
+        $this->newSelfCollectName = (string) ($this->job->self_collect_name ?? '');
+        $this->newSelfCollectPhone = (string) ($this->job->self_collect_phone ?? '');
+        $this->newSelfCollectIdNumber = (string) ($this->job->self_collect_id_number ?? '');
+        $this->showExecutorPanel = true;
+    }
+
+    public function cancelExecutorPanel(): void
+    {
+        $this->showExecutorPanel = false;
+    }
+
+    public function saveExecutor(): void
+    {
+        $this->authorize('changeExecutor', $this->job);
+
+        $rules = ['newExecutorType' => 'required|in:' . implode(',', Job::EXECUTOR_TYPES)];
+        if ($this->newExecutorType === Job::EXECUTOR_THIRD_PARTY) {
+            $rules['newThirdPartyCourierName'] = 'required|string|max:255';
+            $rules['newThirdPartyExpectedDate'] = 'nullable|date';
+        }
+        if ($this->newExecutorType === Job::EXECUTOR_SELF_COLLECT) {
+            $rules['newSelfCollectName'] = 'required|string|max:255';
+            $rules['newSelfCollectPhone'] = 'required|string|max:50';
+        }
+        $this->validate($rules);
+
+        $meta = [];
+        if ($this->newExecutorType === Job::EXECUTOR_INTERNAL && $this->newInternalDriverId) {
+            $meta['driver_user_id'] = $this->newInternalDriverId;
+        }
+        if ($this->newExecutorType === Job::EXECUTOR_THIRD_PARTY) {
+            $meta['third_party_courier_name'] = $this->newThirdPartyCourierName ?: null;
+            $meta['third_party_waybill'] = $this->newThirdPartyWaybill ?: null;
+            $meta['third_party_expected_date'] = $this->newThirdPartyExpectedDate ?: null;
+        }
+        if ($this->newExecutorType === Job::EXECUTOR_SELF_COLLECT) {
+            $meta['self_collect_name'] = $this->newSelfCollectName ?: null;
+            $meta['self_collect_phone'] = $this->newSelfCollectPhone ?: null;
+            $meta['self_collect_id_number'] = $this->newSelfCollectIdNumber ?: null;
+        }
+
+        $ok = $this->job->changeExecutor($this->newExecutorType, $meta);
+        if (! $ok) {
+            session()->flash('error', 'Could not change the executor — the job may already be in transit.');
+            return;
+        }
+
+        $this->job->refresh()->load('driver:id,name,phone');
+        $this->showExecutorPanel = false;
+        session()->flash('success', 'Executor updated — ' . $this->job->executorLabel() . '.');
+    }
+
+    /* ----------------------------------------------------------------
+     | Inline driver assignment for internal-executor jobs. The dealer
+     | picks one of their own drivers from the pool; status flips to
+     | DRIVER_ASSIGNED so it shows up on the driver's "My Day" view.
+     |-----------------------------------------------------------------*/
+
+    public function openAssignDriverPanel(): void
+    {
+        $this->authorize('assignDriver', $this->job);
+        $this->assignDriverId = $this->job->driver_user_id;
+        $this->showAssignDriverPanel = true;
+    }
+
+    public function cancelAssignDriverPanel(): void
+    {
+        $this->showAssignDriverPanel = false;
+    }
+
+    public function saveDriverAssignment(): void
+    {
+        $this->authorize('assignDriver', $this->job);
+
+        $this->validate([
+            'assignDriverId' => [
+                'required', 'integer',
+                function (string $attribute, $value, \Closure $fail) {
+                    $exists = User::query()
+                        ->driversForCompany($this->job->company_id)
+                        ->whereKey((int) $value)
+                        ->exists();
+                    if (! $exists) {
+                        $fail('Selected driver is not in your driver pool.');
+                    }
+                },
+            ],
+        ]);
+
+        $this->job->driver_user_id = $this->assignDriverId;
+        if ($this->job->status === Job::STATUS_PLANNED) {
+            $this->job->transitionTo(Job::STATUS_DRIVER_ASSIGNED);
+        } else {
+            $this->job->save();
+        }
+        $this->job->refresh()->load('driver:id,name,phone');
+        $this->showAssignDriverPanel = false;
+        session()->flash('success', 'Driver assigned.');
+    }
+
+    /* ----------------------------------------------------------------
+     | Archive / unarchive — moves final deliveries out of the active
+     | order list (they stay queryable in reports).
+     |-----------------------------------------------------------------*/
+
+    public function archiveJob(): void
+    {
+        $this->authorize('archive', $this->job);
+        if ($this->job->archive()) {
+            $this->job->refresh();
+            session()->flash('success', 'Order archived.');
+        } else {
+            session()->flash('error', 'This order cannot be archived yet.');
+        }
+    }
+
+    public function unarchiveJob(): void
+    {
+        $this->authorize('unarchive', $this->job);
+        if ($this->job->unarchive()) {
+            $this->job->refresh();
+            session()->flash('success', 'Order restored to active list.');
+        }
     }
 
     public function confirmOrder(): void
@@ -90,8 +245,23 @@ new #[Layout('components.layouts.app')] class extends Component {
         $phase1Statuses = Job::PHASE1_STATUSES;
         $currentIndex = array_search($this->job->status, $phase1Statuses);
 
-        $canConfirm = auth()->user()->can('confirmCustomerOrder', $this->job)
+        $user = auth()->user();
+        $canConfirm = $user->can('confirmCustomerOrder', $this->job)
             && $this->requiresConfirmation;
+
+        // Dealer's internal driver pool — used by the inline assign-driver
+        // panel and the executor-change modal. Empty when the dealer
+        // hasn't onboarded any drivers yet; the UI nudges them to
+        // /customer/drivers in that case.
+        $internalDrivers = User::query()
+            ->driversForCompany($this->job->company_id)
+            ->orderBy('name')
+            ->get(['id', 'name']);
+
+        $internalDriverOptions = $internalDrivers->map(fn ($d) => [
+            'value' => (string) $d->id,
+            'label' => $d->name,
+        ])->values()->all();
 
         return [
             'allDocuments' => $allDocuments,
@@ -99,6 +269,14 @@ new #[Layout('components.layouts.app')] class extends Component {
             'currentIndex' => $currentIndex !== false ? $currentIndex : -1,
             'canConfirm' => $canConfirm,
             'issueReasons' => Job::CONFIRMATION_ISSUE_REASONS,
+            'canChangeExecutor' => $user->can('changeExecutor', $this->job),
+            'canAssignDriver' => $user->can('assignDriver', $this->job)
+                && $this->job->executor_type === Job::EXECUTOR_INTERNAL,
+            'canArchive' => $user->can('archive', $this->job),
+            'canUnarchive' => $user->can('unarchive', $this->job),
+            'internalDrivers' => $internalDrivers,
+            'internalDriverOptions' => $internalDriverOptions,
+            'executorChoices' => Job::EXECUTOR_LABELS,
         ];
     }
 };
@@ -110,6 +288,15 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     @if(session('success'))
         <div class="mb-4 rounded-lg bg-green-50 border border-green-200 px-4 py-3 text-sm text-green-800">{{ session('success') }}</div>
+    @endif
+    @if(session('error'))
+        <div class="mb-4 rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-800">{{ session('error') }}</div>
+    @endif
+    @if($job->isArchived())
+        <div class="mb-4 rounded-lg bg-gray-100 border border-gray-200 px-4 py-3 text-sm text-gray-700 flex items-center gap-2">
+            <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="5"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><line x1="10" x2="14" y1="12" y2="12"/></svg>
+            Archived on {{ $job->archived_at->format('d M Y') }} — hidden from the active order list.
+        </div>
     @endif
 
     <div class="mb-4">
@@ -351,22 +538,218 @@ new #[Layout('components.layouts.app')] class extends Component {
                 </div>
             </div>
 
-            {{-- Driver --}}
-            @if($job->driver)
+            {{-- Executor (who is moving this vehicle) --}}
             <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-                <h3 class="text-sm font-semibold text-gray-700 mb-3">Assigned Driver</h3>
-                <div class="flex items-center gap-3">
-                    <div class="flex items-center justify-center h-10 w-10 rounded-full bg-blue-100 text-blue-700 font-semibold text-sm">
-                        {{ strtoupper(substr($job->driver->name, 0, 2)) }}
-                    </div>
+                <div class="flex items-start justify-between mb-3">
                     <div>
-                        <p class="text-sm font-medium text-gray-900">{{ $job->driver->name }}</p>
-                        @if($job->driver->phone)
-                            <p class="text-sm text-gray-500">{{ $job->driver->phone }}</p>
+                        <h3 class="text-sm font-semibold text-gray-700">Executor</h3>
+                        <p class="text-xs text-gray-500">Who is moving this vehicle</p>
+                    </div>
+                    @if($canChangeExecutor)
+                        <button wire:click="openExecutorPanel"
+                            class="inline-flex items-center gap-1 rounded-md bg-white border border-gray-200 px-3 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-50">
+                            <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
+                            Change Executor
+                        </button>
+                    @endif
+                </div>
+
+                @php
+                    $executorBadgeClass = match ($job->executor_type) {
+                        \App\Models\Job::EXECUTOR_INTERNAL => 'bg-emerald-50 text-emerald-700 border-emerald-200',
+                        \App\Models\Job::EXECUTOR_THIRD_PARTY => 'bg-purple-50 text-purple-700 border-purple-200',
+                        \App\Models\Job::EXECUTOR_SELF_COLLECT => 'bg-amber-50 text-amber-700 border-amber-200',
+                        default => 'bg-blue-50 text-blue-700 border-blue-200',
+                    };
+                @endphp
+
+                <span class="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold {{ $executorBadgeClass }}">
+                    {{ $job->executorLabel() }}
+                </span>
+
+                {{-- Per-executor meta --}}
+                @if($job->executor_type === \App\Models\Job::EXECUTOR_THIRD_PARTY)
+                    <dl class="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm">
+                        <div>
+                            <dt class="text-xs text-gray-500">Courier</dt>
+                            <dd class="font-medium text-gray-900">{{ $job->third_party_courier_name ?: '—' }}</dd>
+                        </div>
+                        <div>
+                            <dt class="text-xs text-gray-500">Waybill</dt>
+                            <dd class="font-medium text-gray-900">{{ $job->third_party_waybill ?: '—' }}</dd>
+                        </div>
+                        <div>
+                            <dt class="text-xs text-gray-500">Expected Delivery</dt>
+                            <dd class="font-medium text-gray-900">{{ $job->third_party_expected_date?->format('d M Y') ?: '—' }}</dd>
+                        </div>
+                    </dl>
+                @elseif($job->executor_type === \App\Models\Job::EXECUTOR_SELF_COLLECT)
+                    <dl class="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm">
+                        <div>
+                            <dt class="text-xs text-gray-500">Collector</dt>
+                            <dd class="font-medium text-gray-900">{{ $job->self_collect_name ?: '—' }}</dd>
+                        </div>
+                        <div>
+                            <dt class="text-xs text-gray-500">Phone</dt>
+                            <dd class="font-medium text-gray-900">{{ $job->self_collect_phone ?: '—' }}</dd>
+                        </div>
+                        <div>
+                            <dt class="text-xs text-gray-500">ID / Licence</dt>
+                            <dd class="font-medium text-gray-900">{{ $job->self_collect_id_number ?: '—' }}</dd>
+                        </div>
+                    </dl>
+                @elseif($job->requiresDriverUser())
+                    {{-- ProSelver or Internal: show the driver if one is set, otherwise (for internal only) offer to assign. --}}
+                    @if($job->driver)
+                        <div class="mt-3 flex items-center gap-3">
+                            <div class="flex items-center justify-center h-10 w-10 rounded-full bg-blue-100 text-blue-700 font-semibold text-sm">
+                                {{ strtoupper(substr($job->driver->name, 0, 2)) }}
+                            </div>
+                            <div class="flex-1">
+                                <p class="text-sm font-medium text-gray-900">{{ $job->driver->name }}</p>
+                                @if($job->driver->phone)
+                                    <p class="text-sm text-gray-500">{{ $job->driver->phone }}</p>
+                                @endif
+                            </div>
+                            @if($canAssignDriver)
+                                <button wire:click="openAssignDriverPanel"
+                                    class="text-xs font-medium text-blue-600 hover:text-blue-700">Change</button>
+                            @endif
+                        </div>
+                    @else
+                        @if($canAssignDriver)
+                            <div class="mt-3">
+                                <p class="text-sm text-gray-500 mb-2">No driver assigned yet.</p>
+                                <button wire:click="openAssignDriverPanel"
+                                    class="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm font-semibold text-white hover:bg-blue-500">
+                                    <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" x2="19" y1="8" y2="14"/><line x1="22" x2="16" y1="11" y2="11"/></svg>
+                                    Assign Driver
+                                </button>
+                            </div>
+                        @else
+                            <p class="mt-3 text-sm text-gray-500">No driver assigned yet — waiting on dispatch.</p>
+                        @endif
+                    @endif
+                @endif
+
+                {{-- Inline assign-driver panel --}}
+                @if($showAssignDriverPanel)
+                    <div class="mt-4 rounded-lg border border-blue-200 bg-blue-50 p-4">
+                        <h4 class="text-sm font-semibold text-gray-800 mb-2">Assign internal driver</h4>
+                        @if(empty($internalDriverOptions))
+                            <p class="text-sm text-gray-600">No internal drivers yet. Add one in <a class="font-medium text-blue-600 hover:underline" href="{{ route('customer.drivers.index') }}">Drivers</a>.</p>
+                        @else
+                            <x-searchable-select
+                                wire:model="assignDriverId"
+                                :options="$internalDriverOptions"
+                                placeholder="Pick a driver"
+                                search-placeholder="Search drivers…"
+                            />
+                            @error('assignDriverId') <p class="mt-1 text-xs text-red-600">{{ $message }}</p> @enderror
+                            <div class="mt-3 flex items-center gap-2">
+                                <button wire:click="saveDriverAssignment" class="rounded-lg bg-blue-600 px-3 py-2 text-sm font-semibold text-white hover:bg-blue-500">Save</button>
+                                <button wire:click="cancelAssignDriverPanel" type="button" class="text-sm text-gray-500 hover:text-gray-700">Cancel</button>
+                            </div>
                         @endif
                     </div>
-                </div>
+                @endif
+
+                {{-- Inline executor-change panel --}}
+                @if($showExecutorPanel)
+                    <div class="mt-4 rounded-lg border border-gray-300 bg-gray-50 p-4">
+                        <h4 class="text-sm font-semibold text-gray-800 mb-3">Switch executor</h4>
+                        <p class="text-xs text-gray-500 mb-3">Changing the executor resets the driver and any executor-specific info, and moves the order back to <strong>Planned</strong>.</p>
+
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-3">
+                            @foreach($executorChoices as $value => $label)
+                                <label class="cursor-pointer rounded-lg border-2 px-3 py-2 transition-colors hover:border-blue-300
+                                    {{ $newExecutorType === $value ? 'border-blue-500 bg-blue-50' : 'border-gray-200 bg-white' }}">
+                                    <input type="radio" wire:model.live="newExecutorType" value="{{ $value }}" class="sr-only">
+                                    <span class="text-sm font-semibold text-gray-900">{{ $label }}</span>
+                                </label>
+                            @endforeach
+                        </div>
+                        @error('newExecutorType') <p class="text-xs text-red-600">{{ $message }}</p> @enderror
+
+                        @if($newExecutorType === \App\Models\Job::EXECUTOR_INTERNAL)
+                            <div class="mt-2">
+                                <label class="block text-xs font-medium text-gray-700 mb-1">Driver (optional)</label>
+                                @if(empty($internalDriverOptions))
+                                    <p class="text-xs text-gray-500">No internal drivers — assign later from <a class="text-blue-600 hover:underline" href="{{ route('customer.drivers.index') }}">Drivers</a>.</p>
+                                @else
+                                    <x-searchable-select
+                                        wire:model="newInternalDriverId"
+                                        :options="$internalDriverOptions"
+                                        placeholder="Leave blank to assign later"
+                                        search-placeholder="Search drivers…"
+                                    />
+                                @endif
+                            </div>
+                        @elseif($newExecutorType === \App\Models\Job::EXECUTOR_THIRD_PARTY)
+                            <div class="mt-2 grid grid-cols-1 sm:grid-cols-3 gap-2">
+                                <div class="sm:col-span-2">
+                                    <label class="block text-xs font-medium text-gray-700 mb-1">Courier</label>
+                                    <input wire:model="newThirdPartyCourierName" type="text" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm">
+                                    @error('newThirdPartyCourierName') <p class="text-xs text-red-600">{{ $message }}</p> @enderror
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-700 mb-1">Expected</label>
+                                    <input wire:model="newThirdPartyExpectedDate" type="date" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm">
+                                </div>
+                                <div class="sm:col-span-3">
+                                    <label class="block text-xs font-medium text-gray-700 mb-1">Waybill</label>
+                                    <input wire:model="newThirdPartyWaybill" type="text" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm">
+                                </div>
+                            </div>
+                        @elseif($newExecutorType === \App\Models\Job::EXECUTOR_SELF_COLLECT)
+                            <div class="mt-2 grid grid-cols-1 sm:grid-cols-3 gap-2">
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-700 mb-1">Collector Name</label>
+                                    <input wire:model="newSelfCollectName" type="text" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm">
+                                    @error('newSelfCollectName') <p class="text-xs text-red-600">{{ $message }}</p> @enderror
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-700 mb-1">Phone</label>
+                                    <input wire:model="newSelfCollectPhone" type="tel" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm">
+                                    @error('newSelfCollectPhone') <p class="text-xs text-red-600">{{ $message }}</p> @enderror
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-700 mb-1">ID / Licence</label>
+                                    <input wire:model="newSelfCollectIdNumber" type="text" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm">
+                                </div>
+                            </div>
+                        @endif
+
+                        <div class="mt-3 flex items-center gap-2">
+                            <button wire:click="saveExecutor" class="rounded-lg bg-blue-600 px-3 py-2 text-sm font-semibold text-white hover:bg-blue-500">Save</button>
+                            <button wire:click="cancelExecutorPanel" type="button" class="text-sm text-gray-500 hover:text-gray-700">Cancel</button>
+                        </div>
+                    </div>
+                @endif
             </div>
+
+            {{-- Archive / Unarchive — only surfaces once the job has reached delivered/completed. --}}
+            @if($canArchive || $canUnarchive)
+                <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+                    <h3 class="text-sm font-semibold text-gray-700 mb-2">Archive</h3>
+                    @if($job->isArchived())
+                        <p class="text-sm text-gray-500 mb-3">This order is archived and hidden from your active orders list. It still appears in reports.</p>
+                        @if($canUnarchive)
+                            <button wire:click="unarchiveJob"
+                                class="inline-flex items-center gap-2 rounded-lg bg-white border border-gray-300 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50">
+                                <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
+                                Restore to Active List
+                            </button>
+                        @endif
+                    @else
+                        <p class="text-sm text-gray-500 mb-3">This delivery is complete. Archive it to remove it from your active orders list — it stays available in your reports.</p>
+                        <button wire:click="archiveJob" wire:confirm="Archive this order? It will be hidden from the active list."
+                            class="inline-flex items-center gap-2 rounded-lg bg-gray-700 px-3 py-2 text-sm font-semibold text-white hover:bg-gray-600">
+                            <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="5"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><line x1="10" x2="14" y1="12" y2="12"/></svg>
+                            Archive Order
+                        </button>
+                    @endif
+                </div>
             @endif
         </div>
 

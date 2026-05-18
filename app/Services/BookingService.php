@@ -46,6 +46,16 @@ class BookingService
             'base_price' => 0,
         ]);
 
+        // Normalise + validate the executor. Default to ProSelver so any
+        // existing caller that doesn't pass executor_type behaves
+        // identically to before this column existed. An unknown value
+        // collapses to ProSelver too — defensive, in case a stale form
+        // posts an invalid string.
+        $executorType = $data['executor_type'] ?? Job::EXECUTOR_PROSELVER;
+        if (! in_array($executorType, Job::EXECUTOR_TYPES, true)) {
+            $executorType = Job::EXECUTOR_PROSELVER;
+        }
+
         $job = Job::create([
             'job_number' => $this->numberGenerator->generate(),
             'job_type' => Job::TYPE_TRANSPORT,
@@ -61,6 +71,7 @@ class BookingService
             'pickup_contact_name' => $data['pickup_contact_name'] ?? null,
             'pickup_contact_phone' => $data['pickup_contact_phone'] ?? null,
             'delivery_location_id' => $data['delivery_location_id'],
+            'destination_type' => $data['destination_type'] ?? null,
             'delivery_contact_name' => $data['delivery_contact_name'] ?? null,
             'delivery_contact_phone' => $data['delivery_contact_phone'] ?? null,
             'vehicle_class_id' => $data['vehicle_class_id'],
@@ -76,9 +87,44 @@ class BookingService
             'emergency_reason' => $data['emergency_reason'] ?? null,
             'is_round_trip' => $data['is_round_trip'] ?? false,
             'customer_notes' => $data['customer_notes'] ?? null,
+            // Executor + meta. Only the columns relevant to the chosen
+            // type are written; the others stay NULL so we don't carry
+            // ghost data after a later executor flip.
+            'executor_type' => $executorType,
+            'driver_user_id' => in_array($executorType, Job::DRIVER_REQUIRED_EXECUTORS, true)
+                ? ($data['driver_user_id'] ?? null)
+                : null,
+            'third_party_courier_name' => $executorType === Job::EXECUTOR_THIRD_PARTY
+                ? ($data['third_party_courier_name'] ?? null)
+                : null,
+            'third_party_waybill' => $executorType === Job::EXECUTOR_THIRD_PARTY
+                ? ($data['third_party_waybill'] ?? null)
+                : null,
+            'third_party_expected_date' => $executorType === Job::EXECUTOR_THIRD_PARTY
+                ? ($data['third_party_expected_date'] ?? null)
+                : null,
+            'self_collect_name' => $executorType === Job::EXECUTOR_SELF_COLLECT
+                ? ($data['self_collect_name'] ?? null)
+                : null,
+            'self_collect_phone' => $executorType === Job::EXECUTOR_SELF_COLLECT
+                ? ($data['self_collect_phone'] ?? null)
+                : null,
+            'self_collect_id_number' => $executorType === Job::EXECUTOR_SELF_COLLECT
+                ? ($data['self_collect_id_number'] ?? null)
+                : null,
         ]);
 
-        $this->calculateAndStoreRoute($job);
+        // Zone-rate pricing is ProSelver's commercial pricing — it
+        // only applies when ProSelver is actually executing the move.
+        // Internal / 3rd-party / self-collect skip pricing entirely
+        // (the dealer's own driver / courier / end-customer isn't
+        // being billed by us); distance_km still gets set for the
+        // benefit of dealer-side reports that show route distance.
+        if ($executorType === Job::EXECUTOR_PROSELVER) {
+            $this->calculateAndStoreRoute($job);
+        } else {
+            $this->calculateAndStoreDistanceOnly($job);
+        }
 
         return $job;
     }
@@ -156,6 +202,33 @@ class BookingService
     }
 
     protected function calculateAndStoreRoute(Job $job): void
+    {
+        $pickup = Location::find($job->pickup_location_id);
+        $delivery = Location::find($job->delivery_location_id);
+
+        if (!$pickup?->zone_id || !$delivery?->zone_id || !$job->vehicle_class_id) {
+            return;
+        }
+
+        $rate = ZoneRate::findRate($pickup->zone_id, $delivery->zone_id, $job->vehicle_class_id);
+        if (!$rate) {
+            return;
+        }
+
+        $multiplier = $job->is_round_trip ? 2 : 1;
+
+        $job->distance_km = round($rate->distance_km * $multiplier, 2);
+        $job->save();
+    }
+
+    /**
+     * Stamp distance_km for jobs ProSelver isn't pricing. The dealer
+     * still wants to see route length in their stock + reports views
+     * even when their own driver / courier is handling the move, so
+     * we honour the same zone-rate lookup but stop short of writing
+     * any of the financial columns.
+     */
+    protected function calculateAndStoreDistanceOnly(Job $job): void
     {
         $pickup = Location::find($job->pickup_location_id);
         $delivery = Location::find($job->delivery_location_id);

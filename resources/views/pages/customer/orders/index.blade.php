@@ -18,6 +18,12 @@ new #[Layout('components.layouts.app')] class extends Component {
     #[Url]
     public string $statusFilter = '';
 
+    // Default: hide archived (out-of-stock) movements from the active
+    // orders list. The dealer flips this on if they want to bring back
+    // archived rows — reports always show them either way.
+    #[Url(as: 'archived')]
+    public bool $showArchived = false;
+
     public function mount(): void
     {
         $this->company = auth()->user()->company();
@@ -30,6 +36,11 @@ new #[Layout('components.layouts.app')] class extends Component {
     }
 
     public function updatedStatusFilter(): void
+    {
+        $this->resetPage();
+    }
+
+    public function updatedShowArchived(): void
     {
         $this->resetPage();
     }
@@ -71,8 +82,13 @@ new #[Layout('components.layouts.app')] class extends Component {
             $query->where('status', $this->statusFilter);
         }
 
+        if (! $this->showArchived) {
+            $query->whereNull('archived_at');
+        }
+
         return [
             'jobs' => $query->paginate(15),
+            'archivedCount' => Job::where('company_id', $this->company->id)->whereNotNull('archived_at')->count(),
         ];
     }
 };
@@ -83,8 +99,8 @@ new #[Layout('components.layouts.app')] class extends Component {
     <x-slot:header>Orders</x-slot:header>
 
     {{-- Filters --}}
-    <div class="mb-6 flex flex-col sm:flex-row gap-4">
-        <div class="flex-1">
+    <div class="mb-6 flex flex-col sm:flex-row gap-4 items-start sm:items-center">
+        <div class="flex-1 w-full">
             <input wire:model.live.debounce.300ms="search" type="text" placeholder="Search by order #, VIN, make/model, route, or driver..."
                 class="w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm focus:border-blue-500 focus:ring-blue-500">
         </div>
@@ -94,6 +110,13 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <option value="{{ $value }}">{{ $label }}</option>
             @endforeach
         </select>
+        <label class="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700 cursor-pointer hover:bg-gray-50">
+            <input type="checkbox" wire:model.live="showArchived" class="h-4 w-4 rounded border-gray-300 text-blue-600">
+            <span>Show archived</span>
+            @if($archivedCount > 0)
+                <span class="text-xs text-gray-500">({{ $archivedCount }})</span>
+            @endif
+        </label>
     </div>
 
     {{-- Orders Table --}}

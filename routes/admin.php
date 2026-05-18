@@ -102,6 +102,10 @@ Volt::route('users', 'admin.users.index')->name('users.index');
 Volt::route('users/create', 'admin.users.create')->name('users.create');
 Volt::route('users/{user}/edit', 'admin.users.edit')->name('users.edit');
 
+// Trips (ops view — cross-company)
+Volt::route('trips', 'admin.trips.index')->name('trips.index');
+Volt::route('trips/{trip}', 'admin.trips.show')->name('trips.show');
+
 // Reports
 Volt::route('reports', 'admin.reports.index')->name('reports.index');
 Volt::route('reports/performance', 'admin.reports.performance')->name('reports.performance');

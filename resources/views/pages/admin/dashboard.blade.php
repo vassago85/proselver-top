@@ -166,9 +166,39 @@ new #[Layout('components.layouts.app')] class extends Component
         //  All driven by transport_jobs, not inventory.
         // ─────────────────────────────────────────────────────────────
         $intake = (clone $this->baseJobsQuery())->whereIn('status', self::G_INTAKE)->count();
-        $toDispatch = (clone $this->baseJobsQuery())->whereIn('status', self::G_TO_DISPATCH)->count();
-        $dispatched = (clone $this->baseJobsQuery())->whereIn('status', self::G_DISPATCHED)->count();
+        // Ready-to-dispatch and Dispatched are ProSelver-operational
+        // counters — they answer "how many vehicles is my dispatch
+        // team about to send out / has out the door right now". An
+        // internal/3rd-party/self-collect job is the dealer's problem,
+        // not ours, so scoping to executor_type=proselver here stops
+        // those inflating ops's dispatch board.
+        $toDispatch = (clone $this->baseJobsQuery())
+            ->where('executor_type', Job::EXECUTOR_PROSELVER)
+            ->whereIn('status', self::G_TO_DISPATCH)
+            ->count();
+        $dispatched = (clone $this->baseJobsQuery())
+            ->where('executor_type', Job::EXECUTOR_PROSELVER)
+            ->whereIn('status', self::G_DISPATCHED)
+            ->count();
         $onRoad = (clone $this->baseJobsQuery())->whereIn('status', self::G_IN_TRANSIT)->count();
+
+        // External-executor awareness counter — surface what dealers
+        // are self-handling so ops still has visibility even though
+        // none of these inflate the dispatch board. Bucketed by type
+        // for the "External Executors" card further down.
+        $externalActive = (clone $this->baseJobsQuery())
+            ->whereIn('status', self::ACTIVE_PHASE1)
+            ->whereIn('executor_type', [Job::EXECUTOR_INTERNAL, Job::EXECUTOR_THIRD_PARTY, Job::EXECUTOR_SELF_COLLECT])
+            ->selectRaw('executor_type, count(*) as n')
+            ->groupBy('executor_type')
+            ->pluck('n', 'executor_type')
+            ->toArray();
+        $externalBuckets = [
+            Job::EXECUTOR_INTERNAL => (int) ($externalActive[Job::EXECUTOR_INTERNAL] ?? 0),
+            Job::EXECUTOR_THIRD_PARTY => (int) ($externalActive[Job::EXECUTOR_THIRD_PARTY] ?? 0),
+            Job::EXECUTOR_SELF_COLLECT => (int) ($externalActive[Job::EXECUTOR_SELF_COLLECT] ?? 0),
+        ];
+        $externalTotal = array_sum($externalBuckets);
 
         $deliveredRange = (clone $this->baseJobsQuery())
             ->whereNotNull('delivered_at')
@@ -511,6 +541,7 @@ new #[Layout('components.layouts.app')] class extends Component
             'invoiceIssued', 'invoicePaid', 'invoiceDraft', 'awaitingInv',
             'companyOptions', 'transporterOptions', 'brandOptions', 'regionOptions', 'statusOptions',
             'th',
+            'externalBuckets', 'externalTotal',
         );
     }
 
@@ -744,6 +775,47 @@ new #[Layout('components.layouts.app')] class extends Component
             @endif
         </x-dash.panel>
     </div>
+
+    {{-- External executors awareness — ProSelver is NOT moving these
+         vehicles, but ops still wants to know how many are out there
+         and via what channel. Each tile links to the order list pre-
+         filtered to that executor so ops can drill in. --}}
+    <x-dash.panel
+        title="External executors"
+        subtitle="Active dealer-managed movements ProSelver isn't dispatching">
+        <x-slot:actions>
+            <x-dash.pill size="md" :variant="$externalTotal > 0 ? 'indigo' : 'slate'">
+                {{ $externalTotal }} total
+            </x-dash.pill>
+        </x-slot:actions>
+
+        @if($externalTotal === 0)
+            <p class="text-sm text-slate-400 text-center py-6">No external-executor movements right now.</p>
+        @else
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                @foreach([
+                    \App\Models\Job::EXECUTOR_INTERNAL    => ['label' => 'Dealer internal drivers', 'color' => 'emerald'],
+                    \App\Models\Job::EXECUTOR_THIRD_PARTY => ['label' => '3rd-party courier',        'color' => 'purple'],
+                    \App\Models\Job::EXECUTOR_SELF_COLLECT => ['label' => 'Self-collect',             'color' => 'amber'],
+                ] as $type => $meta)
+                    @php
+                        $count = $externalBuckets[$type] ?? 0;
+                        $tone = match ($meta['color']) {
+                            'emerald' => 'bg-emerald-50 border-emerald-200 text-emerald-800',
+                            'purple'  => 'bg-purple-50 border-purple-200 text-purple-800',
+                            'amber'   => 'bg-amber-50 border-amber-200 text-amber-800',
+                            default   => 'bg-slate-50 border-slate-200 text-slate-700',
+                        };
+                    @endphp
+                    <a href="{{ route('admin.orders.index', ['executor_type' => $type]) }}"
+                       class="block rounded-xl border {{ $tone }} px-4 py-3 hover:shadow-sm transition">
+                        <p class="text-[10px] font-semibold uppercase tracking-[0.2em]">{{ $meta['label'] }}</p>
+                        <p class="mt-1 text-2xl font-semibold tabular-nums">{{ $num($count) }}</p>
+                    </a>
+                @endforeach
+            </div>
+        @endif
+    </x-dash.panel>
 
     {{-- Throughput vs scheduled --}}
     <x-dash.panel

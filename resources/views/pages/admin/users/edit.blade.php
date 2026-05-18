@@ -68,14 +68,12 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         $hasDealerRole = Role::whereIn('id', $this->selectedRoles)->where('tier', 'dealer')->exists();
         $hasOemRole = Role::whereIn('id', $this->selectedRoles)->where('tier', 'oem')->exists();
+        // Driver attached on a dealer's behalf — ops needs to pin the
+        // driver to the dealer's company so executor_type=internal jobs
+        // can find them.
+        $hasDriverRole = Role::whereIn('id', $this->selectedRoles)->where('slug', 'driver')->exists();
 
-        // Dealer / OEM tier roles are meaningless without a company link, so
-        // we keep that gate as a hard requirement when those roles are
-        // selected. For every other role the picker is optional — internal
-        // staff don't need a customer link, but site admins are allowed to
-        // attach them to a company anyway (e.g. an ops controller dual-hatted
-        // as the platform-owner contact).
-        if ($hasDealerRole || $hasOemRole) {
+        if ($hasDealerRole || $hasOemRole || $hasDriverRole) {
             $rules['companyId'] = 'required|exists:companies,id';
         } else {
             $rules['companyId'] = 'nullable|integer|exists:companies,id';
@@ -136,7 +134,11 @@ new #[Layout('components.layouts.app')] class extends Component {
     public function with(): array
     {
         $actor = auth()->user();
-        $allRoles = Role::where('slug', '!=', 'driver')->orderBy('tier')->orderBy('name')->get();
+        // 'driver' is included here so ops can attach (or detach) a
+        // driver to a dealer company on the dealer's behalf — the
+        // dealer's own /customer/drivers page does the same thing for
+        // dealer admins.
+        $allRoles = Role::orderBy('tier')->orderBy('name')->get();
 
         // Show only roles the actor can assign, PLUS any role the edited user
         // already holds (read-only for the actor) so high-rank roles aren't
@@ -228,9 +230,23 @@ new #[Layout('components.layouts.app')] class extends Component {
         @php
             $hasDealerRole = \App\Models\Role::whereIn('id', $selectedRoles)->where('tier', 'dealer')->exists();
             $hasOemRole = \App\Models\Role::whereIn('id', $selectedRoles)->where('tier', 'oem')->exists();
-            $companyRequired = $hasDealerRole || $hasOemRole;
+            $hasDriverRole = \App\Models\Role::whereIn('id', $selectedRoles)->where('slug', 'driver')->exists();
+            $companyRequired = $hasDealerRole || $hasOemRole || $hasDriverRole;
             $currentCompany = $user->companies()->first();
         @endphp
+
+        @if($hasDriverRole)
+            <div class="mb-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+                <p class="font-semibold mb-1">Attaching as a driver to a dealer</p>
+                <p class="text-xs">
+                    Drivers attached to a dealer company appear in that dealer's
+                    /customer/drivers pool and can be assigned to <em>Internal</em>
+                    executor movements. Pin the user to the platform-owner
+                    company instead if this is a ProSelver driver.
+                </p>
+            </div>
+        @endif
+
         <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
             <h3 class="text-lg font-semibold text-gray-900 mb-1">
                 Organisation
@@ -238,8 +254,8 @@ new #[Layout('components.layouts.app')] class extends Component {
             </h3>
             <p class="text-xs text-gray-500 mb-4">
                 Pin this user to a single customer / dealer / OEM. Internal
-                staff can be left unassigned. Required for dealer- and
-                OEM-tier roles, optional for everyone else.
+                staff can be left unassigned. Required for dealer-, OEM- or
+                driver-role assignments.
                 @if($currentCompany)
                     Currently assigned to <span class="font-medium text-gray-700">{{ $currentCompany->name }}</span>.
                 @else

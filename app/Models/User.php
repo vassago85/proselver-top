@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Traits\HasRoles;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -138,5 +139,45 @@ class User extends Authenticatable
     public function createdJobs(): HasMany
     {
         return $this->hasMany(Job::class, 'created_by_user_id');
+    }
+
+    /* ----------------------------------------------------------------
+     | Driver-pool scopes — used by the order-show driver dropdowns
+     | (admin + customer) and the new dealer-drivers CRUD page. Two
+     | distinct pools intentionally: ProSelver-executed jobs draw from
+     | platformDrivers(), internal-executed jobs draw from
+     | driversForCompany($dealerCompanyId). Mixing them up is a bug:
+     | a dealer should never see ProSelver's drivers in their picker,
+     | and ops shouldn't accidentally assign a dealer's driver to a
+     | ProSelver movement.
+     |-----------------------------------------------------------------*/
+
+    /**
+     * Active users with the 'driver' role who belong to the
+     * platform-owner company. This is the ProSelver driver pool used
+     * for executor_type=proselver jobs.
+     */
+    public function scopePlatformDrivers(Builder $query): Builder
+    {
+        return $query->where('is_active', true)
+            ->whereHas('roles', fn ($q) => $q->where('slug', 'driver'))
+            ->whereHas('companies', fn ($q) => $q->where('is_platform_owner', true));
+    }
+
+    /**
+     * Active users with the 'driver' role attached to a specific
+     * company via the company_users pivot. This is the dealer driver
+     * pool used for executor_type=internal jobs owned by that dealer.
+     *
+     * Note: the same User row CAN exist in both pools if a driver is
+     * attached to both the platform-owner company and a dealer
+     * company — that's not a data error, it just means they can be
+     * deployed either way. The dropdowns scope by query, not by row.
+     */
+    public function scopeDriversForCompany(Builder $query, int $companyId): Builder
+    {
+        return $query->where('is_active', true)
+            ->whereHas('roles', fn ($q) => $q->where('slug', 'driver'))
+            ->whereHas('companies', fn ($q) => $q->where('companies.id', $companyId));
     }
 }

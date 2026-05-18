@@ -47,11 +47,13 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         $hasDealerRole = Role::whereIn('id', $this->selectedRoles)->where('tier', 'dealer')->exists();
         $hasOemRole = Role::whereIn('id', $this->selectedRoles)->where('tier', 'oem')->exists();
+        // Driver role attached on a dealer's behalf: ops uses this form
+        // to onboard an internal driver for a dealer who's just signing
+        // up. The dealer link is the whole point of the operation, so
+        // make companyId mandatory in that path too.
+        $hasDriverRole = Role::whereIn('id', $this->selectedRoles)->where('slug', 'driver')->exists();
 
-        // Dealer / OEM tier roles are meaningless without a company link.
-        // For every other role the picker is optional but still available
-        // so site admins can attach any user to any organisation.
-        if ($hasDealerRole || $hasOemRole) {
+        if ($hasDealerRole || $hasOemRole || $hasDriverRole) {
             $rules['companyId'] = 'required|exists:companies,id';
         } else {
             $rules['companyId'] = 'nullable|integer|exists:companies,id';
@@ -104,7 +106,12 @@ new #[Layout('components.layouts.app')] class extends Component {
     public function with(): array
     {
         $actor = auth()->user();
-        $allRoles = Role::where('slug', '!=', 'driver')->orderBy('tier')->orderBy('name')->get();
+        // 'driver' is included here intentionally — ops uses this form to
+        // attach internal drivers on behalf of a dealer who's just
+        // onboarding (the "both" answer to the planning question). The
+        // role picker groups by tier so drivers land in their own
+        // dedicated row, separate from the customer_* family.
+        $allRoles = Role::orderBy('tier')->orderBy('name')->get();
 
         $companies = Company::where('is_active', true)->orderBy('name')->get();
 
@@ -188,8 +195,22 @@ new #[Layout('components.layouts.app')] class extends Component {
         @php
             $hasDealerRole = \App\Models\Role::whereIn('id', $selectedRoles)->where('tier', 'dealer')->exists();
             $hasOemRole = \App\Models\Role::whereIn('id', $selectedRoles)->where('tier', 'oem')->exists();
-            $companyRequired = $hasDealerRole || $hasOemRole;
+            $hasDriverRole = \App\Models\Role::whereIn('id', $selectedRoles)->where('slug', 'driver')->exists();
+            $companyRequired = $hasDealerRole || $hasOemRole || $hasDriverRole;
         @endphp
+
+        @if($hasDriverRole)
+            <div class="mb-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+                <p class="font-semibold mb-1">Attaching as a driver to a dealer</p>
+                <p class="text-xs">
+                    Drivers attached to a dealer company appear in that dealer's
+                    /customer/drivers pool and can be assigned to <em>Internal</em>
+                    executor movements. Pick the platform-owner company instead
+                    if this is a ProSelver-employed driver.
+                </p>
+            </div>
+        @endif
+
         <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
             <h3 class="text-lg font-semibold text-gray-900 mb-1">
                 Organisation
@@ -197,7 +218,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             </h3>
             <p class="text-xs text-gray-500 mb-4">
                 Pin this user to a single customer / dealer / OEM. Required
-                for dealer- and OEM-tier roles, optional for everyone else.
+                for dealer-, OEM- or driver-role assignments.
             </p>
             <x-searchable-select
                 wire:model="companyId"

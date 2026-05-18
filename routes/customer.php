@@ -14,3 +14,17 @@ Volt::route('orders/{job}', 'customer.orders.show')->name('orders.show');
 Volt::route('documents', 'customer.documents')->name('documents');
 Volt::route('locations', 'customer.locations.index')->name('locations.index');
 Volt::route('team', 'customer.team.index')->name('team.index');
+// Dealer-side driver pool — for executor_type=internal jobs. Sits
+// alongside team management because both create User rows attached to
+// the dealer's company via company_users.
+Volt::route('drivers', 'customer.drivers.index')->name('drivers.index');
+// Body-builder stock view — vehicles delivered to a body builder that
+// are still in the dealer's stock (no return movement booked yet).
+Volt::route('stock/at-body-builder', 'customer.stock.at-body-builder')->name('stock.at-body-builder');
+// Deliveries report (dealer-scoped mirror of admin/reports).
+Volt::route('reports/deliveries', 'customer.reports.deliveries')->name('reports.deliveries');
+// Driver trips — Phase 6.
+Volt::route('trips', 'customer.trips.index')->name('trips.index');
+Volt::route('trips/create', 'customer.trips.create')->name('trips.create');
+Volt::route('trips/my-day', 'customer.trips.my-day')->name('trips.my-day');
+Volt::route('trips/{trip}', 'customer.trips.show')->name('trips.show');

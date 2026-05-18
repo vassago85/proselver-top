@@ -124,6 +124,15 @@
                             Dispatch Board
                         </x-sidebar-link>
 
+                        {{-- Trip planner (cross-company). Ops sees every
+                             dealer's and ProSelver's own trips here; the
+                             planner UI is unscoped so ops can edit on a
+                             dealer's behalf. --}}
+                        <x-sidebar-link :href="route('admin.trips.index')" :active="request()->routeIs('admin.trips.*')">
+                            <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></svg></x-slot:icon>
+                            Trips
+                        </x-sidebar-link>
+
                         <x-sidebar-link :href="route('admin.drivers.index')" :active="request()->routeIs('admin.drivers.index') || request()->routeIs('admin.drivers.create') || request()->routeIs('admin.drivers.edit')">
                             <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></x-slot:icon>
                             Drivers
@@ -274,6 +283,44 @@
                             <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4"/><path d="M12 16h4"/><path d="M8 11h.01"/><path d="M8 16h.01"/></svg></x-slot:icon>
                             My Orders
                         </x-sidebar-link>
+
+                        <x-sidebar-link :href="route('customer.stock.at-body-builder')" :active="request()->routeIs('customer.stock.*')">
+                            <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" x2="12" y1="22.08" y2="12"/></svg></x-slot:icon>
+                            At Body Builder
+                        </x-sidebar-link>
+                    </ul>
+                </li>
+
+                {{-- Trips planner — gated to dispatch-capable roles. Drivers
+                     also get a "My Day" entry below; depot dispatchers and
+                     admins get the full planner. --}}
+                @if($user->hasAnyRole(['customer_owner', 'customer_admin', 'customer_dispatcher', 'driver']))
+                <li>
+                    <p class="mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">Trips</p>
+                    <ul role="list" class="space-y-0.5">
+                        @if($user->hasAnyRole(['customer_owner', 'customer_admin', 'customer_dispatcher']))
+                            <x-sidebar-link :href="route('customer.trips.index')" :active="request()->routeIs('customer.trips.index') || request()->routeIs('customer.trips.show') || request()->routeIs('customer.trips.create')">
+                                <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></svg></x-slot:icon>
+                                Trip Planner
+                            </x-sidebar-link>
+                        @endif
+                        @if($user->hasRole('driver'))
+                            <x-sidebar-link :href="route('customer.trips.my-day')" :active="request()->routeIs('customer.trips.my-day')">
+                                <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="4" rx="2" ry="2"/><line x1="16" x2="16" y1="2" y2="6"/><line x1="8" x2="8" y1="2" y2="6"/><line x1="3" x2="21" y1="10" y2="10"/></svg></x-slot:icon>
+                                My Day
+                            </x-sidebar-link>
+                        @endif
+                    </ul>
+                </li>
+                @endif
+
+                <li>
+                    <p class="mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">Reports</p>
+                    <ul role="list" class="space-y-0.5">
+                        <x-sidebar-link :href="route('customer.reports.deliveries')" :active="request()->routeIs('customer.reports.*')">
+                            <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg></x-slot:icon>
+                            Deliveries
+                        </x-sidebar-link>
                     </ul>
                 </li>
 
@@ -299,6 +346,11 @@
                         <x-sidebar-link :href="route('customer.team.index')" :active="request()->routeIs('customer.team.*')">
                             <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></x-slot:icon>
                             Team
+                        </x-sidebar-link>
+
+                        <x-sidebar-link :href="route('customer.drivers.index')" :active="request()->routeIs('customer.drivers.*')">
+                            <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg></x-slot:icon>
+                            Drivers
                         </x-sidebar-link>
                     </ul>
                 </li>

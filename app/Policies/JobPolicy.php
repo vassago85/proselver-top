@@ -142,12 +142,111 @@ class JobPolicy
 
     public function assignDriver(User $user, Job $job): bool
     {
-        return $user->canAssignDrivers() && in_array($job->status, [
+        $assignableStatuses = [
             Job::STATUS_APPROVED,
             Job::STATUS_ASSIGNED,
             Job::STATUS_PLANNED,
             Job::STATUS_DRIVER_ASSIGNED,
-        ]);
+        ];
+
+        if (! in_array($job->status, $assignableStatuses, true)) {
+            return false;
+        }
+
+        // ProSelver ops (dispatcher / ops_manager / operations_controller /
+        // super_admin / developer) can always assign — they own the
+        // platform-driver pool.
+        if ($user->canAssignDrivers()) {
+            return true;
+        }
+
+        // Dealer-side authority: customer_owner / customer_admin /
+        // customer_dispatcher can assign on jobs their company owns,
+        // but only when the executor is INTERNAL (the dealer is
+        // running the move themselves and picking from their own
+        // driver pool). They must NOT be able to touch executor_type
+        // = proselver / third_party / self_collect jobs — those have
+        // either ProSelver doing the assignment or no driver at all.
+        if ($job->executor_type === Job::EXECUTOR_INTERNAL
+            && $user->hasAnyRole(['customer_owner', 'customer_admin', 'customer_dispatcher'])
+            && $user->companies->pluck('id')->contains($job->company_id)
+        ) {
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * Flip the executor on a job. Allowed for ProSelver ops on any job
+     * they can see, and for the dealer's admin/owner/dispatcher on
+     * their own jobs while the vehicle hasn't been collected yet.
+     * Sales-only roles (customer_user) can pick the executor at booking
+     * time via the create form but can't flip after the fact.
+     */
+    public function changeExecutor(User $user, Job $job): bool
+    {
+        if (! $job->canChangeExecutor()) {
+            return false;
+        }
+
+        if ($user->isDeveloper() || $user->isSuperAdmin() || $user->isInternal()) {
+            return true;
+        }
+
+        if ($user->hasAnyRole(['customer_owner', 'customer_admin', 'customer_dispatcher'])
+            && $user->companies->pluck('id')->contains($job->company_id)
+        ) {
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * Archive / unarchive a final-delivery job. The dealer can archive
+     * their own non-body-builder deliveries; ops can archive anything
+     * (including body-builder rows, with the opsOverride flag inside
+     * Job::archive()).
+     */
+    public function archive(User $user, Job $job): bool
+    {
+        $isOps = $user->isDeveloper() || $user->isSuperAdmin() || $user->isInternal();
+
+        if (! $job->canArchive($opsOverride = $isOps)) {
+            return false;
+        }
+
+        if ($isOps) {
+            return true;
+        }
+
+        if ($user->hasAnyRole(['customer_owner', 'customer_admin'])
+            && $user->companies->pluck('id')->contains($job->company_id)
+        ) {
+            return true;
+        }
+
+        return false;
+    }
+
+    public function unarchive(User $user, Job $job): bool
+    {
+        if (! $job->isArchived()) {
+            return false;
+        }
+
+        if ($user->isDeveloper() || $user->isSuperAdmin() || $user->isInternal()) {
+            return true;
+        }
+
+        if ($user->hasAnyRole(['customer_owner', 'customer_admin'])
+            && $user->companies->pluck('id')->contains($job->company_id)
+        ) {
+            return true;
+        }
+
+        return false;
     }
 
     public function cancel(User $user, Job $job): bool

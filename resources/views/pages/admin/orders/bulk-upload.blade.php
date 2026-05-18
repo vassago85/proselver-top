@@ -2,6 +2,7 @@
 
 use App\Models\Brand;
 use App\Models\Company;
+use App\Models\Job;
 use App\Models\VehicleClass;
 use App\Services\JobBulkImporter;
 use Livewire\Attributes\Layout;
@@ -39,6 +40,7 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     public ?int $defaultBrandId = null;
     public ?int $defaultVehicleClassId = null;
+    public string $defaultExecutorType = Job::EXECUTOR_PROSELVER;
     public bool $autoCreateLocations = true;
     public bool $includeOnHold = false;
     public bool $rememberMapping = true;
@@ -60,7 +62,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             ->get(['id', 'name', 'type', 'movement_csv_mapping']);
 
         $brands = Brand::query()->where('is_active', true)->orderBy('name')->get();
-        $vehicleClasses = VehicleClass::query()->where('is_active', true)->orderBy('name')->get();
+        $vehicleClasses = VehicleClass::query()->where('is_active', true)->ordered()->get();
 
         $companyOptions = $companies->map(fn ($c) => [
             'value' => (string) $c->id,
@@ -85,6 +87,9 @@ new #[Layout('components.layouts.app')] class extends Component {
             'companyOptions' => $companyOptions,
             'brandOptions' => $brandOptions,
             'vehicleClassOptions' => $vehicleClassOptions,
+            'executorOptions' => collect(Job::EXECUTOR_LABELS)
+                ->map(fn ($label, $value) => ['value' => $value, 'label' => $label])
+                ->values()->all(),
         ];
     }
 
@@ -161,6 +166,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             'include_on_hold' => $this->includeOnHold,
             'auto_create_locations' => $this->autoCreateLocations,
             'default_vehicle_class_id' => $this->defaultVehicleClassId,
+            'default_executor_type' => $this->defaultExecutorType,
             'vehicle_classes' => VehicleClass::query()->where('is_active', true)->get(['id', 'name']),
         ]);
 
@@ -266,7 +272,7 @@ new #[Layout('components.layouts.app')] class extends Component {
     {
         $this->reset([
             'step', 'companyId', 'spreadsheet', 'parsedHeaders', 'parsedRows',
-            'mapping', 'defaultBrandId', 'defaultVehicleClassId',
+            'mapping', 'defaultBrandId', 'defaultVehicleClassId', 'defaultExecutorType',
             'autoCreateLocations', 'includeOnHold', 'rememberMapping',
             'previewRows', 'previewStats', 'commitResult', 'bulkVehicleClassId',
         ]);
@@ -432,6 +438,21 @@ new #[Layout('components.layouts.app')] class extends Component {
                     </p>
                     @error('defaultVehicleClassId')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
                 </div>
+
+                <div class="sm:col-span-2">
+                    <label class="block text-sm font-medium text-slate-700">Default executor</label>
+                    <div class="mt-1">
+                        <x-searchable-select
+                            wire:model="defaultExecutorType"
+                            :options="$executorOptions"
+                            placeholder="— pick an executor —"
+                        />
+                    </div>
+                    <p class="mt-1 text-xs text-slate-500">
+                        Applied to every row that doesn't carry its own executor column. You can also map an
+                        <strong>Executor</strong> column above and the per-row value will win.
+                    </p>
+                </div>
             </div>
 
             <div class="mt-5 space-y-2">
@@ -543,6 +564,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                                 <th class="px-3 py-2 text-left text-[11px] font-medium uppercase tracking-wider text-gray-500">VIN</th>
                                 <th class="px-3 py-2 text-left text-[11px] font-medium uppercase tracking-wider text-gray-500">Model</th>
                                 <th class="px-3 py-2 text-left text-[11px] font-medium uppercase tracking-wider text-gray-500">Class</th>
+                                <th class="px-3 py-2 text-left text-[11px] font-medium uppercase tracking-wider text-gray-500">Executor</th>
                                 <th class="px-3 py-2 text-left text-[11px] font-medium uppercase tracking-wider text-gray-500">Pickup</th>
                                 <th class="px-3 py-2 text-left text-[11px] font-medium uppercase tracking-wider text-gray-500">Delivery</th>
                                 <th class="px-3 py-2 text-left text-[11px] font-medium uppercase tracking-wider text-gray-500">Date</th>
@@ -585,6 +607,30 @@ new #[Layout('components.layouts.app')] class extends Component {
                                                 <option value="{{ $vc->id }}" @selected(($row['parsed']['vehicle_class_id'] ?? null) == $vc->id)>{{ $vc->name }}</option>
                                             @endforeach
                                         </select>
+                                    </td>
+                                    <td class="px-3 py-2 text-xs text-slate-700">
+                                        @php
+                                            $execType = $row['parsed']['executor_type'] ?? null;
+                                            $execLabel = $execType ? (\App\Models\Job::EXECUTOR_LABELS[$execType] ?? $execType) : '—';
+                                            $execPill = match ($execType) {
+                                                \App\Models\Job::EXECUTOR_INTERNAL    => 'bg-emerald-50 text-emerald-700 border-emerald-200',
+                                                \App\Models\Job::EXECUTOR_THIRD_PARTY => 'bg-purple-50 text-purple-700 border-purple-200',
+                                                \App\Models\Job::EXECUTOR_SELF_COLLECT => 'bg-amber-50 text-amber-700 border-amber-200',
+                                                default                                => 'bg-blue-50 text-blue-700 border-blue-200',
+                                            };
+                                        @endphp
+                                        <span class="inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider {{ $execPill }}">
+                                            {{ $execLabel }}
+                                        </span>
+                                        @if($execType === \App\Models\Job::EXECUTOR_INTERNAL && !empty($row['parsed']['driver_name_raw']))
+                                            <div class="mt-1 text-[10px] text-slate-500">drv: {{ $row['parsed']['driver_name_raw'] }}
+                                                @if(empty($row['parsed']['driver_user_id']))<span class="text-amber-600">·unmatched</span>@endif
+                                            </div>
+                                        @elseif($execType === \App\Models\Job::EXECUTOR_THIRD_PARTY && !empty($row['parsed']['third_party_courier_name']))
+                                            <div class="mt-1 text-[10px] text-slate-500">{{ $row['parsed']['third_party_courier_name'] }}</div>
+                                        @elseif($execType === \App\Models\Job::EXECUTOR_SELF_COLLECT && !empty($row['parsed']['self_collect_name']))
+                                            <div class="mt-1 text-[10px] text-slate-500">{{ $row['parsed']['self_collect_name'] }}</div>
+                                        @endif
                                     </td>
                                     <td class="px-3 py-2 text-xs text-slate-700">
                                         {{ $row['parsed']['pickup_match']?->company_name ?? $row['parsed']['pickup_raw'] ?? '—' }}

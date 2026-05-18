@@ -182,6 +182,58 @@ class Job extends Model
         self::DESTINATION_OTHER,
     ];
 
+    // Who is actually moving this vehicle. Four mutually-exclusive
+    // options — see 2026_05_18_000000_add_executors_and_archive_to_transport_jobs.
+    // PROSELVER is the default (and the only legal value pre-Phase-1 of
+    // the dealer-executor feature). INTERNAL means the booking customer
+    // is using their own driver; THIRD_PARTY = courier (light tracking
+    // via three columns); SELF_COLLECT = end-customer pickup (no driver
+    // at all, just contact / ID for the collector).
+    const EXECUTOR_PROSELVER = 'proselver';
+    const EXECUTOR_INTERNAL = 'internal';
+    const EXECUTOR_THIRD_PARTY = 'third_party';
+    const EXECUTOR_SELF_COLLECT = 'self_collect';
+
+    const EXECUTOR_TYPES = [
+        self::EXECUTOR_PROSELVER,
+        self::EXECUTOR_INTERNAL,
+        self::EXECUTOR_THIRD_PARTY,
+        self::EXECUTOR_SELF_COLLECT,
+    ];
+
+    // Short, human-grade names for badges / form labels. Keep these
+    // tight — they have to fit inside pill-shaped badges on the order
+    // list and dashboard cards.
+    const EXECUTOR_LABELS = [
+        self::EXECUTOR_PROSELVER => 'ProSelver',
+        self::EXECUTOR_INTERNAL => 'Internal Driver',
+        self::EXECUTOR_THIRD_PARTY => '3rd-Party Courier',
+        self::EXECUTOR_SELF_COLLECT => 'Self-Collect',
+    ];
+
+    // Executors that need a driver_user_id (a User row in the system).
+    // Anything outside this set does NOT — third-party / self-collect
+    // carry their own light contact metadata instead.
+    const DRIVER_REQUIRED_EXECUTORS = [
+        self::EXECUTOR_PROSELVER,
+        self::EXECUTOR_INTERNAL,
+    ];
+
+    // Statuses where flipping the executor is still safe. Once the
+    // vehicle is in the truck (COLLECTED onward) we lock the executor:
+    // changing it at that point would orphan the in-flight movement
+    // and corrupt the audit trail.
+    const EXECUTOR_CHANGEABLE_STATUSES = [
+        self::STATUS_PENDING_VERIFICATION,
+        self::STATUS_RECEIVED,
+        self::STATUS_AWAITING_CUSTOMER_CONFIRMATION,
+        self::STATUS_CONFIRMATION_ISSUE,
+        self::STATUS_CONFIRMED,
+        self::STATUS_PLANNED,
+        self::STATUS_DRIVER_ASSIGNED,
+        self::STATUS_READY_FOR_COLLECTION,
+    ];
+
     protected $fillable = [
         'uuid',
         'job_number',
@@ -191,6 +243,7 @@ class Job extends Model
         'executing_company_id',
         'created_by_user_id',
         'driver_user_id',
+        'trip_id',
         'transport_route_id',
         'pickup_location_id',
         'pickup_contact_name',
@@ -265,6 +318,14 @@ class Job extends Model
         'damage_report_released_by',
         'damage_acknowledged_at',
         'damage_acknowledged_by',
+        'executor_type',
+        'third_party_courier_name',
+        'third_party_waybill',
+        'third_party_expected_date',
+        'self_collect_name',
+        'self_collect_phone',
+        'self_collect_id_number',
+        'archived_at',
     ];
 
     protected function casts(): array
@@ -315,6 +376,8 @@ class Job extends Model
             'collected_at' => 'datetime',
             'in_transit_at' => 'datetime',
             'delivered_at' => 'datetime',
+            'third_party_expected_date' => 'date',
+            'archived_at' => 'datetime',
         ];
     }
 
@@ -516,6 +579,17 @@ class Job extends Model
         return $this->belongsTo(User::class, 'driver_user_id');
     }
 
+    public function trip(): BelongsTo
+    {
+        return $this->belongsTo(Trip::class);
+    }
+
+    public function tripStops(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(TripStop::class, 'transport_job_id')
+            ->orderBy('sequence');
+    }
+
     public function transportRoute(): BelongsTo
     {
         return $this->belongsTo(TransportRoute::class);
@@ -598,5 +672,208 @@ class Job extends Model
             $q->whereIn('company_id', $companyIds)
                 ->orWhereIn('executing_company_id', $companyIds);
         });
+    }
+
+    /* ----------------------------------------------------------------
+     | Executor (who is actually moving this vehicle)
+     |-----------------------------------------------------------------*/
+
+    /**
+     * Display label for the current executor — used by badges and
+     * status panels. Falls back to a humanised version of the raw
+     * value if a new executor is added before EXECUTOR_LABELS is
+     * extended (data should never be invisible to the operator).
+     */
+    public function executorLabel(): string
+    {
+        $type = $this->executor_type ?: self::EXECUTOR_PROSELVER;
+        return self::EXECUTOR_LABELS[$type] ?? ucfirst(str_replace('_', ' ', $type));
+    }
+
+    /**
+     * Does the current executor type need a driver_user_id? True for
+     * proselver + internal (real User in the system); false for the
+     * "external" executors where there is no user account to assign.
+     */
+    public function requiresDriverUser(): bool
+    {
+        $type = $this->executor_type ?: self::EXECUTOR_PROSELVER;
+        return in_array($type, self::DRIVER_REQUIRED_EXECUTORS, true);
+    }
+
+    /**
+     * True only while the vehicle is still on the dealer's side of the
+     * fence. Once it's COLLECTED we lock the executor — swapping it
+     * post-collection would leave an in-flight movement orphaned.
+     */
+    public function canChangeExecutor(): bool
+    {
+        return in_array($this->status, self::EXECUTOR_CHANGEABLE_STATUSES, true);
+    }
+
+    /**
+     * Flip the executor to a different type. Clears any driver / meta
+     * that doesn't apply to the new type and reverts the status to
+     * PLANNED so the planner re-picks up the job. Audit-logged via
+     * Auditable::auditCustom so we can trace every flip in the log.
+     *
+     * @param  array{
+     *     third_party_courier_name?: ?string,
+     *     third_party_waybill?: ?string,
+     *     third_party_expected_date?: ?string,
+     *     self_collect_name?: ?string,
+     *     self_collect_phone?: ?string,
+     *     self_collect_id_number?: ?string,
+     *     driver_user_id?: ?int,
+     * } $meta  Executor-specific extras
+     */
+    public function changeExecutor(string $newType, array $meta = []): bool
+    {
+        if (! in_array($newType, self::EXECUTOR_TYPES, true)) {
+            return false;
+        }
+        if (! $this->canChangeExecutor()) {
+            return false;
+        }
+
+        $before = [
+            'executor_type' => $this->executor_type,
+            'driver_user_id' => $this->driver_user_id,
+            'third_party_courier_name' => $this->third_party_courier_name,
+            'third_party_waybill' => $this->third_party_waybill,
+            'third_party_expected_date' => $this->third_party_expected_date?->toDateString(),
+            'self_collect_name' => $this->self_collect_name,
+            'self_collect_phone' => $this->self_collect_phone,
+            'self_collect_id_number' => $this->self_collect_id_number,
+            'status' => $this->status,
+        ];
+
+        // Always start from a clean slate — drop every executor-specific
+        // field, then re-populate only the ones that apply to $newType.
+        $this->executor_type = $newType;
+        $this->driver_user_id = null;
+        $this->third_party_courier_name = null;
+        $this->third_party_waybill = null;
+        $this->third_party_expected_date = null;
+        $this->self_collect_name = null;
+        $this->self_collect_phone = null;
+        $this->self_collect_id_number = null;
+
+        if ($newType === self::EXECUTOR_THIRD_PARTY) {
+            $this->third_party_courier_name = $meta['third_party_courier_name'] ?? null;
+            $this->third_party_waybill = $meta['third_party_waybill'] ?? null;
+            $this->third_party_expected_date = $meta['third_party_expected_date'] ?? null;
+        } elseif ($newType === self::EXECUTOR_SELF_COLLECT) {
+            $this->self_collect_name = $meta['self_collect_name'] ?? null;
+            $this->self_collect_phone = $meta['self_collect_phone'] ?? null;
+            $this->self_collect_id_number = $meta['self_collect_id_number'] ?? null;
+        } elseif (in_array($newType, self::DRIVER_REQUIRED_EXECUTORS, true)) {
+            // Driver may be supplied immediately (e.g. dealer flips to
+            // internal AND picks the driver in one go); otherwise the
+            // planner assigns later via the existing assignDriver path.
+            $this->driver_user_id = $meta['driver_user_id'] ?? null;
+        }
+
+        // Reset to PLANNED so the planner picks the job back up — the
+        // previous driver_assigned timestamp stays in assigned_at for
+        // audit, but the status moves so it shows up in the right bucket.
+        // Skip the reset for the pre-planning statuses so we don't
+        // artificially leap-frog the booking-confirmation gate.
+        $preplanStatuses = [
+            self::STATUS_PENDING_VERIFICATION,
+            self::STATUS_RECEIVED,
+            self::STATUS_AWAITING_CUSTOMER_CONFIRMATION,
+            self::STATUS_CONFIRMATION_ISSUE,
+            self::STATUS_CONFIRMED,
+            self::STATUS_PLANNED,
+        ];
+        if (! in_array($this->status, $preplanStatuses, true)) {
+            $this->status = self::STATUS_PLANNED;
+            $this->planned_at = $this->planned_at ?? now();
+        }
+
+        $saved = $this->save();
+
+        if ($saved) {
+            $this->auditCustom('executor_changed', $before, [
+                'executor_type' => $this->executor_type,
+                'driver_user_id' => $this->driver_user_id,
+                'status' => $this->status,
+            ]);
+        }
+
+        return $saved;
+    }
+
+    /* ----------------------------------------------------------------
+     | Archival (final-delivery flag)
+     |-----------------------------------------------------------------*/
+
+    public function isArchived(): bool
+    {
+        return $this->archived_at !== null;
+    }
+
+    /**
+     * Eligible-to-archive == job has reached delivered/completed AND
+     * it's a final delivery (not a body-builder leg, which by design
+     * is "still in stock"). Ops can override this guard from the admin
+     * surface; the customer-facing UI hides the button otherwise.
+     */
+    public function canArchive(bool $opsOverride = false): bool
+    {
+        if ($this->isArchived()) {
+            return false;
+        }
+        if (! in_array($this->status, [self::STATUS_DELIVERED, self::STATUS_COMPLETED], true)) {
+            return false;
+        }
+        if ($this->destination_type === self::DESTINATION_BODY_BUILDER && ! $opsOverride) {
+            return false;
+        }
+        return true;
+    }
+
+    public function archive(bool $opsOverride = false): bool
+    {
+        if (! $this->canArchive($opsOverride)) {
+            return false;
+        }
+
+        $this->archived_at = now();
+        $saved = $this->save();
+
+        if ($saved) {
+            $this->auditCustom('archived', null, ['archived_at' => $this->archived_at->toIso8601String()]);
+        }
+
+        return $saved;
+    }
+
+    public function unarchive(): bool
+    {
+        if (! $this->isArchived()) {
+            return false;
+        }
+
+        $before = ['archived_at' => $this->archived_at?->toIso8601String()];
+        $this->archived_at = null;
+        $saved = $this->save();
+
+        if ($saved) {
+            $this->auditCustom('unarchived', $before, ['archived_at' => null]);
+        }
+
+        return $saved;
+    }
+
+    public function scopeArchived(Builder $query): Builder
+    {
+        return $query->whereNotNull('archived_at');
+    }
+
+    public function scopeActive(Builder $query): Builder
+    {
+        return $query->whereNull('archived_at');
     }
 }
