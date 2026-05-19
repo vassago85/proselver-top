@@ -48,6 +48,42 @@ new #[Layout('components.layouts.app')] class extends Component {
     }
 
     /**
+     * Pre-collection statuses that the dispatcher expects to see a
+     * driver attached to.  CONFIRMED is deliberately excluded — those
+     * orders haven't been planned yet and live in the "Ready to Plan"
+     * section above.  Anything in here without a driver_user_id is a
+     * planning slip and surfaces in the "Awaiting Driver" section.
+     */
+    private const AWAITING_DRIVER_STATUSES = [
+        Job::STATUS_PLANNED,
+        Job::STATUS_DRIVER_ASSIGNED,
+        Job::STATUS_READY_FOR_COLLECTION,
+        Job::STATUS_ASSIGNED, // legacy pre-Phase-1 alias
+    ];
+
+    /**
+     * Shared search clause for both queue tables.  Uses ilike so the
+     * search actually works on Postgres (the production DB) — plain
+     * LIKE is case-sensitive there and would silently miss matches.
+     */
+    private function applyQueueSearch($query): void
+    {
+        if ($this->search === '') {
+            return;
+        }
+        $s = trim($this->search);
+        $query->where(function ($q) use ($s) {
+            $q->where('job_number', 'ilike', "%{$s}%")
+                ->orWhere('vin', 'ilike', "%{$s}%")
+                ->orWhere('model_name', 'ilike', "%{$s}%")
+                ->orWhereHas('brand', fn ($c) => $c->where('name', 'ilike', "%{$s}%"))
+                ->orWhereHas('company', fn ($c) => $c->where('name', 'ilike', "%{$s}%"))
+                ->orWhereHas('pickupLocation', fn ($c) => $c->where('company_name', 'ilike', "%{$s}%"))
+                ->orWhereHas('deliveryLocation', fn ($c) => $c->where('company_name', 'ilike', "%{$s}%"));
+        });
+    }
+
+    /**
      * Buckets for the driver-workload tab. A driver can technically have
      * more than one active job (multi-leg) but we pick the most advanced
      * status to decide which bucket they fall into; that matches how a
@@ -147,32 +183,53 @@ new #[Layout('components.layouts.app')] class extends Component {
         $payload = [];
 
         if ($this->tab === 'queue') {
-            $jobs = Job::with(['company:id,name', 'pickupLocation:id,company_name', 'deliveryLocation:id,company_name', 'brand:id,name'])
+            $eagerLoads = [
+                'company:id,name',
+                'pickupLocation:id,company_name',
+                'deliveryLocation:id,company_name',
+                'brand:id,name',
+            ];
+
+            // Section 1: orders that have been confirmed but not yet
+            // planned.  These are the original "Planning Queue" rows.
+            $jobs = Job::with($eagerLoads)
                 ->where('status', Job::STATUS_CONFIRMED)
-                ->when($this->search, function ($query) {
-                    $query->where(function ($q) {
-                        $q->where('job_number', 'like', "%{$this->search}%")
-                          ->orWhere('vin', 'like', "%{$this->search}%")
-                          ->orWhere('model_name', 'like', "%{$this->search}%")
-                          ->orWhereHas('brand', fn($c) => $c->where('name', 'like', "%{$this->search}%"))
-                          ->orWhereHas('company', fn($c) => $c->where('name', 'like', "%{$this->search}%"))
-                          ->orWhereHas('pickupLocation', fn($c) => $c->where('company_name', 'like', "%{$this->search}%"))
-                          ->orWhereHas('deliveryLocation', fn($c) => $c->where('company_name', 'like', "%{$this->search}%"));
-                    });
-                })
+                ->tap(fn ($q) => $this->applyQueueSearch($q))
                 ->orderBy('scheduled_date')
                 ->orderBy('created_at')
-                ->paginate(25);
+                ->paginate(25, ['*'], 'planPage');
 
-            $payload['jobs'] = $jobs;
+            // Section 2: orders that *have* been planned (or beyond)
+            // but never had a driver attached.  Without this list a
+            // dispatcher who clicks Plan and forgets to assign a
+            // driver has no UI surface that flags it — the order
+            // just goes silent until somebody spots it on the wall
+            // display.  Independent paginator so paging one list
+            // doesn't drop the other off-screen.
+            $awaitingDriver = Job::with($eagerLoads)
+                ->whereIn('status', self::AWAITING_DRIVER_STATUSES)
+                ->whereNull('driver_user_id')
+                ->tap(fn ($q) => $this->applyQueueSearch($q))
+                ->orderBy('scheduled_date')
+                ->orderBy('created_at')
+                ->paginate(25, ['*'], 'driverPage');
+
+            $payload['jobs']           = $jobs;
+            $payload['awaitingDriver'] = $awaitingDriver;
         } else {
             $payload = array_merge($payload, $this->driverWorkload());
         }
 
-        // Always supply the headline counters so the tab badges are accurate
-        // regardless of which tab is currently rendered.
-        $payload['queueCount']    = Job::where('status', Job::STATUS_CONFIRMED)->count();
-        $payload['driverActive'] = Job::whereIn('status', [
+        // Always supply the headline counters so the tab badges are
+        // accurate regardless of which tab is currently rendered.
+        // queueCount is the sum of both queue sections so dispatch
+        // sees a single "needs my attention" number.
+        $payload['toPlanCount']        = Job::where('status', Job::STATUS_CONFIRMED)->count();
+        $payload['awaitingDriverCount'] = Job::whereIn('status', self::AWAITING_DRIVER_STATUSES)
+            ->whereNull('driver_user_id')
+            ->count();
+        $payload['queueCount']         = $payload['toPlanCount'] + $payload['awaitingDriverCount'];
+        $payload['driverActive']       = Job::whereIn('status', [
             Job::STATUS_DRIVER_ASSIGNED, Job::STATUS_READY_FOR_COLLECTION, Job::STATUS_ASSIGNED,
             Job::STATUS_COLLECTED, Job::STATUS_IN_TRANSIT, Job::STATUS_IN_PROGRESS,
         ])->whereNotNull('driver_user_id')->distinct('driver_user_id')->count('driver_user_id');
@@ -238,10 +295,14 @@ new #[Layout('components.layouts.app')] class extends Component {
             </div>
         </div>
 
+        {{-- ===================== Section 1: Ready to plan ===================== --}}
         <div class="bg-white rounded-xl shadow-sm border border-gray-200">
             <div class="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
-                <h2 class="text-lg font-semibold text-gray-900">Confirmed Orders — Ready to Plan</h2>
-                <span class="text-sm text-gray-500">{{ $jobs->total() }} {{ Str::plural('order', $jobs->total()) }}</span>
+                <div class="flex items-center gap-3">
+                    <h2 class="text-lg font-semibold text-gray-900">Confirmed Orders — Ready to Plan</h2>
+                    <span class="rounded-full bg-blue-100 text-blue-700 px-2 py-0.5 text-[11px] font-bold tabular-nums">{{ $toPlanCount }}</span>
+                </div>
+                <span class="text-sm text-gray-500">{{ $jobs->total() }} {{ Str::plural('order', $jobs->total()) }} matching</span>
             </div>
             <div class="overflow-x-auto">
                 <table class="min-w-full divide-y divide-gray-200">
@@ -294,6 +355,78 @@ new #[Layout('components.layouts.app')] class extends Component {
             @if($jobs->hasPages())
             <div class="px-6 py-4 border-t border-gray-200">
                 {{ $jobs->links() }}
+            </div>
+            @endif
+        </div>
+
+        {{-- ===================== Section 2: Awaiting driver ===================== --}}
+        <div class="mt-6 bg-white rounded-xl shadow-sm border border-amber-200">
+            <div class="px-6 py-4 border-b border-amber-200 bg-amber-50/40 flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                    <span class="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-amber-100 text-amber-700">
+                        <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/><path d="m22 12-3 3-1.5-1.5"/></svg>
+                    </span>
+                    <h2 class="text-lg font-semibold text-gray-900">Planned Orders — Awaiting Driver</h2>
+                    <span class="rounded-full bg-amber-100 text-amber-800 px-2 py-0.5 text-[11px] font-bold tabular-nums">{{ $awaitingDriverCount }}</span>
+                </div>
+                <span class="text-sm text-gray-500">{{ $awaitingDriver->total() }} {{ Str::plural('order', $awaitingDriver->total()) }} matching</span>
+            </div>
+            <div class="px-6 pt-3 pb-2 text-xs text-amber-800/80">
+                These orders have been planned (or beyond) but no driver has been attached yet.
+                Click the order number to assign one on the order detail page.
+            </div>
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-gray-200">
+                    <thead class="bg-gray-50">
+                        <tr>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Order #</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Customer</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Make / Model</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">VIN</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Pickup</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Delivery</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Scheduled</th>
+                            <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-200">
+                        @forelse($awaitingDriver as $job)
+                        <tr class="hover:bg-amber-50/50" wire:key="awaiting-{{ $job->id }}">
+                            <td class="px-6 py-4 text-sm font-medium text-blue-600">
+                                <a href="{{ route('admin.orders.show', $job) }}" class="hover:underline">{{ $job->job_number ?? '—' }}</a>
+                            </td>
+                            <td class="px-6 py-4 text-xs">
+                                <span class="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 font-semibold uppercase tracking-wide text-amber-800">
+                                    {{ \App\Models\Job::PHASE1_STATUS_LABELS[$job->status] ?? Str::title(str_replace('_', ' ', $job->status)) }}
+                                </span>
+                            </td>
+                            <td class="px-6 py-4 text-sm text-gray-900">{{ $job->company?->name ?? '—' }}</td>
+                            <td class="px-6 py-4 text-sm text-gray-900">{{ $job->brand?->name }} {{ $job->model_name }}</td>
+                            <td class="px-6 py-4 text-sm font-mono text-gray-600">{{ $job->vin ?: '—' }}</td>
+                            <td class="px-6 py-4 text-sm text-gray-500">{{ $job->pickupLocation?->company_name ?? '—' }}</td>
+                            <td class="px-6 py-4 text-sm text-gray-500">{{ $job->deliveryLocation?->company_name ?? '—' }}</td>
+                            <td class="px-6 py-4 text-sm text-gray-500">{{ $job->scheduled_date?->format('d M Y') ?? '—' }}</td>
+                            <td class="px-6 py-4 text-right">
+                                <a href="{{ route('admin.orders.show', $job) }}"
+                                   class="inline-flex items-center gap-1.5 rounded-lg bg-amber-600 px-3.5 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-amber-700 transition-colors">
+                                    <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                                    Assign Driver
+                                </a>
+                            </td>
+                        </tr>
+                        @empty
+                        <tr>
+                            <td colspan="9" class="px-6 py-12 text-center text-sm text-gray-500">Every planned order has a driver attached. Nice.</td>
+                        </tr>
+                        @endforelse
+                    </tbody>
+                </table>
+            </div>
+
+            @if($awaitingDriver->hasPages())
+            <div class="px-6 py-4 border-t border-gray-200">
+                {{ $awaitingDriver->links() }}
             </div>
             @endif
         </div>
