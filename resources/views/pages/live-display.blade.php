@@ -658,21 +658,20 @@ new #[Layout('components.layouts.display')] class extends Component {
                 }
             },
 
-            // (Re)build the marquee for one lane.
-            //   1. Compute a signature of the original cards (id list).
-            //      If it matches what we set up last time, do nothing
-            //      -- a wire:poll with unchanged data shouldn't disturb
-            //      the running animation.
-            //   2. Otherwise: remove the previous clones, stop the
-            //      previous timer, measure the originals' total height.
-            //   3. If the originals fit in the viewport, leave the
-            //      lane static and bail.
-            //   4. Otherwise: clone every original below the last,
-            //      strip wire:key / data-job-id from each clone (so
-            //      Livewire's morph leaves them alone), and start a
-            //      stepMs interval that drives this.step(idx).  The
-            //      initial timer fires after a short stagger so the
-            //      three lanes don't all step at the same instant.
+            // (Re)build the marquee for one lane.  Strict idempotence:
+            // if the original card ids match what we set up last time
+            // AND the lane already has clones AND we already have
+            // recorded state for it, return immediately and DO NOT
+            // touch the DOM or the timer.  This keeps each lane
+            // completely independent: a Livewire morph that only
+            // changes lane A leaves lane B and C running their
+            // animation undisturbed.
+            //
+            // Otherwise: remove the previous clones, stop the previous
+            // timer, measure the originals, clone them, install a
+            // fresh setInterval staggered per-lane.  The stagger only
+            // affects the FIRST step so all three lanes never animate
+            // at the exact same instant.
             setupLane(idx) {
                 if (this.reduceMotion) return;
                 const viewport = this.$refs['content' + idx];
@@ -683,10 +682,20 @@ new #[Layout('components.layouts.display')] class extends Component {
                 const originals = Array.from(list.children).filter(el => el.hasAttribute('data-job-id'));
                 const ids = originals.map(el => el.dataset.jobId).join(',');
 
-                // Same set of cards as last setup -> animation keeps
-                // running, no reset.  This is the common case on
-                // every 30s wire:poll when nothing has actually moved.
-                if (this.laneIds[idx] === ids && this.laneTimers[idx]) return;
+                // Idempotent guard.  Required conditions for "the
+                // marquee is already correctly running for this exact
+                // card set":
+                //   - signature matches
+                //   - we have laneState (loopLength + offset)
+                //   - clones are physically present in the DOM
+                // If any of those is false we (re)build.  Critically
+                // this lets us NOT depend on the timer handle being
+                // alive -- the stagger window or a missed tick must
+                // not trigger a full rebuild on this lane.
+                const hasClones = !!list.querySelector('[data-clone="1"]');
+                if (this.laneIds[idx] === ids && this.laneState[idx] && hasClones) {
+                    return;
+                }
                 this.laneIds[idx] = ids;
 
                 // Tear down any previous marquee on this lane.
@@ -695,6 +704,7 @@ new #[Layout('components.layouts.display')] class extends Component {
                     clearInterval(this.laneTimers[idx]);
                     this.laneTimers[idx] = null;
                 }
+                this.laneState[idx] = null;
                 list.style.transition = 'none';
                 list.style.transform  = '';
 
@@ -729,11 +739,14 @@ new #[Layout('components.layouts.display')] class extends Component {
                     list.appendChild(clone);
                 });
 
-                this.laneState[idx] = { offset: 0, loopLength };
+                this.laneState[idx] = { offset: 0, loopLength, wrapping: false };
 
                 // Stagger the three lanes' first step so they don't
                 // all animate in lockstep.  ~1700ms apart matches the
-                // staggering we used in the previous design.
+                // staggering we used in the previous design.  The
+                // interval itself is plain stepMs -- because all three
+                // lanes share the same period, the relative phase is
+                // preserved for the lifetime of the page.
                 const stagger = 1700 * idx;
                 setTimeout(() => {
                     if (this.laneIds[idx] !== ids) return; // bailed during the stagger
@@ -742,15 +755,28 @@ new #[Layout('components.layouts.display')] class extends Component {
             },
 
             // Advance one lane by one card.  We never mutate the DOM
-            // here -- only translateY on the list.  At the end of one
-            // full loop (offset >= loopLength) we wait for the slide
-            // to finish, then snap translateY back by exactly
-            // loopLength with transition: none.  Because the cards
-            // immediately below the snap point are clones of the
-            // cards now at the top, the snap is invisible.
+            // here -- only translateY on the list.  When we hit the
+            // wrap point (the last original is now at the top of the
+            // viewport), we let the slide animation play to completion
+            // via the `transitionend` event, then snap translateY back
+            // by exactly loopLength with transition: none.  Because
+            // the cards immediately below the snap point (clones)
+            // are pixel-identical to the originals above, the snap is
+            // invisible -- the user sees an unbroken upward scroll.
+            //
+            // The previous implementation snapped on a fixed setTimeout
+            // (slideMs+20ms) which fired before the transition actually
+            // completed in some frames, causing the visible "kak"
+            // jump at the wrap.  transitionend is event-driven and
+            // fires exactly when the browser has finished compositing
+            // the last frame -- no race, no jump.
             step(idx) {
                 const state = this.laneState[idx];
                 if (!state) return;
+                // A previous wrap is still in flight (transitionend
+                // hasn't fired yet).  Skip this tick -- we'd otherwise
+                // mid-flight reset the transition and produce a jerk.
+                if (state.wrapping) return;
                 const viewport = this.$refs['content' + idx];
                 if (!viewport) return;
                 const list = viewport.querySelector('.lane-list');
@@ -770,18 +796,27 @@ new #[Layout('components.layouts.display')] class extends Component {
                 list.style.transition = `transform ${this.slideMs}ms cubic-bezier(0.4, 0, 0.2, 1)`;
                 list.style.transform  = `translateY(-${state.offset}px)`;
 
-                // Wrap point: once we've translated by one full
-                // loopLength, snap back invisibly so the next step
-                // continues without ever reaching the bottom of the
-                // doubled-up list.
+                // Wrap?  Let the slide finish, then snap invisibly.
+                // Listener is `{once: true}` and scoped to this exact
+                // wrap, so back-to-back wraps don't stack listeners.
                 if (state.offset >= state.loopLength - 0.5) {
-                    setTimeout(() => {
+                    state.wrapping = true;
+                    const onEnd = (e) => {
+                        // Ignore transitionend events bubbling from
+                        // card-internal animations.  We only care
+                        // about the list's own transform finishing.
+                        if (e.target !== list || e.propertyName !== 'transform') {
+                            list.addEventListener('transitionend', onEnd, { once: true });
+                            return;
+                        }
                         list.style.transition = 'none';
                         state.offset -= state.loopLength;
                         list.style.transform  = `translateY(-${state.offset}px)`;
-                        void list.offsetHeight; // force reflow
+                        void list.offsetHeight; // force reflow before restoring transition
                         list.style.transition = '';
-                    }, this.slideMs + 20);
+                        state.wrapping = false;
+                    };
+                    list.addEventListener('transitionend', onEnd, { once: true });
                 }
             },
 
