@@ -51,7 +51,7 @@
                 {{ $job->job_number ?? '—' }}
             </div>
             <div class="text-xs text-slate-300 truncate">
-                {{ trim(($job->brand?->name ?? '') . ' ' . ($job->model_name ?? '')) ?: 'Vehicle TBD' }}
+                {{ trim(($job->brand?->name ?? '') . ' ' . ($job->model_name ?? '')) ?: 'Vehicle TBD' }}@if($job->vin)<span class="ml-1.5 text-slate-500 tabular-nums" title="VIN {{ $job->vin }}">· …{{ strtoupper(substr($job->vin, -6)) }}</span>@endif
             </div>
             @if($isInternal)
                 <div class="mt-0.5 text-[10px] uppercase tracking-[0.15em] text-cyan-300/80 truncate">
