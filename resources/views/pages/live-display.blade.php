@@ -81,18 +81,30 @@ new #[Layout('components.layouts.display')] class extends Component {
         $isInternal = $user->isInternal();
         $company = $isInternal ? null : $user->company();
 
+        // The same component drives two routes:
+        //   /admin/live-display  → admin.live-display
+        //   /customer/display    → customer.display
+        // The "New Orders" lane is an ops-only surface; it doesn't
+        // belong on the customer-facing wallboard (which is meant to
+        // run on a TV in a dealership / OEM office) even when an
+        // internal user happens to open that URL.  Gate the 4th lane
+        // on the route name, not just on $isInternal.
+        $isAdminBoard = request()->routeIs('admin.live-display');
+        $showNewOrdersLane = $isInternal && $isAdminBoard;
+
         if (!$isInternal && !$company) {
             return [
-                'company'        => null,
-                'isInternal'     => false,
-                'newOrders'      => collect(),
-                'waiting'        => collect(),
-                'inTransit'      => collect(),
-                'deliveredToday' => collect(),
-                'unassignedCount'=> 0,
-                'delayedCount'   => 0,
-                'newOrdersCount' => 0,
-                'lastUpdatedAt'  => now(),
+                'company'           => null,
+                'isInternal'        => false,
+                'showNewOrdersLane' => false,
+                'newOrders'         => collect(),
+                'waiting'           => collect(),
+                'inTransit'         => collect(),
+                'deliveredToday'    => collect(),
+                'unassignedCount'   => 0,
+                'delayedCount'      => 0,
+                'newOrdersCount'    => 0,
+                'lastUpdatedAt'     => now(),
             ];
         }
 
@@ -123,7 +135,7 @@ new #[Layout('components.layouts.display')] class extends Component {
             Job::STATUS_APPROVED,
             Job::STATUS_ASSIGNED,
         ];
-        $waitingStatuses = $isInternal
+        $waitingStatuses = $showNewOrdersLane
             ? $waitingPlannedStatuses
             : array_merge($newOrderStatuses, $waitingPlannedStatuses);
         $inTransitStatuses = [
@@ -163,10 +175,10 @@ new #[Layout('components.layouts.display')] class extends Component {
         // the lane is supposed to scroll, not stream forever.
         $lanePerCap = $isInternal ? 80 : 40;
 
-        // New Orders lane (internal only).  Sorted newest-first so
-        // the most recently dropped orders are at the top of the
-        // column where ops controllers look first.
-        $newOrders = $isInternal
+        // New Orders lane (admin board, internal user only).  Sorted
+        // newest-first so the most recently dropped orders are at
+        // the top of the column where ops controllers look first.
+        $newOrders = $showNewOrdersLane
             ? (clone $base)
                 ->whereIn('status', $newOrderStatuses)
                 ->orderByDesc('created_at')
@@ -240,16 +252,17 @@ new #[Layout('components.layouts.display')] class extends Component {
             + $inTransit->filter(fn ($j) => $isOverdueFor($j, 18))->count();
 
         return [
-            'company'         => $company,
-            'isInternal'      => $isInternal,
-            'newOrders'       => $newOrders,
-            'waiting'         => $waiting,
-            'inTransit'       => $inTransit,
-            'deliveredToday'  => $deliveredToday,
-            'unassignedCount' => $unassignedCount,
-            'delayedCount'    => $delayedCount,
-            'newOrdersCount'  => $newOrders->count(),
-            'lastUpdatedAt'   => now(),
+            'company'           => $company,
+            'isInternal'        => $isInternal,
+            'showNewOrdersLane' => $showNewOrdersLane,
+            'newOrders'         => $newOrders,
+            'waiting'           => $waiting,
+            'inTransit'         => $inTransit,
+            'deliveredToday'    => $deliveredToday,
+            'unassignedCount'   => $unassignedCount,
+            'delayedCount'      => $delayedCount,
+            'newOrdersCount'    => $newOrders->count(),
+            'lastUpdatedAt'     => now(),
         ];
     }
 };
@@ -401,15 +414,15 @@ new #[Layout('components.layouts.display')] class extends Component {
     {{-- Always-visible tiles so an ops controller can read the
          current headline numbers without waiting for the focus
          rotation to land on a particular column. --}}
-    {{-- Tile counts: 4 base tiles (Waiting / Transit / Delivered /
-         Unassigned / Delayed = 5) + 1 extra for internal users
-         (New Orders).  Last-updated lives in the footer, not here. --}}
+    {{-- Tile counts: 5 base tiles (Waiting / Transit / Delivered /
+         Unassigned / Delayed) + 1 extra on the admin board (New
+         Orders).  Last-updated lives in the footer, not here. --}}
     <div @class([
             'grid gap-2 border-b border-slate-800/80 bg-slate-950/60 px-4 py-3',
-            'grid-cols-3 sm:grid-cols-6' => $isInternal,
-            'grid-cols-3 sm:grid-cols-5' => !$isInternal,
+            'grid-cols-3 sm:grid-cols-6' => $showNewOrdersLane,
+            'grid-cols-3 sm:grid-cols-5' => !$showNewOrdersLane,
         ])>
-        @if($isInternal)
+        @if($showNewOrdersLane)
             <div class="rounded-lg border border-sky-500/25 bg-sky-500/5 px-3 py-2">
                 <div class="text-[10px] font-semibold uppercase tracking-[0.18em] text-sky-300/80">New Orders</div>
                 <div class="text-2xl font-bold tabular-nums text-white">{{ $newOrdersCount }}</div>
@@ -453,12 +466,12 @@ new #[Layout('components.layouts.display')] class extends Component {
     @php $laneIdx = 0; @endphp
     <main @class([
             'grid flex-1 min-h-0 grid-cols-1 gap-4 p-4 lg:gap-6 lg:p-6',
-            'md:grid-cols-4' => $isInternal,
-            'md:grid-cols-3' => !$isInternal,
+            'md:grid-cols-4' => $showNewOrdersLane,
+            'md:grid-cols-3' => !$showNewOrdersLane,
         ])>
 
-        @if($isInternal)
-            {{-- NEW ORDERS (internal / ProSelver ops only) --}}
+        @if($showNewOrdersLane)
+            {{-- NEW ORDERS (admin board, internal user only) --}}
             <section class="lane flex min-h-0 flex-col rounded-2xl border border-sky-500/20 bg-slate-900/40">
                 <div class="flex items-center justify-between border-b border-sky-500/20 px-5 py-3">
                     <div class="flex items-center gap-3">
