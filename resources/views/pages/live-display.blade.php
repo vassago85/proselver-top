@@ -85,11 +85,13 @@ new #[Layout('components.layouts.display')] class extends Component {
             return [
                 'company'        => null,
                 'isInternal'     => false,
+                'newOrders'      => collect(),
                 'waiting'        => collect(),
                 'inTransit'      => collect(),
                 'deliveredToday' => collect(),
                 'unassignedCount'=> 0,
                 'delayedCount'   => 0,
+                'newOrdersCount' => 0,
                 'lastUpdatedAt'  => now(),
             ];
         }
@@ -98,11 +100,20 @@ new #[Layout('components.layouts.display')] class extends Component {
         // counts, the SQL filters and the empty-state copy all stay
         // consistent. If you add a new Job::STATUS_*, drop it into the
         // appropriate bucket here.
-        $waitingStatuses = [
+        //
+        // Internal (ProSelver ops) users get a dedicated "New Orders"
+        // lane to the left of Waiting so freshly-received orders that
+        // still need ops action (verify / confirm / re-classify) are
+        // visible at a glance instead of buried inside Waiting. Tenant
+        // users don't see the split -- their "Waiting" stays one
+        // combined column.
+        $newOrderStatuses = [
             Job::STATUS_PENDING_VERIFICATION,
             Job::STATUS_RECEIVED,
             Job::STATUS_AWAITING_CUSTOMER_CONFIRMATION,
             Job::STATUS_CONFIRMATION_ISSUE,
+        ];
+        $waitingPlannedStatuses = [
             Job::STATUS_CONFIRMED,
             Job::STATUS_PLANNED,
             Job::STATUS_DRIVER_ASSIGNED,
@@ -112,6 +123,9 @@ new #[Layout('components.layouts.display')] class extends Component {
             Job::STATUS_APPROVED,
             Job::STATUS_ASSIGNED,
         ];
+        $waitingStatuses = $isInternal
+            ? $waitingPlannedStatuses
+            : array_merge($newOrderStatuses, $waitingPlannedStatuses);
         $inTransitStatuses = [
             Job::STATUS_COLLECTED,
             Job::STATUS_IN_TRANSIT,
@@ -148,6 +162,17 @@ new #[Layout('components.layouts.display')] class extends Component {
         // ProSelver-wide traffic easily exceeds that.  Still bounded —
         // the lane is supposed to scroll, not stream forever.
         $lanePerCap = $isInternal ? 80 : 40;
+
+        // New Orders lane (internal only).  Sorted newest-first so
+        // the most recently dropped orders are at the top of the
+        // column where ops controllers look first.
+        $newOrders = $isInternal
+            ? (clone $base)
+                ->whereIn('status', $newOrderStatuses)
+                ->orderByDesc('created_at')
+                ->limit($lanePerCap)
+                ->get()
+            : collect();
 
         $waiting = (clone $base)
             ->whereIn('status', $waitingStatuses)
@@ -217,11 +242,13 @@ new #[Layout('components.layouts.display')] class extends Component {
         return [
             'company'         => $company,
             'isInternal'      => $isInternal,
+            'newOrders'       => $newOrders,
             'waiting'         => $waiting,
             'inTransit'       => $inTransit,
             'deliveredToday'  => $deliveredToday,
             'unassignedCount' => $unassignedCount,
             'delayedCount'    => $delayedCount,
+            'newOrdersCount'  => $newOrders->count(),
             'lastUpdatedAt'   => now(),
         ];
     }
@@ -254,6 +281,7 @@ new #[Layout('components.layouts.display')] class extends Component {
     // match the column.  Keep in sync with the column header colours
     // and the per-card ring colours above.
     $laneAccent = [
+        'new'       => ['sky',     'border-sky-500/20',     'text-sky-300',     'bg-sky-400',     'shadow-sky-500/30'],
         'waiting'   => ['amber',   'border-amber-500/20',   'text-amber-300',   'bg-amber-400',   'shadow-amber-500/30'],
         'transit'   => ['orange',  'border-orange-500/20',  'text-orange-300',  'bg-orange-400',  'shadow-orange-500/30'],
         'delivered' => ['emerald', 'border-emerald-500/20', 'text-emerald-300', 'bg-emerald-400', 'shadow-emerald-500/30'],
@@ -373,7 +401,17 @@ new #[Layout('components.layouts.display')] class extends Component {
     {{-- Always-visible tiles so an ops controller can read the
          current headline numbers without waiting for the focus
          rotation to land on a particular column. --}}
-    <div class="grid grid-cols-3 gap-2 border-b border-slate-800/80 bg-slate-950/60 px-4 py-3 sm:grid-cols-6">
+    <div @class([
+            'grid gap-2 border-b border-slate-800/80 bg-slate-950/60 px-4 py-3',
+            'grid-cols-3 sm:grid-cols-7' => $isInternal,
+            'grid-cols-3 sm:grid-cols-6' => !$isInternal,
+        ])>
+        @if($isInternal)
+            <div class="rounded-lg border border-sky-500/25 bg-sky-500/5 px-3 py-2">
+                <div class="text-[10px] font-semibold uppercase tracking-[0.18em] text-sky-300/80">New Orders</div>
+                <div class="text-2xl font-bold tabular-nums text-white">{{ $newOrdersCount }}</div>
+            </div>
+        @endif
         <div class="rounded-lg border border-amber-500/25 bg-amber-500/5 px-3 py-2">
             <div class="text-[10px] font-semibold uppercase tracking-[0.18em] text-amber-300/80">Waiting</div>
             <div class="text-2xl font-bold tabular-nums text-white">{{ $waiting->count() }}</div>
@@ -409,7 +447,48 @@ new #[Layout('components.layouts.display')] class extends Component {
     </div>
 
     {{-- ============ LANES ============ --}}
-    <main class="grid flex-1 min-h-0 grid-cols-1 gap-4 p-4 md:grid-cols-3 lg:gap-6 lg:p-6">
+    {{-- Lane indices used by x-ref="content{n}" are renumbered when
+         the optional New Orders lane is rendered, so the Alpine
+         marquee always finds content0..content(N-1) in left-to-right
+         visual order. --}}
+    @php $laneIdx = 0; @endphp
+    <main @class([
+            'grid flex-1 min-h-0 grid-cols-1 gap-4 p-4 lg:gap-6 lg:p-6',
+            'md:grid-cols-4' => $isInternal,
+            'md:grid-cols-3' => !$isInternal,
+        ])>
+
+        @if($isInternal)
+            {{-- NEW ORDERS (internal / ProSelver ops only) --}}
+            <section class="lane flex min-h-0 flex-col rounded-2xl border border-sky-500/20 bg-slate-900/40">
+                <div class="flex items-center justify-between border-b border-sky-500/20 px-5 py-3">
+                    <div class="flex items-center gap-3">
+                        <span class="h-2.5 w-2.5 rounded-full bg-sky-400 live-dot"></span>
+                        <h2 class="text-sm font-semibold uppercase tracking-[0.2em] text-sky-300">New Orders</h2>
+                    </div>
+                    <span class="text-2xl font-bold tabular-nums text-white">{{ $newOrdersCount }}</span>
+                </div>
+                <div class="no-scrollbar flex-1 overflow-y-hidden" x-ref="content{{ $laneIdx }}" data-lane-idx="{{ $laneIdx }}">
+                    <div class="lane-list space-y-2 p-3">
+                        @forelse($newOrders as $job)
+                            @include('pages._live-display-card', [
+                                'job'         => $job,
+                                'style'       => $statusStyle[$job->status] ?? ['ring-sky-500/40 bg-sky-500/10', 'text-sky-300', ucfirst($job->status)],
+                                'flags'       => $cardFlags($job, 'waiting'),
+                                'isInternal'  => $isInternal,
+                                'lane'        => 'new',
+                                'accentText'  => 'text-sky-400',
+                            ])
+                        @empty
+                            <div class="flex h-full items-center justify-center px-4 py-10 text-center text-sm text-slate-500">
+                                No new orders waiting on ops.
+                            </div>
+                        @endforelse
+                    </div>
+                </div>
+            </section>
+            @php $laneIdx++; @endphp
+        @endif
 
         {{-- WAITING --}}
         <section class="lane flex min-h-0 flex-col rounded-2xl border border-amber-500/20 bg-slate-900/40">
@@ -420,7 +499,7 @@ new #[Layout('components.layouts.display')] class extends Component {
                 </div>
                 <span class="text-2xl font-bold tabular-nums text-white">{{ $waiting->count() }}</span>
             </div>
-            <div class="no-scrollbar flex-1 overflow-y-hidden" x-ref="content0" data-lane-idx="0">
+            <div class="no-scrollbar flex-1 overflow-y-hidden" x-ref="content{{ $laneIdx }}" data-lane-idx="{{ $laneIdx }}">
                 <div class="lane-list space-y-2 p-3">
                     @forelse($waiting as $job)
                         @include('pages._live-display-card', [
@@ -439,6 +518,7 @@ new #[Layout('components.layouts.display')] class extends Component {
                 </div>
             </div>
         </section>
+        @php $laneIdx++; @endphp
 
         {{-- IN TRANSIT --}}
         <section class="lane flex min-h-0 flex-col rounded-2xl border border-orange-500/20 bg-slate-900/40">
@@ -449,7 +529,7 @@ new #[Layout('components.layouts.display')] class extends Component {
                 </div>
                 <span class="text-2xl font-bold tabular-nums text-white">{{ $inTransit->count() }}</span>
             </div>
-            <div class="no-scrollbar flex-1 overflow-y-hidden" x-ref="content1" data-lane-idx="1">
+            <div class="no-scrollbar flex-1 overflow-y-hidden" x-ref="content{{ $laneIdx }}" data-lane-idx="{{ $laneIdx }}">
                 <div class="lane-list space-y-2 p-3">
                     @forelse($inTransit as $job)
                         @include('pages._live-display-card', [
@@ -468,6 +548,7 @@ new #[Layout('components.layouts.display')] class extends Component {
                 </div>
             </div>
         </section>
+        @php $laneIdx++; @endphp
 
         {{-- DELIVERED TODAY --}}
         <section class="lane flex min-h-0 flex-col rounded-2xl border border-emerald-500/20 bg-slate-900/40">
@@ -478,7 +559,7 @@ new #[Layout('components.layouts.display')] class extends Component {
                 </div>
                 <span class="text-2xl font-bold tabular-nums text-white">{{ $deliveredToday->count() }}</span>
             </div>
-            <div class="no-scrollbar flex-1 overflow-y-hidden" x-ref="content2" data-lane-idx="2">
+            <div class="no-scrollbar flex-1 overflow-y-hidden" x-ref="content{{ $laneIdx }}" data-lane-idx="{{ $laneIdx }}">
                 <div class="lane-list space-y-2 p-3">
                     @forelse($deliveredToday as $job)
                         @include('pages._live-display-card', [
@@ -601,9 +682,12 @@ new #[Layout('components.layouts.display')] class extends Component {
             // data-job-id so the morphdom diff ignores them.
             stepMs:    5000,                 // 5s per card on screen
             slideMs:    700,                  // 700ms ease between steps
-            laneTimers: [null, null, null],
-            laneState:  [null, null, null],   // { offset, loopLength } per lane
-            laneIds:    ['', '', ''],          // signature of current originals (job id list)
+            // 4 slots: internal users get a 4th "New Orders" lane to
+            // the left.  Tenant users render only 3, so setupLane(3)
+            // finds no viewport and bails harmlessly.
+            laneTimers: [null, null, null, null],
+            laneState:  [null, null, null, null],   // { offset, loopLength } per lane
+            laneIds:    ['', '', '', ''],            // signature of current originals (job id list)
             // --- card change tracking ---------------------------------
             // Map<job_id, updated_at> snapshot so we can detect new /
             // recently-changed cards after every Livewire morph and
@@ -636,7 +720,7 @@ new #[Layout('components.layouts.display')] class extends Component {
                     Livewire.hook('morph.updated', () => {
                         requestAnimationFrame(() => {
                             this.diffSnapshot();
-                            for (let i = 0; i < 3; i++) this.setupLane(i);
+                            for (let i = 0; i < 4; i++) this.setupLane(i);
                         });
                     });
                 }
@@ -652,8 +736,9 @@ new #[Layout('components.layouts.display')] class extends Component {
                 // Initial marquee setup for each lane.  setupLane
                 // bails for lanes whose content already fits the
                 // viewport -- only overflowing lanes get clones and
-                // a step timer.
-                for (let i = 0; i < 3; i++) this.setupLane(i);
+                // a step timer.  Slot 3 is a no-op for tenant users
+                // (no content3 ref in the DOM).
+                for (let i = 0; i < 4; i++) this.setupLane(i);
             },
 
             tickClock() {
