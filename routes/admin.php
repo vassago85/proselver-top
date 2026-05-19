@@ -54,16 +54,11 @@ Route::get('customers/{company}', function (\App\Models\Company $company) {
     return redirect()->route('admin.companies.show', $company);
 })->name('customers.show');
 
-// Impersonation
-Route::post('impersonate/{user}', function (\App\Models\User $user) {
-    if (!auth()->user()->isDeveloper()) {
-        abort(403);
-    }
-    session(['impersonating_from' => auth()->id()]);
-    \Illuminate\Support\Facades\Auth::loginUsingId($user->id);
-    return redirect()->route('dashboard');
-})->name('impersonate');
-
+// Impersonation.  The literal `impersonate/stop` route MUST be declared
+// BEFORE the parameterized `impersonate/{user}` -- Laravel matches
+// routes in registration order, and once `route:cache` freezes that
+// order a POST to /admin/impersonate/stop would otherwise bind `$user`
+// to the literal string "stop" and blow up on the bigint cast.
 Route::post('impersonate/stop', function () {
     $originalId = session('impersonating_from');
     if (!$originalId) {
@@ -74,6 +69,15 @@ Route::post('impersonate/stop', function () {
     \Illuminate\Support\Facades\Auth::loginUsingId($originalId);
     return redirect()->route('admin.dashboard');
 })->name('impersonate.stop');
+
+Route::post('impersonate/{user}', function (\App\Models\User $user) {
+    if (!auth()->user()->isDeveloper()) {
+        abort(403);
+    }
+    session(['impersonating_from' => auth()->id()]);
+    \Illuminate\Support\Facades\Auth::loginUsingId($user->id);
+    return redirect()->route('dashboard');
+})->name('impersonate');
 
 // Developer role switching
 Route::post('dev/role-switch', function (\Illuminate\Http\Request $request) {
