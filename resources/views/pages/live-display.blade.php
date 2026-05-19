@@ -17,16 +17,22 @@
  *   - Three lanes (Waiting / In Transit / Delivered Today) sit
  *     side by side, all three "equal citizens" — none of them
  *     is dimmed.  Each lane that has more cards than fit in the
- *     viewport rotates its top card off the screen every ~5 s
- *     and the cards below glide up by one slot; the displaced
- *     card reappears at the bottom of the queue.  That way every
- *     card is guaranteed equal screen time and ops see all 20-
- *     odd waiting / in-transit movements over the course of a
- *     couple of minutes.  Lanes whose content already fits in
- *     the viewport sit still — no rotation needed.
- *   - The three lanes' rotation timers are staggered so only one
- *     lane is animating at any given moment; feels alive rather
- *     than metronomic.
+ *     viewport is set up as an infinite marquee: JS clones the
+ *     originals once and stacks the clones below them, then
+ *     translates the whole list upwards in discrete card-sized
+ *     steps every ~5s with a smooth 700ms ease between steps.
+ *     When the cumulative translation reaches "one originals
+ *     height" we invisibly snap translateY back by that amount
+ *     — the clones immediately below the snap point line up
+ *     perfectly with the originals above, so the wrap-around
+ *     is undetectable and the lane appears to scroll forever
+ *     with no jerk.  Lanes whose content fits sit still.
+ *   - The marquee never mutates the original DOM, so wire:poll
+ *     morphs leave the rotation running.  Clones carry no
+ *     wire:key / data-job-id so the morphdom diff ignores them.
+ *   - The three lanes' first steps are staggered ~1.7s apart so
+ *     only one lane is animating at any given instant — feels
+ *     alive rather than metronomic.
  *   - Cards visually distinguish unassigned drivers, stale rows
  *     (no update in >30 min on Waiting / In Transit) and overdue
  *     movements (scheduled date in the past).  Highlights are a
@@ -482,7 +488,7 @@ new #[Layout('components.layouts.display')] class extends Component {
 
     {{-- ============ FOOTER ============ --}}
     <footer class="flex items-center justify-between border-t border-slate-800/80 bg-slate-900/40 px-6 py-2 text-[11px] text-slate-500">
-        <span>Wallboard mode — cards rotate every <span x-text="(rotateMs/1000)+'s'">—</span> per lane · auto-refresh 30 s</span>
+        <span>Wallboard mode — cards advance every <span x-text="(stepMs/1000)+'s'">—</span> per lane · auto-refresh 30 s</span>
         <span class="tabular-nums">Last loaded {{ $lastUpdatedAt->format('H:i:s') }}</span>
     </footer>
 </div>
@@ -562,14 +568,28 @@ new #[Layout('components.layouts.display')] class extends Component {
 
         Alpine.data('wallboard', () => ({
             // --- card rotation -----------------------------------------
-            // Each lane independently rotates its top card off-screen
-            // every rotateMs.  Rotation timers are staggered so the
-            // three lanes never animate at exactly the same instant —
-            // feels alive instead of metronomic.
-            rotateMs: 5000,
-            slideMs:  650,
+            // Each lane is an infinite vertical marquee: the lane-list
+            // holds the original cards plus a JS-injected clone of
+            // every original below them.  We translate the whole list
+            // upwards in discrete card-sized steps (with a smooth
+            // 700ms ease between steps), and when the cumulative
+            // translation reaches one "originals height" we invisibly
+            // snap translateY back by that amount.  Because the cards
+            // immediately below the snap point (the clones) are
+            // pixel-identical to the originals at the top, the snap
+            // is undetectable -- the lane appears to scroll forever
+            // with no jerk at the wrap.
+            //
+            // We never mutate the DOM order of the originals, so
+            // Livewire's wire:poll morph stays happy and the rotation
+            // isn't reset by data refreshes.  The clones are added
+            // and removed by JS only, and have no wire:key or
+            // data-job-id so the morphdom diff ignores them.
+            stepMs:    5000,                 // 5s per card on screen
+            slideMs:    700,                  // 700ms ease between steps
             laneTimers: [null, null, null],
-            laneBusy:   [false, false, false],
+            laneState:  [null, null, null],   // { offset, loopLength } per lane
+            laneIds:    ['', '', ''],          // signature of current originals (job id list)
             // --- card change tracking ---------------------------------
             // Map<job_id, updated_at> snapshot so we can detect new /
             // recently-changed cards after every Livewire morph and
@@ -593,13 +613,17 @@ new #[Layout('components.layouts.display')] class extends Component {
 
                 // After every Livewire morph, diff the new DOM against
                 // the snapshot we captured before the morph and play
-                // entry / pulse animations only on the deltas.  Hook
-                // is registered once globally even though boot() runs
-                // again on every page navigation.
+                // entry / pulse animations only on the deltas, then
+                // re-sync the marquee clones if the original card list
+                // actually changed.  Hook is registered once globally
+                // even though boot() runs again on every page nav.
                 if (window.Livewire && !window._wallboardMorphHooked) {
                     window._wallboardMorphHooked = true;
                     Livewire.hook('morph.updated', () => {
-                        requestAnimationFrame(() => this.diffSnapshot());
+                        requestAnimationFrame(() => {
+                            this.diffSnapshot();
+                            for (let i = 0; i < 3; i++) this.setupLane(i);
+                        });
                     });
                 }
 
@@ -611,15 +635,11 @@ new #[Layout('components.layouts.display')] class extends Component {
                     return;
                 }
 
-                // Stagger lane rotation timers so only one lane is
-                // animating at any given instant — symmetrical
-                // triple-flip every 5s looks robotic.
-                const offsets = [0, Math.floor(this.rotateMs / 3), Math.floor((2 * this.rotateMs) / 3)];
-                for (let i = 0; i < 3; i++) {
-                    setTimeout(() => {
-                        this.laneTimers[i] = setInterval(() => this.rotateLane(i), this.rotateMs);
-                    }, offsets[i]);
-                }
+                // Initial marquee setup for each lane.  setupLane
+                // bails for lanes whose content already fits the
+                // viewport -- only overflowing lanes get clones and
+                // a step timer.
+                for (let i = 0; i < 3; i++) this.setupLane(i);
             },
 
             tickClock() {
@@ -638,65 +658,131 @@ new #[Layout('components.layouts.display')] class extends Component {
                 }
             },
 
-            // Rotate one lane by one card.
-            //   1. Compute the height of the top card (+ gap below it).
-            //   2. Smoothly translate the list upwards by that height.
-            //   3. After the transition finishes, move the (now off-
-            //      screen) top card to the end of the list and snap
-            //      the translate back to 0 with no animation.  The
-            //      next card naturally takes the top slot and the
-            //      moved card lands at the bottom of the queue.
-            // The container has overflow-y-hidden so the displaced
-            // card disappears the moment it leaves the visible area
-            // and reappears when its turn at the bottom comes around.
-            rotateLane(idx) {
-                if (this.laneBusy[idx]) return;
+            // (Re)build the marquee for one lane.
+            //   1. Compute a signature of the original cards (id list).
+            //      If it matches what we set up last time, do nothing
+            //      -- a wire:poll with unchanged data shouldn't disturb
+            //      the running animation.
+            //   2. Otherwise: remove the previous clones, stop the
+            //      previous timer, measure the originals' total height.
+            //   3. If the originals fit in the viewport, leave the
+            //      lane static and bail.
+            //   4. Otherwise: clone every original below the last,
+            //      strip wire:key / data-job-id from each clone (so
+            //      Livewire's morph leaves them alone), and start a
+            //      stepMs interval that drives this.step(idx).  The
+            //      initial timer fires after a short stagger so the
+            //      three lanes don't all step at the same instant.
+            setupLane(idx) {
+                if (this.reduceMotion) return;
                 const viewport = this.$refs['content' + idx];
                 if (!viewport) return;
                 const list = viewport.querySelector('.lane-list');
                 if (!list) return;
-                const cards = Array.from(list.children).filter(el => el.hasAttribute('data-job-id'));
-                if (cards.length < 2) return;
 
-                // Don't rotate when every card already fits in view —
-                // ops can read them all without movement.  Re-check on
-                // every cycle in case content shrank after a poll.
-                if (list.scrollHeight <= viewport.clientHeight + 4) return;
+                const originals = Array.from(list.children).filter(el => el.hasAttribute('data-job-id'));
+                const ids = originals.map(el => el.dataset.jobId).join(',');
 
-                this.laneBusy[idx] = true;
+                // Same set of cards as last setup -> animation keeps
+                // running, no reset.  This is the common case on
+                // every 30s wire:poll when nothing has actually moved.
+                if (this.laneIds[idx] === ids && this.laneTimers[idx]) return;
+                this.laneIds[idx] = ids;
 
-                const topCard = cards[0];
-                const second  = cards[1];
-                const gap     = Math.max(0, second.getBoundingClientRect().top - topCard.getBoundingClientRect().bottom);
-                const step    = topCard.getBoundingClientRect().height + gap;
+                // Tear down any previous marquee on this lane.
+                list.querySelectorAll('[data-clone="1"]').forEach(n => n.remove());
+                if (this.laneTimers[idx]) {
+                    clearInterval(this.laneTimers[idx]);
+                    this.laneTimers[idx] = null;
+                }
+                list.style.transition = 'none';
+                list.style.transform  = '';
+
+                if (originals.length < 2) return;
+
+                // Measure the originals.  loopLength is the distance
+                // we must translate upwards before the clones below
+                // line up perfectly with the originals above -- after
+                // translating by loopLength the visual is identical
+                // to translating by 0, so the snap is invisible.
+                const firstTop   = originals[0].getBoundingClientRect().top;
+                const lastBottom = originals[originals.length - 1].getBoundingClientRect().bottom;
+                // Add the inter-card gap (space-y-2 = 8px) so the first
+                // clone sits the same distance below the last original
+                // as every other card-to-card gap.
+                const gapPx      = 8;
+                const loopLength = (lastBottom - firstTop) + gapPx;
+
+                // Static lane -- everything fits, no need to scroll.
+                if (loopLength <= viewport.clientHeight + 8) return;
+
+                // Inject the clones.  cloneNode(true) copies every
+                // attribute + descendant; we strip wire:key + data-job-id
+                // so Livewire's diff treats them as foreign DOM and
+                // leaves them alone on subsequent morphs.
+                originals.forEach(orig => {
+                    const clone = orig.cloneNode(true);
+                    clone.removeAttribute('wire:key');
+                    clone.removeAttribute('data-job-id');
+                    clone.setAttribute('data-clone', '1');
+                    clone.setAttribute('aria-hidden', 'true');
+                    list.appendChild(clone);
+                });
+
+                this.laneState[idx] = { offset: 0, loopLength };
+
+                // Stagger the three lanes' first step so they don't
+                // all animate in lockstep.  ~1700ms apart matches the
+                // staggering we used in the previous design.
+                const stagger = 1700 * idx;
+                setTimeout(() => {
+                    if (this.laneIds[idx] !== ids) return; // bailed during the stagger
+                    this.laneTimers[idx] = setInterval(() => this.step(idx), this.stepMs);
+                }, stagger);
+            },
+
+            // Advance one lane by one card.  We never mutate the DOM
+            // here -- only translateY on the list.  At the end of one
+            // full loop (offset >= loopLength) we wait for the slide
+            // to finish, then snap translateY back by exactly
+            // loopLength with transition: none.  Because the cards
+            // immediately below the snap point are clones of the
+            // cards now at the top, the snap is invisible.
+            step(idx) {
+                const state = this.laneState[idx];
+                if (!state) return;
+                const viewport = this.$refs['content' + idx];
+                if (!viewport) return;
+                const list = viewport.querySelector('.lane-list');
+                if (!list) return;
+                const originals = list.querySelectorAll('[data-job-id]');
+                if (originals.length === 0) return;
+
+                // Step size = average card pitch.  Using the average
+                // (rather than measuring each individual card) keeps
+                // the step rhythm steady even when cards have slightly
+                // different heights -- otherwise the user sees the
+                // step duration "breathe" as cards of different
+                // heights cycle past the top.
+                const stepPx = state.loopLength / originals.length;
+                state.offset += stepPx;
 
                 list.style.transition = `transform ${this.slideMs}ms cubic-bezier(0.4, 0, 0.2, 1)`;
-                list.style.transform  = `translateY(-${step}px)`;
+                list.style.transform  = `translateY(-${state.offset}px)`;
 
-                const onEnd = () => {
-                    list.removeEventListener('transitionend', onEnd);
-                    // Move the top card to the end *and* snap
-                    // translate back to 0 with no transition.  The
-                    // browser paints both changes in the same frame so
-                    // there's no visual jump — the second card stays
-                    // exactly where it was, just under a different
-                    // first-child neighbour.
-                    list.style.transition = 'none';
-                    list.appendChild(topCard);
-                    list.style.transform = '';
-                    // Force a reflow before re-enabling transitions so
-                    // the next rotation starts from a stable baseline.
-                    void list.offsetHeight;
-                    list.style.transition = '';
-                    this.laneBusy[idx] = false;
-                };
-                list.addEventListener('transitionend', onEnd);
-                // Safety net in case transitionend doesn't fire (e.g.
-                // tab was backgrounded mid-animation): release the
-                // busy flag after slideMs + a little headroom.
-                setTimeout(() => {
-                    if (this.laneBusy[idx]) onEnd();
-                }, this.slideMs + 200);
+                // Wrap point: once we've translated by one full
+                // loopLength, snap back invisibly so the next step
+                // continues without ever reaching the bottom of the
+                // doubled-up list.
+                if (state.offset >= state.loopLength - 0.5) {
+                    setTimeout(() => {
+                        list.style.transition = 'none';
+                        state.offset -= state.loopLength;
+                        list.style.transform  = `translateY(-${state.offset}px)`;
+                        void list.offsetHeight; // force reflow
+                        list.style.transition = '';
+                    }, this.slideMs + 20);
+                }
             },
 
             captureSnapshot() {
