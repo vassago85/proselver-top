@@ -103,6 +103,7 @@ new #[Layout('components.layouts.display')] class extends Component {
                 'deliveredToday'    => collect(),
                 'unassignedCount'   => 0,
                 'delayedCount'      => 0,
+                'urgentCount'       => 0,
                 'newOrdersCount'    => 0,
                 'lastUpdatedAt'     => now(),
             ];
@@ -175,19 +176,21 @@ new #[Layout('components.layouts.display')] class extends Component {
         // the lane is supposed to scroll, not stream forever.
         $lanePerCap = $isInternal ? 80 : 40;
 
-        // New Orders lane (admin board, internal user only).  Sorted
-        // newest-first so the most recently dropped orders are at
-        // the top of the column where ops controllers look first.
+        // New Orders lane (admin board, internal user only).  Urgent
+        // jobs float to the top, then newest-first.
         $newOrders = $showNewOrdersLane
             ? (clone $base)
                 ->whereIn('status', $newOrderStatuses)
+                ->orderByDesc('is_urgent')
                 ->orderByDesc('created_at')
                 ->limit($lanePerCap)
                 ->get()
             : collect();
 
+        // Waiting lane: urgent first, then by scheduled date/time.
         $waiting = (clone $base)
             ->whereIn('status', $waitingStatuses)
+            ->orderByDesc('is_urgent')
             ->orderByRaw('scheduled_date IS NULL, scheduled_date ASC')
             ->orderBy('scheduled_ready_time')
             ->limit($lanePerCap)
@@ -195,6 +198,7 @@ new #[Layout('components.layouts.display')] class extends Component {
 
         $inTransit = (clone $base)
             ->whereIn('status', $inTransitStatuses)
+            ->orderByDesc('is_urgent')
             ->orderByDesc('updated_at')
             ->limit($lanePerCap)
             ->get();
@@ -257,6 +261,13 @@ new #[Layout('components.layouts.display')] class extends Component {
             + $waiting->filter(fn ($j) => $isSlaOverdue($j) || $isOverdueFor($j, 0))->count()
             + $inTransit->filter(fn ($j) => $isOverdueFor($j, 18))->count();
 
+        // Urgent counter for the headline strip.  Counts every visible
+        // urgent job across the pre-delivered lanes; once delivered
+        // the urgency is moot (job is done).
+        $urgentCount = $waiting->where('is_urgent', true)->count()
+            + $inTransit->where('is_urgent', true)->count()
+            + ($newOrders ? $newOrders->where('is_urgent', true)->count() : 0);
+
         return [
             'company'           => $company,
             'isInternal'        => $isInternal,
@@ -267,6 +278,7 @@ new #[Layout('components.layouts.display')] class extends Component {
             'deliveredToday'    => $deliveredToday,
             'unassignedCount'   => $unassignedCount,
             'delayedCount'      => $delayedCount,
+            'urgentCount'       => $urgentCount,
             'newOrdersCount'    => $newOrders->count(),
             'lastUpdatedAt'     => now(),
         ];
@@ -360,10 +372,15 @@ new #[Layout('components.layouts.display')] class extends Component {
         // bug that lit every assigned waiting card as "NO DRIVER".
         $unassigned = $lane === 'waiting' && empty($job->driver_user_id);
 
-        // Pick the most severe flag for the badge / glow (overdue
-        // outranks unassigned outranks stale).  Multiple flags can
-        // still stack on $classes for tooltips / future use.
-        if ($overdue) {
+        // Pick the most severe flag for the badge / glow.  Urgent
+        // wins over everything because it's a manual operator
+        // signal -- if someone took the trouble to mark this
+        // urgent, it must be visible at all times. Other flags fall
+        // back to overdue > unassigned > stale.
+        if (!empty($job->is_urgent) && in_array($lane, ['waiting', 'transit', 'new'], true)) {
+            $flags['classes'][] = 'card-alert card-alert-urgent';
+            $flags['label'] = 'URGENT';
+        } elseif ($overdue) {
             $flags['classes'][] = 'card-alert card-alert-danger';
             $flags['label'] = 'OVERDUE';
         } elseif ($unassigned) {
@@ -429,14 +446,25 @@ new #[Layout('components.layouts.display')] class extends Component {
     {{-- Always-visible tiles so an ops controller can read the
          current headline numbers without waiting for the focus
          rotation to land on a particular column. --}}
-    {{-- Tile counts: 5 base tiles (Waiting / Transit / Delivered /
-         Unassigned / Delayed) + 1 extra on the admin board (New
-         Orders).  Last-updated lives in the footer, not here. --}}
+    {{-- Tile counts: 5 base tiles (Urgent / Waiting / Transit /
+         Delivered / Unassigned / Delayed) + 1 extra on the admin
+         board (New Orders).  Urgent always renders -- it's a
+         signal that absolutely must be visible the moment it
+         appears, not gated by user type.  Last-updated lives in
+         the footer, not here. --}}
     <div @class([
             'grid gap-2 border-b border-slate-800/80 bg-slate-950/60 px-4 py-3',
-            'grid-cols-3 sm:grid-cols-6' => $showNewOrdersLane,
-            'grid-cols-3 sm:grid-cols-5' => !$showNewOrdersLane,
+            'grid-cols-3 sm:grid-cols-7' => $showNewOrdersLane,
+            'grid-cols-3 sm:grid-cols-6' => !$showNewOrdersLane,
         ])>
+        <div @class([
+                'rounded-lg border px-3 py-2',
+                'border-fuchsia-500/50 bg-fuchsia-500/15' => $urgentCount > 0,
+                'border-slate-700/60 bg-slate-800/40'     => $urgentCount === 0,
+        ])>
+            <div class="text-[10px] font-semibold uppercase tracking-[0.18em] {{ $urgentCount > 0 ? 'text-fuchsia-200' : 'text-slate-400' }}">Urgent</div>
+            <div class="text-2xl font-bold tabular-nums text-white">{{ $urgentCount }}</div>
+        </div>
         @if($showNewOrdersLane)
             <div class="rounded-lg border border-sky-500/25 bg-sky-500/5 px-3 py-2">
                 <div class="text-[10px] font-semibold uppercase tracking-[0.18em] text-sky-300/80">New Orders</div>
@@ -627,6 +655,7 @@ new #[Layout('components.layouts.display')] class extends Component {
     .card-alert-mute    { animation: alertPulseMute 3.2s ease-in-out infinite; }
     .card-alert-warn    { animation: alertPulseWarn 2.6s ease-in-out infinite; }
     .card-alert-danger  { animation: alertPulseDanger 2.0s ease-in-out infinite; }
+    .card-alert-urgent  { animation: alertPulseUrgent 1.6s ease-in-out infinite; }
 
     @keyframes alertPulseMute {
         0%, 100% { box-shadow: 0 0 0 0 rgba(148, 163, 184, 0.0); }
@@ -639,6 +668,10 @@ new #[Layout('components.layouts.display')] class extends Component {
     @keyframes alertPulseDanger {
         0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.0); }
         50%      { box-shadow: 0 0 0 5px rgba(239, 68, 68, 0.55); }
+    }
+    @keyframes alertPulseUrgent {
+        0%, 100% { box-shadow: 0 0 0 0 rgba(217, 70, 239, 0.0); }
+        50%      { box-shadow: 0 0 0 6px rgba(217, 70, 239, 0.55); }
     }
 
     /* Entry animation for cards that didn't exist on the previous

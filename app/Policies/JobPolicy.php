@@ -338,6 +338,46 @@ class JobPolicy
     }
 
     /**
+     * Mark a job as urgent collection (or clear the flag).
+     *
+     * Any internal user gets it (ops controllers / dispatchers / owners
+     * etc. — flagging priority is a routine ops action, not a privileged
+     * one). Customers and dealers can mark their OWN company's jobs urgent
+     * while the vehicle hasn't been collected yet -- once it's on the road
+     * marking it urgent doesn't change anything operationally.
+     */
+    public function markUrgent(User $user, Job $job): bool
+    {
+        if ($user->isInternal()) {
+            return true;
+        }
+
+        if (! ($user->isCustomer() || $user->isDealer())) {
+            return false;
+        }
+        if (! $user->companies->pluck('id')->contains($job->company_id)) {
+            return false;
+        }
+
+        // Customer self-service: only while still pre-collection. After
+        // STATUS_COLLECTED the wheels are turning and prioritisation is
+        // ops's call, not the customer's.
+        return in_array($job->status, [
+            Job::STATUS_PENDING_VERIFICATION,
+            Job::STATUS_RECEIVED,
+            Job::STATUS_AWAITING_CUSTOMER_CONFIRMATION,
+            Job::STATUS_CONFIRMATION_ISSUE,
+            Job::STATUS_VERIFIED,
+            Job::STATUS_APPROVED,
+            Job::STATUS_CONFIRMED,
+            Job::STATUS_PLANNED,
+            Job::STATUS_DRIVER_ASSIGNED,
+            Job::STATUS_READY_FOR_COLLECTION,
+            Job::STATUS_ASSIGNED,
+        ], true);
+    }
+
+    /**
      * Internal role slugs the owner has authorised to cancel orders.
      * Falls back to the pre-configurable default so first-boot behaviour
      * matches what shipped before this setting existed.

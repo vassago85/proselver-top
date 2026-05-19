@@ -12,6 +12,12 @@ new #[Layout('components.layouts.app')] class extends Component {
     public string $cancelReason = '';
     public bool $showCancelModal = false;
 
+    // Urgent collection toggle.  Either ops (any internal user) or
+    // the booking customer can mark a job urgent with an optional
+    // reason. See JobPolicy::markUrgent for the auth rules.
+    public bool $showUrgentModal = false;
+    public string $urgentReason = '';
+
     /*
      * Inline editing for the scheduled (collection) date. Ops needs this
      * because the bulk upload may set the wrong date, or operational
@@ -366,6 +372,44 @@ new #[Layout('components.layouts.app')] class extends Component {
         $this->showCancelModal = false;
     }
 
+    /* ----------------------------------------------------------------
+     | Urgent collection toggle
+     |---------------------------------------------------------------*/
+
+    public function openUrgentModal(): void
+    {
+        $this->authorize('markUrgent', $this->job);
+        $this->urgentReason = $this->job->urgent_reason ?? '';
+        $this->showUrgentModal = true;
+    }
+
+    public function closeUrgentModal(): void
+    {
+        $this->showUrgentModal = false;
+        $this->urgentReason = '';
+    }
+
+    public function saveUrgent(): void
+    {
+        $this->authorize('markUrgent', $this->job);
+        $this->validate(['urgentReason' => 'nullable|string|max:500']);
+
+        $this->job->markUrgent(auth()->user(), $this->urgentReason);
+        $this->job->load('urgentMarkedBy:id,name');
+
+        $this->showUrgentModal = false;
+        $this->urgentReason = '';
+        session()->flash('success', 'Marked URGENT — wallboard will reflect immediately.');
+    }
+
+    public function clearUrgent(): void
+    {
+        $this->authorize('markUrgent', $this->job);
+        $this->job->clearUrgent(auth()->user());
+        $this->job->load('urgentMarkedBy:id,name');
+        session()->flash('success', 'Urgent flag cleared.');
+    }
+
     public function cancelOrder(): void
     {
         // Server-side guard. The UI hides the button when the user isn't
@@ -586,6 +630,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             },
             'internalDriverOptions' => $internalDriverOptions,
             'canChangeExecutor' => $user->can('changeExecutor', $this->job),
+            'canMarkUrgent' => $user->can('markUrgent', $this->job),
             'canArchive' => $user->can('archive', $this->job),
             'canUnarchive' => $user->can('unarchive', $this->job),
             'executorChoices' => Job::EXECUTOR_LABELS,
@@ -933,6 +978,22 @@ new #[Layout('components.layouts.app')] class extends Component {
                                 Cancel Order
                             </button>
                         @endcan
+                    @endif
+
+                    @if($canMarkUrgent)
+                        @if($job->is_urgent)
+                            <button wire:click="clearUrgent" wire:confirm="Clear the URGENT flag on this order?"
+                                class="inline-flex items-center gap-2 rounded-lg border border-fuchsia-300 bg-fuchsia-50 px-3.5 py-2.5 text-sm font-semibold text-fuchsia-800 hover:bg-fuchsia-100 transition-colors">
+                                <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+                                Clear URGENT
+                            </button>
+                        @else
+                            <button wire:click="openUrgentModal"
+                                class="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3.5 py-2.5 text-sm font-medium text-gray-700 hover:bg-fuchsia-50 hover:border-fuchsia-200 hover:text-fuchsia-800 transition-colors">
+                                <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+                                Mark Urgent
+                            </button>
+                        @endif
                     @endif
 
                     @if($canChangeExecutor)
@@ -1443,6 +1504,40 @@ new #[Layout('components.layouts.app')] class extends Component {
              All CTAs live in the Next-step hero at the top of the
              page and all document actions live inside
              <x-documents-list>. --}}
+
+    {{-- Mark Urgent Modal --}}
+    @if($showUrgentModal)
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60" wire:click.self="closeUrgentModal">
+        <div class="relative w-full max-w-md mx-4 bg-white rounded-2xl shadow-2xl overflow-hidden">
+            <div class="border-b border-gray-200 px-6 py-4 bg-fuchsia-50">
+                <div class="flex items-center gap-2">
+                    <svg class="h-5 w-5 text-fuchsia-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+                    <h3 class="text-lg font-semibold text-fuchsia-900">Mark as Urgent</h3>
+                </div>
+                <p class="text-sm text-fuchsia-700 mt-0.5">{{ $job->job_number }}</p>
+            </div>
+            <div class="px-6 py-5 space-y-4">
+                <div class="rounded-lg bg-fuchsia-50 border border-fuchsia-200 p-4 text-sm text-fuchsia-900">
+                    This order will be flagged URGENT on the live wallboard, sorted to the top of its lane, and counted on the Urgent headline.
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1.5">Reason <span class="text-gray-400 font-normal">(optional, shown on hover)</span></label>
+                    <textarea wire:model="urgentReason" rows="3" maxlength="500" placeholder="e.g. Customer collecting tomorrow morning, must be at depot by 5pm…"
+                        class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-fuchsia-500 focus:ring-fuchsia-500"></textarea>
+                    @error('urgentReason') <p class="mt-1 text-xs text-red-600">{{ $message }}</p> @enderror
+                </div>
+            </div>
+            <div class="border-t border-gray-200 px-6 py-4 flex items-center justify-end gap-3 bg-gray-50">
+                <button wire:click="closeUrgentModal" type="button" class="rounded-lg px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-100 transition-colors">
+                    Cancel
+                </button>
+                <button wire:click="saveUrgent" class="rounded-lg bg-fuchsia-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-fuchsia-500 transition-colors">
+                    Mark URGENT
+                </button>
+            </div>
+        </div>
+    </div>
+    @endif
 
     {{-- Cancel Order Modal --}}
     @if($showCancelModal)

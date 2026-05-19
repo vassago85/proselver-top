@@ -94,10 +94,12 @@
                      in the parent's cardFlags() callback. --}}
                 <span @class([
                         'rounded-md px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider',
-                        'bg-red-500/20 text-red-200 ring-1 ring-red-500/50'        => $flags['label'] === 'OVERDUE',
-                        'bg-amber-500/20 text-amber-100 ring-1 ring-amber-500/50' => $flags['label'] === 'NO DRIVER',
-                        'bg-slate-500/20 text-slate-200 ring-1 ring-slate-500/50' => $flags['label'] === 'STALE',
-                ])>
+                        'bg-fuchsia-500/30 text-fuchsia-100 ring-1 ring-fuchsia-400/70' => $flags['label'] === 'URGENT',
+                        'bg-red-500/20 text-red-200 ring-1 ring-red-500/50'             => $flags['label'] === 'OVERDUE',
+                        'bg-amber-500/20 text-amber-100 ring-1 ring-amber-500/50'       => $flags['label'] === 'NO DRIVER',
+                        'bg-slate-500/20 text-slate-200 ring-1 ring-slate-500/50'       => $flags['label'] === 'STALE',
+                ])
+                @if($flags['label'] === 'URGENT' && !empty($job->urgent_reason)) title="{{ $job->urgent_reason }}" @endif>
                     {{ $flags['label'] }}
                 </span>
             @endif

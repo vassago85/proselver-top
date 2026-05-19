@@ -323,6 +323,10 @@ class Job extends Model
         'margin_percent',
         'is_emergency',
         'emergency_reason',
+        'is_urgent',
+        'urgent_reason',
+        'urgent_marked_by_user_id',
+        'urgent_marked_at',
         'delay_minutes',
         'delay_reason',
         'delay_reason_type',
@@ -371,6 +375,8 @@ class Job extends Model
             'po_amount' => 'decimal:2',
             'po_verified' => 'boolean',
             'po_verified_at' => 'datetime',
+            'is_urgent' => 'boolean',
+            'urgent_marked_at' => 'datetime',
             'vehicle_reassigned_at' => 'datetime',
             'hourly_rate' => 'decimal:2',
             'base_transport_price' => 'decimal:2',
@@ -648,6 +654,82 @@ class Job extends Model
             return false;
         }
         return $deadline->lt(now());
+    }
+
+    /* ----------------------------------------------------------------
+     | Urgent-collection flag
+     |
+     | Either an ops user (governed by JobPolicy::markUrgent) or the
+     | booking customer can mark a job urgent with an optional reason
+     | sentence. The flag is shown as a prominent URGENT badge on the
+     | wallboard, sorts the job to the top of the Waiting / New
+     | Orders lanes, and rolls into a headline counter.
+     |
+     | markUrgent() / clearUrgent() handle their own audit log
+     | entries so callers don't have to remember to log -- centralises
+     | the paper trail.
+     |---------------------------------------------------------------*/
+
+    public function urgentMarkedBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'urgent_marked_by_user_id');
+    }
+
+    /**
+     * Mark the job urgent. Idempotent on the boolean flag but
+     * always refreshes who/when so the latest marker is on record.
+     * Reason is optional; an empty string is normalised to null.
+     */
+    public function markUrgent(User $by, ?string $reason = null): void
+    {
+        $reason = $reason !== null ? trim($reason) : null;
+        if ($reason === '') {
+            $reason = null;
+        }
+
+        $wasUrgent = (bool) $this->is_urgent;
+        $before    = $wasUrgent
+            ? ['is_urgent' => true, 'urgent_reason' => $this->urgent_reason]
+            : ['is_urgent' => false];
+
+        $this->forceFill([
+            'is_urgent'                 => true,
+            'urgent_reason'             => $reason,
+            'urgent_marked_by_user_id'  => $by->id,
+            'urgent_marked_at'          => now(),
+        ])->save();
+
+        \App\Services\AuditService::log(
+            $wasUrgent ? 'urgent_updated' : 'urgent_marked',
+            'job',
+            $this->id,
+            $before,
+            ['is_urgent' => true, 'urgent_reason' => $reason, 'by' => $by->id],
+            $reason
+        );
+    }
+
+    public function clearUrgent(User $by): void
+    {
+        if (! $this->is_urgent) {
+            return;
+        }
+        $previousReason = $this->urgent_reason;
+        $this->forceFill([
+            'is_urgent'                 => false,
+            'urgent_reason'             => null,
+            'urgent_marked_by_user_id'  => null,
+            'urgent_marked_at'          => null,
+        ])->save();
+
+        \App\Services\AuditService::log(
+            'urgent_cleared',
+            'job',
+            $this->id,
+            ['is_urgent' => true, 'urgent_reason' => $previousReason],
+            ['is_urgent' => false, 'by' => $by->id],
+            $previousReason
+        );
     }
 
     /**
