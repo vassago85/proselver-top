@@ -698,6 +698,20 @@ new #[Layout('components.layouts.display')] class extends Component {
                 }
                 this.laneIds[idx] = ids;
 
+                // Capture the user-visible scroll progress BEFORE we
+                // tear down so we can put the user back roughly where
+                // they were after the rebuild.  Without this, every
+                // wire:poll that adds/removes a card in this lane
+                // snaps the user back to the top of the column mid-
+                // cycle -- which is exactly the "scrolling multiple
+                // cards at a time" + "lanes reset together" symptom
+                // ops controllers see when several lanes happen to
+                // change in the same poll.
+                const oldState = this.laneState[idx];
+                const oldFraction = (oldState && oldState.loopLength > 0)
+                    ? Math.min(0.999, oldState.offset / oldState.loopLength)
+                    : 0;
+
                 // Tear down any previous marquee on this lane.
                 list.querySelectorAll('[data-clone="1"]').forEach(n => n.remove());
                 if (this.laneTimers[idx]) {
@@ -739,7 +753,20 @@ new #[Layout('components.layouts.display')] class extends Component {
                     list.appendChild(clone);
                 });
 
-                this.laneState[idx] = { offset: 0, loopLength, wrapping: false };
+                // Restore the previous scroll position so the rebuild
+                // doesn't look like a snap-to-top.  Apply the transform
+                // synchronously with transition:none, then force a
+                // reflow before re-enabling transitions, so the next
+                // step()'s animation starts from the preserved spot
+                // rather than from 0.
+                const preservedOffset = oldFraction * loopLength;
+                this.laneState[idx] = { offset: preservedOffset, loopLength, wrapping: false };
+                if (preservedOffset > 0) {
+                    list.style.transition = 'none';
+                    list.style.transform  = `translateY(-${preservedOffset}px)`;
+                    void list.offsetHeight;
+                    list.style.transition = '';
+                }
 
                 // Stagger the three lanes' first step so they don't
                 // all animate in lockstep.  ~1700ms apart matches the
@@ -801,6 +828,17 @@ new #[Layout('components.layouts.display')] class extends Component {
                 // wrap, so back-to-back wraps don't stack listeners.
                 if (state.offset >= state.loopLength - 0.5) {
                     state.wrapping = true;
+                    // Capture the current state object so that if a
+                    // wire:poll rebuild replaces this.laneState[idx]
+                    // mid-wrap, our onEnd handler doesn't touch the
+                    // new lane state (or the wrong transform) when
+                    // transitionend finally fires for the dying
+                    // animation.  Without this guard, a rebuild
+                    // landing within ~slideMs of a wrap caused a
+                    // visible jump as the stale snap-back ran on top
+                    // of the freshly-restored offset.
+                    const wallboard = this;
+                    const capturedState = state;
                     const onEnd = (e) => {
                         // Ignore transitionend events bubbling from
                         // card-internal animations.  We only care
@@ -809,12 +847,13 @@ new #[Layout('components.layouts.display')] class extends Component {
                             list.addEventListener('transitionend', onEnd, { once: true });
                             return;
                         }
+                        if (wallboard.laneState[idx] !== capturedState) return; // stale
                         list.style.transition = 'none';
-                        state.offset -= state.loopLength;
-                        list.style.transform  = `translateY(-${state.offset}px)`;
+                        capturedState.offset -= capturedState.loopLength;
+                        list.style.transform  = `translateY(-${capturedState.offset}px)`;
                         void list.offsetHeight; // force reflow before restoring transition
                         list.style.transition = '';
-                        state.wrapping = false;
+                        capturedState.wrapping = false;
                     };
                     list.addEventListener('transitionend', onEnd, { once: true });
                 }
