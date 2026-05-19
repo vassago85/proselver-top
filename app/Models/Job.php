@@ -574,6 +574,82 @@ class Job extends Model
         return $this->belongsTo(Company::class);
     }
 
+    /* ----------------------------------------------------------------
+     | Collection-SLA helpers
+     |
+     | The booking company (the OEM in most flows) can carry a
+     | `collection_sla_days` value -- the contractual number of
+     | calendar days from when the order lands until the vehicle
+     | must be collected. Today's contracts:
+     |   FAW   = 7 days
+     |   Isuzu = 3 days
+     |
+     | These accessors stay null-safe so the UI can short-circuit
+     | rendering of the "Day X / Y" pill and the deadline pill when
+     | the company has no SLA configured (no badge, no overdue
+     | trigger, no behavioural change vs pre-SLA jobs).
+     |---------------------------------------------------------------*/
+
+    /**
+     * Calendar-day deadline by which collection must happen.
+     * Null when the booking company has no SLA configured or the
+     * job hasn't been created yet.
+     */
+    public function collectionDeadline(): ?\Carbon\Carbon
+    {
+        $sla = $this->company?->collection_sla_days;
+        if (! $sla || ! $this->created_at) {
+            return null;
+        }
+        return $this->created_at->copy()->addDays($sla)->endOfDay();
+    }
+
+    /**
+     * 1-indexed day number into the collection window.
+     *   Day 1 = the day the job was created.
+     *   Day SLA = the deadline day.
+     *   > SLA   = past deadline.
+     * Null when no SLA / no created_at.
+     */
+    public function collectionWindowDay(): ?int
+    {
+        $sla = $this->company?->collection_sla_days;
+        if (! $sla || ! $this->created_at) {
+            return null;
+        }
+        return max(1, $this->created_at->copy()->startOfDay()->diffInDays(now()->startOfDay()) + 1);
+    }
+
+    /**
+     * True when we're past the contractual collection deadline AND
+     * the vehicle hasn't been picked up yet (status still in a
+     * pre-collection phase).
+     */
+    public function pastCollectionDeadline(): bool
+    {
+        $deadline = $this->collectionDeadline();
+        if (! $deadline) {
+            return false;
+        }
+        // If the vehicle has already moved past the collection
+        // phase (or been cancelled / rejected), the SLA is no
+        // longer meaningful -- no overdue flag even if calendar-
+        // wise we're past the deadline.
+        $sttsPastCollection = [
+            self::STATUS_COLLECTED,
+            self::STATUS_IN_TRANSIT,
+            self::STATUS_IN_PROGRESS,
+            self::STATUS_DELIVERED,
+            self::STATUS_COMPLETED,
+            self::STATUS_CANCELLED,
+            self::STATUS_REJECTED,
+        ];
+        if (in_array($this->status, $sttsPastCollection, true)) {
+            return false;
+        }
+        return $deadline->lt(now());
+    }
+
     /**
      * Company actually moving the vehicle. NULL means the platform-owner
      * company (us) is executing internally — the default for every existing

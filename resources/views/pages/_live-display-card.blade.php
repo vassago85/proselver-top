@@ -44,6 +44,18 @@
         implode(' ', $flags['classes'] ?? []),
     ])
 >
+    @php
+        // Collection-SLA pill: only meaningful on the pre-collection
+        // lanes (Waiting / New Orders). The Job model returns null
+        // when the booking company has no SLA configured, in which
+        // case nothing renders.  Colour ramps from emerald (early)
+        // through amber (1 day left) to red (past deadline).
+        $slaDay      = in_array($lane, ['waiting', 'new'], true) ? $job->collectionWindowDay() : null;
+        $slaTotal    = $job->company?->collection_sla_days;
+        $slaOverdue  = $slaDay && $slaTotal && $slaDay > $slaTotal;
+        $slaCritical = $slaDay && $slaTotal && !$slaOverdue && ($slaTotal - $slaDay) <= 1;
+    @endphp
+
     {{-- Top row: movement number + status pill ---------------------- --}}
     <div class="flex items-start justify-between gap-2">
         <div class="min-w-0">
@@ -63,6 +75,19 @@
             <span class="rounded-md px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide {{ $style[1] }}">
                 {{ $style[2] }}
             </span>
+            @if($slaDay && $slaTotal)
+                {{-- Collection-SLA day counter.  Tooltip shows the
+                     deadline date so ops can plan around it without
+                     having to do calendar math. --}}
+                <span @class([
+                        'rounded-md px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider tabular-nums ring-1',
+                        'bg-red-500/20 text-red-200 ring-red-500/50'             => $slaOverdue,
+                        'bg-amber-500/20 text-amber-100 ring-amber-500/50'       => $slaCritical,
+                        'bg-emerald-500/15 text-emerald-200 ring-emerald-500/40' => !$slaOverdue && !$slaCritical,
+                ]) title="Collect by {{ $job->collectionDeadline()?->format('D d M Y') }}">
+                    Day {{ $slaDay }}/{{ $slaTotal }}
+                </span>
+            @endif
             @if(!empty($flags['label']))
                 {{-- Exception badge — only one rendered per card,
                      chosen by severity (overdue > unassigned > stale)

@@ -47,6 +47,7 @@ class Company extends Model
         'type',
         'workflow_type',
         'is_platform_owner',
+        'collection_sla_days',
         'address',
         'vat_number',
         'billing_email',
@@ -60,6 +61,7 @@ class Company extends Model
         return [
             'is_active' => 'boolean',
             'is_platform_owner' => 'boolean',
+            'collection_sla_days' => 'integer',
             'movement_csv_mapping' => 'array',
         ];
     }

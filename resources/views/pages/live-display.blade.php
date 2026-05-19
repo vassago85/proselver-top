@@ -248,7 +248,13 @@ new #[Layout('components.layouts.display')] class extends Component {
             }
             return $cutoff->copy()->addHours($graceHours)->lt($now);
         };
-        $delayedCount = $waiting->filter(fn ($j) => $isOverdueFor($j, 0))->count()
+        // Match the per-card cardFlags() rule: a job is delayed if
+        // it's past its collection-SLA deadline OR past its
+        // scheduled time (with per-lane grace).  New Orders rolls
+        // up into the same counter -- ops looks at one number.
+        $isSlaOverdue = fn (Job $j) => $j->pastCollectionDeadline();
+        $delayedCount = $newOrders->filter($isSlaOverdue)->count()
+            + $waiting->filter(fn ($j) => $isSlaOverdue($j) || $isOverdueFor($j, 0))->count()
             + $inTransit->filter(fn ($j) => $isOverdueFor($j, 18))->count();
 
         return [
@@ -325,9 +331,18 @@ new #[Layout('components.layouts.display')] class extends Component {
             && $job->updated_at
             && $job->updated_at->lt($now->copy()->subMinutes(30));
 
-        // Overdue = scheduled to be ready before now-grace and still moving.
+        // Overdue triggers, in order:
+        //   1. Past the per-OEM collection-SLA deadline (Waiting +
+        //      New Orders lanes only -- transit/delivered have
+        //      already satisfied the SLA).  This dominates because
+        //      it's a contractual breach, not just a schedule slip.
+        //   2. Scheduled ready time passed, with per-lane grace
+        //      (0h Waiting, 18h Transit for long-haul tolerance).
         $overdue = false;
-        if (in_array($lane, ['waiting', 'transit'], true) && $job->scheduled_date) {
+        if (in_array($lane, ['waiting', 'new'], true) && $job->pastCollectionDeadline()) {
+            $overdue = true;
+        }
+        if (! $overdue && in_array($lane, ['waiting', 'transit'], true) && $job->scheduled_date) {
             $cutoff = Carbon::parse($job->scheduled_date)->startOfDay();
             if ($job->scheduled_ready_time) {
                 $t = Carbon::parse($job->scheduled_ready_time);
