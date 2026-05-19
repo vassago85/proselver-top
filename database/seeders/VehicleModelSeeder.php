@@ -109,7 +109,31 @@ class VehicleModelSeeder extends Seeder
                 'FTR850 BUS',
                 'FTS750SWA',
             ],
+            // Powerstar SA current range (scraped from everstarindustries.com,
+            // who are the local distributor). VX = heavy-duty rigid / off-road,
+            // V3 = long-haul double-sleeper tractors, VL = AMT premium long-haul.
+            // Names follow the official brochure format (range + GVM-and-power
+            // code + axle configuration); SWB/LWB variants kept as distinct
+            // models because their tare/payload differs for invoicing.
             'Powerstar' => [
+                // VX Range (rigid / tipper / off-road)
+                'VX 1627 4x2',
+                'VX 1729 4x4',
+                'VX 2628 6x4 SWB',
+                'VX 2628 6x4 LWB',
+                'VX 2635A 6x6',
+                'VX 2642 6x4',
+                'VX 3335 6x4 SWB',
+                'VX 3335 6x4 LWB',
+                'VX 4035 8x4',
+                'VX 4042A 8x8',
+                // V3 Range (long-haul tractors, double-sleeper cab)
+                'V3 2646 6x4',
+                'V3 2646S AMT 6x4',
+                // VL Range (premium AMT long-haul)
+                'VL 550 AMT 6x4',
+                // Legacy short-form codes (kept for historical compatibility
+                // with any test bookings created before the formal SA list).
                 'VX2628',
                 'VX3341',
                 'VX2642',
