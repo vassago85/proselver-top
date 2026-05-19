@@ -2,10 +2,12 @@
 
 namespace Database\Seeders;
 
+use App\Models\Company;
 use App\Models\DriverProfile;
 use App\Models\User;
 use Carbon\Carbon;
 use Illuminate\Database\Seeder;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
@@ -42,11 +44,22 @@ class FleetDriverSeeder extends Seeder
         $password = Hash::make($this->defaultPassword());
         $rows = $this->masterSheet();
 
+        // Every fleet driver must be linked to the platform-owner company
+        // (ProSelver) via the company_users pivot, otherwise they won't
+        // appear in the order-show "Assign Driver" picker which scopes by
+        // User::scopePlatformDrivers().
+        $platform = Company::where('is_platform_owner', true)->first();
+        if (! $platform) {
+            throw new ModelNotFoundException(
+                'No company has is_platform_owner=true. Seed the ProSelver company before running FleetDriverSeeder.'
+            );
+        }
+
         $created = 0;
         $updated = 0;
         $touched = [];
 
-        DB::transaction(function () use ($rows, $password, &$created, &$updated, &$touched) {
+        DB::transaction(function () use ($rows, $password, $platform, &$created, &$updated, &$touched) {
             foreach ($rows as $row) {
                 $profile = DriverProfile::where('id_number', $row['id_number'])->first();
 
@@ -74,6 +87,7 @@ class FleetDriverSeeder extends Seeder
                         'license_code'       => $row['license_code'],
                         'prdp_expiry'        => $row['prdp_expiry'],
                     ]);
+                    $user->companies()->syncWithoutDetaching([$platform->id]);
                     $updated++;
                     $touched[] = ['action' => 'updated', 'name' => $row['name'], 'username' => $user->username];
                     continue;
@@ -90,6 +104,7 @@ class FleetDriverSeeder extends Seeder
                     'is_active'            => true,
                 ]);
                 $user->assignRole('driver');
+                $user->companies()->syncWithoutDetaching([$platform->id]);
 
                 DriverProfile::create([
                     'user_id'            => $user->id,

@@ -1,4 +1,5 @@
 <?php
+use App\Models\Company;
 use App\Models\User;
 use App\Models\DriverProfile;
 use Livewire\Volt\Component;
@@ -89,6 +90,14 @@ new #[Layout('components.layouts.app')] class extends Component {
         ]);
 
         $user->assignRole('driver');
+
+        // Attach to the platform-owner company so the new driver shows up
+        // in the order-show "Assign Driver" picker (scoped through
+        // User::scopePlatformDrivers, which requires this pivot row).
+        $platform = Company::where('is_platform_owner', true)->first();
+        if ($platform) {
+            $user->companies()->syncWithoutDetaching([$platform->id]);
+        }
 
         $profileData = [
             'user_id' => $user->id,
