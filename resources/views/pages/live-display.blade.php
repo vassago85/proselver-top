@@ -401,10 +401,13 @@ new #[Layout('components.layouts.display')] class extends Component {
     {{-- Always-visible tiles so an ops controller can read the
          current headline numbers without waiting for the focus
          rotation to land on a particular column. --}}
+    {{-- Tile counts: 4 base tiles (Waiting / Transit / Delivered /
+         Unassigned / Delayed = 5) + 1 extra for internal users
+         (New Orders).  Last-updated lives in the footer, not here. --}}
     <div @class([
             'grid gap-2 border-b border-slate-800/80 bg-slate-950/60 px-4 py-3',
-            'grid-cols-3 sm:grid-cols-7' => $isInternal,
-            'grid-cols-3 sm:grid-cols-6' => !$isInternal,
+            'grid-cols-3 sm:grid-cols-6' => $isInternal,
+            'grid-cols-3 sm:grid-cols-5' => !$isInternal,
         ])>
         @if($isInternal)
             <div class="rounded-lg border border-sky-500/25 bg-sky-500/5 px-3 py-2">
@@ -439,10 +442,6 @@ new #[Layout('components.layouts.display')] class extends Component {
         ])>
             <div class="text-[10px] font-semibold uppercase tracking-[0.18em] {{ $delayedCount > 0 ? 'text-red-300' : 'text-slate-400' }}">Delayed</div>
             <div class="text-2xl font-bold tabular-nums text-white">{{ $delayedCount }}</div>
-        </div>
-        <div class="rounded-lg border border-slate-700/60 bg-slate-800/40 px-3 py-2">
-            <div class="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">Last Updated</div>
-            <div class="text-2xl font-bold tabular-nums text-white">{{ $lastUpdatedAt->format('H:i:s') }}</div>
         </div>
     </div>
 
