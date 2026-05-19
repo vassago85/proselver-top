@@ -13,11 +13,20 @@
  * Designed for a TV / wall monitor: no mouse, no touch, no chrome.
  *   - Top summary strip with the headline numbers (waiting / in
  *     transit / delivered / unassigned / delayed / last updated)
- *     stays in view regardless of which column is in focus.
- *   - Three lanes (Waiting / In Transit / Delivered Today) take
- *     turns being the "focused" column on a 25s rotation; the
- *     focused column subtly brightens + scales and is the only one
- *     that auto-scrolls when its content overflows the viewport.
+ *     stays in view at all times.
+ *   - Three lanes (Waiting / In Transit / Delivered Today) sit
+ *     side by side, all three "equal citizens" — none of them
+ *     is dimmed.  Each lane that has more cards than fit in the
+ *     viewport rotates its top card off the screen every ~5 s
+ *     and the cards below glide up by one slot; the displaced
+ *     card reappears at the bottom of the queue.  That way every
+ *     card is guaranteed equal screen time and ops see all 20-
+ *     odd waiting / in-transit movements over the course of a
+ *     couple of minutes.  Lanes whose content already fits in
+ *     the viewport sit still — no rotation needed.
+ *   - The three lanes' rotation timers are staggered so only one
+ *     lane is animating at any given moment; feels alive rather
+ *     than metronomic.
  *   - Cards visually distinguish unassigned drivers, stale rows
  *     (no update in >30 min on Waiting / In Transit) and overdue
  *     movements (scheduled date in the past).  Highlights are a
@@ -25,8 +34,8 @@
  *   - Newly-arrived and freshly-updated cards animate in on poll
  *     so an ops controller across the room can see when something
  *     changes without having to scan every card.
- *   - `prefers-reduced-motion` disables the rotation, the auto-
- *     scroll and the card entry / pulse animations.
+ *   - `prefers-reduced-motion` disables the rotation and the
+ *     card entry / pulse animations.
  *
  * Backend data shape is unchanged: same three Eloquent collections,
  * same relations, same lane caps as before.  Everything new lives
@@ -383,17 +392,15 @@ new #[Layout('components.layouts.display')] class extends Component {
     <main class="grid flex-1 min-h-0 grid-cols-1 gap-4 p-4 md:grid-cols-3 lg:gap-6 lg:p-6">
 
         {{-- WAITING --}}
-        <section x-ref="lane0"
-                 :class="{ 'lane-focused': focusedIdx === 0, 'lane-dim': focusedIdx !== 0 }"
-                 class="lane flex min-h-0 flex-col rounded-2xl border border-amber-500/20 bg-slate-900/40 transition-[transform,opacity,box-shadow] duration-700 ease-out shadow-[0_0_0_0_rgba(0,0,0,0)]">
+        <section class="lane flex min-h-0 flex-col rounded-2xl border border-amber-500/20 bg-slate-900/40">
             <div class="flex items-center justify-between border-b border-amber-500/20 px-5 py-3">
                 <div class="flex items-center gap-3">
-                    <span class="h-2.5 w-2.5 rounded-full bg-amber-400 transition-transform duration-700" :class="focusedIdx === 0 ? 'scale-125' : 'scale-100'"></span>
+                    <span class="h-2.5 w-2.5 rounded-full bg-amber-400"></span>
                     <h2 class="text-sm font-semibold uppercase tracking-[0.2em] text-amber-300">Waiting</h2>
                 </div>
                 <span class="text-2xl font-bold tabular-nums text-white">{{ $waiting->count() }}</span>
             </div>
-            <div class="no-scrollbar flex-1 overflow-y-auto" x-ref="content0">
+            <div class="no-scrollbar flex-1 overflow-y-hidden" x-ref="content0" data-lane-idx="0">
                 <div class="lane-list space-y-2 p-3">
                     @forelse($waiting as $job)
                         @include('pages._live-display-card', [
@@ -414,9 +421,7 @@ new #[Layout('components.layouts.display')] class extends Component {
         </section>
 
         {{-- IN TRANSIT --}}
-        <section x-ref="lane1"
-                 :class="{ 'lane-focused': focusedIdx === 1, 'lane-dim': focusedIdx !== 1 }"
-                 class="lane flex min-h-0 flex-col rounded-2xl border border-orange-500/20 bg-slate-900/40 transition-[transform,opacity,box-shadow] duration-700 ease-out shadow-[0_0_0_0_rgba(0,0,0,0)]">
+        <section class="lane flex min-h-0 flex-col rounded-2xl border border-orange-500/20 bg-slate-900/40">
             <div class="flex items-center justify-between border-b border-orange-500/20 px-5 py-3">
                 <div class="flex items-center gap-3">
                     <span class="h-2.5 w-2.5 rounded-full bg-orange-400 live-dot"></span>
@@ -424,7 +429,7 @@ new #[Layout('components.layouts.display')] class extends Component {
                 </div>
                 <span class="text-2xl font-bold tabular-nums text-white">{{ $inTransit->count() }}</span>
             </div>
-            <div class="no-scrollbar flex-1 overflow-y-auto" x-ref="content1">
+            <div class="no-scrollbar flex-1 overflow-y-hidden" x-ref="content1" data-lane-idx="1">
                 <div class="lane-list space-y-2 p-3">
                     @forelse($inTransit as $job)
                         @include('pages._live-display-card', [
@@ -445,9 +450,7 @@ new #[Layout('components.layouts.display')] class extends Component {
         </section>
 
         {{-- DELIVERED TODAY --}}
-        <section x-ref="lane2"
-                 :class="{ 'lane-focused': focusedIdx === 2, 'lane-dim': focusedIdx !== 2 }"
-                 class="lane flex min-h-0 flex-col rounded-2xl border border-emerald-500/20 bg-slate-900/40 transition-[transform,opacity,box-shadow] duration-700 ease-out shadow-[0_0_0_0_rgba(0,0,0,0)]">
+        <section class="lane flex min-h-0 flex-col rounded-2xl border border-emerald-500/20 bg-slate-900/40">
             <div class="flex items-center justify-between border-b border-emerald-500/20 px-5 py-3">
                 <div class="flex items-center gap-3">
                     <span class="h-2.5 w-2.5 rounded-full bg-emerald-400"></span>
@@ -455,7 +458,7 @@ new #[Layout('components.layouts.display')] class extends Component {
                 </div>
                 <span class="text-2xl font-bold tabular-nums text-white">{{ $deliveredToday->count() }}</span>
             </div>
-            <div class="no-scrollbar flex-1 overflow-y-auto" x-ref="content2">
+            <div class="no-scrollbar flex-1 overflow-y-hidden" x-ref="content2" data-lane-idx="2">
                 <div class="lane-list space-y-2 p-3">
                     @forelse($deliveredToday as $job)
                         @include('pages._live-display-card', [
@@ -479,11 +482,7 @@ new #[Layout('components.layouts.display')] class extends Component {
 
     {{-- ============ FOOTER ============ --}}
     <footer class="flex items-center justify-between border-t border-slate-800/80 bg-slate-900/40 px-6 py-2 text-[11px] text-slate-500">
-        <span>
-            Wallboard mode — focus rotates every 25 s · auto-refresh 30 s
-            <span class="ml-2 opacity-50">·</span>
-            <span class="ml-2">Focused lane: <span x-text="['Waiting','In Transit','Delivered Today'][focusedIdx]" class="font-semibold text-slate-300">—</span></span>
-        </span>
+        <span>Wallboard mode — cards rotate every <span x-text="(rotateMs/1000)+'s'">—</span> per lane · auto-refresh 30 s</span>
         <span class="tabular-nums">Last loaded {{ $lastUpdatedAt->format('H:i:s') }}</span>
     </footer>
 </div>
@@ -492,38 +491,14 @@ new #[Layout('components.layouts.display')] class extends Component {
      Wallboard Alpine component + styles
      ================================================================= --}}
 <style>
-    /* Focused / dimmed lane treatment.  Use opacity + a subtle scale +
-       a glow ring rather than colour changes so we don't fight the
-       per-status ring tints inside the lane. */
-    .lane.lane-focused {
-        transform: scale(1.015);
-        opacity: 1;
-        box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.15), 0 18px 48px -24px rgba(15, 23, 42, 0.7);
-        z-index: 1;
-    }
-    .lane.lane-dim {
-        transform: scale(0.985);
-        opacity: 0.62;
-    }
-
-    /* Lane content fade — used by the auto-scroll state machine when
-       resetting from the bottom of the list back to the top.  The
-       state machine writes inline opacity which trumps these
-       defaults; classes only set up the transition. */
-    [x-ref^="content"] {
-        transition: opacity 600ms ease-out;
-    }
-
     /* Card alert glow.  Three intensities so the most severe alert
        (overdue) reads loudest from across the room while stale rows
        stay subtle.  Pulse is slow (~2.4s) so it never feels like a
        flash. */
-    .card-alert {
-        position: relative;
-    }
-    .card-alert-mute  { animation: alertPulseMute 3.2s ease-in-out infinite; }
-    .card-alert-warn  { animation: alertPulseWarn 2.6s ease-in-out infinite; }
-    .card-alert-danger{ animation: alertPulseDanger 2.0s ease-in-out infinite; }
+    .card-alert         { position: relative; }
+    .card-alert-mute    { animation: alertPulseMute 3.2s ease-in-out infinite; }
+    .card-alert-warn    { animation: alertPulseWarn 2.6s ease-in-out infinite; }
+    .card-alert-danger  { animation: alertPulseDanger 2.0s ease-in-out infinite; }
 
     @keyframes alertPulseMute {
         0%, 100% { box-shadow: 0 0 0 0 rgba(148, 163, 184, 0.0); }
@@ -557,21 +532,23 @@ new #[Layout('components.layouts.display')] class extends Component {
     }
     .card-pulse { animation: cardPulse 1.6s ease-out 1; }
 
+    /* The lane viewport.  overflow-y-hidden because the rotation
+       script owns scrollTop entirely — we never want a stray
+       trackpad / wheel event to nudge it. */
+    .lane > [x-ref^="content"] {
+        scroll-behavior: auto;
+    }
+
     /* Honour the user's reduced-motion preference.  Disable the
-       pulses, the rotation glow transitions and the JS-driven
-       auto-scroll (handled in JS).  The board still refreshes every
-       30s via wire:poll. */
+       pulses and the rotation transitions.  The board still
+       refreshes every 30s via wire:poll. */
     @media (prefers-reduced-motion: reduce) {
-        .lane,
-        .lane.lane-focused,
-        .lane.lane-dim         { transform: none !important; transition: opacity 200ms linear !important; }
         .card-alert-mute,
         .card-alert-warn,
         .card-alert-danger,
         .card-enter,
         .card-pulse,
         .live-dot              { animation: none !important; }
-        [x-ref^="content"]     { transition: none !important; }
     }
 </style>
 
@@ -584,23 +561,15 @@ new #[Layout('components.layouts.display')] class extends Component {
         window._wallboardRegistered = true;
 
         Alpine.data('wallboard', () => ({
-            // --- focus rotation ----------------------------------------
-            focusedIdx: 0,                  // 0=Waiting, 1=In Transit, 2=Delivered
-            rotateMs: 25000,                // wallboard focus cycle
-            // --- scroll state machine (per lane) ----------------------
-            // Phases:
-            //   'idle'    -> content fits, nothing to do
-            //   'scroll'  -> animating scrollTop downwards
-            //   'pause'   -> bottom reached, holding for 4s
-            //   'fadeOut' -> fading the content out (600ms)
-            //   'reset'   -> snap scrollTop to 0
-            //   'fadeIn'  -> fading the content back in (600ms)
-            lanePhase: ['idle', 'idle', 'idle'],
-            lanePos:   [0, 0, 0],
-            phaseStart:[0, 0, 0],
-            pxPerSec:  28,                  // calm reading pace
-            pauseMs:   4000,
-            fadeMs:    600,
+            // --- card rotation -----------------------------------------
+            // Each lane independently rotates its top card off-screen
+            // every rotateMs.  Rotation timers are staggered so the
+            // three lanes never animate at exactly the same instant —
+            // feels alive instead of metronomic.
+            rotateMs: 5000,
+            slideMs:  650,
+            laneTimers: [null, null, null],
+            laneBusy:   [false, false, false],
             // --- card change tracking ---------------------------------
             // Map<job_id, updated_at> snapshot so we can detect new /
             // recently-changed cards after every Livewire morph and
@@ -611,7 +580,6 @@ new #[Layout('components.layouts.display')] class extends Component {
             date: '',
             fs: false,
             reduceMotion: false,
-            lastRaf: 0,
 
             boot() {
                 this.reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -631,22 +599,27 @@ new #[Layout('components.layouts.display')] class extends Component {
                 if (window.Livewire && !window._wallboardMorphHooked) {
                     window._wallboardMorphHooked = true;
                     Livewire.hook('morph.updated', () => {
-                        // morph.updated fires after the DOM is patched
-                        // but we delay one frame so transitions have a
-                        // chance to settle before we attach classes.
                         requestAnimationFrame(() => this.diffSnapshot());
                     });
                 }
 
                 if (this.reduceMotion) {
-                    // Reduced motion: skip the rotation + scroll loop.
-                    // The board still auto-refreshes via wire:poll, so
-                    // ops gets fresh data, just no animated motion.
+                    // Reduced motion: no rotation.  The board still
+                    // auto-refreshes via wire:poll, so ops gets fresh
+                    // data, just no animated motion.  Visible cards
+                    // are whichever ones fit in the viewport.
                     return;
                 }
 
-                this.rotateInterval = setInterval(() => this.advanceFocus(), this.rotateMs);
-                requestAnimationFrame((t) => this.scrollLoop(t));
+                // Stagger lane rotation timers so only one lane is
+                // animating at any given instant — symmetrical
+                // triple-flip every 5s looks robotic.
+                const offsets = [0, Math.floor(this.rotateMs / 3), Math.floor((2 * this.rotateMs) / 3)];
+                for (let i = 0; i < 3; i++) {
+                    setTimeout(() => {
+                        this.laneTimers[i] = setInterval(() => this.rotateLane(i), this.rotateMs);
+                    }, offsets[i]);
+                }
             },
 
             tickClock() {
@@ -665,78 +638,65 @@ new #[Layout('components.layouts.display')] class extends Component {
                 }
             },
 
-            advanceFocus() {
-                this.focusedIdx = (this.focusedIdx + 1) % 3;
-                // Reset every lane's scroll state on focus change so
-                // the next focused column always starts at the top
-                // and the previously-focused one isn't left stuck mid-
-                // scroll.  Inline opacity from a fade phase has to be
-                // cleared too.
-                for (let i = 0; i < 3; i++) {
-                    const c = this.$refs['content' + i];
-                    if (c) {
-                        c.scrollTop = 0;
-                        c.style.opacity = '';
-                    }
-                    this.lanePhase[i] = 'idle';
-                    this.lanePos[i]   = 0;
-                }
-            },
+            // Rotate one lane by one card.
+            //   1. Compute the height of the top card (+ gap below it).
+            //   2. Smoothly translate the list upwards by that height.
+            //   3. After the transition finishes, move the (now off-
+            //      screen) top card to the end of the list and snap
+            //      the translate back to 0 with no animation.  The
+            //      next card naturally takes the top slot and the
+            //      moved card lands at the bottom of the queue.
+            // The container has overflow-y-hidden so the displaced
+            // card disappears the moment it leaves the visible area
+            // and reappears when its turn at the bottom comes around.
+            rotateLane(idx) {
+                if (this.laneBusy[idx]) return;
+                const viewport = this.$refs['content' + idx];
+                if (!viewport) return;
+                const list = viewport.querySelector('.lane-list');
+                if (!list) return;
+                const cards = Array.from(list.children).filter(el => el.hasAttribute('data-job-id'));
+                if (cards.length < 2) return;
 
-            scrollLoop(t) {
-                const dt = this.lastRaf ? (t - this.lastRaf) / 1000 : 0;
-                this.lastRaf = t;
+                // Don't rotate when every card already fits in view —
+                // ops can read them all without movement.  Re-check on
+                // every cycle in case content shrank after a poll.
+                if (list.scrollHeight <= viewport.clientHeight + 4) return;
 
-                const idx = this.focusedIdx;
-                const lane = this.$refs['content' + idx];
-                if (lane) {
-                    const max = lane.scrollHeight - lane.clientHeight;
-                    if (max <= 4) {
-                        // Content fits the viewport — no scrolling
-                        // needed.  Stay idle until focus shifts or
-                        // the content grows (next render).
-                        this.lanePhase[idx] = 'idle';
-                        lane.style.opacity = '';
-                    } else {
-                        const phase = this.lanePhase[idx];
-                        if (phase === 'idle') {
-                            this.lanePhase[idx] = 'scroll';
-                            this.lanePos[idx] = 0;
-                            lane.scrollTop = 0;
-                        } else if (phase === 'scroll') {
-                            this.lanePos[idx] += this.pxPerSec * dt;
-                            if (this.lanePos[idx] >= max) {
-                                this.lanePos[idx] = max;
-                                this.lanePhase[idx] = 'pause';
-                                this.phaseStart[idx] = t;
-                            }
-                            lane.scrollTop = this.lanePos[idx];
-                        } else if (phase === 'pause') {
-                            if (t - this.phaseStart[idx] >= this.pauseMs) {
-                                this.lanePhase[idx] = 'fadeOut';
-                                this.phaseStart[idx] = t;
-                            }
-                        } else if (phase === 'fadeOut') {
-                            const p = Math.min(1, (t - this.phaseStart[idx]) / this.fadeMs);
-                            lane.style.opacity = String(1 - p);
-                            if (p >= 1) {
-                                lane.scrollTop = 0;
-                                this.lanePos[idx] = 0;
-                                this.lanePhase[idx] = 'fadeIn';
-                                this.phaseStart[idx] = t;
-                            }
-                        } else if (phase === 'fadeIn') {
-                            const p = Math.min(1, (t - this.phaseStart[idx]) / this.fadeMs);
-                            lane.style.opacity = String(p);
-                            if (p >= 1) {
-                                lane.style.opacity = '';
-                                this.lanePhase[idx] = 'scroll';
-                            }
-                        }
-                    }
-                }
+                this.laneBusy[idx] = true;
 
-                requestAnimationFrame((t2) => this.scrollLoop(t2));
+                const topCard = cards[0];
+                const second  = cards[1];
+                const gap     = Math.max(0, second.getBoundingClientRect().top - topCard.getBoundingClientRect().bottom);
+                const step    = topCard.getBoundingClientRect().height + gap;
+
+                list.style.transition = `transform ${this.slideMs}ms cubic-bezier(0.4, 0, 0.2, 1)`;
+                list.style.transform  = `translateY(-${step}px)`;
+
+                const onEnd = () => {
+                    list.removeEventListener('transitionend', onEnd);
+                    // Move the top card to the end *and* snap
+                    // translate back to 0 with no transition.  The
+                    // browser paints both changes in the same frame so
+                    // there's no visual jump — the second card stays
+                    // exactly where it was, just under a different
+                    // first-child neighbour.
+                    list.style.transition = 'none';
+                    list.appendChild(topCard);
+                    list.style.transform = '';
+                    // Force a reflow before re-enabling transitions so
+                    // the next rotation starts from a stable baseline.
+                    void list.offsetHeight;
+                    list.style.transition = '';
+                    this.laneBusy[idx] = false;
+                };
+                list.addEventListener('transitionend', onEnd);
+                // Safety net in case transitionend doesn't fire (e.g.
+                // tab was backgrounded mid-animation): release the
+                // busy flag after slideMs + a little headroom.
+                setTimeout(() => {
+                    if (this.laneBusy[idx]) onEnd();
+                }, this.slideMs + 200);
             },
 
             captureSnapshot() {
@@ -757,8 +717,6 @@ new #[Layout('components.layouts.display')] class extends Component {
                     if (!prev.has(id)) {
                         // Card didn't exist before this morph — new arrival.
                         el.classList.remove('card-enter');
-                        // Re-trigger reflow so the animation restarts even
-                        // if the same element gets re-entered later.
                         void el.offsetWidth;
                         el.classList.add('card-enter');
                         setTimeout(() => el.classList.remove('card-enter'), 800);
