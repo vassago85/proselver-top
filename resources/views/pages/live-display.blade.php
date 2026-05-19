@@ -190,8 +190,15 @@ new #[Layout('components.layouts.display')] class extends Component {
         // start-of-day for the date when scheduled_ready_time is
         // missing.  Only counts Waiting + In Transit; Delivered is
         // by definition done.
+        //
+        // Grace must match the per-card cardFlags() rule below:
+        //   - waiting: 0 hours
+        //   - transit: 18 hours (long-haul tolerance)
+        // Otherwise the headline counter disagrees with the visible
+        // OVERDUE pills on the cards, which is the worst kind of
+        // wallboard bug -- ops trusts the big number first.
         $now = now();
-        $isOverdue = function (Job $job) use ($now): bool {
+        $isOverdueFor = function (Job $job, int $graceHours) use ($now): bool {
             if (!$job->scheduled_date) {
                 return false;
             }
@@ -200,16 +207,12 @@ new #[Layout('components.layouts.display')] class extends Component {
                 $t = Carbon::parse($job->scheduled_ready_time);
                 $cutoff = $cutoff->setTime($t->hour, $t->minute);
             } else {
-                // No time specified — treat as overdue once the
-                // scheduled date itself has fully passed (so a
-                // booking dated "today" without a time isn't flagged
-                // delayed until midnight).
                 $cutoff = $cutoff->endOfDay();
             }
-            return $cutoff->lt($now);
+            return $cutoff->copy()->addHours($graceHours)->lt($now);
         };
-        $delayedCount = $waiting->filter($isOverdue)->count()
-            + $inTransit->filter($isOverdue)->count();
+        $delayedCount = $waiting->filter(fn ($j) => $isOverdueFor($j, 0))->count()
+            + $inTransit->filter(fn ($j) => $isOverdueFor($j, 18))->count();
 
         return [
             'company'         => $company,
@@ -260,6 +263,16 @@ new #[Layout('components.layouts.display')] class extends Component {
     // an array of class strings the partial concatenates onto the
     // card root, plus a small badge string for the corner pill.  Kept
     // here (not on the Job model) because it's pure presentation.
+    //
+    // Overdue grace per lane:
+    //   - waiting: 0 hours.  A waiting job past its scheduled ready
+    //     time is genuinely behind schedule and ops needs to know.
+    //   - transit: 18 hours.  Long-haul deliveries (e.g. JHB to
+    //     Cape Town) routinely cross overnight without anyone
+    //     touching the row, and lighting up every transit card with
+    //     a red OVERDUE pill just because it's been a few hours is
+    //     noise.  18h covers most domestic legs end-to-end while
+    //     still flagging genuinely stuck movements.
     $cardFlags = function (Job $job, string $lane) {
         $now = now();
         $flags = ['classes' => [], 'label' => null];
@@ -271,7 +284,7 @@ new #[Layout('components.layouts.display')] class extends Component {
             && $job->updated_at
             && $job->updated_at->lt($now->copy()->subMinutes(30));
 
-        // Overdue = scheduled to be ready before now and still moving.
+        // Overdue = scheduled to be ready before now-grace and still moving.
         $overdue = false;
         if (in_array($lane, ['waiting', 'transit'], true) && $job->scheduled_date) {
             $cutoff = Carbon::parse($job->scheduled_date)->startOfDay();
@@ -281,7 +294,8 @@ new #[Layout('components.layouts.display')] class extends Component {
             } else {
                 $cutoff = $cutoff->endOfDay();
             }
-            $overdue = $cutoff->lt($now);
+            $graceHours = $lane === 'transit' ? 18 : 0;
+            $overdue = $cutoff->copy()->addHours($graceHours)->lt($now);
         }
 
         // Unassigned = waiting lane only.  The Job model's driver
