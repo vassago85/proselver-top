@@ -19,23 +19,77 @@ use Illuminate\Support\Facades\DB;
  * attached the user to the platform-owner company, leaving the picker empty
  * even though /admin/drivers showed dozens of drivers.
  *
+ * On a fresh production database the is_platform_owner flag is also unset
+ * (only DemoSeeder ever flips it). Pass --set-platform=<id|name> to flag
+ * the correct company in the same run and then immediately backfill the
+ * driver pivots.
+ *
  * This command is idempotent and safe to re-run any time.
  *
- *   php artisan drivers:attach-platform           # backfill, prints summary
- *   php artisan drivers:attach-platform --dry-run # show what WOULD change
+ *   php artisan drivers:attach-platform                           # backfill only
+ *   php artisan drivers:attach-platform --dry-run                 # preview
+ *   php artisan drivers:attach-platform --set-platform=12         # flag company id 12 + backfill
+ *   php artisan drivers:attach-platform --set-platform="ProSelver" # flag by name + backfill
  */
 class AttachDriversToPlatform extends Command
 {
     protected $signature = 'drivers:attach-platform
-                            {--dry-run : list affected drivers without writing}';
+                            {--dry-run : list affected drivers without writing}
+                            {--set-platform= : flag this company id (numeric) or name as is_platform_owner before backfilling}';
 
     protected $description = 'Attach every driver-role user to the platform-owner company so they appear in the ProSelver assignment picker';
 
     public function handle(): int
     {
+        // Optional: flag a company as platform owner in the same run.
+        // The Company model already enforces the single-owner invariant
+        // (any other rows currently flagged get unflagged automatically).
+        if ($target = $this->option('set-platform')) {
+            $company = is_numeric($target)
+                ? Company::find((int) $target)
+                : Company::where('name', $target)
+                    ->orWhere('normalized_name', mb_strtolower($target))
+                    ->first();
+
+            if (! $company) {
+                $this->error("No company matches \"{$target}\". Run without --set-platform to list candidates.");
+                return self::FAILURE;
+            }
+
+            if (! $company->is_platform_owner) {
+                if ($this->option('dry-run')) {
+                    $this->warn("Dry run — would flag <fg=cyan>{$company->name}</> (id={$company->id}) as platform owner.");
+                } else {
+                    $company->update(['is_platform_owner' => true]);
+                    $this->info("Flagged <fg=cyan>{$company->name}</> (id={$company->id}) as the platform-owner company.");
+                }
+            } else {
+                $this->line("<fg=cyan>{$company->name}</> is already the platform-owner — nothing to flag.");
+            }
+        }
+
         $platform = Company::where('is_platform_owner', true)->first();
         if (! $platform) {
-            $this->error('No company has is_platform_owner = true. Flag the ProSelver company first.');
+            $this->error('No company has is_platform_owner = true.');
+            $this->newLine();
+            $this->line('Pick the company that operates this platform (most likely a transporter row) and re-run with:');
+            $this->line('  <fg=yellow>php artisan drivers:attach-platform --set-platform=<id></>');
+            $this->newLine();
+            $this->line('Candidate companies (transporters first):');
+
+            $candidates = Company::orderByRaw("CASE WHEN type = 'transporter' THEN 0 ELSE 1 END")
+                ->orderBy('name')
+                ->limit(20)
+                ->get(['id', 'name', 'type']);
+
+            if ($candidates->isEmpty()) {
+                $this->warn('  (no companies in this database — seed companies first)');
+            } else {
+                $this->table(
+                    ['ID', 'Name', 'Type'],
+                    $candidates->map(fn ($c) => [$c->id, $c->name, $c->type])->all()
+                );
+            }
             return self::FAILURE;
         }
 
