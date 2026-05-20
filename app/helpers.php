@@ -29,19 +29,27 @@ if (!function_exists('resolveUserHomePath')) {
         if (method_exists($user, 'companyIsBodyBuilder') && $user->companyIsBodyBuilder()) {
             return route('body-builder.dashboard');
         }
-        if ($user->isCustomer()) {
+        // Customer / dealer / OEM tenants all land on the customer
+        // portal.  The /dealer/* and /oem/* portals were retired and
+        // their tenants now share /customer/* (see EnsureCustomerAccess
+        // for the matching middleware-level acceptance).  isCustomer is
+        // tier=='customer' only, so legacy dealer_admin / oem_owner
+        // users wouldn't otherwise resolve here -- without this branch
+        // they'd be sent back to /login, which then re-redirects
+        // /dashboard for an authenticated user => infinite loop.
+        if ($user->isCustomer() || $user->isDealer() || $user->isOem()) {
             return route('customer.dashboard');
         }
         if ($user->isDriver()) {
             return route('driver.dashboard');
         }
 
-        // Legacy dealer-tier / oem-tier role users (dealer_owner,
-        // dealer_admin, oem_owner, oem_admin, ...) no longer have a
-        // dedicated portal — the /dealer/* and /oem/* prefixes were
-        // retired with no production tenants on them.  Anything that
-        // still holds one of those role slugs falls through to login
-        // and will need to be re-seeded onto a customer-tier role.
-        return route('login');
+        // Authenticated user with no resolvable home (e.g. a brand new
+        // account whose role hasn't been assigned yet).  Sending them
+        // to /login causes an infinite redirect because Fortify
+        // bounces authenticated requests back to /dashboard.  Land on
+        // the profile page instead so the user can at least see who
+        // they're logged in as and contact ops.
+        return route('profile.index');
     }
 }

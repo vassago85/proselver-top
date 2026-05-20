@@ -31,13 +31,18 @@ class EnsureCustomerAccess
         }
 
         // Every modern tenant — dealer-customers, OEM-customers, body
-        // builders — sits on a customer-tier role.  The legacy
-        // isDealer() / isOem() ROLE checks (dealer_owner, oem_admin,
-        // ...) were dropped when the /dealer/* and /oem/* portals
-        // were retired; OEM-vs-dealer differentiation now lives on
-        // Company::$type and is enforced inside the customer Volt
-        // pages themselves.
-        if ($user->isCustomer()) {
+        // builders — sits on a customer-tier role.  The /dealer/* and
+        // /oem/* portals were retired; OEM-vs-dealer differentiation
+        // now lives on Company::$type and is enforced inside the
+        // customer Volt pages themselves.
+        //
+        // We also accept legacy dealer-tier and oem-tier ROLE users
+        // (dealer_owner, dealer_admin, oem_owner, oem_admin, ...) so
+        // any tenant that hasn't been re-seeded onto a customer-tier
+        // role can still reach their dashboard.  Without this branch
+        // an authenticated dealer-tier user would loop indefinitely
+        // between /dashboard and /customer/dashboard.
+        if ($user->isCustomer() || $user->isDealer() || $user->isOem()) {
             return $next($request);
         }
 
