@@ -1,7 +1,13 @@
 @php
     $user = auth()->user();
     $isInternal = $user->isInternal();
-    $isCustomer = $user->isCustomer();
+    // Treat legacy dealer-tier and oem-tier users as customers for sidebar
+    // gating: the /dealer/* and /oem/* portals were retired and these
+    // tenants now share the /customer/* menus.  Without this widening,
+    // dealer_admin / oem_owner users would see an empty sidebar with the
+    // default "INTERNAL" label and no way to reach orders / locations /
+    // team pages.  Matches EnsureCustomerAccess and resolveUserHomePath.
+    $isCustomer = $user->isCustomer() || $user->isDealer() || $user->isOem();
     $isDriver = $user->isDriver();
     $isDeveloper = $user->isDeveloper();
     $isSuperAdmin = $user->isSuperAdmin();
