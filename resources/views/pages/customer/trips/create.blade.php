@@ -52,9 +52,14 @@ class extends Component
 
         $this->tripDate = now()->addDay()->toDateString();
 
+        // No "is_primary" flag exists on locations -- fall back to the
+        // oldest active depot as the default start/end. Dealers can flip
+        // it in the form if they want a different yard. The original
+        // implementation referenced a column that was never added to the
+        // schema, which 500-ed the page the moment a dealer opened it.
         $primary = $this->company->locations()
             ->where('is_active', true)
-            ->orderByDesc('is_primary')
+            ->orderBy('id')
             ->first();
 
         if ($primary) {
@@ -108,7 +113,6 @@ class extends Component
             ? Location::query()
                 ->where('company_id', $this->company->id)
                 ->where('is_active', true)
-                ->orderByDesc('is_primary')
                 ->orderBy('company_name')
                 ->get(['id', 'company_name', 'city'])
                 ->map(fn ($l) => [
