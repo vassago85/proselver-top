@@ -15,6 +15,22 @@ new #[Layout('components.layouts.app')] class extends Component {
     #[Url]
     public string $statusFilter = '';
 
+    /**
+     * Executor scope for the listing. Defaults to ProSelver so ops's
+     * default view shows only the movements they actually dispatch --
+     * dealer-internal / 3rd-party / self-collect bookings stay hidden
+     * unless explicitly asked for, because they'd otherwise clutter
+     * the queue with work that's not ops's responsibility.
+     *
+     * Values: 'proselver' (default) | 'external' | 'all'.
+     *
+     * IMPORTANT: a non-empty $search bypasses this filter entirely --
+     * if a customer phones in with an order number / VIN, the search
+     * must find it regardless of which executor is in the dropdown.
+     */
+    #[Url(except: 'proselver')]
+    public string $executorFilter = 'proselver';
+
     public function with(): array
     {
         $query = Job::with([
@@ -31,6 +47,14 @@ new #[Layout('components.layouts.app')] class extends Component {
             $query->where('status', $this->statusFilter);
         }
 
+        // Apply the executor filter only when the operator is browsing
+        // (no active search). Searching always spans every executor so
+        // ops can find a phoned-in order without first switching the
+        // dropdown to "All".
+        if (! $this->search) {
+            $this->applyExecutorScope($query);
+        }
+
         if ($this->search) {
             $query->where(function ($q) {
                 $q->where('job_number', 'ilike', "%{$this->search}%")
@@ -44,19 +68,51 @@ new #[Layout('components.layouts.app')] class extends Component {
             });
         }
 
-        // Lightweight status counts for quick-filter pills
-        $statusCounts = Job::whereIn('status', Job::PHASE1_STATUSES)
+        // Status counts pills must respect the active executor filter --
+        // otherwise the pill says "23 In Transit" but the table shows 6
+        // because the other 17 are dealer-internal.
+        $countsQuery = Job::whereIn('status', Job::PHASE1_STATUSES);
+        if (! $this->search) {
+            $this->applyExecutorScope($countsQuery);
+        }
+        $statusCounts = $countsQuery
             ->selectRaw('status, COUNT(*) as c')
             ->groupBy('status')
             ->pluck('c', 'status')
             ->toArray();
+
+        // Always-on counter of hidden dealer-internal jobs so ops knows
+        // there's a parallel pile even when the filter is on.
+        $hiddenExternalCount = $this->executorFilter === 'proselver' && ! $this->search
+            ? Job::whereIn('status', Job::PHASE1_STATUSES)
+                ->whereIn('executor_type', [Job::EXECUTOR_INTERNAL, Job::EXECUTOR_THIRD_PARTY, Job::EXECUTOR_SELF_COLLECT])
+                ->count()
+            : 0;
 
         return [
             'jobs' => $query->paginate(20),
             'statuses' => Job::PHASE1_STATUS_LABELS,
             'statusCounts' => $statusCounts,
             'totalCount' => array_sum($statusCounts),
+            'hiddenExternalCount' => $hiddenExternalCount,
         ];
+    }
+
+    /**
+     * Narrow a Job query to the active executor filter. Pulled out so the
+     * listing query and the counts query stay in lockstep.
+     */
+    protected function applyExecutorScope($query): void
+    {
+        match ($this->executorFilter) {
+            'external' => $query->whereIn('executor_type', [
+                Job::EXECUTOR_INTERNAL,
+                Job::EXECUTOR_THIRD_PARTY,
+                Job::EXECUTOR_SELF_COLLECT,
+            ]),
+            'all'      => null,
+            default    => $query->where('executor_type', Job::EXECUTOR_PROSELVER),
+        };
     }
 
     public function updatedSearch(): void
@@ -65,6 +121,11 @@ new #[Layout('components.layouts.app')] class extends Component {
     }
 
     public function updatedStatusFilter(): void
+    {
+        $this->resetPage();
+    }
+
+    public function updatedExecutorFilter(): void
     {
         $this->resetPage();
     }
@@ -79,6 +140,7 @@ new #[Layout('components.layouts.app')] class extends Component {
     {
         $this->search = '';
         $this->statusFilter = '';
+        $this->executorFilter = 'proselver';
         $this->resetPage();
     }
 };
@@ -138,7 +200,28 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <option value="{{ $value }}">{{ $label }}</option>
             @endforeach
         </select>
+        {{-- Executor filter. ProSelver-only is the default so ops's
+             browse view stays clean; the dealer-internal pile is one
+             click away when ops actually wants to look at it. Search
+             ignores this filter so phoned-in lookups always work. --}}
+        <select wire:model.live="executorFilter" class="rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 focus:outline-none transition">
+            <option value="proselver">ProSelver only</option>
+            <option value="external">Dealer / 3rd-party / Self-collect</option>
+            <option value="all">All executors</option>
+        </select>
     </div>
+
+    @if($hiddenExternalCount > 0)
+        <div class="mb-3 flex items-center gap-2 text-xs text-slate-500">
+            <svg class="h-3.5 w-3.5 text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+            <span>
+                {{ number_format($hiddenExternalCount) }} dealer-internal / 3rd-party / self-collect
+                {{ \Illuminate\Support\Str::plural('movement', $hiddenExternalCount) }} hidden.
+            </span>
+            <button type="button" wire:click="$set('executorFilter', 'external')"
+                class="font-semibold text-blue-600 hover:text-blue-800">Show them</button>
+        </div>
+    @endif
 
     {{-- Table --}}
     <div class="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">

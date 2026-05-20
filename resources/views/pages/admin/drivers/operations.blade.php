@@ -65,6 +65,14 @@ new #[Layout('components.layouts.app')] class extends Component
     {
         $q = User::query()
             ->whereHas('roles', fn ($r) => $r->where('slug', 'driver'))
+            // Restrict to drivers attached to the platform-owner company
+            // (ProSelver). Dealer-only drivers belong to a dealer's own
+            // pool, get assigned through the customer portal, and have no
+            // bearing on ProSelver fleet operations -- including them here
+            // would make every dealer's drivers show up on ops's "who's
+            // idle / who's overloaded" board, drowning the real signal.
+            // Same scope as User::scopePlatformDrivers().
+            ->whereHas('companies', fn ($c) => $c->where('is_platform_owner', true))
             ->with('driverProfile:id,user_id,base_location,license_expiry,prdp_expiry,trade_plate_expiry');
 
         if ($this->activeFilter === 'active')   { $q->where('is_active', true); }
@@ -314,7 +322,9 @@ new #[Layout('components.layouts.app')] class extends Component
         // the current filters.
         $complianceDrivers = DriverProfile::query()
             ->whereHas('user', function ($u) {
-                $u->whereHas('roles', fn ($r) => $r->where('slug', 'driver'));
+                $u->whereHas('roles', fn ($r) => $r->where('slug', 'driver'))
+                  // Match baseDriverQuery -- platform-owner drivers only.
+                  ->whereHas('companies', fn ($c) => $c->where('is_platform_owner', true));
                 if ($this->activeFilter === 'active')   { $u->where('is_active', true); }
                 if ($this->activeFilter === 'inactive') { $u->where('is_active', false); }
                 if ($this->companyId) {

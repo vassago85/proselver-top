@@ -168,6 +168,15 @@ new #[Layout('components.layouts.display')] class extends Component {
 
         if (!$isInternal) {
             $base->where('company_id', $company->id);
+        } else {
+            // Internal ops wallboard only shows ProSelver-executed movements.
+            // Dealer-internal / 3rd-party / self-collect bookings are work
+            // ProSelver isn't moving, so they'd just clutter the boards ops
+            // staff are watching to coordinate dispatch. Tenant boards still
+            // see every executor type for their own company (the dealer
+            // running their own driver pool wants those rows visible on
+            // their own TV).
+            $base->where('executor_type', Job::EXECUTOR_PROSELVER);
         }
 
         // Lane caps are bigger for the system-wide ops view because a

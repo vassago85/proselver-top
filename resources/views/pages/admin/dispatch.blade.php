@@ -70,6 +70,10 @@ new #[Layout('components.layouts.app')] class extends Component {
                 'brand:id,name',
             ])
             ->whereIn('status', $statuses)
+            // Dispatch is ProSelver crew assignment -- dealer-internal /
+            // 3rd-party / self-collect bookings move via the dealer's own
+            // tooling, so they don't belong on this board.
+            ->where('executor_type', Job::EXECUTOR_PROSELVER)
             ->when($this->search, function ($query) {
                 $query->where(function ($q) {
                     $q->where('job_number', 'like', "%{$this->search}%")
@@ -91,8 +95,14 @@ new #[Layout('components.layouts.app')] class extends Component {
             ->orderBy('name')
             ->get(['id', 'name']);
 
-        $plannedCount = Job::where('status', Job::STATUS_PLANNED)->count();
-        $assignedCount = Job::where('status', Job::STATUS_DRIVER_ASSIGNED)->count();
+        // Counts match the filtered job list above -- otherwise the badges
+        // disagree with the table beneath them.
+        $plannedCount = Job::where('status', Job::STATUS_PLANNED)
+            ->where('executor_type', Job::EXECUTOR_PROSELVER)
+            ->count();
+        $assignedCount = Job::where('status', Job::STATUS_DRIVER_ASSIGNED)
+            ->where('executor_type', Job::EXECUTOR_PROSELVER)
+            ->count();
 
         $driverOptions = $drivers->map(fn ($d) => [
             'value' => (string) $d->id,

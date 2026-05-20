@@ -192,8 +192,16 @@ new #[Layout('components.layouts.app')] class extends Component {
 
             // Section 1: orders that have been confirmed but not yet
             // planned.  These are the original "Planning Queue" rows.
+            //
+            // Scoped to ProSelver-executed orders because the planning
+            // queue is "what ops needs to dispatch a ProSelver driver
+            // for". Dealer-internal / 3rd-party / self-collect bookings
+            // are moved by the dealer's own driver / a courier / the
+            // customer themselves, so they never need an ops planning
+            // touch and would just clutter the queue.
             $jobs = Job::with($eagerLoads)
                 ->where('status', Job::STATUS_CONFIRMED)
+                ->where('executor_type', Job::EXECUTOR_PROSELVER)
                 ->tap(fn ($q) => $this->applyQueueSearch($q))
                 ->orderBy('scheduled_date')
                 ->orderBy('created_at')
@@ -206,8 +214,13 @@ new #[Layout('components.layouts.app')] class extends Component {
             // just goes silent until somebody spots it on the wall
             // display.  Independent paginator so paging one list
             // doesn't drop the other off-screen.
+            // Same ProSelver-only scope as Section 1 -- a dealer-internal
+            // booking sitting at PLANNED with no driver_user_id is not
+            // an ops planning slip, it's the dealer not having picked
+            // their own driver yet, and surfaces on their portal not ours.
             $awaitingDriver = Job::with($eagerLoads)
                 ->whereIn('status', self::AWAITING_DRIVER_STATUSES)
+                ->where('executor_type', Job::EXECUTOR_PROSELVER)
                 ->whereNull('driver_user_id')
                 ->tap(fn ($q) => $this->applyQueueSearch($q))
                 ->orderBy('scheduled_date')
@@ -224,15 +237,27 @@ new #[Layout('components.layouts.app')] class extends Component {
         // accurate regardless of which tab is currently rendered.
         // queueCount is the sum of both queue sections so dispatch
         // sees a single "needs my attention" number.
-        $payload['toPlanCount']        = Job::where('status', Job::STATUS_CONFIRMED)->count();
+        // Tab badge counts must match the filtered lists above, otherwise
+        // the dispatcher sees "5 to plan" but only 3 rows -- the missing
+        // 2 are dealer-internal which we deliberately hide on this page.
+        $payload['toPlanCount']        = Job::where('status', Job::STATUS_CONFIRMED)
+            ->where('executor_type', Job::EXECUTOR_PROSELVER)
+            ->count();
         $payload['awaitingDriverCount'] = Job::whereIn('status', self::AWAITING_DRIVER_STATUSES)
+            ->where('executor_type', Job::EXECUTOR_PROSELVER)
             ->whereNull('driver_user_id')
             ->count();
         $payload['queueCount']         = $payload['toPlanCount'] + $payload['awaitingDriverCount'];
+        // driverActive counts how many distinct ProSelver drivers are
+        // currently engaged. Dealer-driver jobs aren't part of ProSelver
+        // dispatch utilisation, so they're excluded here too.
         $payload['driverActive']       = Job::whereIn('status', [
             Job::STATUS_DRIVER_ASSIGNED, Job::STATUS_READY_FOR_COLLECTION, Job::STATUS_ASSIGNED,
             Job::STATUS_COLLECTED, Job::STATUS_IN_TRANSIT, Job::STATUS_IN_PROGRESS,
-        ])->whereNotNull('driver_user_id')->distinct('driver_user_id')->count('driver_user_id');
+        ])->where('executor_type', Job::EXECUTOR_PROSELVER)
+          ->whereNotNull('driver_user_id')
+          ->distinct('driver_user_id')
+          ->count('driver_user_id');
 
         return $payload;
     }

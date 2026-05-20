@@ -110,10 +110,22 @@ new #[Layout('components.layouts.app')] class extends Component
     // ───────────────────────────────────────────────────────────────────
     //  Jobs query scoped by the active filters (except status — we apply
     //  per-metric). Status filter only pre-narrows the Priority list.
+    //
+    //  Default scope is ProSelver-executed movements ONLY. The ops
+    //  dashboard answers "how is OUR dispatch operation doing", and
+    //  dealer-internal / 3rd-party / self-collect movements are work
+    //  ProSelver isn't doing — they would just inflate every count.
+    //  The "External Executors" awareness card is the one place that
+    //  needs the inverse view; it calls baseJobsQuery(allExecutors: true)
+    //  and applies its own executor filter on top.
     // ───────────────────────────────────────────────────────────────────
-    protected function baseJobsQuery(bool $applyStatusFilter = false)
+    protected function baseJobsQuery(bool $applyStatusFilter = false, bool $allExecutors = false)
     {
         $q = Job::query();
+
+        if (!$allExecutors) {
+            $q->where('executor_type', Job::EXECUTOR_PROSELVER);
+        }
 
         if ($this->companyId)     { $q->where('company_id', $this->companyId); }
         if ($this->transporterId) { $q->where('executing_company_id', $this->transporterId); }
@@ -165,28 +177,22 @@ new #[Layout('components.layouts.app')] class extends Component
         //  ROW 1 — KPI cards, one per pipeline stage + risk.
         //  All driven by transport_jobs, not inventory.
         // ─────────────────────────────────────────────────────────────
-        $intake = (clone $this->baseJobsQuery())->whereIn('status', self::G_INTAKE)->count();
-        // Ready-to-dispatch and Dispatched are ProSelver-operational
-        // counters — they answer "how many vehicles is my dispatch
-        // team about to send out / has out the door right now". An
-        // internal/3rd-party/self-collect job is the dealer's problem,
-        // not ours, so scoping to executor_type=proselver here stops
-        // those inflating ops's dispatch board.
-        $toDispatch = (clone $this->baseJobsQuery())
-            ->where('executor_type', Job::EXECUTOR_PROSELVER)
-            ->whereIn('status', self::G_TO_DISPATCH)
-            ->count();
-        $dispatched = (clone $this->baseJobsQuery())
-            ->where('executor_type', Job::EXECUTOR_PROSELVER)
-            ->whereIn('status', self::G_DISPATCHED)
-            ->count();
-        $onRoad = (clone $this->baseJobsQuery())->whereIn('status', self::G_IN_TRANSIT)->count();
+        // Every headline pipeline-stage KPI inherits the ProSelver-only
+        // scope from baseJobsQuery(). The "External Executors" awareness
+        // card further down opts out via baseJobsQuery(allExecutors: true)
+        // and applies its own executor filter for the bucket breakdown.
+        $intake     = (clone $this->baseJobsQuery())->whereIn('status', self::G_INTAKE)->count();
+        $toDispatch = (clone $this->baseJobsQuery())->whereIn('status', self::G_TO_DISPATCH)->count();
+        $dispatched = (clone $this->baseJobsQuery())->whereIn('status', self::G_DISPATCHED)->count();
+        $onRoad     = (clone $this->baseJobsQuery())->whereIn('status', self::G_IN_TRANSIT)->count();
 
         // External-executor awareness counter — surface what dealers
         // are self-handling so ops still has visibility even though
         // none of these inflate the dispatch board. Bucketed by type
-        // for the "External Executors" card further down.
-        $externalActive = (clone $this->baseJobsQuery())
+        // for the "External Executors" card further down. Opts out of
+        // the default ProSelver-only scope because we want the OTHER
+        // executors here.
+        $externalActive = (clone $this->baseJobsQuery(allExecutors: true))
             ->whereIn('status', self::ACTIVE_PHASE1)
             ->whereIn('executor_type', [Job::EXECUTOR_INTERNAL, Job::EXECUTOR_THIRD_PARTY, Job::EXECUTOR_SELF_COLLECT])
             ->selectRaw('executor_type, count(*) as n')
