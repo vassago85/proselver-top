@@ -253,6 +253,44 @@ class Job extends Model
         self::EXECUTOR_INTERNAL,
     ];
 
+    /**
+     * Decide where a newly-created booking should land in the workflow.
+     *
+     * Two axes drive this:
+     *
+     *   1. Workflow type. Companies on the 'faw'-style strict workflow
+     *      have an ops-side PO-verification gate (STATUS_PENDING_VERIFICATION)
+     *      that runs BEFORE anything else. That gate is only meaningful for
+     *      bookings created by ops on the customer's behalf — when the
+     *      customer themselves is the one typing in the booking through the
+     *      portal, they ARE the verification step, so callers pass
+     *      $bypassPoVerification=true to skip it.
+     *
+     *   2. Executor type. Historically every booking landed at RECEIVED so
+     *      the dealer could click "Confirm Order" to flip it to CONFIRMED
+     *      and release it for dispatch. That click is meaningful when
+     *      ProSelver is the executor — it's the dealer→ops handshake that
+     *      says "yes, please send a driver". For every other executor
+     *      (Internal Driver, 3rd-Party Courier, Self-Collect) ProSelver
+     *      isn't dispatching anything: the dealer already decided who's
+     *      moving the truck when they picked the executor. In those cases
+     *      the Confirm-Order step is pure paperwork, so we skip RECEIVED
+     *      entirely and land straight on CONFIRMED.
+     */
+    public static function initialStatusFor(
+        string $executor,
+        ?string $workflowType = null,
+        bool $bypassPoVerification = false,
+    ): string {
+        if ($workflowType === 'faw' && !$bypassPoVerification) {
+            return self::STATUS_PENDING_VERIFICATION;
+        }
+
+        return $executor === self::EXECUTOR_PROSELVER
+            ? self::STATUS_RECEIVED
+            : self::STATUS_CONFIRMED;
+    }
+
     // Statuses where flipping the executor is still safe. Once the
     // vehicle is in the truck (COLLECTED onward) we lock the executor:
     // changing it at that point would orphan the in-flight movement

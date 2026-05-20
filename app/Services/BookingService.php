@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\Company;
 use App\Models\Job;
+use App\Models\JobEvent;
 use App\Models\Location;
 use App\Models\SystemSetting;
 use App\Models\TransportRoute;
@@ -56,14 +57,30 @@ class BookingService
             $executorType = Job::EXECUTOR_PROSELVER;
         }
 
+        // Workflow + executor jointly decide the landing status. See
+        // Job::initialStatusFor() for the full rationale; in short:
+        //   - 'faw'-style workflow + ops-created booking  -> PENDING_VERIFICATION
+        //   - ProSelver-executor                          -> RECEIVED (dealer must click Confirm)
+        //   - Internal / 3rd-party / Self-collect         -> CONFIRMED (no Proselver handshake)
+        $initialStatus = Job::initialStatusFor(
+            $executorType,
+            $this->companyWorkflowType($data['company_id'] ?? null),
+            (bool) ($data['bypass_po_verification'] ?? false),
+        );
+
         $job = Job::create([
             'job_number' => $this->numberGenerator->generate(),
             'job_type' => Job::TYPE_TRANSPORT,
-            // Phase 1 workflow entry point. Whether the job needs a plant-side
-            // confirmation afterwards (FAW-style) vs jumps straight to CONFIRMED
-            // (Demo Motors-style) is decided downstream via
-            // Company::requiresExternalConfirmation(), NOT at creation time.
-            'status' => $this->initialBookingStatus($data['company_id'] ?? null),
+            'status' => $initialStatus,
+            // Stamp the customer-confirmation columns when we auto-skip
+            // the manual Confirm-Order step so the order timeline still
+            // shows WHO acknowledged the booking and WHEN. Without this
+            // the audit trail would show a CONFIRMED order with a null
+            // customer_confirmed_at, which looks like a bug.
+            'customer_confirmed_at' => $initialStatus === Job::STATUS_CONFIRMED ? now() : null,
+            'customer_confirmed_by' => $initialStatus === Job::STATUS_CONFIRMED
+                ? ($data['created_by_user_id'] ?? null)
+                : null,
             'company_id' => $data['company_id'],
             'created_by_user_id' => $data['created_by_user_id'],
             'transport_route_id' => $route->id,
@@ -126,6 +143,24 @@ class BookingService
             $this->calculateAndStoreDistanceOnly($job);
         }
 
+        // When we auto-skipped the manual Confirm step, leave a breadcrumb
+        // on the order's event timeline so anyone reviewing the audit
+        // trail later can see the order didn't sit at RECEIVED waiting
+        // for a click that never came — it was always meant to land at
+        // CONFIRMED. The text mirrors what the order page would show.
+        if ($initialStatus === Job::STATUS_CONFIRMED) {
+            JobEvent::create([
+                'job_id'     => $job->id,
+                'event_type' => 'auto_confirmed_on_create',
+                'event_at'   => now(),
+                'user_id'    => $data['created_by_user_id'] ?? null,
+                'notes'      => sprintf(
+                    'Auto-confirmed: %s executor — no ProSelver dispatch handshake needed.',
+                    Job::EXECUTOR_LABELS[$executorType] ?? $executorType,
+                ),
+            ]);
+        }
+
         return $job;
     }
 
@@ -159,7 +194,14 @@ class BookingService
         $job = Job::create([
             'job_number' => $this->numberGenerator->generate(),
             'job_type' => Job::TYPE_YARD_WORK,
-            'status' => $this->initialBookingStatus($data['company_id'] ?? null),
+            // Yard work is always Proselver crew on Proselver premises — no
+            // non-Proselver executor option exists for it — so it always
+            // routes via the standard RECEIVED → CONFIRMED flow.
+            'status' => Job::initialStatusFor(
+                Job::EXECUTOR_PROSELVER,
+                $this->companyWorkflowType($data['company_id'] ?? null),
+                (bool) ($data['bypass_po_verification'] ?? false),
+            ),
             'company_id' => $data['company_id'],
             'created_by_user_id' => $data['created_by_user_id'],
             'yard_location_id' => $data['yard_location_id'],
@@ -178,27 +220,16 @@ class BookingService
     }
 
     /**
-     * Where a brand-new booking lands on the workflow.
-     *
-     * Standard-workflow companies (dealers like Demo Motors, transporters, most
-     * OEMs) jump straight into the Phase 1 chain at STATUS_RECEIVED — no ops
-     * PO-verification gate, they can manage their own bookings.
-     *
-     * The legacy STATUS_PENDING_VERIFICATION gate is reserved for workflows
-     * that explicitly need an ops eye on the PO before anything else (e.g.
-     * 'faw' workflow_type). Extend the match below if another OEM needs the
-     * strict chain.
+     * Look up a company's workflow_type, or NULL if the booking isn't
+     * scoped to a company yet. Extracted so both Transport and Yard
+     * creation paths share the same lookup and Job::initialStatusFor()
+     * gets a consistent input.
      */
-    protected function initialBookingStatus(?int $companyId): string
+    protected function companyWorkflowType(?int $companyId): ?string
     {
-        $workflow = $companyId
+        return $companyId
             ? Company::whereKey($companyId)->value('workflow_type')
             : null;
-
-        return match ($workflow) {
-            'faw'   => Job::STATUS_PENDING_VERIFICATION,
-            default => Job::STATUS_RECEIVED,
-        };
     }
 
     protected function calculateAndStoreRoute(Job $job): void

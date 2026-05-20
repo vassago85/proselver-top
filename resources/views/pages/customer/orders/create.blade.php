@@ -220,10 +220,11 @@ new #[Layout('components.layouts.app')] class extends Component {
             'self_collect_name' => $this->selfCollectName ?: null,
             'self_collect_phone' => $this->selfCollectPhone ?: null,
             'self_collect_id_number' => $this->selfCollectIdNumber ?: null,
+            // Customer-portal bookings bypass the ops PO-verification
+            // gate (only relevant for 'faw'-style spreadsheet imports).
+            // The dealer typing it in themselves IS the verification.
+            'bypass_po_verification' => true,
         ]);
-
-        $job->status = Job::STATUS_RECEIVED;
-        $job->save();
 
         if ($this->poFile) {
             $disk = \App\Support\StorageDisk::forUploads();
