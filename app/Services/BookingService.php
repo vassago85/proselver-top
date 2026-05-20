@@ -148,12 +148,18 @@ class BookingService
         // trail later can see the order didn't sit at RECEIVED waiting
         // for a click that never came — it was always meant to land at
         // CONFIRMED. The text mirrors what the order page would show.
-        if ($initialStatus === Job::STATUS_CONFIRMED) {
+        //
+        // job_events.user_id is NOT NULL (->constrained() without
+        // ->nullable()), so we only write the breadcrumb when we have
+        // a real actor. Every legitimate booking path passes
+        // created_by_user_id, so this is defensive against an unknown
+        // caller — better to lose the audit row than 500 the booking.
+        if ($initialStatus === Job::STATUS_CONFIRMED && !empty($data['created_by_user_id'])) {
             JobEvent::create([
                 'job_id'     => $job->id,
                 'event_type' => 'auto_confirmed_on_create',
                 'event_at'   => now(),
-                'user_id'    => $data['created_by_user_id'] ?? null,
+                'user_id'    => $data['created_by_user_id'],
                 'notes'      => sprintf(
                     'Auto-confirmed: %s executor — no ProSelver dispatch handshake needed.',
                     Job::EXECUTOR_LABELS[$executorType] ?? $executorType,

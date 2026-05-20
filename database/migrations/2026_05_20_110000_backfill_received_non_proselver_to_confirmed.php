@@ -57,15 +57,41 @@ return new class extends Migration
                 'updated_at'            => $now,
             ]);
 
-        $events = $jobIds->map(fn ($id) => [
-            'job_id'     => $id,
-            'event_type' => 'auto_confirmed_on_create',
-            'event_at'   => $now,
-            'user_id'    => null,
-            'notes'      => 'Backfilled: legacy RECEIVED order with non-ProSelver executor flipped to CONFIRMED by 2026_05_20 migration.',
-            'created_at' => $now,
-            'updated_at' => $now,
-        ])->all();
+        // job_events.user_id is NOT NULL (->constrained() without
+        // ->nullable()), so we need a real user for the breadcrumb
+        // event. Pick the first super_admin / developer as the system
+        // actor; if none exists (fresh install with only seed data),
+        // fall back to the job's original creator. If even that is
+        // null on a particular row, skip the event for that row --
+        // the status flip is already persisted, the missing breadcrumb
+        // is non-fatal and shouldn't block the rest of the migration.
+        $systemActorId = DB::table('users')
+            ->join('user_roles', 'users.id', '=', 'user_roles.user_id')
+            ->join('roles', 'roles.id', '=', 'user_roles.role_id')
+            ->whereIn('roles.slug', ['super_admin', 'developer'])
+            ->where('users.is_active', true)
+            ->value('users.id');
+
+        $jobCreators = DB::table('transport_jobs')
+            ->whereIn('id', $jobIds)
+            ->pluck('created_by_user_id', 'id');
+
+        $events = [];
+        foreach ($jobIds as $id) {
+            $actorId = $systemActorId ?? ($jobCreators[$id] ?? null);
+            if ($actorId === null) {
+                continue;
+            }
+            $events[] = [
+                'job_id'     => $id,
+                'event_type' => 'auto_confirmed_on_create',
+                'event_at'   => $now,
+                'user_id'    => $actorId,
+                'notes'      => 'Backfilled: legacy RECEIVED order with non-ProSelver executor flipped to CONFIRMED by 2026_05_20 migration.',
+                'created_at' => $now,
+                'updated_at' => $now,
+            ];
+        }
 
         // Chunked insert so we don't blow past Postgres' parameter limit
         // if this migration ever runs against a large historical dataset.
