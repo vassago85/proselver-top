@@ -18,6 +18,13 @@ new #[Layout('components.layouts.app')] class extends Component {
     public bool $showUrgentModal = false;
     public string $urgentReason = '';
 
+    // Recall to planning. Ops-only override that pulls the job back
+    // to STATUS_CONFIRMED, clearing the driver and schedule so it
+    // re-enters the planning queue from scratch.  Valid from any
+    // pre-delivery status; see JobPolicy::recallToPlanning.
+    public bool $showRecallModal = false;
+    public string $recallReason = '';
+
     /*
      * Inline editing for the scheduled (collection) date. Ops needs this
      * because the bulk upload may set the wrong date, or operational
@@ -54,6 +61,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             'brand',
             'createdBy.companies',
             'damageReportReleasedBy:id,name',
+            'recalledBy:id,name',
         ]);
 
         // Auto-acknowledge damage for the dashboard strip the first time an
@@ -410,6 +418,36 @@ new #[Layout('components.layouts.app')] class extends Component {
         session()->flash('success', 'Urgent flag cleared.');
     }
 
+    /* ----------------------------------------------------------------
+     | Recall to planning
+     |---------------------------------------------------------------*/
+
+    public function openRecallModal(): void
+    {
+        $this->authorize('recallToPlanning', $this->job);
+        $this->recallReason = '';
+        $this->showRecallModal = true;
+    }
+
+    public function closeRecallModal(): void
+    {
+        $this->showRecallModal = false;
+        $this->recallReason = '';
+    }
+
+    public function recallToPlanning(): void
+    {
+        $this->authorize('recallToPlanning', $this->job);
+        $this->validate(['recallReason' => 'nullable|string|max:500']);
+
+        $this->job->recallToPlanning(auth()->user(), $this->recallReason);
+        $this->job->refresh()->load('recalledBy:id,name');
+
+        $this->showRecallModal = false;
+        $this->recallReason = '';
+        session()->flash('success', 'Order sent back to planning — driver cleared, schedule reset.');
+    }
+
     public function cancelOrder(): void
     {
         // Server-side guard. The UI hides the button when the user isn't
@@ -631,6 +669,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             'internalDriverOptions' => $internalDriverOptions,
             'canChangeExecutor' => $user->can('changeExecutor', $this->job),
             'canMarkUrgent' => $user->can('markUrgent', $this->job),
+            'canRecall' => $user->can('recallToPlanning', $this->job),
             'canArchive' => $user->can('archive', $this->job),
             'canUnarchive' => $user->can('unarchive', $this->job),
             'executorChoices' => Job::EXECUTOR_LABELS,
@@ -649,6 +688,30 @@ new #[Layout('components.layouts.app')] class extends Component {
             <span>Order {{ $job->job_number ?? $job->uuid }}</span>
         </div>
     </x-slot:header>
+
+    {{-- Recall banner: only renders when the job has been recalled at
+         least once.  Stays visible even after the order has been re-
+         planned so ops can see at a glance why it came back through
+         the queue (and who decided it).  Cleared automatically when
+         the order finally completes (recalled_at preserved in audit
+         log either way). --}}
+    @if($job->recalled_at)
+        <div class="mb-4 rounded-xl border-2 border-amber-300 bg-amber-50 px-4 py-3 flex items-start gap-3">
+            <svg class="h-5 w-5 mt-0.5 shrink-0 text-amber-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg>
+            <div class="min-w-0">
+                <div class="text-sm font-bold uppercase tracking-wider text-amber-900">Recalled to planning</div>
+                @if($job->recall_reason)
+                    <div class="mt-0.5 text-sm text-amber-900/90">{{ $job->recall_reason }}</div>
+                @endif
+                <div class="mt-0.5 text-[11px] text-amber-700">
+                    @if($job->recalledBy)
+                        Recalled by {{ $job->recalledBy->name }} ·
+                    @endif
+                    {{ $job->recalled_at->diffForHumans() }} · {{ $job->recalled_at->format('D d M Y H:i') }}
+                </div>
+            </div>
+        </div>
+    @endif
 
     @php
         // -------------------------------------------------------------
@@ -978,6 +1041,15 @@ new #[Layout('components.layouts.app')] class extends Component {
                                 Cancel Order
                             </button>
                         @endcan
+                    @endif
+
+                    @if($canRecall)
+                        <button wire:click="openRecallModal"
+                            class="inline-flex items-center gap-2 rounded-lg border border-amber-300 bg-white px-3.5 py-2.5 text-sm font-medium text-amber-800 hover:bg-amber-50 transition-colors"
+                            title="Reset driver + schedule and push the order back into the planning queue.">
+                            <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg>
+                            Send back to planning
+                        </button>
                     @endif
 
                     @if($canMarkUrgent)
@@ -1533,6 +1605,62 @@ new #[Layout('components.layouts.app')] class extends Component {
                 </button>
                 <button wire:click="saveUrgent" class="rounded-lg bg-fuchsia-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-fuchsia-500 transition-colors">
                     Mark URGENT
+                </button>
+            </div>
+        </div>
+    </div>
+    @endif
+
+    {{-- Recall to Planning Modal --}}
+    @if($showRecallModal)
+    @php
+        $recallOnRoad = in_array($job->status, [Job::STATUS_COLLECTED, Job::STATUS_IN_TRANSIT], true);
+    @endphp
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60" wire:click.self="closeRecallModal">
+        <div class="relative w-full max-w-md mx-4 bg-white rounded-2xl shadow-2xl overflow-hidden">
+            <div class="border-b border-gray-200 px-6 py-4 bg-amber-50">
+                <div class="flex items-center gap-2">
+                    <svg class="h-5 w-5 text-amber-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg>
+                    <h3 class="text-lg font-semibold text-amber-900">Send back to planning</h3>
+                </div>
+                <p class="text-sm text-amber-700 mt-0.5">{{ $job->job_number }}</p>
+            </div>
+            <div class="px-6 py-5 space-y-4">
+                <div @class([
+                        'rounded-lg p-4 text-sm border',
+                        'bg-red-50 border-red-200 text-red-900'        => $recallOnRoad,
+                        'bg-amber-50 border-amber-200 text-amber-900'  => !$recallOnRoad,
+                ])>
+                    @if($recallOnRoad)
+                        <strong>The truck has already left the depot.</strong>
+                        Confirm only if the vehicle is being recalled to the yard. The driver will need to be contacted out-of-band to return.
+                    @else
+                        The assigned driver and scheduled date will be cleared. The order returns to <em>Collection Confirmed</em> at the top of the planning queue.
+                    @endif
+                </div>
+                <ul class="text-xs text-gray-600 space-y-1 pl-4 list-disc">
+                    <li>Driver assignment cleared</li>
+                    <li>Scheduled date &amp; ready-time cleared</li>
+                    <li>Collection / in-transit timestamps wiped</li>
+                    <li>URGENT flag, customer confirmation, PO data and documents preserved</li>
+                </ul>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1.5">Reason <span class="text-gray-400 font-normal">(optional)</span></label>
+                    <textarea wire:model="recallReason" rows="3" maxlength="500" placeholder="e.g. Driver unavailable, vehicle not ready, customer rescheduled…"
+                        class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-amber-500 focus:ring-amber-500"></textarea>
+                    @error('recallReason') <p class="mt-1 text-xs text-red-600">{{ $message }}</p> @enderror
+                </div>
+            </div>
+            <div class="border-t border-gray-200 px-6 py-4 flex items-center justify-end gap-3 bg-gray-50">
+                <button wire:click="closeRecallModal" type="button" class="rounded-lg px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-100 transition-colors">
+                    Keep as is
+                </button>
+                <button wire:click="recallToPlanning" @class([
+                        'rounded-lg px-5 py-2.5 text-sm font-semibold text-white transition-colors',
+                        'bg-red-600 hover:bg-red-500'     => $recallOnRoad,
+                        'bg-amber-600 hover:bg-amber-500' => !$recallOnRoad,
+                ])>
+                    Send back to planning
                 </button>
             </div>
         </div>

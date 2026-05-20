@@ -321,9 +321,24 @@ new #[Layout('components.layouts.app')] class extends Component {
                     </thead>
                     <tbody class="divide-y divide-gray-200">
                         @forelse($jobs as $job)
+                        @php
+                            // Surface freshly-recalled orders so ops sees these are returns
+                            // rather than first-time confirmations.  24h window matches how
+                            // long ops typically takes to re-plan after a recall.
+                            $recentlyRecalled = $job->recalled_at && $job->recalled_at->gt(now()->subDay());
+                        @endphp
                         <tr class="hover:bg-gray-50" wire:key="plan-{{ $job->id }}">
                             <td class="px-6 py-4 text-sm font-medium text-blue-600">
-                                <a href="{{ route('admin.orders.show', $job) }}" class="hover:underline">{{ $job->job_number ?? '—' }}</a>
+                                <div class="flex items-center gap-2">
+                                    <a href="{{ route('admin.orders.show', $job) }}" class="hover:underline">{{ $job->job_number ?? '—' }}</a>
+                                    @if($recentlyRecalled)
+                                        <span class="inline-flex items-center gap-1 rounded-md bg-amber-100 text-amber-800 ring-1 ring-amber-200 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider"
+                                            title="Recalled {{ $job->recalled_at->diffForHumans() }}@if($job->recall_reason) — {{ $job->recall_reason }}@endif">
+                                            <svg class="h-2.5 w-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg>
+                                            Recalled
+                                        </span>
+                                    @endif
+                                </div>
                             </td>
                             <td class="px-6 py-4 text-sm text-gray-900">{{ $job->company?->name ?? '—' }}</td>
                             <td class="px-6 py-4 text-sm text-gray-900">{{ $job->brand?->name }} {{ $job->model_name }}</td>

@@ -346,6 +346,18 @@ class JobPolicy
      * while the vehicle hasn't been collected yet -- once it's on the road
      * marking it urgent doesn't change anything operationally.
      */
+    /**
+     * Recall a job back to STATUS_CONFIRMED so it re-enters the
+     * planning queue.  Internal-only (ops decision -- never exposed
+     * to customers, dealers, drivers, body builders).  Status gate
+     * lives on the Job model itself (isRecallable) so the policy and
+     * the UI can't drift on what's recallable.
+     */
+    public function recallToPlanning(User $user, Job $job): bool
+    {
+        return $user->isInternal() && $job->isRecallable();
+    }
+
     public function markUrgent(User $user, Job $job): bool
     {
         if ($user->isInternal()) {

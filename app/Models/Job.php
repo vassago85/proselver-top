@@ -338,6 +338,9 @@ class Job extends Model
         'invoiced_at',
         'cancelled_at',
         'cancellation_reason',
+        'recalled_at',
+        'recalled_by_user_id',
+        'recall_reason',
         'distance_km',
         'estimated_duration_minutes',
         'is_round_trip',
@@ -377,6 +380,7 @@ class Job extends Model
             'po_verified_at' => 'datetime',
             'is_urgent' => 'boolean',
             'urgent_marked_at' => 'datetime',
+            'recalled_at' => 'datetime',
             'vehicle_reassigned_at' => 'datetime',
             'hourly_rate' => 'decimal:2',
             'base_transport_price' => 'decimal:2',
@@ -729,6 +733,110 @@ class Job extends Model
             ['is_urgent' => true, 'urgent_reason' => $previousReason],
             ['is_urgent' => false, 'by' => $by->id],
             $previousReason
+        );
+    }
+
+    /* ----------------------------------------------------------------
+     | Recall to planning
+     |
+     | Ops override that pulls a job back to STATUS_CONFIRMED from any
+     | pre-delivery state -- including COLLECTED / IN_TRANSIT, where
+     | the truck has physically left the depot and is being recalled.
+     |
+     | This deliberately bypasses transitionTo() because COLLECTED and
+     | IN_TRANSIT have no formal backwards step in the workflow map by
+     | design (regular transitions are forward-only); recall is an
+     | admin action, audit-logged separately.  Clearing the driver and
+     | scheduled date is what makes the job re-enter the planning queue
+     | from scratch as the user requested ("full fresh start").
+     |
+     | URGENT, customer confirmation, PO data, locations and documents
+     | are all preserved -- only the dispatch arrangements (driver +
+     | schedule + collection timestamps) are reset.
+     |---------------------------------------------------------------*/
+
+    public function recalledBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'recalled_by_user_id');
+    }
+
+    /**
+     * Statuses from which a recall makes operational sense.  Pre-
+     * delivery only -- DELIVERED / COMPLETED / CANCELLED are
+     * terminal physical states and never recallable.  Pre-planning
+     * statuses (PENDING_VERIFICATION etc.) aren't included because
+     * there's nothing dispatch-wise to undo.
+     */
+    public function isRecallable(): bool
+    {
+        return in_array($this->status, [
+            self::STATUS_PLANNED,
+            self::STATUS_DRIVER_ASSIGNED,
+            self::STATUS_READY_FOR_COLLECTION,
+            self::STATUS_COLLECTED,
+            self::STATUS_IN_TRANSIT,
+        ], true);
+    }
+
+    public function recallToPlanning(User $by, ?string $reason = null): void
+    {
+        if (! $this->isRecallable()) {
+            throw new \RuntimeException(sprintf(
+                'Job %s is not recallable from status %s.',
+                $this->job_number ?? $this->id,
+                $this->status
+            ));
+        }
+
+        $reason = $reason !== null ? trim($reason) : null;
+        if ($reason === '') {
+            $reason = null;
+        }
+
+        $before = [
+            'status'                 => $this->status,
+            'driver_user_id'         => $this->driver_user_id,
+            'scheduled_date'         => $this->scheduled_date?->toIso8601String(),
+            'planned_at'             => $this->planned_at?->toIso8601String(),
+            'collected_at'           => $this->collected_at?->toIso8601String(),
+            'in_transit_at'          => $this->in_transit_at?->toIso8601String(),
+        ];
+
+        \Illuminate\Support\Facades\DB::transaction(function () use ($by, $reason) {
+            $this->forceFill([
+                'status'                   => self::STATUS_CONFIRMED,
+                'driver_user_id'           => null,
+                'scheduled_date'           => null,
+                'scheduled_ready_time'     => null,
+                'actual_ready_time'        => null,
+                'planned_at'               => null,
+                'ready_for_collection_at'  => null,
+                'collected_at'             => null,
+                'in_transit_at'            => null,
+                'recalled_at'              => now(),
+                'recalled_by_user_id'      => $by->id,
+                'recall_reason'            => $reason,
+            ])->save();
+
+            $this->events()->create([
+                'event_type' => 'recalled_to_planning',
+                'event_at'   => now(),
+                'user_id'    => $by->id,
+                'notes'      => $reason,
+            ]);
+        });
+
+        \App\Services\AuditService::log(
+            'job_recalled',
+            'job',
+            $this->id,
+            $before,
+            [
+                'status'                => self::STATUS_CONFIRMED,
+                'recalled_by_user_id'   => $by->id,
+                'recall_reason'         => $reason,
+            ],
+            $reason
         );
     }
 
