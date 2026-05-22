@@ -17,8 +17,10 @@ use App\Services\TrackSolid\Client as TrackSolidClient;
 use App\Services\TrackSolid\TrackSolidClientInterface;
 use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\ServiceProvider;
+use Livewire\Livewire;
 use Throwable;
 
 class AppServiceProvider extends ServiceProvider
@@ -49,6 +51,31 @@ class AppServiceProvider extends ServiceProvider
 
         static::hydrateStorageConfigFromDatabase();
         static::hydrateMailConfigFromDatabase();
+
+        // Pin Livewire's update endpoint to a stable URL.
+        //
+        // Livewire 4 randomises the update route per-boot (a hash like
+        // "/livewire-7c04dcfc/update") as an anti-fingerprinting measure.
+        // The hash gets baked into every rendered page's JavaScript, so
+        // when we deploy and the boot regenerates a new hash, every
+        // browser tab that's still on a pre-deploy page suddenly posts
+        // its next Livewire interaction (pagination, search debounce,
+        // wire:click, etc.) to a URL the new app no longer knows about
+        // and gets a 405 Method Not Allowed -- which renders as the
+        // generic "Oops! An Error Occurred" page from Symfony's default
+        // exception handler, not a Livewire-specific message.
+        //
+        // We've already had ops hit this twice on the production box
+        // (most recently /admin/reports → filter FAW → next page after
+        // a routine deploy). Hard refresh fixes individual users, but
+        // every redeploy creates a fresh wave of broken stale tabs.
+        //
+        // Pinning the route trades a tiny bit of fingerprint surface
+        // (which path the POST hits) for predictability across deploys.
+        // It also matches how Livewire 3 has worked for years.
+        Livewire::setUpdateRoute(function ($handle) {
+            return Route::post('/livewire/update', $handle);
+        });
     }
 
     /**
