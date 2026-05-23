@@ -73,8 +73,19 @@ class AppServiceProvider extends ServiceProvider
         // Pinning the route trades a tiny bit of fingerprint surface
         // (which path the POST hits) for predictability across deploys.
         // It also matches how Livewire 3 has worked for years.
+        //
+        // CRITICAL: ->middleware('web') is REQUIRED. Livewire's own
+        // default registration includes it (HandleRequests::boot at
+        // vendor line 26), and dropping it breaks anything that relies
+        // on the session being warm during an update — most visibly
+        // file uploads, which round-trip through a SECOND endpoint
+        // (/livewire-*/upload-file) whose signed-URL validation needs
+        // the encrypted session cookie. Without it, selecting a file
+        // in a wire:model file input causes the upload fetch to 401/419
+        // and Livewire morphs the component back to its initial state,
+        // which looks like "the page reset" to the user.
         Livewire::setUpdateRoute(function ($handle) {
-            return Route::post('/livewire/update', $handle);
+            return Route::post('/livewire/update', $handle)->middleware('web');
         });
     }
 
