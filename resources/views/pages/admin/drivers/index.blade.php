@@ -1,12 +1,13 @@
 <?php
-use App\Models\User;
 use App\Models\DriverProfile;
+use App\Models\Job;
 use App\Models\SystemSetting;
-use Livewire\Volt\Component;
+use App\Models\User;
+use Carbon\Carbon;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\Url;
+use Livewire\Volt\Component;
 use Livewire\WithPagination;
-use Carbon\Carbon;
 
 new #[Layout('components.layouts.app')] class extends Component {
     use WithPagination;
@@ -54,6 +55,72 @@ new #[Layout('components.layouts.app')] class extends Component {
     {
         $user = User::findOrFail($userId);
         $user->update(['is_active' => !$user->is_active]);
+    }
+
+    /**
+     * Soft-delete a driver. Used when ops needs to remove a duplicate, a
+     * mis-typed entry, or somebody who has actually left — the row stays
+     * in the database (deleted_at) so historical jobs that reference
+     * driver_user_id still resolve, but the driver disappears from every
+     * picker / board / dropdown thanks to the default global scope on
+     * the SoftDeletes trait.
+     *
+     * Refuses to delete drivers who currently sit on a live movement —
+     * we'd be hiding the assigned driver mid-trip otherwise. Ops must
+     * reassign the job(s) first, then come back and delete.
+     */
+    public function deleteDriver(int $userId): void
+    {
+        $actor = auth()->user();
+        abort_unless($actor?->canManageInternalUsers(), 403, 'You may not delete drivers.');
+
+        if ($actor->id === $userId) {
+            session()->flash('error', 'You cannot delete your own account from here.');
+            return;
+        }
+
+        $driver = User::with('roles')->findOrFail($userId);
+
+        // Rank guard mirrors the user-edit form: you cannot remove a user
+        // whose highest role outranks (or equals) yours, except as a
+        // developer. In practice drivers sit far below admin tiers so
+        // this is mostly belt-and-braces against role-config drift.
+        if (!$actor->isDeveloper() && $driver->highestRoleLevel() >= $actor->highestRoleLevel()) {
+            session()->flash('error', 'You may not delete a user at or above your own role level.');
+            return;
+        }
+
+        // Don't soft-delete a driver mid-trip. We cover the full
+        // "actively dispatched" range: from driver_assigned through
+        // in_transit. Once a movement is COMPLETED the driver_user_id
+        // is just history and a soft-delete leaves it intact.
+        $liveJobCount = Job::where('driver_user_id', $userId)
+            ->whereIn('status', [
+                Job::STATUS_DRIVER_ASSIGNED,
+                Job::STATUS_READY_FOR_COLLECTION,
+                Job::STATUS_COLLECTED,
+                Job::STATUS_IN_TRANSIT,
+            ])
+            ->count();
+
+        if ($liveJobCount > 0) {
+            session()->flash(
+                'error',
+                "Cannot delete {$driver->name}: they are currently assigned to {$liveJobCount} live "
+                . \Illuminate\Support\Str::plural('job', $liveJobCount)
+                . '. Reassign the job(s) first, then delete the driver.'
+            );
+            return;
+        }
+
+        // Detach company memberships first so /admin/companies/{id} stops
+        // listing them in the Users table. Then soft-delete the user
+        // itself — driverProfile is left in place because it's tied to
+        // user_id with cascade-on-delete only at hard-delete time.
+        $driver->companies()->detach();
+        $driver->delete();
+
+        session()->flash('success', "Deleted {$driver->name}. Their historical jobs still reference them.");
     }
 
     protected function expiryBadge(?string $date, int $warnMonths): string
@@ -523,8 +590,13 @@ new #[Layout('components.layouts.app')] class extends Component {
                         <div class="flex items-center justify-end gap-2">
                             <a href="{{ route('admin.drivers.edit', $driver) }}" class="text-blue-600 hover:text-blue-800 font-medium">Edit</a>
                             <button wire:click="toggleActive({{ $driver->id }})" wire:confirm="Are you sure?"
-                                class="{{ $driver->is_active ? 'text-red-600 hover:text-red-800' : 'text-green-600 hover:text-green-800' }} font-medium">
+                                class="{{ $driver->is_active ? 'text-amber-600 hover:text-amber-800' : 'text-green-600 hover:text-green-800' }} font-medium">
                                 {{ $driver->is_active ? 'Deactivate' : 'Activate' }}
+                            </button>
+                            <button wire:click="deleteDriver({{ $driver->id }})"
+                                wire:confirm="Delete {{ $driver->name }}?\n\nThis hides them from every list, picker and board. Historical jobs still reference them. Use Deactivate instead if they're just on leave."
+                                class="text-red-600 hover:text-red-800 font-medium">
+                                Delete
                             </button>
                         </div>
                     </td>
@@ -692,8 +764,13 @@ new #[Layout('components.layouts.app')] class extends Component {
                             Edit
                         </a>
                         <button wire:click="toggleActive({{ $driver->id }})" wire:confirm="Are you sure?"
-                            class="inline-flex items-center rounded-md px-3 py-1.5 text-xs font-semibold {{ $driver->is_active ? 'bg-red-50 text-red-700 hover:bg-red-100' : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100' }}">
+                            class="inline-flex items-center rounded-md px-3 py-1.5 text-xs font-semibold {{ $driver->is_active ? 'bg-amber-50 text-amber-700 hover:bg-amber-100' : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100' }}">
                             {{ $driver->is_active ? 'Deactivate' : 'Activate' }}
+                        </button>
+                        <button wire:click="deleteDriver({{ $driver->id }})"
+                            wire:confirm="Delete {{ $driver->name }}?\n\nThis hides them from every list, picker and board. Historical jobs still reference them. Use Deactivate instead if they're just on leave."
+                            class="inline-flex items-center rounded-md bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-100">
+                            Delete
                         </button>
                     </div>
                 </div>
