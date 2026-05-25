@@ -4,6 +4,7 @@ namespace Database\Seeders;
 
 use App\Models\Brand;
 use App\Models\Company;
+use App\Models\CompanyGroup;
 use App\Models\DriverProfile;
 use App\Models\Location;
 use App\Models\User;
@@ -212,6 +213,84 @@ class DemoSeeder extends Seeder
             ['company_name' => 'Demo Motors Pretoria', 'company_id' => $company->id],
             ['address' => '45 Church St, Pretoria', 'city' => 'Pretoria', 'province' => 'Gauteng', 'customer_name' => 'Jane Dealer', 'customer_phone' => '012 345 6789', 'company_id' => $company->id]
         );
+
+        // ===== CFAO GROUP (Williams Hunt dealerships) =====
+        $cfao = CompanyGroup::firstOrCreate(
+            ['normalized_name' => 'cfao'],
+            ['name' => 'CFAO', 'is_active' => true]
+        );
+
+        // Williams Hunt Pretoria
+        $whPretoria = Company::firstOrCreate(
+            ['normalized_name' => 'williams hunt pretoria'],
+            [
+                'name'             => 'Williams Hunt Pretoria',
+                'type'             => 'dealer',
+                'workflow_type'    => 'standard',
+                'company_group_id' => $cfao->id,
+                'address'          => 'Centurion, Pretoria',
+                'phone'            => '012 328 6580',
+                'billing_email'    => 'accounts@williamshuntpretoria.test',
+            ]
+        );
+        Location::firstOrCreate(
+            ['company_name' => 'Williams Hunt Pretoria', 'company_id' => $whPretoria->id],
+            ['address' => 'Centurion', 'city' => 'Pretoria', 'province' => 'Gauteng', 'customer_name' => 'Dealership Manager', 'customer_phone' => '012 328 6580', 'company_id' => $whPretoria->id]
+        );
+        $whPretoriaAdmin = User::firstOrCreate(
+            ['username' => 'wh_pretoria'],
+            ['name' => 'WH Pretoria Admin', 'email' => 'admin@williamshuntpretoria.test', 'password' => $password, 'is_active' => true]
+        );
+        $whPretoriaAdmin->assignRole('dealer_principal');
+        $whPretoria->users()->syncWithoutDetaching([$whPretoriaAdmin->id => ['location_id' => null]]);
+
+        // Williams Hunt Midrand
+        $whMidrand = Company::firstOrCreate(
+            ['normalized_name' => 'williams hunt midrand'],
+            [
+                'name'             => 'Williams Hunt Midrand',
+                'type'             => 'dealer',
+                'workflow_type'    => 'standard',
+                'company_group_id' => $cfao->id,
+                'address'          => 'Midrand, Gauteng',
+                'phone'            => '011 254 3294',
+                'billing_email'    => 'accounts@williamshuntmidrand.test',
+            ]
+        );
+        Location::firstOrCreate(
+            ['company_name' => 'Williams Hunt Midrand', 'company_id' => $whMidrand->id],
+            ['address' => 'Midrand', 'city' => 'Midrand', 'province' => 'Gauteng', 'customer_name' => 'Dealership Manager', 'customer_phone' => '011 254 3294', 'company_id' => $whMidrand->id]
+        );
+        $whMidrandAdmin = User::firstOrCreate(
+            ['username' => 'wh_midrand'],
+            ['name' => 'WH Midrand Admin', 'email' => 'admin@williamshuntmidrand.test', 'password' => $password, 'is_active' => true]
+        );
+        $whMidrandAdmin->assignRole('dealer_principal');
+        $whMidrand->users()->syncWithoutDetaching([$whMidrandAdmin->id => ['location_id' => null]]);
+
+        // Williams Hunt Roodepoort
+        $whRoodepoort = Company::firstOrCreate(
+            ['normalized_name' => 'williams hunt roodepoort'],
+            [
+                'name'             => 'Williams Hunt Roodepoort',
+                'type'             => 'dealer',
+                'workflow_type'    => 'standard',
+                'company_group_id' => $cfao->id,
+                'address'          => 'Roodepoort, Gauteng',
+                'phone'            => '011 279 5695',
+                'billing_email'    => 'accounts@williamshuntroodepoort.test',
+            ]
+        );
+        Location::firstOrCreate(
+            ['company_name' => 'Williams Hunt Roodepoort', 'company_id' => $whRoodepoort->id],
+            ['address' => 'Roodepoort', 'city' => 'Roodepoort', 'province' => 'Gauteng', 'customer_name' => 'Dealership Manager', 'customer_phone' => '011 279 5695', 'company_id' => $whRoodepoort->id]
+        );
+        $whRoodepoortAdmin = User::firstOrCreate(
+            ['username' => 'wh_roodepoort'],
+            ['name' => 'WH Roodepoort Admin', 'email' => 'admin@williamshuntroodepoort.test', 'password' => $password, 'is_active' => true]
+        );
+        $whRoodepoortAdmin->assignRole('dealer_principal');
+        $whRoodepoort->users()->syncWithoutDetaching([$whRoodepoortAdmin->id => ['location_id' => null]]);
 
         // ===== DRIVERS WITH FULL PROFILES =====
         $driver1 = User::firstOrCreate(
