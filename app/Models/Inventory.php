@@ -51,6 +51,7 @@ class Inventory extends Model
         'brand_id',
         'model_name',
         'status',
+        'share_with_group',
         'delivered_at',
         'delivered_via_job_id',
     ];
@@ -59,6 +60,7 @@ class Inventory extends Model
     {
         return [
             'delivered_at' => 'datetime',
+            'share_with_group' => 'boolean',
         ];
     }
 
@@ -112,7 +114,24 @@ class Inventory extends Model
             return $query;
         }
 
-        return $query->whereIn('owner_company_id', $user->operatingCompanyIds());
+        $myCompanyIds = $user->operatingCompanyIds();
+        $siblingCompanyIds = $user->groupSiblingCompanyIds();
+
+        // Branch the WHERE so the dealer always sees their own stock
+        // (regardless of share_with_group) AND additionally sees stock
+        // owned by sibling dealerships in the same group, but only when
+        // the sibling dealer has flipped share_with_group to true.
+        // Stock always BELONGS to its owner_company_id — this is just
+        // a read-side overview, never an ownership transfer.
+        return $query->where(function (Builder $q) use ($myCompanyIds, $siblingCompanyIds) {
+            $q->whereIn('owner_company_id', $myCompanyIds);
+            if (!empty($siblingCompanyIds)) {
+                $q->orWhere(function (Builder $sub) use ($siblingCompanyIds) {
+                    $sub->whereIn('owner_company_id', $siblingCompanyIds)
+                        ->where('share_with_group', true);
+                });
+            }
+        });
     }
 
     public function isActiveStock(): bool

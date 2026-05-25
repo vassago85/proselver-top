@@ -2,6 +2,7 @@
 
 use App\Models\Brand;
 use App\Models\Company;
+use App\Models\CompanyGroup;
 use App\Models\Job;
 use App\Models\Location;
 use App\Models\Role;
@@ -23,6 +24,10 @@ new #[Layout('components.layouts.app')] class extends Component {
     public string $phone = '';
     public bool $isActive = true;
     public array $selectedBrandIds = [];
+    // Group FK as string for the <select> binding. Empty = no group;
+    // "__new__" = create-on-save (matches the index modal's UX).
+    public string $groupId = '';
+    public string $newGroupName = '';
 
     public bool $editing = false;
 
@@ -38,6 +43,17 @@ new #[Layout('components.layouts.app')] class extends Component {
     public string $newUserPassword = '';
     public bool $generateNewUserPassword = true;
     public string $newUserRoleSlug = '';
+
+    // ----- "Attach existing user" inline form ---------------------------
+    // The /admin/users/create page is for brand-new accounts. When the
+    // person already exists (e.g. a CFAO ops manager who covers another
+    // CFAO dealership) admin needs a way to link the existing User row
+    // to this company without bouncing through /admin/users/{id}/edit.
+    // attachableUsers in with() filters to active accounts that are
+    // either un-linked OR linked elsewhere — anyone already on this
+    // company is hidden so the dropdown is clean.
+    public bool $showAttachUser = false;
+    public ?int $attachUserId = null;
 
     // ----- Inline "Add location" form state -----------------------------
     // Google Places autocomplete populates address/city/province/lat/lng
@@ -71,6 +87,8 @@ new #[Layout('components.layouts.app')] class extends Component {
         $this->phone = $this->company->phone ?? '';
         $this->isActive = $this->company->is_active;
         $this->selectedBrandIds = $this->company->brands()->pluck('brands.id')->map(fn($id) => (string) $id)->toArray();
+        $this->groupId = $this->company->company_group_id ? (string) $this->company->company_group_id : '';
+        $this->newGroupName = '';
     }
 
     protected function defaultRoleSlugForType(string $type): string
@@ -96,7 +114,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         // oem, body_builder, transporter, yard, internal, customer)
         // rather than the old 3-value subset, so admin can promote /
         // change a company without surgery on the DB.
-        $this->validate([
+        $rules = [
             'name' => 'required|string|max:255',
             'type' => 'required|in:' . implode(',', Company::TYPES),
             'workflowType' => 'required|in:standard,faw',
@@ -106,7 +124,29 @@ new #[Layout('components.layouts.app')] class extends Component {
             'phone' => 'nullable|string|max:30',
             'selectedBrandIds' => 'array',
             'selectedBrandIds.*' => 'exists:brands,id',
-        ]);
+            'groupId' => 'nullable|string',
+        ];
+
+        if ($this->groupId === '__new__') {
+            $rules['newGroupName'] = 'required|string|max:255|unique:company_groups,name';
+        } elseif ($this->groupId !== '') {
+            $rules['groupId'] = 'required|exists:company_groups,id';
+        }
+
+        $this->validate($rules);
+
+        // Resolve the group FK in the same flow the index modal uses,
+        // so admins get a single "save" press whether they're picking
+        // an existing group or naming a new one inline.
+        $resolvedGroupId = null;
+        if ($this->groupId === '__new__') {
+            $resolvedGroupId = CompanyGroup::create([
+                'name'      => $this->newGroupName,
+                'is_active' => true,
+            ])->id;
+        } elseif ($this->groupId !== '') {
+            $resolvedGroupId = (int) $this->groupId;
+        }
 
         $this->company->update([
             'name' => $this->name,
@@ -116,12 +156,14 @@ new #[Layout('components.layouts.app')] class extends Component {
             'vat_number' => $this->vatNumber,
             'billing_email' => $this->billingEmail,
             'phone' => $this->phone,
+            'company_group_id' => $resolvedGroupId,
             'is_active' => $this->isActive,
         ]);
 
         $this->company->brands()->sync(array_map('intval', $this->selectedBrandIds));
 
         $this->editing = false;
+        $this->fillForm();
         session()->flash('success', 'Company updated.');
     }
 
@@ -200,6 +242,59 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         $this->showAddUser = false;
         $this->resetAddUserForm();
+    }
+
+    // ----- Attach-existing-user actions ---------------------------------
+
+    public function toggleAttachUser(): void
+    {
+        $this->showAttachUser = !$this->showAttachUser;
+        if (!$this->showAttachUser) {
+            $this->attachUserId = null;
+            $this->resetErrorBag(['attachUserId']);
+        }
+    }
+
+    public function attachExistingUser(): void
+    {
+        $actor = auth()->user();
+        abort_unless($actor?->canManageInternalUsers(), 403, 'You may not attach users.');
+
+        $this->validate([
+            'attachUserId' => 'required|integer|exists:users,id',
+        ]);
+
+        $target = User::findOrFail($this->attachUserId);
+
+        // Rank guard: same rule as the standalone edit form. A lower-rank
+        // manager cannot attach a senior user to anything; otherwise
+        // ops_manager could quietly bind a super_admin to a random
+        // dealership and use that as a back-door to that org's data.
+        if (!$actor->isDeveloper() && $target->highestRoleLevel() >= $actor->highestRoleLevel()) {
+            abort(403, 'You may not attach a user at or above your own role level.');
+        }
+
+        $target->companies()->syncWithoutDetaching([$this->company->id]);
+
+        session()->flash('success', "Linked {$target->name} to {$this->company->name}.");
+        $this->showAttachUser = false;
+        $this->attachUserId = null;
+    }
+
+    public function detachUser(int $userId): void
+    {
+        $actor = auth()->user();
+        abort_unless($actor?->canManageInternalUsers(), 403, 'You may not unlink users.');
+
+        $target = User::findOrFail($userId);
+
+        if (!$actor->isDeveloper() && $target->highestRoleLevel() >= $actor->highestRoleLevel()) {
+            abort(403, 'You may not unlink a user at or above your own role level.');
+        }
+
+        $target->companies()->detach($this->company->id);
+
+        session()->flash('success', "Unlinked {$target->name} from {$this->company->name}.");
     }
 
     // ----- Inline add-location actions ----------------------------------
@@ -317,6 +412,22 @@ new #[Layout('components.layouts.app')] class extends Component {
             ->sortBy(fn ($r) => ($tierOrder[$r->tier] ?? 99) . '|' . $r->name)
             ->values();
 
+        $groups = CompanyGroup::where('is_active', true)
+            ->orWhere('id', $this->company->company_group_id)
+            ->orderBy('name')
+            ->get(['id', 'name']);
+
+        // Candidate users for the "Attach existing user" picker. Anyone
+        // active and not already on this company is fair game — drivers,
+        // dealer staff from a sister branch, internal ops, etc. The
+        // server-side rank guard in attachExistingUser() does the final
+        // authorisation check; this just keeps the dropdown short.
+        $existingMemberIds = $users->pluck('id')->all();
+        $attachableUsers = User::where('is_active', true)
+            ->whereNotIn('id', $existingMemberIds)
+            ->orderBy('name')
+            ->get(['id', 'name', 'email']);
+
         return [
             'users'            => $users,
             'orderStats'       => $orderStats,
@@ -325,6 +436,8 @@ new #[Layout('components.layouts.app')] class extends Component {
             'companyBrands'    => $companyBrands,
             'typeLabels'       => $typeLabels,
             'assignableRoles'  => $assignableRoles,
+            'groups'           => $groups,
+            'attachableUsers'  => $attachableUsers,
             'canCreateUsers'   => (bool) $actor?->canManageInternalUsers(),
             'canManageCompany' => Gate::allows('update', $this->company),
         ];
@@ -396,6 +509,24 @@ new #[Layout('components.layouts.app')] class extends Component {
                                 <option value="standard">Standard</option>
                                 <option value="faw">FAW (requires customer confirmation)</option>
                             </select>
+                        </div>
+                        <div class="sm:col-span-2">
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Group</label>
+                            <select wire:model.live="groupId" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
+                                <option value="">— No group —</option>
+                                @foreach($groups as $g)
+                                    <option value="{{ $g->id }}">{{ $g->name }}</option>
+                                @endforeach
+                                <option value="__new__">+ Create new group…</option>
+                            </select>
+                            @if($groupId === '__new__')
+                                <input wire:model="newGroupName" type="text" placeholder="New group name (e.g. MCCARTHY)" class="mt-2 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
+                                @error('newGroupName') <p class="text-red-600 text-xs mt-1">{{ $message }}</p> @enderror
+                            @endif
+                            @error('groupId') <p class="text-red-600 text-xs mt-1">{{ $message }}</p> @enderror
+                            <p class="mt-1 text-xs text-gray-500">
+                                Optional. Group dealerships under their holding company (e.g. MCCARTHY, CFAO) so siblings share an overview.
+                            </p>
                         </div>
                         <div>
                             <label class="block text-sm font-medium text-gray-700 mb-1">Phone</label>
@@ -484,6 +615,16 @@ new #[Layout('components.layouts.app')] class extends Component {
                         </dd>
                     </div>
                     <div>
+                        <dt class="text-sm text-gray-500">Group</dt>
+                        <dd class="mt-0.5">
+                            @if($company->group)
+                                <span class="inline-flex items-center rounded-full bg-indigo-50 px-2.5 py-0.5 text-xs font-medium text-indigo-700">{{ $company->group->name }}</span>
+                            @else
+                                <span class="text-sm text-gray-400">—</span>
+                            @endif
+                        </dd>
+                    </div>
+                    <div>
                         <dt class="text-sm text-gray-500">Phone</dt>
                         <dd class="mt-0.5 text-sm text-gray-900">{{ $company->phone ?? '—' }}</dd>
                     </div>
@@ -526,13 +667,56 @@ new #[Layout('components.layouts.app')] class extends Component {
         <div class="rounded-xl border border-gray-200 bg-white shadow-sm">
             <div class="flex items-center justify-between border-b border-gray-200 px-6 py-4">
                 <h3 class="text-lg font-semibold text-gray-900">Users ({{ $users->count() }})</h3>
-                @if($canCreateUsers && $assignableRoles->isNotEmpty())
-                    <button wire:click="toggleAddUser" class="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-500 transition-colors">
-                        <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
-                        {{ $showAddUser ? 'Cancel' : 'Add user' }}
-                    </button>
+                @if($canCreateUsers)
+                    <div class="flex items-center gap-2">
+                        @if($attachableUsers->isNotEmpty())
+                            <button wire:click="toggleAttachUser" class="inline-flex items-center gap-1.5 rounded-lg border border-blue-600 bg-white px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-50 transition-colors">
+                                <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9V5a3 3 0 0 0-6 0v4"/><rect width="20" height="14" x="2" y="9" rx="2"/></svg>
+                                {{ $showAttachUser ? 'Cancel' : 'Attach existing' }}
+                            </button>
+                        @endif
+                        @if($assignableRoles->isNotEmpty())
+                            <button wire:click="toggleAddUser" class="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-500 transition-colors">
+                                <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+                                {{ $showAddUser ? 'Cancel' : 'Add new user' }}
+                            </button>
+                        @endif
+                    </div>
                 @endif
             </div>
+
+            @if($showAttachUser && $canCreateUsers)
+                <div class="border-b border-gray-200 bg-blue-50/40 px-6 py-5"
+                     x-data="{ search: '' }">
+                    <p class="text-xs text-gray-600 mb-3">
+                        Pick an existing user to add to this dealership. Useful for group-level staff who already exist on a sister branch and just need a second link.
+                    </p>
+                    <input type="text" x-model="search" placeholder="Search by name or email…"
+                           class="mb-3 w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
+                    <form wire:submit.prevent="attachExistingUser" class="flex flex-col gap-3">
+                        <div class="max-h-60 overflow-y-auto pr-1 space-y-1">
+                            @foreach($attachableUsers as $candidate)
+                                <label class="flex items-center gap-2 rounded-md border border-gray-200 bg-white px-3 py-2 cursor-pointer hover:bg-gray-50 has-[:checked]:border-blue-500 has-[:checked]:bg-blue-50"
+                                       x-show="search === '' || '{{ Str::lower($candidate->name) }} {{ Str::lower($candidate->email ?? '') }}'.includes(search.toLowerCase())">
+                                    <input wire:model.live="attachUserId" type="radio" value="{{ $candidate->id }}" class="h-4 w-4 border-gray-300 text-blue-600">
+                                    <span class="flex-1 min-w-0">
+                                        <span class="block text-sm font-medium text-gray-900 truncate">{{ $candidate->name }}</span>
+                                        <span class="block text-xs text-gray-500 truncate">{{ $candidate->email ?? '—' }}</span>
+                                    </span>
+                                </label>
+                            @endforeach
+                        </div>
+                        @error('attachUserId') <p class="text-xs text-red-600">{{ $message }}</p> @enderror
+
+                        <div class="flex justify-end gap-2">
+                            <button type="button" wire:click="toggleAttachUser" class="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50">Cancel</button>
+                            <button type="submit" class="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-500" wire:loading.attr="disabled">
+                                Attach to {{ $company->name }}
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            @endif
 
             @if($showAddUser && $canCreateUsers)
                 <div class="border-b border-gray-200 bg-blue-50/40 px-6 py-5">
@@ -619,12 +803,22 @@ new #[Layout('components.layouts.app')] class extends Component {
                             </span>
                         </td>
                         <td class="whitespace-nowrap px-6 py-3 text-sm">
-                            @if(auth()->user()->isDeveloper())
-                                <form method="POST" action="{{ route('admin.impersonate', $user) }}" class="inline">
-                                    @csrf
-                                    <button type="submit" class="text-amber-600 hover:text-amber-800 font-medium">Impersonate</button>
-                                </form>
-                            @endif
+                            <div class="flex items-center gap-3">
+                                @if(auth()->user()->isDeveloper())
+                                    <form method="POST" action="{{ route('admin.impersonate', $user) }}" class="inline">
+                                        @csrf
+                                        <button type="submit" class="text-amber-600 hover:text-amber-800 font-medium">Impersonate</button>
+                                    </form>
+                                @endif
+                                @if($canCreateUsers)
+                                    <button type="button"
+                                            wire:click="detachUser({{ $user->id }})"
+                                            wire:confirm="Unlink {{ $user->name }} from {{ $company->name }}? Their other company links stay intact."
+                                            class="text-red-600 hover:text-red-800 font-medium">
+                                        Unlink
+                                    </button>
+                                @endif
+                            </div>
                         </td>
                     </tr>
                     @empty

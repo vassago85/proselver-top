@@ -1,10 +1,10 @@
 <?php
-use App\Models\User;
-use App\Models\Role;
 use App\Models\Company;
-use Livewire\Volt\Component;
-use Livewire\Attributes\Layout;
+use App\Models\Role;
+use App\Models\User;
 use Illuminate\Support\Str;
+use Livewire\Attributes\Layout;
+use Livewire\Volt\Component;
 
 new #[Layout('components.layouts.app')] class extends Component {
     public string $name = '';
@@ -14,7 +14,12 @@ new #[Layout('components.layouts.app')] class extends Component {
     public string $password = '';
     public bool $generatePassword = true;
     public array $selectedRoles = [];
-    public ?int $companyId = null;
+    // Multi-company support: a single user (e.g. a CFAO group ops
+    // manager) can belong to many dealerships. Stored as an array of
+    // string ids so it round-trips through the <select multiple>
+    // / Livewire pivot cleanly. Old single-value $companyId was the
+    // reason a save here used to detach siblings — see save() below.
+    public array $companyIds = [];
 
     public function mount(): void
     {
@@ -54,9 +59,11 @@ new #[Layout('components.layouts.app')] class extends Component {
         $hasDriverRole = Role::whereIn('id', $this->selectedRoles)->where('slug', 'driver')->exists();
 
         if ($hasDealerRole || $hasOemRole || $hasDriverRole) {
-            $rules['companyId'] = 'required|exists:companies,id';
+            $rules['companyIds']   = 'required|array|min:1';
+            $rules['companyIds.*'] = 'integer|exists:companies,id';
         } else {
-            $rules['companyId'] = 'nullable|integer|exists:companies,id';
+            $rules['companyIds']   = 'array';
+            $rules['companyIds.*'] = 'integer|exists:companies,id';
         }
 
         $this->validate($rules);
@@ -95,8 +102,8 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         $user->roles()->sync($this->selectedRoles);
 
-        if ($this->companyId) {
-            $user->companies()->sync([$this->companyId]);
+        if (!empty($this->companyIds)) {
+            $user->companies()->sync(array_map('intval', $this->companyIds));
         }
 
         session()->flash('success', "User {$user->name} created successfully.");
@@ -211,22 +218,36 @@ new #[Layout('components.layouts.app')] class extends Component {
             </div>
         @endif
 
-        <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
-            <h3 class="text-lg font-semibold text-gray-900 mb-1">
-                Organisation
-                @if($companyRequired) <span class="text-red-500">*</span> @endif
-            </h3>
-            <p class="text-xs text-gray-500 mb-4">
-                Pin this user to a single customer / dealer / OEM. Required
-                for dealer-, OEM- or driver-role assignments.
+        <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6"
+             x-data="{ search: '' }">
+            <div class="flex items-start justify-between gap-4 mb-1">
+                <h3 class="text-lg font-semibold text-gray-900">
+                    Organisations
+                    @if($companyRequired) <span class="text-red-500">*</span> @endif
+                </h3>
+                <span class="text-xs text-gray-500">{{ count($companyIds) }} selected</span>
+            </div>
+            <p class="text-xs text-gray-500 mb-3">
+                Tick every customer / dealer / OEM this user belongs to.
+                A group ops manager (e.g. CFAO covering 5 dealerships) ticks all 5.
+                Required for dealer-, OEM- or driver-role assignments.
             </p>
-            <x-searchable-select
-                wire:model="companyId"
-                :options="$companyOptions"
-                placeholder="— not assigned —"
-                search-placeholder="Search organisations…"
-            />
-            @error('companyId')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
+
+            <input type="text" x-model="search" placeholder="Search organisations…"
+                   class="mb-3 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
+
+            <div class="max-h-72 overflow-y-auto pr-1 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                @foreach($companies as $c)
+                    <label class="flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 cursor-pointer hover:bg-gray-50 has-[:checked]:border-blue-500 has-[:checked]:bg-blue-50"
+                           x-show="search === '' || '{{ Str::lower($c->name) }}'.includes(search.toLowerCase())">
+                        <input wire:model.live="companyIds" type="checkbox" value="{{ $c->id }}" class="h-4 w-4 rounded border-gray-300 text-blue-600">
+                        <span class="text-sm">{{ $c->name }}</span>
+                    </label>
+                @endforeach
+            </div>
+
+            @error('companyIds')<p class="mt-2 text-xs text-red-600">{{ $message }}</p>@enderror
+            @error('companyIds.*')<p class="mt-2 text-xs text-red-600">{{ $message }}</p>@enderror
         </div>
 
         <div class="flex justify-end gap-3">

@@ -26,10 +26,14 @@ class CompanyPolicy
         // Mirror the sidebar's "Companies" section gate so the people
         // who can see the menu can also use the Add Company button —
         // developer, super admin, owner, ops controller, ops manager.
+        // The canonical slug is `operations_controller` (per
+        // HasRoles::isOperationsController()); the older `ops_controller`
+        // string was a typo that silently locked ops out of every
+        // company-create / company-update surface.
         return $user->isDeveloper()
             || $user->isSuperAdmin()
             || $user->isOwner()
-            || $user->hasRole('ops_controller')
+            || $user->isOperationsController()
             || $user->hasRole('ops_manager');
     }
 
@@ -38,7 +42,7 @@ class CompanyPolicy
         return $user->isDeveloper()
             || $user->isSuperAdmin()
             || $user->isOwner()
-            || $user->hasRole('ops_controller')
+            || $user->isOperationsController()
             || $user->hasRole('ops_manager');
     }
 

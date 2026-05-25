@@ -117,6 +117,39 @@ class User extends Authenticatable
         return $this->companies()->pluck('companies.id')->all();
     }
 
+    /**
+     * IDs of every sibling company in the same dealer group(s) as the
+     * companies this user is a direct member of. Excludes the user's
+     * own companies (operatingCompanyIds() already covers those) — the
+     * caller is expected to merge the two lists when the goal is "any
+     * company I or my group can see".
+     *
+     * Returns an empty array when the user belongs to no grouped
+     * companies, so platform-wide queries that union this list with
+     * operatingCompanyIds() degrade gracefully.
+     *
+     * @return array<int, int>
+     */
+    public function groupSiblingCompanyIds(): array
+    {
+        $groupIds = $this->companies()
+            ->whereNotNull('companies.company_group_id')
+            ->pluck('companies.company_group_id')
+            ->unique()
+            ->all();
+
+        if (empty($groupIds)) {
+            return [];
+        }
+
+        $myCompanyIds = $this->operatingCompanyIds();
+
+        return \App\Models\Company::whereIn('company_group_id', $groupIds)
+            ->whereNotIn('id', $myCompanyIds)
+            ->pluck('id')
+            ->all();
+    }
+
     public function assignedLocation(): ?Location
     {
         $company = $this->companies()->first();

@@ -47,6 +47,10 @@ Volt::route('documents', 'admin.documents.index')->name('documents.index');
 // the menu just used to call it Customers).  Old /admin/customers and
 // /admin/customers/{id} URLs redirect below so deep-links keep working.
 Volt::route('companies', 'admin.companies.index')->name('companies.index');
+// /admin/companies/groups must be registered BEFORE the {company} route
+// so the literal "groups" segment wins the match — otherwise Laravel
+// would try to bind 'groups' as a Company id.
+Volt::route('companies/groups', 'admin.companies.groups')->name('companies.groups');
 Volt::route('companies/{company}', 'admin.companies.show')->name('companies.show');
 
 Route::redirect('customers', '/admin/companies')->name('customers.index');

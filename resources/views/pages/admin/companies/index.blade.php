@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\Company;
+use App\Models\CompanyGroup;
 use App\Models\Location;
 use App\Models\Role;
 use App\Models\User;
@@ -20,6 +21,12 @@ new #[Layout('components.layouts.app')] class extends Component {
     #[Url]
     public string $typeFilter = '';
 
+    // Group filter is keyed off the FK id directly (string-cast for the
+    // <select> binding); blank means "all groups including ungrouped".
+    // Deep-linked from /admin/companies/groups via ?groupFilter=<id>.
+    #[Url]
+    public string $groupFilter = '';
+
     // Create-form state. Kept on the component (rather than a child
     // Volt page) so the modal can read the same $typeFilter etc. and
     // we don't have to re-resolve the user permission twice.
@@ -31,6 +38,12 @@ new #[Layout('components.layouts.app')] class extends Component {
     public string $newBillingEmail = '';
     public string $newVatNumber = '';
     public string $newAddress = '';
+    // Group can be left blank (no group), set to an existing CompanyGroup
+    // id, or set to the literal "__new__" sentinel to create a new group
+    // inline at the same time as the company. Sentinel keeps the picker
+    // a single <select> instead of a select-or-input pair.
+    public string $newGroupId = '';
+    public string $newGroupName = '';
     // Google Places autocomplete writes city/province/lat/lng into
     // these so we can seed a first Location row for the company in
     // the same transaction — that way the address appears on
@@ -59,6 +72,11 @@ new #[Layout('components.layouts.app')] class extends Component {
     }
 
     public function updatedTypeFilter(): void
+    {
+        $this->resetPage();
+    }
+
+    public function updatedGroupFilter(): void
     {
         $this->resetPage();
     }
@@ -108,6 +126,8 @@ new #[Layout('components.layouts.app')] class extends Component {
         $this->newProvince = '';
         $this->newLatitude = '';
         $this->newLongitude = '';
+        $this->newGroupId = '';
+        $this->newGroupName = '';
         $this->newIsActive = true;
         $this->createFirstUser = true;
         $this->firstUserName = '';
@@ -154,8 +174,17 @@ new #[Layout('components.layouts.app')] class extends Component {
             'newProvince'     => 'nullable|string|max:255',
             'newLatitude'     => 'nullable|numeric',
             'newLongitude'    => 'nullable|numeric',
+            'newGroupId'      => 'nullable|string',
             'newIsActive'     => 'boolean',
         ];
+
+        // Conditional: if "Create new group" was picked the inline name
+        // is required and must be unique against the groups table.
+        if ($this->newGroupId === '__new__') {
+            $rules['newGroupName'] = 'required|string|max:255|unique:company_groups,name';
+        } elseif ($this->newGroupId !== '') {
+            $rules['newGroupId'] = 'required|exists:company_groups,id';
+        }
 
         if ($this->createFirstUser) {
             $rules['firstUserName']     = 'required|string|max:255';
@@ -181,15 +210,28 @@ new #[Layout('components.layouts.app')] class extends Component {
         }
 
         $company = \DB::transaction(function () use ($data) {
+            // Resolve the group FK first: either an existing id, the
+            // newly-created inline group, or null for ungrouped.
+            $groupId = null;
+            if (($data['newGroupId'] ?? '') === '__new__') {
+                $groupId = CompanyGroup::create([
+                    'name'      => $data['newGroupName'],
+                    'is_active' => true,
+                ])->id;
+            } elseif (!empty($data['newGroupId'])) {
+                $groupId = (int) $data['newGroupId'];
+            }
+
             $company = Company::create([
-                'name'          => $data['newName'],
-                'type'          => $data['newType'],
-                'workflow_type' => $data['newWorkflowType'],
-                'phone'         => $data['newPhone'] ?: null,
-                'billing_email' => $data['newBillingEmail'] ?: null,
-                'vat_number'    => $data['newVatNumber'] ?: null,
-                'address'       => $data['newAddress'] ?: null,
-                'is_active'     => (bool) $data['newIsActive'],
+                'name'             => $data['newName'],
+                'type'             => $data['newType'],
+                'workflow_type'    => $data['newWorkflowType'],
+                'phone'            => $data['newPhone'] ?: null,
+                'billing_email'    => $data['newBillingEmail'] ?: null,
+                'vat_number'       => $data['newVatNumber'] ?: null,
+                'address'          => $data['newAddress'] ?: null,
+                'company_group_id' => $groupId,
+                'is_active'        => (bool) $data['newIsActive'],
             ]);
 
             // If the admin picked an address off Google Places we
@@ -273,7 +315,9 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     public function with(): array
     {
-        $query = Company::withCount('users')->orderBy('name');
+        $query = Company::withCount('users')
+            ->with('group:id,name')
+            ->orderBy('name');
 
         if ($this->search) {
             $needle = '%' . $this->search . '%';
@@ -287,6 +331,18 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         if ($this->typeFilter) {
             $query->where('type', $this->typeFilter);
+        }
+
+        if ($this->groupFilter !== '') {
+            // "0" is the well-known "no group" value used by the picker
+            // so admins can list ungrouped dealerships explicitly. Any
+            // other value is treated as a real CompanyGroup id; the
+            // ->whereNull / ->where branches keep the SQL one round-trip.
+            if ($this->groupFilter === '0') {
+                $query->whereNull('company_group_id');
+            } else {
+                $query->where('company_group_id', (int) $this->groupFilter);
+            }
         }
 
         // Pretty labels for each Company::TYPE_* constant.  Kept here
@@ -317,12 +373,17 @@ new #[Layout('components.layouts.app')] class extends Component {
             ->sortBy(fn ($r) => ($tierOrder[$r->tier] ?? 99) . '|' . $r->name)
             ->values();
 
+        $groups = CompanyGroup::where('is_active', true)
+            ->orderBy('name')
+            ->get(['id', 'name']);
+
         return [
             'companies'      => $query->paginate(20),
             'canManage'      => Gate::allows('create', Company::class),
             'canCreateUsers' => (bool) $actor?->canManageInternalUsers(),
             'typeLabels'     => $typeLabels,
             'firstUserRoles' => $firstUserRoles,
+            'groups'         => $groups,
         ];
     }
 };
@@ -348,6 +409,16 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <option value="{{ $value }}">{{ $label }}</option>
             @endforeach
         </select>
+        <select wire:model.live="groupFilter" class="rounded-lg border border-gray-300 px-4 py-2.5 text-sm focus:border-blue-500 focus:ring-blue-500">
+            <option value="">All Groups</option>
+            <option value="0">— No group —</option>
+            @foreach($groups as $g)
+                <option value="{{ $g->id }}">{{ $g->name }}</option>
+            @endforeach
+        </select>
+        <a href="{{ route('admin.companies.groups') }}" class="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50">
+            Manage groups
+        </a>
         @if($canManage)
             <button type="button" wire:click="openCreate" class="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-500 transition-colors">
                 <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
@@ -362,6 +433,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             <thead class="bg-gray-50">
                 <tr>
                     <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Name</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Group</th>
                     <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Type</th>
                     <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Workflow</th>
                     <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Phone</th>
@@ -375,6 +447,13 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <tr class="hover:bg-gray-50">
                     <td class="px-4 py-3 text-sm font-medium">
                         <a href="{{ route('admin.companies.show', $company) }}" class="text-gray-900 hover:text-blue-600">{{ $company->name }}</a>
+                    </td>
+                    <td class="px-4 py-3 text-sm">
+                        @if($company->group)
+                            <span class="inline-flex items-center rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700">{{ $company->group->name }}</span>
+                        @else
+                            <span class="text-gray-400">—</span>
+                        @endif
                     </td>
                     <td class="px-4 py-3">
                         <span @class([
@@ -411,7 +490,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                 </tr>
                 @empty
                 <tr>
-                    <td colspan="7" class="px-6 py-12 text-center text-sm text-gray-500">No companies found.</td>
+                    <td colspan="8" class="px-6 py-12 text-center text-sm text-gray-500">No companies found.</td>
                 </tr>
                 @endforelse
             </tbody>
@@ -459,6 +538,30 @@ new #[Layout('components.layouts.app')] class extends Component {
                             <option value="standard">Standard (auto-confirm)</option>
                             <option value="faw">FAW (requires customer confirmation)</option>
                         </select>
+                    </div>
+
+                    {{-- Group (optional) — picks an existing dealer-group
+                         umbrella like MCCARTHY or CFAO, or creates one
+                         inline via the "+ Create new group" sentinel so
+                         the admin doesn't have to bounce to the Groups
+                         page mid-flow. --}}
+                    <div class="sm:col-span-2">
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Group</label>
+                        <select wire:model.live="newGroupId" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
+                            <option value="">— No group —</option>
+                            @foreach($groups as $g)
+                                <option value="{{ $g->id }}">{{ $g->name }}</option>
+                            @endforeach
+                            <option value="__new__">+ Create new group…</option>
+                        </select>
+                        @if($newGroupId === '__new__')
+                            <input wire:model="newGroupName" type="text" placeholder="New group name (e.g. MCCARTHY)" class="mt-2 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
+                            @error('newGroupName') <p class="text-red-600 text-xs mt-1">{{ $message }}</p> @enderror
+                        @endif
+                        @error('newGroupId') <p class="text-red-600 text-xs mt-1">{{ $message }}</p> @enderror
+                        <p class="mt-1 text-xs text-gray-500">
+                            Optional. Use a group when this dealership belongs to a holding company (MCCARTHY, CFAO, etc.) so its sibling dealerships can share an overview.
+                        </p>
                     </div>
 
                     <div>

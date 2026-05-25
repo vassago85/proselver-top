@@ -5,6 +5,7 @@ namespace App\Models;
 use App\Traits\Auditable;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
@@ -47,6 +48,7 @@ class Company extends Model
         'type',
         'workflow_type',
         'is_platform_owner',
+        'company_group_id',
         'collection_sla_days',
         'address',
         'vat_number',
@@ -192,5 +194,29 @@ class Company extends Model
     public function isPlatformOwner(): bool
     {
         return (bool) $this->is_platform_owner;
+    }
+
+    /**
+     * The dealer-group umbrella this company sits under, if any.
+     * Holding companies like MCCARTHY / CFAO own multiple member
+     * dealerships; the group is for overview / cross-visibility only,
+     * never for ownership transfer of jobs or stock.
+     */
+    public function group(): BelongsTo
+    {
+        return $this->belongsTo(CompanyGroup::class, 'company_group_id');
+    }
+
+    /**
+     * Sibling companies in the same group (excluding this one).
+     * Used by visibility scopes so a group-level user / a stock item
+     * with share_with_group=true appears on sister dealerships'
+     * boards. Returns an empty collection when this company has no
+     * group set, never the entire companies table.
+     */
+    public function siblingCompanies(): HasMany
+    {
+        return $this->hasMany(Company::class, 'company_group_id', 'company_group_id')
+            ->where('id', '!=', $this->id);
     }
 }

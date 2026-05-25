@@ -1,10 +1,10 @@
 <?php
-use App\Models\User;
-use App\Models\Role;
 use App\Models\Company;
-use Livewire\Volt\Component;
-use Livewire\Attributes\Layout;
+use App\Models\Role;
+use App\Models\User;
 use Illuminate\Support\Str;
+use Livewire\Attributes\Layout;
+use Livewire\Volt\Component;
 
 new #[Layout('components.layouts.app')] class extends Component {
     public User $user;
@@ -15,7 +15,12 @@ new #[Layout('components.layouts.app')] class extends Component {
     public string $newPassword = '';
     public bool $resetPassword = false;
     public array $selectedRoles = [];
-    public ?int $companyId = null;
+    // Multi-company support: a user (e.g. a CFAO group ops manager) can
+    // belong to many dealerships at once. Stored as string ids so it
+    // round-trips through the checkbox grid + Livewire pivot cleanly.
+    // The legacy single-value $companyId silently detached siblings on
+    // save which is how FAW Owner kept losing its FAW link.
+    public array $companyIds = [];
 
     public function mount(User $user): void
     {
@@ -35,7 +40,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         $this->phone = $user->phone ?? '';
         $this->username = $user->username;
         $this->selectedRoles = $user->roles->pluck('id')->map(fn($id) => (string) $id)->toArray();
-        $this->companyId = $user->companies()->first()?->id;
+        $this->companyIds = $user->companies()->pluck('companies.id')->map(fn($id) => (string) $id)->toArray();
     }
 
     public function updatedResetPassword(): void
@@ -74,9 +79,11 @@ new #[Layout('components.layouts.app')] class extends Component {
         $hasDriverRole = Role::whereIn('id', $this->selectedRoles)->where('slug', 'driver')->exists();
 
         if ($hasDealerRole || $hasOemRole || $hasDriverRole) {
-            $rules['companyId'] = 'required|exists:companies,id';
+            $rules['companyIds']   = 'required|array|min:1';
+            $rules['companyIds.*'] = 'integer|exists:companies,id';
         } else {
-            $rules['companyId'] = 'nullable|integer|exists:companies,id';
+            $rules['companyIds']   = 'array';
+            $rules['companyIds.*'] = 'integer|exists:companies,id';
         }
 
         $this->validate($rules);
@@ -116,16 +123,12 @@ new #[Layout('components.layouts.app')] class extends Component {
         $this->user->roles()->sync($this->selectedRoles);
 
         // Company assignment now follows whatever the admin picked, full stop.
-        // Earlier this branch silently detached the user from every company
-        // whenever no Dealer/OEM role was in the selection — which is how
-        // FAW Owner ended up unlinked from FAW after a routine role-edit.
-        // The picker is pre-filled with the existing assignment in mount(),
-        // so a save with no edits keeps the current link.
-        if ($this->companyId) {
-            $this->user->companies()->sync([$this->companyId]);
-        } else {
-            $this->user->companies()->detach();
-        }
+        // The picker is pre-filled in mount() with the user's CURRENT set
+        // (not just the first one), so a save with no edits is a no-op
+        // and a tick / untick adds or removes a single membership without
+        // touching siblings — that's how a CFAO ops manager covering 5
+        // dealerships keeps all 5 across an unrelated role tweak.
+        $this->user->companies()->sync(array_map('intval', $this->companyIds));
 
         session()->flash('success', "User {$this->user->name} updated successfully.");
         $this->redirect(route('admin.users.index'));
@@ -232,7 +235,6 @@ new #[Layout('components.layouts.app')] class extends Component {
             $hasOemRole = \App\Models\Role::whereIn('id', $selectedRoles)->where('tier', 'oem')->exists();
             $hasDriverRole = \App\Models\Role::whereIn('id', $selectedRoles)->where('slug', 'driver')->exists();
             $companyRequired = $hasDealerRole || $hasOemRole || $hasDriverRole;
-            $currentCompany = $user->companies()->first();
         @endphp
 
         @if($hasDriverRole)
@@ -247,28 +249,36 @@ new #[Layout('components.layouts.app')] class extends Component {
             </div>
         @endif
 
-        <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
-            <h3 class="text-lg font-semibold text-gray-900 mb-1">
-                Organisation
-                @if($companyRequired) <span class="text-red-500">*</span> @endif
-            </h3>
-            <p class="text-xs text-gray-500 mb-4">
-                Pin this user to a single customer / dealer / OEM. Internal
-                staff can be left unassigned. Required for dealer-, OEM- or
-                driver-role assignments.
-                @if($currentCompany)
-                    Currently assigned to <span class="font-medium text-gray-700">{{ $currentCompany->name }}</span>.
-                @else
-                    Currently unassigned.
-                @endif
+        <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6"
+             x-data="{ search: '' }">
+            <div class="flex items-start justify-between gap-4 mb-1">
+                <h3 class="text-lg font-semibold text-gray-900">
+                    Organisations
+                    @if($companyRequired) <span class="text-red-500">*</span> @endif
+                </h3>
+                <span class="text-xs text-gray-500">{{ count($companyIds) }} selected</span>
+            </div>
+            <p class="text-xs text-gray-500 mb-3">
+                Tick every customer / dealer / OEM this user belongs to.
+                A group ops manager covering several dealerships ticks all of them.
+                Required for dealer-, OEM- or driver-role assignments.
             </p>
-            <x-searchable-select
-                wire:model="companyId"
-                :options="$companyOptions"
-                placeholder="— not assigned —"
-                search-placeholder="Search organisations…"
-            />
-            @error('companyId')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
+
+            <input type="text" x-model="search" placeholder="Search organisations…"
+                   class="mb-3 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
+
+            <div class="max-h-72 overflow-y-auto pr-1 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                @foreach($companies as $c)
+                    <label class="flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 cursor-pointer hover:bg-gray-50 has-[:checked]:border-blue-500 has-[:checked]:bg-blue-50"
+                           x-show="search === '' || '{{ Str::lower($c->name) }}'.includes(search.toLowerCase())">
+                        <input wire:model.live="companyIds" type="checkbox" value="{{ $c->id }}" class="h-4 w-4 rounded border-gray-300 text-blue-600">
+                        <span class="text-sm">{{ $c->name }}</span>
+                    </label>
+                @endforeach
+            </div>
+
+            @error('companyIds')<p class="mt-2 text-xs text-red-600">{{ $message }}</p>@enderror
+            @error('companyIds.*')<p class="mt-2 text-xs text-red-600">{{ $message }}</p>@enderror
         </div>
 
         <div class="flex justify-end gap-3">
