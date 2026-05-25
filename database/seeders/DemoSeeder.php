@@ -4,7 +4,6 @@ namespace Database\Seeders;
 
 use App\Models\Brand;
 use App\Models\Company;
-use App\Models\CompanyGroup;
 use App\Models\DriverProfile;
 use App\Models\Location;
 use App\Models\User;
@@ -18,44 +17,44 @@ class DemoSeeder extends Seeder
         $password = Hash::make('changeme');
 
         // ===== DEVELOPER =====
-        $developer = User::firstOrCreate(
+        $developer = $this->seedUser(
             ['username' => 'developer'],
             ['name' => 'Developer', 'email' => 'dev@tcdc.test', 'password' => $password, 'is_active' => true]
         );
         $developer->assignRole('developer');
 
         // ===== INTERNAL STAFF =====
-        $owner = User::firstOrCreate(
+        $owner = $this->seedUser(
             ['username' => 'owner'],
             ['name' => 'Business Owner', 'email' => 'owner@tcdc.test', 'password' => $password, 'is_active' => true]
         );
         $owner->assignRole('owner');
 
-        $opsController = User::firstOrCreate(
+        $opsController = $this->seedUser(
             ['username' => 'ops'],
             ['name' => 'Cassius Jege', 'email' => 'cassius@tcdc.test', 'password' => $password, 'is_active' => true]
         );
         $opsController->syncRoles(['operations_controller']);
 
-        $opsController2 = User::firstOrCreate(
+        $opsController2 = $this->seedUser(
             ['username' => 'wiaan'],
             ['name' => 'Wiaan Swart', 'email' => 'wiaan@tcdc.test', 'password' => $password, 'is_active' => true]
         );
         $opsController2->assignRole('operations_controller');
 
-        $dispatcher = User::firstOrCreate(
+        $dispatcher = $this->seedUser(
             ['username' => 'dispatch'],
             ['name' => 'Michael Esbie', 'email' => 'michael@tcdc.test', 'password' => $password, 'is_active' => true]
         );
         $dispatcher->syncRoles(['dispatcher']);
 
-        $dispatcher2 = User::firstOrCreate(
+        $dispatcher2 = $this->seedUser(
             ['username' => 'busani'],
             ['name' => 'Busani Ndwandwe', 'email' => 'busani@tcdc.test', 'password' => $password, 'is_active' => true]
         );
         $dispatcher2->assignRole('dispatcher');
 
-        $accounts = User::firstOrCreate(
+        $accounts = $this->seedUser(
             ['username' => 'accounts'],
             ['name' => 'Demo Accounts', 'password' => $password, 'is_active' => true]
         );
@@ -120,28 +119,28 @@ class DemoSeeder extends Seeder
             ['address' => '120 Buccleuch Dr, Sandton', 'city' => 'Johannesburg', 'province' => 'Gauteng', 'customer_name' => 'JHB Manager', 'customer_phone' => '011 555 0001', 'company_id' => $faw->id]
         );
 
-        $fawOwner = User::firstOrCreate(
+        $fawOwner = $this->seedUser(
             ['username' => 'fawowner'],
             ['name' => 'FAW Customer Owner', 'email' => 'owner@faw.test', 'password' => $password, 'is_active' => true]
         );
         $fawOwner->assignRole('customer_owner');
         $faw->users()->syncWithoutDetaching([$fawOwner->id => ['location_id' => null]]);
 
-        $fawDispatcher = User::firstOrCreate(
+        $fawDispatcher = $this->seedUser(
             ['username' => 'fawdispatch'],
             ['name' => 'FAW Coega Dispatcher', 'email' => 'dispatcher@faw.test', 'password' => $password, 'is_active' => true]
         );
         $fawDispatcher->assignRole('customer_dispatcher');
         $faw->users()->syncWithoutDetaching([$fawDispatcher->id => ['location_id' => $fawCoega->id]]);
 
-        $fawJhbDispatcher = User::firstOrCreate(
+        $fawJhbDispatcher = $this->seedUser(
             ['username' => 'fawjhb'],
             ['name' => 'FAW JHB Dispatcher', 'email' => 'jhb@faw.test', 'password' => $password, 'is_active' => true]
         );
         $fawJhbDispatcher->assignRole('customer_dispatcher');
         $faw->users()->syncWithoutDetaching([$fawJhbDispatcher->id => ['location_id' => $fawJhb->id]]);
 
-        $fawUser = User::firstOrCreate(
+        $fawUser = $this->seedUser(
             ['username' => 'fawuser'],
             ['name' => 'FAW User', 'email' => 'user@faw.test', 'password' => $password, 'is_active' => true]
         );
@@ -173,7 +172,7 @@ class DemoSeeder extends Seeder
             ['address' => '1 Isuzu Way, Struandale', 'city' => 'Gqeberha', 'province' => 'Eastern Cape', 'customer_name' => 'Plant Manager', 'customer_phone' => '041 995 0001', 'company_id' => $isuzu->id]
         );
 
-        $isuzuAdmin = User::firstOrCreate(
+        $isuzuAdmin = $this->seedUser(
             ['username' => 'isuzuadmin'],
             ['name' => 'Isuzu Admin', 'email' => 'admin@isuzu.test', 'password' => $password, 'is_active' => true]
         );
@@ -197,7 +196,7 @@ class DemoSeeder extends Seeder
             ]
         );
 
-        $dealerAdmin = User::firstOrCreate(
+        $dealerAdmin = $this->seedUser(
             ['username' => 'dealer'],
             ['name' => 'Demo Dealer Admin', 'email' => 'dealer@demomotors.test', 'password' => $password, 'is_active' => true]
         );
@@ -214,86 +213,10 @@ class DemoSeeder extends Seeder
             ['address' => '45 Church St, Pretoria', 'city' => 'Pretoria', 'province' => 'Gauteng', 'customer_name' => 'Jane Dealer', 'customer_phone' => '012 345 6789', 'company_id' => $company->id]
         );
 
-        // ===== CFAO GROUP (Williams Hunt dealerships) =====
-        $cfao = CompanyGroup::firstOrCreate(
-            ['normalized_name' => 'cfao'],
-            ['name' => 'CFAO', 'is_active' => true]
-        );
-
-        // Williams Hunt Pretoria
-        $whPretoria = Company::firstOrCreate(
-            ['normalized_name' => 'williams hunt pretoria'],
-            [
-                'name'             => 'Williams Hunt Pretoria',
-                'type'             => 'dealer',
-                'workflow_type'    => 'standard',
-                'company_group_id' => $cfao->id,
-                'address'          => 'Centurion, Pretoria',
-                'phone'            => '012 328 6580',
-                'billing_email'    => 'accounts@williamshuntpretoria.test',
-            ]
-        );
-        Location::firstOrCreate(
-            ['company_name' => 'Williams Hunt Pretoria', 'company_id' => $whPretoria->id],
-            ['address' => 'Centurion', 'city' => 'Pretoria', 'province' => 'Gauteng', 'customer_name' => 'Dealership Manager', 'customer_phone' => '012 328 6580', 'company_id' => $whPretoria->id]
-        );
-        $whPretoriaAdmin = User::firstOrCreate(
-            ['username' => 'wh_pretoria'],
-            ['name' => 'WH Pretoria Admin', 'email' => 'admin@williamshuntpretoria.test', 'password' => $password, 'is_active' => true]
-        );
-        $whPretoriaAdmin->assignRole('dealer_principal');
-        $whPretoria->users()->syncWithoutDetaching([$whPretoriaAdmin->id => ['location_id' => null]]);
-
-        // Williams Hunt Midrand
-        $whMidrand = Company::firstOrCreate(
-            ['normalized_name' => 'williams hunt midrand'],
-            [
-                'name'             => 'Williams Hunt Midrand',
-                'type'             => 'dealer',
-                'workflow_type'    => 'standard',
-                'company_group_id' => $cfao->id,
-                'address'          => 'Midrand, Gauteng',
-                'phone'            => '011 254 3294',
-                'billing_email'    => 'accounts@williamshuntmidrand.test',
-            ]
-        );
-        Location::firstOrCreate(
-            ['company_name' => 'Williams Hunt Midrand', 'company_id' => $whMidrand->id],
-            ['address' => 'Midrand', 'city' => 'Midrand', 'province' => 'Gauteng', 'customer_name' => 'Dealership Manager', 'customer_phone' => '011 254 3294', 'company_id' => $whMidrand->id]
-        );
-        $whMidrandAdmin = User::firstOrCreate(
-            ['username' => 'wh_midrand'],
-            ['name' => 'WH Midrand Admin', 'email' => 'admin@williamshuntmidrand.test', 'password' => $password, 'is_active' => true]
-        );
-        $whMidrandAdmin->assignRole('dealer_principal');
-        $whMidrand->users()->syncWithoutDetaching([$whMidrandAdmin->id => ['location_id' => null]]);
-
-        // Williams Hunt Roodepoort
-        $whRoodepoort = Company::firstOrCreate(
-            ['normalized_name' => 'williams hunt roodepoort'],
-            [
-                'name'             => 'Williams Hunt Roodepoort',
-                'type'             => 'dealer',
-                'workflow_type'    => 'standard',
-                'company_group_id' => $cfao->id,
-                'address'          => 'Roodepoort, Gauteng',
-                'phone'            => '011 279 5695',
-                'billing_email'    => 'accounts@williamshuntroodepoort.test',
-            ]
-        );
-        Location::firstOrCreate(
-            ['company_name' => 'Williams Hunt Roodepoort', 'company_id' => $whRoodepoort->id],
-            ['address' => 'Roodepoort', 'city' => 'Roodepoort', 'province' => 'Gauteng', 'customer_name' => 'Dealership Manager', 'customer_phone' => '011 279 5695', 'company_id' => $whRoodepoort->id]
-        );
-        $whRoodepoortAdmin = User::firstOrCreate(
-            ['username' => 'wh_roodepoort'],
-            ['name' => 'WH Roodepoort Admin', 'email' => 'admin@williamshuntroodepoort.test', 'password' => $password, 'is_active' => true]
-        );
-        $whRoodepoortAdmin->assignRole('dealer_principal');
-        $whRoodepoort->users()->syncWithoutDetaching([$whRoodepoortAdmin->id => ['location_id' => null]]);
+        $this->call(CfaoDealerSeeder::class);
 
         // ===== DRIVERS WITH FULL PROFILES =====
-        $driver1 = User::firstOrCreate(
+        $driver1 = $this->seedUser(
             ['username' => 'driver'],
             ['name' => 'Thabo Molefe', 'phone' => '082 123 4567', 'password' => $password, 'is_active' => true]
         );
@@ -311,7 +234,7 @@ class DemoSeeder extends Seeder
             ]
         );
 
-        $driver2 = User::firstOrCreate(
+        $driver2 = $this->seedUser(
             ['username' => 'driver2'],
             ['name' => 'Sipho Nkosi', 'phone' => '083 987 6543', 'password' => $password, 'is_active' => true]
         );
@@ -329,7 +252,7 @@ class DemoSeeder extends Seeder
             ]
         );
 
-        $driver3 = User::firstOrCreate(
+        $driver3 = $this->seedUser(
             ['username' => 'driver3'],
             ['name' => 'David Botha', 'phone' => '071 555 0000', 'password' => $password, 'is_active' => true]
         );
@@ -363,5 +286,16 @@ class DemoSeeder extends Seeder
                 array_merge($loc, ['company_id' => null])
             );
         }
+    }
+
+    private function seedUser(array $keys, array $values): User
+    {
+        $user = User::withTrashed()->firstOrCreate($keys, $values);
+
+        if ($user->trashed()) {
+            $user->restore();
+        }
+
+        return $user;
     }
 }
