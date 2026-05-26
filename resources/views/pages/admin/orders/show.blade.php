@@ -61,6 +61,10 @@ new #[Layout('components.layouts.app')] class extends Component {
     ];
     public ?float $advanceAccommodation = null;
     public ?float $advanceTaxi = null;
+    // Taxi is opt-in.  When unticked the taxi field is forced to R0
+    // (driver got a shuttle, no cash needed); when ticked we pre-fill
+    // the configured standard amount.  Persisted in advance_taxi_included.
+    public bool $advanceTaxiIncluded = false;
     public ?float $advanceFood = null;
     public bool $advanceFoodWaived = false;
     public ?float $advanceTotal = null;
@@ -544,11 +548,17 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         $this->advanceTollResult = $estimator->estimateTolls($this->job);
 
-        // Taxi: flat per-trip default (R50) -- ops can edit down/up.
-        // Stored value wins if a previous advance has been issued.
-        $this->advanceTaxi = $this->job->advance_taxi !== null
-            ? (float) $this->job->advance_taxi
-            : (float) ($this->advanceTollResult['suggested_taxi'] ?? 50);
+        // Taxi: opt-in.  If this trip had taxi previously enabled keep
+        // it on (and keep the saved value); if it's a fresh trip start
+        // unticked (R0) so ops makes a deliberate choice.
+        $this->advanceTaxiIncluded = (bool) $this->job->advance_taxi_included;
+        if ($this->advanceTaxiIncluded) {
+            $this->advanceTaxi = $this->job->advance_taxi !== null
+                ? (float) $this->job->advance_taxi
+                : (float) ($this->advanceTollResult['suggested_taxi'] ?? 50);
+        } else {
+            $this->advanceTaxi = 0.0;
+        }
 
         // Food: <4h → R0, 4-9h → R150, ≥9h → R300.  Saved value wins
         // on re-open.  If ops has waived food, force the field to 0
@@ -591,6 +601,33 @@ new #[Layout('components.layouts.app')] class extends Component {
      * the first positional arg.  If we type-hinted a service here it
      * would be clobbered.  Resolve via the container instead.
      */
+    /**
+     * Toggling the taxi opt-in checkbox flips the amount field.  When
+     * ops ticks it we pre-fill the configured standard (R50 by default);
+     * when they untick we force the amount to zero so the running total
+     * reflects "no taxi this trip".  The amount can still be edited
+     * after ticking.
+     */
+    public function updatedAdvanceTaxiIncluded(): void
+    {
+        if (!auth()->user()?->isInternal()) {
+            abort(403);
+        }
+        if ($this->advanceTaxiIncluded) {
+            // Restore the saved value if it exists, otherwise the
+            // standard.  Don't clobber a previously typed override.
+            $standard = (float) ($this->advanceTollResult['suggested_taxi'] ?? 50);
+            $this->advanceTaxi = $this->job->advance_taxi !== null
+                ? (float) $this->job->advance_taxi
+                : $standard;
+            if ($this->advanceTaxi <= 0) {
+                $this->advanceTaxi = $standard;
+            }
+        } else {
+            $this->advanceTaxi = 0.0;
+        }
+    }
+
     public function updatedAdvanceTollClassOverride(): void
     {
         if (!auth()->user()?->isInternal()) {
@@ -644,7 +681,10 @@ new #[Layout('components.layouts.app')] class extends Component {
         $autoTolls     = (float) ($this->advanceTollResult['toll_total'] ?? 0);
         $tolls         = $this->advanceTollsManual !== null ? round((float) $this->advanceTollsManual, 2) : $autoTolls;
         $accommodation = (float) ($this->advanceAccommodation ?? 0);
-        $taxi          = (float) ($this->advanceTaxi ?? 0);
+        // Opt-in: when the taxi box is unticked we force R0 here too
+        // (defence-in-depth -- the field is already disabled in the UI
+        // but a stale typed value could otherwise survive a flip).
+        $taxi          = $this->advanceTaxiIncluded ? (float) ($this->advanceTaxi ?? 0) : 0.0;
         $food          = $this->advanceFoodWaived ? 0.0 : (float) ($this->advanceFood ?? 0);
         $computed      = round($tolls + $accommodation + $taxi + $food, 2);
         $total         = $this->advanceTotal !== null ? round((float) $this->advanceTotal, 2) : $computed;
@@ -702,7 +742,8 @@ new #[Layout('components.layouts.app')] class extends Component {
             'advance_toll_class_override'   => $this->advanceTollClassOverride,
             'advance_tolls'                 => $tolls,
             'advance_accommodation'         => $accommodation,
-            'advance_taxi'                  => $taxi,
+            'advance_taxi'                  => $this->advanceTaxiIncluded ? $taxi : 0,
+            'advance_taxi_included'         => $this->advanceTaxiIncluded,
             'advance_food'                  => $food,
             'advance_food_waived'           => $this->advanceFoodWaived,
             'advance_total'                 => $total,
@@ -2352,14 +2393,20 @@ new #[Layout('components.layouts.app')] class extends Component {
                             <input wire:model.live.debounce.300ms="advanceAccommodation" type="number" min="0" step="0.01" placeholder="0.00"
                                 class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-emerald-500 focus:ring-emerald-500">
                         </label>
-                        <label class="block">
-                            <span class="block text-[11px] uppercase tracking-wide text-gray-500 mb-1">
+                        <div>
+                            <label class="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-gray-500 mb-1 cursor-pointer">
+                                <input type="checkbox" wire:model.live="advanceTaxiIncluded" class="rounded border-gray-300 text-emerald-600 focus:ring-emerald-500">
                                 Taxi (R)
-                                <span class="ml-1 font-semibold text-emerald-700 normal-case tracking-normal">· standard R{{ number_format((float) ($advanceTollResult['suggested_taxi'] ?? 50), 0) }} (no slip)</span>
-                            </span>
+                                @if($advanceTaxiIncluded)
+                                    <span class="ml-1 font-semibold text-emerald-700 normal-case tracking-normal">· standard R{{ number_format((float) ($advanceTollResult['suggested_taxi'] ?? 50), 0) }} (no slip)</span>
+                                @else
+                                    <span class="ml-1 font-semibold text-gray-400 normal-case tracking-normal">· shuttle (no cash)</span>
+                                @endif
+                            </label>
                             <input wire:model.live.debounce.300ms="advanceTaxi" type="number" min="0" step="0.01" placeholder="0.00"
-                                class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-emerald-500 focus:ring-emerald-500">
-                        </label>
+                                @if(!$advanceTaxiIncluded) disabled @endif
+                                class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-emerald-500 focus:ring-emerald-500 {{ !$advanceTaxiIncluded ? 'bg-gray-100 text-gray-400' : '' }}">
+                        </div>
                         <label class="block">
                             <span class="block text-[11px] uppercase tracking-wide text-gray-500 mb-1">
                                 Food (R)
