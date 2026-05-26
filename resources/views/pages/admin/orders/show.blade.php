@@ -2068,8 +2068,23 @@ new #[Layout('components.layouts.app')] class extends Component {
                             </div>
                         @endif
                     @else
-                        <div class="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800">
-                            {{ $advanceTollResult['message'] }}
+                        <div class="rounded-lg bg-amber-50 border border-amber-200 px-3 py-3 text-xs text-amber-800 space-y-1">
+                            <p>{{ $advanceTollResult['message'] }}</p>
+                            @if(($advanceTollResult['status'] ?? '') === 'missing_coords')
+                                <p class="text-[11px] text-amber-700/80">
+                                    Fix from the address book:
+                                    @if($advanceTollResult['missing_pickup_coords'] ?? false)
+                                        <a href="{{ route('admin.settings.locations') }}?focus={{ $advanceTollResult['pickup_location_id'] ?? '' }}" target="_blank" class="font-semibold underline hover:no-underline">Edit pickup ({{ $job->pickupLocation?->company_name }})</a>
+                                    @endif
+                                    @if(($advanceTollResult['missing_pickup_coords'] ?? false) && ($advanceTollResult['missing_delivery_coords'] ?? false))
+                                        ·
+                                    @endif
+                                    @if($advanceTollResult['missing_delivery_coords'] ?? false)
+                                        <a href="{{ route('admin.settings.locations') }}?focus={{ $advanceTollResult['delivery_location_id'] ?? '' }}" target="_blank" class="font-semibold underline hover:no-underline">Edit delivery ({{ $job->deliveryLocation?->company_name }})</a>
+                                    @endif
+                                </p>
+                                <p class="text-[10px] text-amber-700/70">Or run <code class="bg-amber-100 px-1 rounded">php artisan locations:geocode</code> on the server to backfill all in one shot.</p>
+                            @endif
                         </div>
                     @endif
 

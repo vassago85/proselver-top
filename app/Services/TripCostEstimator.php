@@ -34,8 +34,12 @@ class TripCostEstimator
      *
      * Shape:
      *  [
-     *    'status' => 'ok' | 'no_route' | 'no_coordinates' | 'no_api_key' | 'no_toll_class',
+     *    'status' => 'ok' | 'no_route' | 'no_coordinates' | 'missing_coords' | 'no_api_key' | 'no_toll_class',
      *    'message' => string|null,                  // human-readable explanation when status !== 'ok'
+     *    'missing_pickup_coords' => bool,           // true when status is 'missing_coords' and pickup is the culprit
+     *    'missing_delivery_coords' => bool,         // true when status is 'missing_coords' and delivery is the culprit
+     *    'pickup_location_id' => ?int,              // surfaced so the UI can deep-link to the address book
+     *    'delivery_location_id' => ?int,
      *    'cached' => bool,                          // true when we hit the route_estimates cache
      *    'distance_km' => float|null,
      *    'duration_minutes' => int|null,
@@ -73,6 +77,28 @@ class TripCostEstimator
         // Cheap guard before either DB or API work.
         if (!$pickup || !$delivery) {
             return $this->emptyResult('no_coordinates', 'Pickup or delivery location is not set on this order.', $foodRate, $foodMinHours, $foodThresholdHours, $taxiRate);
+        }
+
+        // Specific check: address looks fine but lat/lng never got
+        // populated.  Most common cause of "couldn't calculate a route"
+        // -- bulk-imported locations whose `address` was the dealer
+        // name at first, so geocoding silently failed, and the saving
+        // hook only retries when BOTH coords are null.  Surface the
+        // specific location so ops can fix it from the address book.
+        $missingPickup = !$pickup->latitude || !$pickup->longitude;
+        $missingDelivery = !$delivery->latitude || !$delivery->longitude;
+        if ($missingPickup || $missingDelivery) {
+            $which = [];
+            if ($missingPickup) $which[] = "pickup '" . ($pickup->company_name ?: '#' . $pickup->id) . "'";
+            if ($missingDelivery) $which[] = "delivery '" . ($delivery->company_name ?: '#' . $delivery->id) . "'";
+            $msg = ucfirst(implode(' and ', $which)) . ' ' . (count($which) === 1 ? 'has' : 'have') . ' no coordinates yet. Run `php artisan locations:geocode` to backfill, or edit the address in Settings → Locations.';
+
+            $result = $this->emptyResult('missing_coords', $msg, $foodRate, $foodMinHours, $foodThresholdHours, $taxiRate);
+            $result['missing_pickup_coords'] = $missingPickup;
+            $result['missing_delivery_coords'] = $missingDelivery;
+            $result['pickup_location_id'] = $pickup->id;
+            $result['delivery_location_id'] = $delivery->id;
+            return $result;
         }
 
         // The vehicle class drives which fee column we read from
