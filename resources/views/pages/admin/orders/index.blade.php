@@ -35,8 +35,8 @@ new #[Layout('components.layouts.app')] class extends Component {
     {
         $query = Job::with([
                 'company:id,name,workflow_type',
-                'pickupLocation:id,company_name,city',
-                'deliveryLocation:id,company_name,city',
+                'pickupLocation:id,company_name,address,city,province',
+                'deliveryLocation:id,company_name,address,city,province',
                 'driver:id,name',
                 'brand:id,name',
             ])
@@ -256,11 +256,32 @@ new #[Layout('components.layouts.app')] class extends Component {
                         </td>
                         <td class="px-4 py-3.5 text-sm text-slate-700">{{ trim(($job->brand?->name ?? '') . ' ' . ($job->model_name ?? '')) ?: '—' }}</td>
                         <td class="px-4 py-3.5 text-xs text-slate-500">{{ $job->vin ?: '—' }}</td>
-                        <td class="px-4 py-3.5">
-                            <div class="flex items-center gap-1.5 text-xs text-slate-600">
-                                <span class="truncate max-w-[100px]">{{ $job->pickupLocation?->shortDisplay() ?? '—' }}</span>
-                                <svg viewBox="0 0 24 24" class="h-3 w-3 text-slate-300 shrink-0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
-                                <span class="truncate max-w-[100px]">{{ $job->deliveryLocation?->shortDisplay() ?? '—' }}</span>
+                        <td class="px-4 py-3.5 text-xs text-slate-600 align-top">
+                            <div class="space-y-2 max-w-[260px]">
+                                <div class="flex gap-1.5">
+                                    <span class="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-blue-100 text-blue-700 text-[9px] font-bold" title="Pickup">P</span>
+                                    <div class="min-w-0 leading-tight" title="{{ $job->pickupLocation?->fullDisplay(' — ') }}">
+                                        <p class="font-semibold text-slate-800 truncate">{{ $job->pickupLocation?->company_name ?? '—' }}</p>
+                                        @if($job->pickupLocation?->address)
+                                            <p class="text-slate-500 truncate">{{ $job->pickupLocation->address }}</p>
+                                        @endif
+                                        @if($job->pickupLocation?->city || $job->pickupLocation?->province)
+                                            <p class="text-slate-400 text-[10px]">{{ trim(implode(', ', array_filter([$job->pickupLocation->city, $job->pickupLocation->province]))) }}</p>
+                                        @endif
+                                    </div>
+                                </div>
+                                <div class="flex gap-1.5">
+                                    <span class="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-emerald-700 text-[9px] font-bold" title="Delivery">D</span>
+                                    <div class="min-w-0 leading-tight" title="{{ $job->deliveryLocation?->fullDisplay(' — ') }}">
+                                        <p class="font-semibold text-slate-800 truncate">{{ $job->deliveryLocation?->company_name ?? '—' }}</p>
+                                        @if($job->deliveryLocation?->address)
+                                            <p class="text-slate-500 truncate">{{ $job->deliveryLocation->address }}</p>
+                                        @endif
+                                        @if($job->deliveryLocation?->city || $job->deliveryLocation?->province)
+                                            <p class="text-slate-400 text-[10px]">{{ trim(implode(', ', array_filter([$job->deliveryLocation->city, $job->deliveryLocation->province]))) }}</p>
+                                        @endif
+                                    </div>
+                                </div>
                             </div>
                         </td>
                         <td class="px-4 py-3.5"><x-status-badge :status="$job->status" /></td>

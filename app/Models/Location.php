@@ -124,4 +124,30 @@ class Location extends Model
         }
         return implode(', ', $parts);
     }
+
+    /**
+     * Full multi-line display for the orders list / collection notes etc.
+     * Returns "<company>\n<street address>\n<city, province>" with the
+     * blank pieces dropped so a half-populated location still renders
+     * sensibly.  Lines are joined with " — " when collapsed for tooltips.
+     */
+    public function fullDisplay(string $sep = "\n"): string
+    {
+        $lines = [trim((string) $this->company_name)];
+
+        $addr = trim((string) $this->address);
+        if ($addr !== '' && strcasecmp($addr, (string) $this->company_name) !== 0) {
+            $lines[] = $addr;
+        }
+
+        $tail = trim(implode(', ', array_filter([
+            trim((string) $this->city),
+            trim((string) $this->province),
+        ])));
+        if ($tail !== '') {
+            $lines[] = $tail;
+        }
+
+        return implode($sep, array_filter($lines));
+    }
 }
