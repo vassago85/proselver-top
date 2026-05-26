@@ -929,6 +929,13 @@ new #[Layout('components.layouts.app')] class extends Component {
             session()->flash('error', 'No advance has been saved for this trip yet. Use Petty Cash / Advance first.');
             return;
         }
+        // Driver gate -- same rule as markAsIssued.  Belt-and-braces:
+        // the button is disabled in the UI when no driver, but a
+        // crafted Livewire call would bypass that.  Block server-side.
+        if (!$this->job->driver_user_id) {
+            session()->flash('error', 'Assign a driver before issuing the advance. The cash routes to their cellphone.');
+            return;
+        }
         $this->advanceIssueReference = (string) ($this->job->advance_issue_reference ?? '');
         $this->showIssueModal = true;
     }
@@ -943,6 +950,16 @@ new #[Layout('components.layouts.app')] class extends Component {
         if (!auth()->user()?->isInternal()) abort(403);
         if ($this->job->advance_total === null) {
             session()->flash('error', 'No advance to issue.');
+            return;
+        }
+
+        // Driver gate: the cash routes to the driver's cellphone via
+        // bank-send, so there has to be a driver attached.  Planning /
+        // sign-off can run without one (we just don't know yet WHO will
+        // do the trip); issue is the moment of payment so the recipient
+        // must be known.
+        if (!$this->job->driver_user_id) {
+            session()->flash('error', 'A driver must be assigned to this order before the advance can be issued -- they\'re the recipient of the bank-send.');
             return;
         }
 
@@ -1666,7 +1683,9 @@ new #[Layout('components.layouts.app')] class extends Component {
 
                     {{-- Issue to Driver -- the moment cash physically
                          goes out.  Distinct from saving the breakdown.
-                         Disabled until an advance amount has been saved.
+                         Disabled until an advance amount has been saved
+                         AND a driver is assigned (the cash routes to
+                         their cellphone, so we need to know who).
                          Visually changes once issued so ops sees the
                          status at a glance. --}}
                     @if(auth()->user()?->isInternal() && !$isTerminal && $job->advance_total !== null)
@@ -1677,10 +1696,18 @@ new #[Layout('components.layouts.app')] class extends Component {
                                 <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
                                 Issued {{ $job->advance_issued_at->format('d M') }}
                             </button>
+                        @elseif(!$job->driver_user_id)
+                            <button type="button" disabled
+                                class="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-gray-100 px-3.5 py-2.5 text-sm font-medium text-gray-400 cursor-not-allowed"
+                                title="Assign a driver before you can issue the advance -- the cash routes to their cellphone.">
+                                <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+                                Issue to Driver
+                                <span class="text-[10px] uppercase tracking-wide text-amber-600 font-semibold">assign driver first</span>
+                            </button>
                         @else
                             <button wire:click="openIssueModal"
                                 class="inline-flex items-center gap-2 rounded-lg border border-blue-300 bg-blue-600 px-3.5 py-2.5 text-sm font-semibold text-white hover:bg-blue-500 transition-colors"
-                                title="Record that the cash has been handed to the driver / EFT sent.">
+                                title="Record that the cash has been handed to {{ $job->driver?->name }} / EFT sent.">
                                 <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
                                 Issue to Driver
                             </button>
