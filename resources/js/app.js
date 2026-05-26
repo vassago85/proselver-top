@@ -178,9 +178,27 @@ document.addEventListener('alpine:init', () => {
         },
 
         applyValue(v, propagate = true) {
-            const match = this.flatOptions.find(o => o.value === String(v));
-            this.value = match ? match.value : (v ?? '');
-            this.label = match ? match.label : '';
+            const newValue = (v === null || v === undefined) ? '' : String(v);
+            const match = this.flatOptions.find(o => o.value === newValue);
+            this.value = newValue;
+
+            // Update the visible label only when we have new ground
+            // truth: a matching option, or an explicit clear.  Without
+            // this guard, a Livewire re-render that arrives BEFORE the
+            // refreshed options list is wired into Alpine's groups (a
+            // race we hit on the reports page filter chain) would wipe
+            // the label to '' while value stayed set -- the dropdown
+            // visually reverted to its placeholder ("All customers")
+            // even though the backend filter was correctly applied.
+            // Keeping the previous label keeps the visual stable until
+            // the next reactive pass either confirms it or replaces it.
+            if (match) {
+                this.label = match.label;
+            } else if (newValue === '') {
+                this.label = '';
+            }
+            // else: keep this.label as-is; subsequent passes will
+            // overwrite when the option becomes findable.
 
             if (propagate) {
                 this.$refs.hiddenInput.value = this.value;

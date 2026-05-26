@@ -75,24 +75,45 @@ new #[Layout('components.layouts.app')] class extends Component {
      */
     private function eligibleJobs(): \Illuminate\Database\Eloquent\Collection
     {
-        $from = $this->rangeFrom ? Carbon::parse($this->rangeFrom)->startOfDay() : now()->startOfDay();
-        $to = $this->rangeTo ? Carbon::parse($this->rangeTo)->endOfDay() : $from->copy()->endOfDay();
+        // "Not moving yet" = every pre-collection status.  Owner wants
+        // ops able to add anything that hasn't actually left -- pre-
+        // verification through ready-for-collection -- not just the
+        // narrow confirmed-or-later set we started with.  Once a trip
+        // is collected / in transit / delivered the cash is irrelevant
+        // to a pay-run going out for tomorrow's work, so we cut there.
+        $preMovementStatuses = [
+            Job::STATUS_PENDING_VERIFICATION,
+            Job::STATUS_AWAITING_CUSTOMER_CONFIRMATION,
+            Job::STATUS_RECEIVED,
+            Job::STATUS_CONFIRMED,
+            Job::STATUS_PLANNED,
+            Job::STATUS_DRIVER_ASSIGNED,
+            Job::STATUS_READY_FOR_COLLECTION,
+        ];
 
-        return Job::query()
-            ->whereIn('status', [
-                Job::STATUS_CONFIRMED,
-                Job::STATUS_PLANNED,
-                Job::STATUS_DRIVER_ASSIGNED,
-                Job::STATUS_READY_FOR_COLLECTION,
-            ])
+        $q = Job::query()
+            ->whereIn('status', $preMovementStatuses)
             ->where('executor_type', Job::EXECUTOR_PROSELVER)
-            ->whereBetween('scheduled_date', [$from->toDateString(), $to->toDateString()])
             ->where(function ($q) {
                 $q->whereNull('advance_plan_id')
                   ->orWhereHas('advancePlan', fn ($qq) => $qq->where('status', PettyCashPlan::STATUS_REJECTED));
             })
-            ->with(['company:id,name', 'pickupLocation:id,company_name', 'deliveryLocation:id,company_name', 'driver:id,name', 'vehicleClass:id,name,toll_class'])
-            ->orderBy('scheduled_date')
+            ->with(['company:id,name', 'pickupLocation:id,company_name', 'deliveryLocation:id,company_name', 'driver:id,name', 'vehicleClass:id,name,toll_class']);
+
+        // Date range is lenient: when both ends are set we filter to
+        // that window OR null-scheduled jobs (trips without a date
+        // shouldn't be hidden just because they're not on a calendar
+        // yet).  Either end empty = no date filter at all.
+        if ($this->rangeFrom && $this->rangeTo) {
+            $from = Carbon::parse($this->rangeFrom)->startOfDay();
+            $to = Carbon::parse($this->rangeTo)->endOfDay();
+            $q->where(function ($qq) use ($from, $to) {
+                $qq->whereBetween('scheduled_date', [$from->toDateString(), $to->toDateString()])
+                   ->orWhereNull('scheduled_date');
+            });
+        }
+
+        return $q->orderByRaw('scheduled_date IS NULL, scheduled_date asc')
             ->orderBy('created_at')
             ->get();
     }
