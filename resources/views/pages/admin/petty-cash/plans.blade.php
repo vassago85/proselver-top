@@ -36,6 +36,12 @@ new #[Layout('components.layouts.app')] class extends Component {
     /** ids of trips ops has ticked for the new plan */
     public array $selectedJobIds = [];
 
+    /** Per-draft-plan item selection.  Shape: [planId => [jobId, ...]].
+     *  Drives the "send selected for sign-off" bulk action on the
+     *  drafts tab so ops can split a daily-rollup draft into approved
+     *  / hold-back buckets without re-creating it. */
+    public array $itemSelections = [];
+
     /** Optional deep-link from the planning page: ?preselect=NNN
      *  pre-ticks that job id on the create tab so ops can plan a
      *  single trip without manually finding it in the list. */
@@ -224,6 +230,108 @@ new #[Layout('components.layouts.app')] class extends Component {
      * Move a draft plan to pending (awaiting sign-off).  Owner sees it
      * on the Pending tab from here.
      */
+    /**
+     * Send a SUBSET of a draft's items off for sign-off.  Creates a
+     * new pending plan with the chosen items; the original draft
+     * retains the unselected ones (or is deleted if empty).  Lets
+     * ops cherry-pick which trips are ready vs which need to wait
+     * without rebuilding the bundle from scratch.
+     */
+    public function sendSelectedForSignOff(int $planId): void
+    {
+        $plan = PettyCashPlan::findOrFail($planId);
+        if ($plan->status !== PettyCashPlan::STATUS_DRAFT) {
+            session()->flash('error', 'Selection-based send only works on draft plans.');
+            return;
+        }
+
+        $selectedJobIds = array_map('intval', $this->itemSelections[$planId] ?? []);
+        if (empty($selectedJobIds)) {
+            session()->flash('error', 'Tick the items you want to send for sign-off.');
+            return;
+        }
+
+        $allItems = collect($plan->items_json ?? []);
+        $selectedItems = $allItems->filter(fn ($i) => in_array((int) ($i['job_id'] ?? 0), $selectedJobIds, true))->values();
+        $remainingItems = $allItems->reject(fn ($i) => in_array((int) ($i['job_id'] ?? 0), $selectedJobIds, true))->values();
+
+        if ($selectedItems->isEmpty()) {
+            session()->flash('error', 'No matching items found in this plan.');
+            return;
+        }
+
+        DB::transaction(function () use ($plan, $selectedItems, $remainingItems, $selectedJobIds) {
+            // Build the pending plan from the picked items.
+            $pending = PettyCashPlan::create([
+                'label' => $plan->label . ' · subset ' . now()->format('H:i'),
+                'status' => PettyCashPlan::STATUS_PENDING,
+                'total_amount' => round((float) $selectedItems->sum('computed_total'), 2),
+                'items_json' => $selectedItems->all(),
+                'generated_by_user_id' => auth()->id(),
+                'generated_at' => now(),
+            ]);
+
+            // Re-tag those jobs to the new pending plan.
+            Job::whereIn('id', $selectedJobIds)->update(['advance_plan_id' => $pending->id]);
+
+            // The original draft keeps the remaining items, or is
+            // soft-deleted if there's nothing left (auto-cleanup so
+            // the drafts list doesn't fill with empty shells).
+            if ($remainingItems->isEmpty()) {
+                $plan->delete();
+            } else {
+                $plan->forceFill([
+                    'items_json' => $remainingItems->all(),
+                    'total_amount' => round((float) $remainingItems->sum('computed_total'), 2),
+                ])->save();
+            }
+
+            AuditService::log('petty_cash_plan_subset_sent', 'petty_cash_plan', $pending->id, null, [
+                'source_plan_id' => $plan->id,
+                'item_count' => $selectedItems->count(),
+                'total' => (float) $pending->total_amount,
+            ]);
+        });
+
+        unset($this->itemSelections[$planId]);
+        $this->tab = 'pending';
+        session()->flash('success', count($selectedJobIds) . ' trip' . (count($selectedJobIds) === 1 ? '' : 's') . ' sent for owner sign-off.');
+    }
+
+    /**
+     * Pull a single item out of a draft plan.  The job becomes
+     * standalone again (advance_plan_id cleared); next time ops opens
+     * its advance modal, saving will re-snapshot it into a fresh
+     * draft per the auto-add rule.
+     */
+    public function removeItemFromPlan(int $planId, int $jobId): void
+    {
+        $plan = PettyCashPlan::findOrFail($planId);
+        if ($plan->status !== PettyCashPlan::STATUS_DRAFT) {
+            session()->flash('error', 'You can only remove items from draft plans.');
+            return;
+        }
+
+        $remaining = collect($plan->items_json ?? [])
+            ->reject(fn ($i) => (int) ($i['job_id'] ?? 0) === $jobId)
+            ->values();
+
+        DB::transaction(function () use ($plan, $remaining, $jobId) {
+            Job::where('id', $jobId)->update(['advance_plan_id' => null]);
+            if ($remaining->isEmpty()) {
+                $plan->delete();
+            } else {
+                $plan->forceFill([
+                    'items_json' => $remaining->all(),
+                    'total_amount' => round((float) $remaining->sum('computed_total'), 2),
+                ])->save();
+            }
+        });
+
+        AuditService::log('petty_cash_plan_item_removed', 'petty_cash_plan', $plan->id, null, ['job_id' => $jobId]);
+        session()->flash('success', 'Trip removed from the draft plan.');
+    }
+
     public function sendForSignOff(int $planId): void
     {
         $plan = PettyCashPlan::findOrFail($planId);
@@ -520,6 +628,13 @@ new #[Layout('components.layouts.app')] class extends Component {
                             <table class="w-full text-xs">
                                 <thead class="bg-slate-50/60 text-[10px] uppercase tracking-wide text-slate-500">
                                     <tr>
+                                        @if($plan->status === 'draft')
+                                            <th class="px-2 py-1.5 w-8">
+                                                <input type="checkbox"
+                                                    wire:click="$set('itemSelections.{{ $plan->id }}', @js(collect($plan->items_json ?? [])->pluck('job_id')->all()))"
+                                                    title="Select all in this draft">
+                                            </th>
+                                        @endif
                                         <th class="px-3 py-1.5 text-left">Order</th>
                                         <th class="px-3 py-1.5 text-left">Route</th>
                                         <th class="px-3 py-1.5 text-left">Scheduled</th>
@@ -529,11 +644,21 @@ new #[Layout('components.layouts.app')] class extends Component {
                                         <th class="px-3 py-1.5 text-right">Food</th>
                                         <th class="px-3 py-1.5 text-right">Custom</th>
                                         <th class="px-3 py-1.5 text-right">Trip total</th>
+                                        @if($plan->status === 'draft')
+                                            <th class="px-2 py-1.5 w-10"></th>
+                                        @endif
                                     </tr>
                                 </thead>
                                 <tbody class="divide-y divide-slate-100">
                                     @foreach($plan->items_json ?? [] as $item)
                                         <tr class="hover:bg-slate-50">
+                                            @if($plan->status === 'draft')
+                                                <td class="px-2 py-1.5">
+                                                    <input type="checkbox"
+                                                        wire:model.live="itemSelections.{{ $plan->id }}"
+                                                        value="{{ $item['job_id'] }}">
+                                                </td>
+                                            @endif
                                             <td class="px-3 py-1.5">
                                                 <a href="{{ route('admin.orders.show', $item['job_id']) }}" target="_blank" class="font-semibold text-blue-700 hover:underline">{{ $item['job_number'] ?? '—' }}</a>
                                             </td>
@@ -545,6 +670,17 @@ new #[Layout('components.layouts.app')] class extends Component {
                                             <td class="px-3 py-1.5 text-right tabular-nums">R {{ number_format((float)($item['food'] ?? 0), 2) }}</td>
                                             <td class="px-3 py-1.5 text-right tabular-nums">R {{ number_format((float) array_sum(array_column($item['custom_items'] ?? [], 'amount')), 2) }}</td>
                                             <td class="px-3 py-1.5 text-right tabular-nums font-bold">R {{ number_format((float)($item['computed_total'] ?? 0), 2) }}</td>
+                                            @if($plan->status === 'draft')
+                                                <td class="px-2 py-1.5 text-right">
+                                                    <button wire:click="removeItemFromPlan({{ $plan->id }}, {{ $item['job_id'] }})"
+                                                        wire:confirm="Remove order {{ $item['job_number'] ?? '' }} from this draft plan?"
+                                                        type="button"
+                                                        title="Remove this trip from the draft"
+                                                        class="text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded p-1">
+                                                        <svg class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><line x1="18" x2="6" y1="6" y2="18"/><line x1="6" x2="18" y1="6" y2="18"/></svg>
+                                                    </button>
+                                                </td>
+                                            @endif
                                         </tr>
                                     @endforeach
                                 </tbody>
@@ -554,11 +690,26 @@ new #[Layout('components.layouts.app')] class extends Component {
                         {{-- Action row per status --}}
                         <footer class="px-4 py-3 bg-slate-50/60 border-t border-slate-100">
                             @if($plan->status === 'draft')
-                                <div class="flex items-center justify-end gap-2">
+                                @php
+                                    $selectedCount = count($itemSelections[$plan->id] ?? []);
+                                    $totalItems = count($plan->items_json ?? []);
+                                @endphp
+                                <div class="flex flex-wrap items-center justify-end gap-2">
+                                    @if($selectedCount > 0 && $selectedCount < $totalItems)
+                                        <span class="text-[11px] text-slate-500">{{ $selectedCount }} of {{ $totalItems }} selected</span>
+                                        <button wire:click="sendSelectedForSignOff({{ $plan->id }})"
+                                            wire:confirm="Send {{ $selectedCount }} selected trip{{ $selectedCount === 1 ? '' : 's' }} to the owner for sign-off? Remaining items stay in this draft."
+                                            class="text-xs rounded-md bg-amber-600 hover:bg-amber-500 text-white px-3 py-1.5 font-semibold">
+                                            Send {{ $selectedCount }} selected for sign-off
+                                        </button>
+                                    @endif
                                     <button wire:click="deleteDraft({{ $plan->id }})" wire:confirm="Delete this draft plan?"
                                         class="text-xs rounded-md px-3 py-1.5 text-rose-600 hover:bg-rose-50 font-semibold">Delete draft</button>
                                     <button wire:click="sendForSignOff({{ $plan->id }})"
-                                        class="text-xs rounded-md bg-amber-600 hover:bg-amber-500 text-white px-3 py-1.5 font-semibold">Send for sign-off</button>
+                                        wire:confirm="Send all {{ $totalItems }} trips on this draft for sign-off?"
+                                        class="text-xs rounded-md bg-amber-700 hover:bg-amber-600 text-white px-3 py-1.5 font-semibold">
+                                        Send all for sign-off
+                                    </button>
                                 </div>
                             @elseif($plan->status === 'pending' && $canApprove)
                                 <div class="space-y-2">
