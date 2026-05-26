@@ -41,6 +41,14 @@ class SystemSettingSeeder extends Seeder
             // default -- it's irregular and owner explicitly rejected one.
             ['key' => 'taxi_allowance_per_trip', 'value' => '50', 'type' => 'float', 'description' => 'Standard taxi allowance per trip (ZAR). Receipt-not-required category.'],
 
+            // Round-up rule: cash advances are paid in physical bills, so
+            // the computed total gets rounded UP to the nearest multiple.
+            // Owner stated R10 (Milton SK confirmed via WhatsApp 2026-05-26
+            // "Close to the 10").  R73 -> R80, R437 -> R440.  Applied to
+            // the FINAL total only; individual line items keep their
+            // exact values so reconciliation against slips stays clean.
+            ['key' => 'advance_round_up_to_multiple', 'value' => '10', 'type' => 'integer', 'description' => 'Round the computed advance UP to the nearest multiple of this ZAR amount (default 10). Drivers draw round amounts in cash.'],
+
             // Truck-speed adjustment for the Google Maps duration.
             // Google estimates car travel time (max ~120 km/h on freeway);
             // SA legal speeds are MCV 100 km/h, HCV/EHCV 80 km/h, so a

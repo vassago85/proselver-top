@@ -762,12 +762,25 @@ new #[Layout('components.layouts.app')] class extends Component {
             $customTotal += $amount;
         }
         $computed      = round($tolls + $accommodation + $taxi + $food + $customTotal, 2);
-        $total         = $this->advanceTotal !== null ? round((float) $this->advanceTotal, 2) : $computed;
 
-        // Audit-on-overage rule: any number above the computed estimate
-        // demands a written reason.  Half-rand tolerance avoids tripping
-        // on decimal rounding.
-        if ($total > $computed + 0.5 && trim($this->advanceIncreaseReason) === '') {
+        // Owner rule (Milton SK, 2026-05-26): cash advances are paid in
+        // round amounts -- driver draws bills, not coins.  Round the
+        // computed total UP to the nearest configured multiple (R10 by
+        // default).  Applied only when ops hasn't typed a manual total;
+        // a typed amount wins exactly as entered.  Line items keep
+        // their exact values so slip reconciliation stays clean.
+        $roundUpTo = (int) \App\Models\SystemSetting::get('advance_round_up_to_multiple', 10);
+        $computedRoundedUp = $roundUpTo > 0
+            ? (float) (ceil($computed / $roundUpTo) * $roundUpTo)
+            : $computed;
+        $total = $this->advanceTotal !== null ? round((float) $this->advanceTotal, 2) : $computedRoundedUp;
+
+        // Audit-on-overage rule: any number above the rounded computed
+        // estimate demands a written reason.  We compare against the
+        // ROUNDED value rather than the raw computed so a routine
+        // round-up-to-R10 doesn't trip the rule.  Half-rand tolerance
+        // avoids tripping on decimal noise.
+        if ($total > $computedRoundedUp + 0.5 && trim($this->advanceIncreaseReason) === '') {
             $this->addError('advanceIncreaseReason', 'A reason is required when the advance is higher than the computed estimate.');
             return;
         }
@@ -2563,8 +2576,12 @@ new #[Layout('components.layouts.app')] class extends Component {
             if ($lbl !== '' && $amt > 0) $customTotalRand += round($amt, 2);
         }
         $computedRand = round($tollsRand + $accomRand + $taxiRand + $foodRand + $customTotalRand, 2);
-        $displayTotal = $advanceTotal !== null ? (float) $advanceTotal : $computedRand;
-        $isOverage    = $displayTotal > $computedRand + 0.5;
+        // Match the saveAdvance round-up rule so the visible "Computed
+        // estimate" and the value that will actually be persisted agree.
+        $roundUpTo = (int) \App\Models\SystemSetting::get('advance_round_up_to_multiple', 10);
+        $computedRoundedRand = $roundUpTo > 0 ? (float) (ceil($computedRand / $roundUpTo) * $roundUpTo) : $computedRand;
+        $displayTotal = $advanceTotal !== null ? (float) $advanceTotal : $computedRoundedRand;
+        $isOverage    = $displayTotal > $computedRoundedRand + 0.5;
     @endphp
     <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 overflow-y-auto py-8" wire:click.self="closeAdvancePanel">
         <div class="relative w-full max-w-3xl mx-4 bg-white rounded-2xl shadow-2xl overflow-hidden">
@@ -2810,17 +2827,25 @@ new #[Layout('components.layouts.app')] class extends Component {
 
                 {{-- Total + audit-on-overage --}}
                 <section>
-                    <div class="flex items-center justify-between rounded-lg border border-gray-200 bg-gray-50 px-4 py-3">
-                        <span class="text-sm font-semibold text-gray-800">Computed estimate</span>
-                        <span class="font-mono text-base font-bold text-gray-900">R {{ number_format($computedRand, 2) }}</span>
+                    <div class="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 space-y-1">
+                        <div class="flex items-center justify-between">
+                            <span class="text-sm font-semibold text-gray-800">Computed estimate</span>
+                            <span class="font-mono text-base font-bold text-gray-900">R {{ number_format($computedRand, 2) }}</span>
+                        </div>
+                        @if($roundUpTo > 0 && abs($computedRoundedRand - $computedRand) > 0.001)
+                            <div class="flex items-center justify-between text-xs">
+                                <span class="text-emerald-700 font-semibold">Rounded up to nearest R{{ $roundUpTo }} (cash draw)</span>
+                                <span class="font-mono font-bold text-emerald-700">R {{ number_format($computedRoundedRand, 2) }}</span>
+                            </div>
+                        @endif
                     </div>
 
                     <div class="mt-3">
                         <label class="block text-sm font-medium text-gray-700 mb-1.5">
                             Advance to assign (R)
-                            <span class="ml-1 text-xs text-gray-400">leave blank to use the computed estimate</span>
+                            <span class="ml-1 text-xs text-gray-400">leave blank to use the rounded estimate</span>
                         </label>
-                        <input wire:model.live.debounce.300ms="advanceTotal" type="number" min="0" step="0.01" placeholder="{{ number_format($computedRand, 2, '.', '') }}"
+                        <input wire:model.live.debounce.300ms="advanceTotal" type="number" min="0" step="0.01" placeholder="{{ number_format($computedRoundedRand, 2, '.', '') }}"
                             class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-emerald-500 focus:ring-emerald-500">
                     </div>
 
