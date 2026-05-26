@@ -1630,33 +1630,79 @@ new #[Layout('components.layouts.app')] class extends Component {
             </div>
             @endif
 
-            {{-- Pickup & Delivery --}}
+            {{-- Pickup & Delivery -- full address + lat/lng status.  The
+                 "missing coords" amber pill is a load-bearing signal:
+                 if it's there, the trip-cost estimator won't be able to
+                 detect tolls until the address is geocoded (run
+                 `php artisan locations:geocode` or edit the location). --}}
             @if($job->isTransport())
+            @php
+                $pickupHasCoords = $job->pickupLocation && $job->pickupLocation->latitude && $job->pickupLocation->longitude;
+                $deliveryHasCoords = $job->deliveryLocation && $job->deliveryLocation->latitude && $job->deliveryLocation->longitude;
+            @endphp
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-6">
                 <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
                     <h4 class="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
                         <svg class="h-4 w-4 text-green-600" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>
                         Pickup
+                        @if($job->pickupLocation && !$pickupHasCoords)
+                            <a href="{{ route('admin.settings.locations') }}?focus={{ $job->pickup_location_id }}" target="_blank"
+                                class="inline-flex items-center gap-1 rounded-full bg-amber-100 text-amber-800 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider hover:bg-amber-200"
+                                title="No latitude/longitude — toll auto-detection won't work for this order until geocoded.">
+                                <svg class="h-2.5 w-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path d="M12 9v2m0 4h.01"/><circle cx="12" cy="12" r="10"/></svg>
+                                no coords
+                            </a>
+                        @endif
                     </h4>
-                    <p class="text-sm font-medium text-gray-900">{{ $job->pickupLocation?->shortDisplay() ?? '—' }}</p>
-                    @if($job->pickup_contact_name)
-                        <p class="text-sm text-gray-600 mt-2">{{ $job->pickup_contact_name }}</p>
+                    <p class="text-sm font-semibold text-gray-900">{{ $job->pickupLocation?->company_name ?? '—' }}</p>
+                    @if($job->pickupLocation?->address && strcasecmp(trim($job->pickupLocation->address), trim((string) $job->pickupLocation->company_name)) !== 0)
+                        <p class="text-sm text-gray-600 mt-0.5">{{ $job->pickupLocation->address }}</p>
                     @endif
-                    @if($job->pickup_contact_phone)
-                        <p class="text-sm text-gray-500">{{ $job->pickup_contact_phone }}</p>
+                    @php $pickupTail = trim(implode(', ', array_filter([$job->pickupLocation?->city, $job->pickupLocation?->province]))); @endphp
+                    @if($pickupTail !== '')
+                        <p class="text-xs text-gray-500 mt-0.5">{{ $pickupTail }}</p>
+                    @endif
+                    @if($job->pickup_contact_name || $job->pickup_contact_phone)
+                        <div class="mt-3 pt-3 border-t border-gray-100">
+                            @if($job->pickup_contact_name)
+                                <p class="text-sm text-gray-700">{{ $job->pickup_contact_name }}</p>
+                            @endif
+                            @if($job->pickup_contact_phone)
+                                <p class="text-xs text-gray-500 font-mono">{{ $job->pickup_contact_phone }}</p>
+                            @endif
+                        </div>
                     @endif
                 </div>
                 <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
                     <h4 class="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
                         <svg class="h-4 w-4 text-red-600" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>
                         Delivery
+                        @if($job->deliveryLocation && !$deliveryHasCoords)
+                            <a href="{{ route('admin.settings.locations') }}?focus={{ $job->delivery_location_id }}" target="_blank"
+                                class="inline-flex items-center gap-1 rounded-full bg-amber-100 text-amber-800 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider hover:bg-amber-200"
+                                title="No latitude/longitude — toll auto-detection won't work for this order until geocoded.">
+                                <svg class="h-2.5 w-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path d="M12 9v2m0 4h.01"/><circle cx="12" cy="12" r="10"/></svg>
+                                no coords
+                            </a>
+                        @endif
                     </h4>
-                    <p class="text-sm font-medium text-gray-900">{{ $job->deliveryLocation?->shortDisplay() ?? '—' }}</p>
-                    @if($job->delivery_contact_name)
-                        <p class="text-sm text-gray-600 mt-2">{{ $job->delivery_contact_name }}</p>
+                    <p class="text-sm font-semibold text-gray-900">{{ $job->deliveryLocation?->company_name ?? '—' }}</p>
+                    @if($job->deliveryLocation?->address && strcasecmp(trim($job->deliveryLocation->address), trim((string) $job->deliveryLocation->company_name)) !== 0)
+                        <p class="text-sm text-gray-600 mt-0.5">{{ $job->deliveryLocation->address }}</p>
                     @endif
-                    @if($job->delivery_contact_phone)
-                        <p class="text-sm text-gray-500">{{ $job->delivery_contact_phone }}</p>
+                    @php $deliveryTail = trim(implode(', ', array_filter([$job->deliveryLocation?->city, $job->deliveryLocation?->province]))); @endphp
+                    @if($deliveryTail !== '')
+                        <p class="text-xs text-gray-500 mt-0.5">{{ $deliveryTail }}</p>
+                    @endif
+                    @if($job->delivery_contact_name || $job->delivery_contact_phone)
+                        <div class="mt-3 pt-3 border-t border-gray-100">
+                            @if($job->delivery_contact_name)
+                                <p class="text-sm text-gray-700">{{ $job->delivery_contact_name }}</p>
+                            @endif
+                            @if($job->delivery_contact_phone)
+                                <p class="text-xs text-gray-500 font-mono">{{ $job->delivery_contact_phone }}</p>
+                            @endif
+                        </div>
                     @endif
                 </div>
             </div>
