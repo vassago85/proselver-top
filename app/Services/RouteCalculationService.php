@@ -12,12 +12,24 @@ class RouteCalculationService
 {
     public static function calculate(Location $pickup, Location $delivery): ?array
     {
+        // Every null-return path now logs a warning with enough context
+        // to debug from the laravel.log without re-running the call.
+        // Previously this was silent and the UI showed a generic "could
+        // not calculate" message even when the underlying cause was
+        // something concrete like REQUEST_DENIED on the API key.
+
         if (!$pickup->latitude || !$pickup->longitude || !$delivery->latitude || !$delivery->longitude) {
+            Log::warning('Route calc: missing coordinates', [
+                'pickup_id' => $pickup->id, 'delivery_id' => $delivery->id,
+                'pickup_lat' => $pickup->latitude, 'pickup_lng' => $pickup->longitude,
+                'delivery_lat' => $delivery->latitude, 'delivery_lng' => $delivery->longitude,
+            ]);
             return null;
         }
 
         $apiKey = SystemSetting::get('google_maps_api_key', config('services.google_maps.api_key'));
         if (!$apiKey) {
+            Log::warning('Route calc: no API key configured');
             return null;
         }
 
@@ -29,11 +41,27 @@ class RouteCalculationService
             ]);
 
             if (!$response->successful()) {
+                Log::warning('Route calc: HTTP failure', [
+                    'status' => $response->status(),
+                    'pickup_id' => $pickup->id, 'delivery_id' => $delivery->id,
+                ]);
                 return null;
             }
 
             $data = $response->json();
-            if (empty($data['routes'][0])) {
+
+            // Google returns 200 OK even when there's no route -- the
+            // actual outcome is in $data['status'].  Log it so we can
+            // distinguish REQUEST_DENIED (API not enabled), OVER_QUERY_LIMIT
+            // (quota), ZERO_RESULTS (no route exists), INVALID_REQUEST
+            // (malformed coords), etc.
+            $googleStatus = $data['status'] ?? 'UNKNOWN';
+            if ($googleStatus !== 'OK' || empty($data['routes'][0])) {
+                Log::warning('Route calc: Google returned no usable route', [
+                    'google_status' => $googleStatus,
+                    'error_message' => $data['error_message'] ?? null,
+                    'pickup_id' => $pickup->id, 'delivery_id' => $delivery->id,
+                ]);
                 return null;
             }
 
@@ -42,7 +70,23 @@ class RouteCalculationService
 
             $distanceKm = round($leg['distance']['value'] / 1000, 2);
             $durationMinutes = (int) ceil($leg['duration']['value'] / 60);
-            $polyline = $route['overview_polyline']['points'] ?? null;
+
+            // Build a denser polyline by concatenating each step's
+            // polyline rather than relying on Google's heavily-
+            // simplified overview_polyline.  Steps give 10-30x more
+            // points so plaza matching is far more accurate.  Stored as
+            // a JSON array of [lat, lng] pairs; decodePolyline detects
+            // and handles both formats so cached overview polylines
+            // keep working until they're refreshed.
+            $allPoints = [];
+            foreach ($leg['steps'] ?? [] as $step) {
+                if (empty($step['polyline']['points'])) continue;
+                $allPoints = array_merge($allPoints, self::decodeGooglePolyline($step['polyline']['points']));
+            }
+
+            $polyline = !empty($allPoints)
+                ? json_encode($allPoints)
+                : ($route['overview_polyline']['points'] ?? null);
 
             return [
                 'distance_km' => $distanceKm,
@@ -50,7 +94,10 @@ class RouteCalculationService
                 'polyline' => $polyline,
             ];
         } catch (\Throwable $e) {
-            Log::warning('Route calculation failed', ['error' => $e->getMessage()]);
+            Log::warning('Route calc: exception', [
+                'error' => $e->getMessage(),
+                'pickup_id' => $pickup->id, 'delivery_id' => $delivery->id,
+            ]);
             return null;
         }
     }
@@ -103,7 +150,33 @@ class RouteCalculationService
         return ['plazas' => $matched, 'total_cost' => round($totalCost, 2)];
     }
 
+    /**
+     * Decode whatever's in the polyline column into a points array.
+     * Supports two shapes:
+     *   - JSON array (new) -- the per-step concatenated polyline we
+     *     started storing after the sparse-overview_polyline bug.
+     *   - Google encoded polyline (legacy) -- still valid for any
+     *     cached route_estimates rows from before the switch.
+     */
     public static function decodePolyline(string $encoded): array
+    {
+        $trimmed = ltrim($encoded);
+        if ($trimmed === '') return [];
+
+        if ($trimmed[0] === '[') {
+            $decoded = json_decode($trimmed, true);
+            if (is_array($decoded)) return $decoded;
+            // Fall through: malformed JSON, try as Google encoded.
+        }
+
+        return self::decodeGooglePolyline($encoded);
+    }
+
+    /**
+     * Decode a single Google-encoded polyline string into [lat, lng] pairs.
+     * Algorithm per https://developers.google.com/maps/documentation/utilities/polylinealgorithm
+     */
+    private static function decodeGooglePolyline(string $encoded): array
     {
         $points = [];
         $index = 0;
@@ -135,10 +208,6 @@ class RouteCalculationService
             $points[] = [$lat / 1e5, $lng / 1e5];
         }
 
-        // No sub-sampling.  Google's overview_polyline is already a
-        // simplified version of the route -- skipping points on top of
-        // that was masking plaza matches.  Even a long trip is only a
-        // few thousand points and the haversine inner loop is cheap.
         return $points;
     }
 
