@@ -928,6 +928,21 @@ new #[Layout('components.layouts.app')] class extends Component {
             default => collect(),
         };
 
+        // Fall-back for installs where no company has been flagged as
+        // platform-owner (or drivers haven't been pivoted to it).
+        // Without this fallback the assign-driver dropdown comes up
+        // empty even though dispatch board shows the same drivers --
+        // dispatch uses a loose all-drivers query, so order detail
+        // looked broken in comparison.  Matches the dispatch query so
+        // the two pages agree on who can be assigned.
+        if ($executorType === Job::EXECUTOR_PROSELVER && $drivers->isEmpty()) {
+            $drivers = User::query()
+                ->where('is_active', true)
+                ->whereHas('roles', fn ($q) => $q->where('slug', 'driver'))
+                ->orderBy('name')
+                ->get(['id', 'name']);
+        }
+
         $driverOptions = $drivers->map(fn ($d) => [
             'value' => (string) $d->id,
             'label' => $d->name,
