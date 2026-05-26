@@ -401,6 +401,9 @@ class Job extends Model
         'advance_increase_reason',
         'advance_assigned_by_user_id',
         'advance_assigned_at',
+        'advance_plan_id',
+        'advance_approved_at',
+        'advance_override_reason',
         'customer_confirmed_at',
         'customer_confirmed_by',
         'planned_at',
@@ -481,6 +484,7 @@ class Job extends Model
             'advance_custom_items' => 'array',
             'advance_total' => 'decimal:2',
             'advance_assigned_at' => 'datetime',
+            'advance_approved_at' => 'datetime',
             'customer_confirmed_at' => 'datetime',
             'planned_at' => 'datetime',
             'ready_for_collection_at' => 'datetime',
@@ -949,6 +953,11 @@ class Job extends Model
     public function advanceAssignedBy(): BelongsTo
     {
         return $this->belongsTo(User::class, 'advance_assigned_by_user_id');
+    }
+
+    public function advancePlan(): BelongsTo
+    {
+        return $this->belongsTo(PettyCashPlan::class, 'advance_plan_id');
     }
 
     public function trip(): BelongsTo

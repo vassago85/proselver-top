@@ -2,6 +2,7 @@
 
 use App\Models\Job;
 use App\Models\ModelTollClassHint;
+use App\Models\PettyCashPlan;
 use App\Models\User;
 use App\Services\AuditService;
 use App\Services\TripCostEstimator;
@@ -74,6 +75,11 @@ new #[Layout('components.layouts.app')] class extends Component {
     // review.  Empty on first issue (initial state is captured by the
     // before/after JSON diff alone).
     public string $advanceChangeReason = '';
+    // Override reason for issuing without an approved plan.  Required
+    // when ops chooses to bypass the sign-off workflow (e.g. emergency
+    // collection after hours).  Surfaces in the audit log so the owner
+    // sees who bypassed and why.
+    public string $advanceOverrideReason = '';
     // Per-trip SANRAL toll-class override (1-4, or null to use vehicle
     // class default).  Picked from the dropdown on the modal -- the
     // estimator re-runs whenever this changes so the toll list updates
@@ -526,6 +532,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             : null;
         $this->advanceIncreaseReason = (string) ($this->job->advance_increase_reason ?? '');
         $this->advanceChangeReason = '';  // always blank on open -- ops re-types each time
+        $this->advanceOverrideReason = '';
         $this->advanceFoodWaived = (bool) $this->job->advance_food_waived;
         // Toll class override: prefer the value previously committed
         // on this job; otherwise see if we have a remembered correction
@@ -794,6 +801,17 @@ new #[Layout('components.layouts.app')] class extends Component {
             return;
         }
 
+        // Sign-off gate: a trip needs to be approved via a Petty-cash
+        // Plan before ops can issue an advance without an explicit
+        // override.  Override path requires a reason and is logged in
+        // the audit trail with action_type 'advance_override_used'.
+        $hasApproval = $this->job->advance_approved_at !== null;
+        $isNewIssue = !$isReissue;
+        if ($isNewIssue && !$hasApproval && trim($this->advanceOverrideReason) === '') {
+            $this->addError('advanceOverrideReason', 'This trip has not been approved via a Petty-cash Plan. Provide a reason to bypass the sign-off workflow.');
+            return;
+        }
+
         $before = $this->job->only([
             'advance_tolls', 'advance_accommodation', 'advance_taxi',
             'advance_food', 'advance_total', 'advance_increase_reason',
@@ -813,7 +831,21 @@ new #[Layout('components.layouts.app')] class extends Component {
             'advance_increase_reason'       => $total > $computed + 0.5 ? trim($this->advanceIncreaseReason) : null,
             'advance_assigned_by_user_id'   => auth()->id(),
             'advance_assigned_at'           => now(),
+            'advance_override_reason'       => (!$hasApproval && $isNewIssue) ? trim($this->advanceOverrideReason) : $this->job->advance_override_reason,
         ])->save();
+
+        // Record any sign-off bypass to the audit log distinctly so
+        // the owner can filter on overrides specifically.
+        if ($isNewIssue && !$hasApproval) {
+            AuditService::log(
+                'advance_override_used',
+                'job',
+                $this->job->id,
+                null,
+                ['amount' => (float) $total],
+                trim($this->advanceOverrideReason),
+            );
+        }
 
         // The audit row carries both the diff AND the change reason
         // (when present).  action_type distinguishes the first issue
@@ -2612,6 +2644,35 @@ new #[Layout('components.layouts.app')] class extends Component {
                                 class="mt-1 w-full rounded-lg border border-amber-300 px-3 py-2 text-sm focus:border-amber-500 focus:ring-amber-500"></textarea>
                             @error('advanceIncreaseReason') <p class="mt-1 text-xs text-red-600">{{ $message }}</p> @enderror
                         </div>
+                    @endif
+
+                    {{-- Sign-off status banner.  Trip-level approval is
+                         the gate ops needs before issuing.  Approved
+                         trips show a green "approved by plan #N" badge;
+                         unapproved trips show an amber prompt with an
+                         override-reason input. --}}
+                    @if($job->advance_total === null)
+                        @if($job->advance_approved_at && $job->advance_plan_id)
+                            <div class="mt-3 rounded-lg border border-emerald-300 bg-emerald-50 px-4 py-2 flex items-center gap-2">
+                                <svg class="h-4 w-4 text-emerald-700 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                                <p class="text-xs text-emerald-900">
+                                    Approved by <a href="{{ route('admin.petty-cash.plans', ['tab' => 'approved']) }}" target="_blank" class="font-semibold underline">plan #{{ $job->advance_plan_id }}</a>
+                                    · {{ $job->advance_approved_at->diffForHumans() }}
+                                </p>
+                            </div>
+                        @else
+                            <div class="mt-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3">
+                                <p class="text-xs font-semibold text-amber-900 mb-1">No owner sign-off on file — issue requires an override reason</p>
+                                <p class="text-[11px] text-amber-800/80 mb-2">
+                                    Best practice: add this trip to a <a href="{{ route('admin.petty-cash.plans', ['tab' => 'create']) }}" target="_blank" class="font-semibold underline">Petty-cash Plan</a> for the owner to sign off.
+                                    Otherwise type why you're bypassing the workflow.
+                                </p>
+                                <textarea wire:model.live.debounce.300ms="advanceOverrideReason" rows="2" maxlength="500"
+                                    placeholder="e.g. emergency after-hours collection, customer changed schedule, etc."
+                                    class="w-full rounded-lg border border-amber-300 px-3 py-2 text-sm focus:border-amber-500 focus:ring-amber-500"></textarea>
+                                @error('advanceOverrideReason') <p class="mt-1 text-xs text-red-600">{{ $message }}</p> @enderror
+                            </div>
+                        @endif
                     @endif
 
                     {{-- Re-issue audit reason.  Required when this order

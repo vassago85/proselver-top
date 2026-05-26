@@ -47,6 +47,12 @@ Volt::route('damage', 'admin.damage.index')->name('damage');
 // workflow on top of the Phase 1 photo-only slips. Internal staff +
 // platform-owner only; customers must never see this page.
 Volt::route('petty-cash', 'admin.petty-cash.index')->name('petty-cash.index');
+
+// Pre-issue petty-cash plan + owner sign-off.  Ops picks tomorrow's
+// trips, system snapshots the computed advances, owner approves the
+// bundle.  Internal staff only -- the page exposes per-trip cost
+// breakdowns no customer should see.
+Volt::route('petty-cash/plans', 'admin.petty-cash.plans')->name('petty-cash.plans');
 Volt::route('vehicles', 'vehicles.index')->name('vehicles.index');
 Volt::route('documents', 'admin.documents.index')->name('documents.index');
 // Companies (formerly "Customers" — the model has always been Company,
