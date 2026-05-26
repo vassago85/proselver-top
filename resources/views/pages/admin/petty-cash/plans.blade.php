@@ -36,11 +36,14 @@ new #[Layout('components.layouts.app')] class extends Component {
     /** ids of trips ops has ticked for the new plan */
     public array $selectedJobIds = [];
 
-    /** Per-draft-plan item selection.  Shape: [planId => [jobId, ...]].
-     *  Drives the "send selected for sign-off" bulk action on the
-     *  drafts tab so ops can split a daily-rollup draft into approved
-     *  / hold-back buckets without re-creating it. */
-    public array $itemSelections = [];
+    /** Per-item selection -- flat list of "planId-jobId" strings.
+     *  We use a flat list rather than a nested [planId => [jobId,...]]
+     *  array because Livewire 3 has a quirk where binding a checkbox
+     *  to a nested array path can write `true` instead of an array
+     *  when only one item is checked, which then crashes the render
+     *  with "count(): Argument must be Countable|array, true given".
+     *  Flat strings keep the binding unambiguous. */
+    public array $selectedItemKeys = [];
 
     /** Optional deep-link from the planning page: ?preselect=NNN
      *  pre-ticks that job id on the create tab so ops can plan a
@@ -237,6 +240,21 @@ new #[Layout('components.layouts.app')] class extends Component {
      * ops cherry-pick which trips are ready vs which need to wait
      * without rebuilding the bundle from scratch.
      */
+    /**
+     * Extract job_ids selected for a specific plan from the flat
+     * selection list.  Keys look like "12-345" -- plan 12, job 345.
+     */
+    private function selectedJobIdsFor(int $planId): array
+    {
+        $prefix = $planId . '-';
+        return collect($this->selectedItemKeys)
+            ->filter(fn ($k) => is_string($k) && str_starts_with($k, $prefix))
+            ->map(fn ($k) => (int) substr($k, strlen($prefix)))
+            ->filter()
+            ->values()
+            ->all();
+    }
+
     public function sendSelectedForSignOff(int $planId): void
     {
         $plan = PettyCashPlan::findOrFail($planId);
@@ -245,7 +263,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             return;
         }
 
-        $selectedJobIds = array_map('intval', $this->itemSelections[$planId] ?? []);
+        $selectedJobIds = $this->selectedJobIdsFor($planId);
         if (empty($selectedJobIds)) {
             session()->flash('error', 'Tick the items you want to send for sign-off.');
             return;
@@ -293,7 +311,13 @@ new #[Layout('components.layouts.app')] class extends Component {
             ]);
         });
 
-        unset($this->itemSelections[$planId]);
+        // Drop the selection keys for the plan that was just split.
+        $prefix = $planId . '-';
+        $this->selectedItemKeys = array_values(array_filter(
+            $this->selectedItemKeys,
+            fn ($k) => !is_string($k) || !str_starts_with($k, $prefix),
+        ));
+
         $this->tab = 'pending';
         session()->flash('success', count($selectedJobIds) . ' trip' . (count($selectedJobIds) === 1 ? '' : 's') . ' sent for owner sign-off.');
     }
@@ -630,8 +654,26 @@ new #[Layout('components.layouts.app')] class extends Component {
                                     <tr>
                                         @if($plan->status === 'draft')
                                             <th class="px-2 py-1.5 w-8">
+                                                @php
+                                                    // Pre-compute the "all keys for this plan" array so
+                                                    // the header check-box can toggle them via $set without
+                                                    // a method call.  Wrapped with array_values to keep
+                                                    // a clean numeric-indexed list.
+                                                    $allKeysForThisPlan = collect($plan->items_json ?? [])
+                                                        ->pluck('job_id')
+                                                        ->filter()
+                                                        ->map(fn ($id) => $plan->id . '-' . $id)
+                                                        ->values()
+                                                        ->all();
+                                                    // Existing selection minus this plan's keys, so we can
+                                                    // merge cleanly when ticking "select all".
+                                                    $existingMinusThisPlan = collect($selectedItemKeys ?? [])
+                                                        ->filter(fn ($k) => is_string($k) && !str_starts_with($k, $plan->id . '-'))
+                                                        ->values()
+                                                        ->all();
+                                                @endphp
                                                 <input type="checkbox"
-                                                    wire:click="$set('itemSelections.{{ $plan->id }}', @js(collect($plan->items_json ?? [])->pluck('job_id')->all()))"
+                                                    wire:click="$set('selectedItemKeys', @js(array_merge($existingMinusThisPlan, $allKeysForThisPlan)))"
                                                     title="Select all in this draft">
                                             </th>
                                         @endif
@@ -655,8 +697,8 @@ new #[Layout('components.layouts.app')] class extends Component {
                                             @if($plan->status === 'draft')
                                                 <td class="px-2 py-1.5">
                                                     <input type="checkbox"
-                                                        wire:model.live="itemSelections.{{ $plan->id }}"
-                                                        value="{{ $item['job_id'] }}">
+                                                        wire:model.live="selectedItemKeys"
+                                                        value="{{ $plan->id }}-{{ $item['job_id'] }}">
                                                 </td>
                                             @endif
                                             <td class="px-3 py-1.5">
@@ -691,8 +733,15 @@ new #[Layout('components.layouts.app')] class extends Component {
                         <footer class="px-4 py-3 bg-slate-50/60 border-t border-slate-100">
                             @if($plan->status === 'draft')
                                 @php
-                                    $selectedCount = count($itemSelections[$plan->id] ?? []);
-                                    $totalItems = count($plan->items_json ?? []);
+                                    // Count keys belonging to this specific plan.  The
+                                    // selectedItemKeys list is shared across plans, so
+                                    // we filter by the "planId-" prefix.
+                                    $planPrefix = $plan->id . '-';
+                                    $selectedCount = collect($selectedItemKeys ?? [])
+                                        ->filter(fn ($k) => is_string($k) && str_starts_with($k, $planPrefix))
+                                        ->count();
+                                    $itemsList = is_array($plan->items_json) ? $plan->items_json : [];
+                                    $totalItems = count($itemsList);
                                 @endphp
                                 <div class="flex flex-wrap items-center justify-end gap-2">
                                     @if($selectedCount > 0 && $selectedCount < $totalItems)
