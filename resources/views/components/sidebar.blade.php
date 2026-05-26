@@ -111,6 +111,19 @@
                             <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="14" x="2" y="5" rx="2"/><line x1="2" x2="22" y1="10" y2="10"/></svg></x-slot:icon>
                             Petty Cash
                         </x-sidebar-link>
+
+                        {{-- Owner + Developer only: petty-cash overview
+                             dashboard.  Different lens than the slip
+                             review queue above -- this is the read-only
+                             "where is the money going" view, the queue
+                             above is the operational "approve / reject"
+                             view. --}}
+                        @if($isOwner || $isDeveloper)
+                            <x-sidebar-link :href="route('admin.overview')" :active="request()->routeIs('admin.overview')">
+                                <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg></x-slot:icon>
+                                Petty Cash Overview
+                            </x-sidebar-link>
+                        @endif
                     </ul>
                 </li>
 
@@ -153,14 +166,11 @@
                             Driver Ops
                         </x-sidebar-link>
 
-                        {{-- Wallboard — second-screen ops view designed for a
-                             dispatch TV. Three panels (drivers / map / events)
-                             on a 5-second poll; intentionally lighter on chrome
-                             than Driver Ops so it reads from across the room. --}}
-                        <x-sidebar-link :href="route('admin.wallboard')" :active="request()->routeIs('admin.wallboard')">
-                            <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/></svg></x-slot:icon>
-                            Wallboard
-                        </x-sidebar-link>
+                        {{-- Wallboard removed 2026-05-26 -- the dispatch-TV
+                             view depended on the TrackSolid position API, which
+                             the owner confirmed isn't going to be available.
+                             Live Display below still renders the 3-lane status
+                             board without needing GPS positions. --}}
 
                         {{-- Live Display — chromeless 3-lane board (waiting /
                              in transit / delivered today) the dealer and OEM

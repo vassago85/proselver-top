@@ -118,6 +118,25 @@ Route::get('/damage-report/{job}/download', function (\App\Models\Job $job) {
     ]);
 })->middleware('auth')->name('damage-report.download');
 
+// Trip petty-cash report (per cargo vehicle / per VIN). Internal staff
+// and platform-owner only -- the report exposes driver cellphone numbers
+// and the full advance vs spend reconciliation, none of which belongs in
+// front of a customer or dealer.  Same posture as PettyCashEntryPolicy
+// uses elsewhere in the app.
+Route::get('/trip-report/{job}/download', function (\App\Models\Job $job) {
+    $user = auth()->user();
+    if (!$user || !$user->isInternal()) {
+        abort(403);
+    }
+
+    $service = app(\App\Services\TripReportService::class);
+    $pdf = $service->generate($job);
+    return response($pdf, 200, [
+        'Content-Type' => 'application/pdf',
+        'Content-Disposition' => 'inline; filename="trip-report-' . ($job->job_number ?: $job->uuid) . '.pdf"',
+    ]);
+})->middleware('auth')->name('trip-report.download');
+
 Route::get('/', function () {
     if (auth()->check()) {
         return redirect()->to(resolveUserHomePath(auth()->user()));

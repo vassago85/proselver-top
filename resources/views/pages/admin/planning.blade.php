@@ -30,7 +30,70 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     public function switchTab(string $tab): void
     {
-        $this->tab = in_array($tab, ['queue', 'drivers'], true) ? $tab : 'queue';
+        $this->tab = in_array($tab, ['queue', 'drivers', 'calendar'], true) ? $tab : 'queue';
+    }
+
+    /**
+     * SLA aging buckets used by the queue badges and the headline counter.
+     * "Stale" = a confirmed order that's been sitting for 24+ hours
+     * without being planned.  "Critical" tips it into 48+.  Tuned to ops
+     * shift cadence -- 24h means "today's batch missed", 48h means "we
+     * need an explanation".
+     */
+    private function ageBadge(\Carbon\CarbonImmutable|\Carbon\Carbon|string|null $confirmedAt): array
+    {
+        if (!$confirmedAt) {
+            return ['label' => null, 'class' => ''];
+        }
+        $confirmed = \Carbon\Carbon::parse($confirmedAt);
+        $hours = $confirmed->diffInHours(now());
+
+        if ($hours >= 48) {
+            return ['label' => $confirmed->diffForHumans(now(), \Carbon\CarbonInterface::DIFF_ABSOLUTE) . ' unplanned', 'class' => 'bg-rose-100 text-rose-800 border-rose-300'];
+        }
+        if ($hours >= 24) {
+            return ['label' => $confirmed->diffForHumans(now(), \Carbon\CarbonInterface::DIFF_ABSOLUTE) . ' unplanned', 'class' => 'bg-amber-100 text-amber-800 border-amber-300'];
+        }
+        return ['label' => null, 'class' => ''];
+    }
+
+    /**
+     * Calendar data: the next 14 days, with each ProSelver-executed job
+     * grouped under its scheduled_date.  Includes both unplanned and
+     * planned orders so ops can see the day's full shape at a glance
+     * (the queue tab only ever shows actionable items).
+     */
+    private function calendarData(): array
+    {
+        $start = now()->startOfDay();
+        $end = $start->copy()->addDays(13);
+
+        $jobs = Job::query()
+            ->with(['company:id,name', 'pickupLocation:id,company_name', 'deliveryLocation:id,company_name', 'driver:id,name'])
+            ->whereBetween('scheduled_date', [$start->toDateString(), $end->toDateString()])
+            ->where('executor_type', Job::EXECUTOR_PROSELVER)
+            ->whereNotIn('status', [Job::STATUS_CANCELLED, Job::STATUS_COMPLETED])
+            ->orderBy('scheduled_date')
+            ->get();
+
+        $byDay = $jobs->groupBy(fn ($j) => $j->scheduled_date?->toDateString());
+
+        $days = [];
+        for ($i = 0; $i < 14; $i++) {
+            $d = $start->copy()->addDays($i);
+            $key = $d->toDateString();
+            $list = $byDay->get($key, collect());
+            $days[] = [
+                'date' => $d,
+                'is_today' => $d->isToday(),
+                'is_weekend' => $d->isWeekend(),
+                'jobs' => $list,
+                'count' => $list->count(),
+                'unplanned' => $list->where('status', Job::STATUS_CONFIRMED)->count(),
+                'unassigned' => $list->whereIn('status', self::AWAITING_DRIVER_STATUSES)->whereNull('driver_user_id')->count(),
+            ];
+        }
+        return $days;
     }
 
     public function planJob(int $jobId): void
@@ -199,12 +262,16 @@ new #[Layout('components.layouts.app')] class extends Component {
             // are moved by the dealer's own driver / a courier / the
             // customer themselves, so they never need an ops planning
             // touch and would just clutter the queue.
+            //
+            // Sort by the older-first / oldest-confirmed-first so SLA
+            // breaches surface at the top of the list -- you read down,
+            // you act on the loudest-shouting badge first.
             $jobs = Job::with($eagerLoads)
                 ->where('status', Job::STATUS_CONFIRMED)
                 ->where('executor_type', Job::EXECUTOR_PROSELVER)
                 ->tap(fn ($q) => $this->applyQueueSearch($q))
+                ->orderByRaw('COALESCE(customer_confirmed_at, created_at) asc')
                 ->orderBy('scheduled_date')
-                ->orderBy('created_at')
                 ->paginate(25, ['*'], 'planPage');
 
             // Section 2: orders that *have* been planned (or beyond)
@@ -229,6 +296,8 @@ new #[Layout('components.layouts.app')] class extends Component {
 
             $payload['jobs']           = $jobs;
             $payload['awaitingDriver'] = $awaitingDriver;
+        } elseif ($this->tab === 'calendar') {
+            $payload['calendarDays'] = $this->calendarData();
         } else {
             $payload = array_merge($payload, $this->driverWorkload());
         }
@@ -248,6 +317,21 @@ new #[Layout('components.layouts.app')] class extends Component {
             ->whereNull('driver_user_id')
             ->count();
         $payload['queueCount']         = $payload['toPlanCount'] + $payload['awaitingDriverCount'];
+
+        // SLA aging: how many confirmed-but-unplanned orders have been
+        // sitting for >24h.  Drives the "Stale" headline so a dispatcher
+        // can't pretend they don't see the backlog.  Postgres age()
+        // would work but a Carbon-side calculation keeps this portable.
+        $staleCutoff = now()->subHours(24);
+        $payload['staleCount'] = Job::where('status', Job::STATUS_CONFIRMED)
+            ->where('executor_type', Job::EXECUTOR_PROSELVER)
+            ->where(function ($q) use ($staleCutoff) {
+                $q->where('customer_confirmed_at', '<', $staleCutoff)
+                  ->orWhere(function ($q2) use ($staleCutoff) {
+                      $q2->whereNull('customer_confirmed_at')->where('created_at', '<', $staleCutoff);
+                  });
+            })
+            ->count();
         // driverActive counts how many distinct ProSelver drivers are
         // currently engaged. Dealer-driver jobs aren't part of ProSelver
         // dispatch utilisation, so they're excluded here too.
@@ -300,7 +384,26 @@ new #[Layout('components.layouts.app')] class extends Component {
             <span class="rounded-full px-1.5 py-0.5 text-[10px] font-bold tabular-nums
                 {{ $tab === 'drivers' ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-600' }}">{{ $driverActive }}</span>
         </button>
+        <button wire:click="switchTab('calendar')" type="button"
+            class="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition
+            {{ $tab === 'calendar' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900' }}">
+            <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4"/><path d="M8 2v4"/><path d="M3 10h18"/></svg>
+            Calendar
+        </button>
     </div>
+
+    {{-- SLA aging headline: only visible when there's something to act on.
+         The cutoff is 24h confirmed-without-being-planned -- past that,
+         the order has missed its daily planning window. --}}
+    @if($staleCount > 0)
+        <div class="mb-4 flex items-center gap-3 rounded-lg border-2 border-amber-300 bg-amber-50 px-4 py-2.5 text-sm">
+            <svg class="h-5 w-5 shrink-0 text-amber-700" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/></svg>
+            <div class="min-w-0">
+                <strong class="text-amber-900">{{ $staleCount }} order{{ $staleCount === 1 ? '' : 's' }}</strong>
+                <span class="text-amber-800">confirmed more than 24 hours ago and still unplanned. They're sorted to the top of the queue below.</span>
+            </div>
+        </div>
+    @endif
 
     {{-- ============================================================ --}}
     {{-- TAB: Planning Queue (existing behaviour)                      --}}
@@ -351,11 +454,18 @@ new #[Layout('components.layouts.app')] class extends Component {
                             // rather than first-time confirmations.  24h window matches how
                             // long ops typically takes to re-plan after a recall.
                             $recentlyRecalled = $job->recalled_at && $job->recalled_at->gt(now()->subDay());
+                            $aging = $this->ageBadge($job->customer_confirmed_at ?? $job->created_at);
                         @endphp
-                        <tr class="hover:bg-gray-50" wire:key="plan-{{ $job->id }}">
+                        <tr class="hover:bg-gray-50 {{ $aging['label'] ? ($aging['class'] === 'bg-rose-100 text-rose-800 border-rose-300' ? 'bg-rose-50/40' : 'bg-amber-50/40') : '' }}" wire:key="plan-{{ $job->id }}">
                             <td class="px-6 py-4 text-sm font-medium text-blue-600">
-                                <div class="flex items-center gap-2">
+                                <div class="flex items-center gap-2 flex-wrap">
                                     <a href="{{ route('admin.orders.show', $job) }}" class="hover:underline">{{ $job->job_number ?? '—' }}</a>
+                                    @if($aging['label'])
+                                        <span class="inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider {{ $aging['class'] }}"
+                                            title="Confirmed {{ ($job->customer_confirmed_at ?? $job->created_at)?->format('D d M H:i') }}">
+                                            {{ $aging['label'] }}
+                                        </span>
+                                    @endif
                                     @if($recentlyRecalled)
                                         <span class="inline-flex items-center gap-1 rounded-md bg-amber-100 text-amber-800 ring-1 ring-amber-200 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider"
                                             title="Recalled {{ $job->recalled_at->diffForHumans() }}@if($job->recall_reason) — {{ $job->recall_reason }}@endif">
@@ -469,6 +579,68 @@ new #[Layout('components.layouts.app')] class extends Component {
                 {{ $awaitingDriver->links() }}
             </div>
             @endif
+        </div>
+
+    @elseif($tab === 'calendar')
+
+    {{-- ============================================================ --}}
+    {{-- TAB: Calendar — next 14 days at a glance.                     --}}
+    {{-- Each day card shows total jobs, with a sub-counter for the    --}}
+    {{-- ones that still need attention (unplanned + unassigned).      --}}
+    {{-- Click a job pill to jump to its detail page.                  --}}
+    {{-- ============================================================ --}}
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-3">
+            @foreach($calendarDays as $day)
+                @php
+                    $needsAttention = $day['unplanned'] + $day['unassigned'];
+                @endphp
+                <div class="rounded-xl border bg-white p-3 min-h-[180px] flex flex-col
+                    {{ $day['is_today'] ? 'border-blue-400 ring-2 ring-blue-100' : ($day['is_weekend'] ? 'border-slate-200 bg-slate-50/60' : 'border-slate-200') }}">
+                    <div class="flex items-center justify-between mb-2">
+                        <div>
+                            <p class="text-[10px] font-semibold uppercase tracking-wide {{ $day['is_today'] ? 'text-blue-700' : 'text-slate-500' }}">
+                                {{ $day['date']->format('D') }}
+                            </p>
+                            <p class="text-base font-bold {{ $day['is_today'] ? 'text-blue-900' : 'text-slate-900' }}">
+                                {{ $day['date']->format('d M') }}
+                            </p>
+                        </div>
+                        @if($day['count'] > 0)
+                            <div class="text-right">
+                                <p class="text-lg font-bold tabular-nums text-slate-900">{{ $day['count'] }}</p>
+                                @if($needsAttention > 0)
+                                    <p class="text-[10px] font-semibold uppercase tracking-wide text-amber-700">{{ $needsAttention }} todo</p>
+                                @endif
+                            </div>
+                        @endif
+                    </div>
+
+                    <div class="flex-1 space-y-1 overflow-hidden">
+                        @forelse($day['jobs']->take(6) as $job)
+                            @php
+                                $pillClass = match (true) {
+                                    $job->status === \App\Models\Job::STATUS_CONFIRMED => 'bg-blue-50 text-blue-800 border-blue-200',
+                                    in_array($job->status, [\App\Models\Job::STATUS_PLANNED, \App\Models\Job::STATUS_DRIVER_ASSIGNED, \App\Models\Job::STATUS_READY_FOR_COLLECTION], true) && !$job->driver_user_id => 'bg-amber-50 text-amber-800 border-amber-200',
+                                    in_array($job->status, [\App\Models\Job::STATUS_COLLECTED, \App\Models\Job::STATUS_IN_TRANSIT, \App\Models\Job::STATUS_IN_PROGRESS], true) => 'bg-emerald-50 text-emerald-800 border-emerald-200',
+                                    $job->status === \App\Models\Job::STATUS_DELIVERED => 'bg-slate-50 text-slate-600 border-slate-200',
+                                    default => 'bg-slate-50 text-slate-700 border-slate-200',
+                                };
+                            @endphp
+                            <a href="{{ route('admin.orders.show', $job) }}"
+                               class="block rounded-md border px-2 py-1 text-[11px] {{ $pillClass }} hover:opacity-80"
+                               title="{{ $job->pickupLocation?->company_name }} → {{ $job->deliveryLocation?->company_name }}">
+                                <span class="font-semibold">{{ $job->job_number }}</span>
+                                @if($job->driver) · <span class="opacity-75">{{ Str::limit($job->driver->name, 14, '…') }}</span> @endif
+                            </a>
+                        @empty
+                            <p class="text-[11px] text-slate-400 italic">no jobs</p>
+                        @endforelse
+                        @if($day['count'] > 6)
+                            <p class="text-[10px] text-slate-500 mt-1">+{{ $day['count'] - 6 }} more</p>
+                        @endif
+                    </div>
+                </div>
+            @endforeach
         </div>
 
     @else

@@ -383,6 +383,22 @@ class Job extends Model
         'estimated_duration_minutes',
         'is_round_trip',
         'estimated_toll_cost',
+        // Driver-advance / petty-cash estimator fields. Optional in v1 —
+        // ops opens the "Petty Cash / Advance" panel on order detail to
+        // populate these.  advance_toll_breakdown is a json snapshot of
+        // the matched plazas at the moment the advance was set, so the
+        // historical record survives plaza-fee changes.
+        'advance_toll_breakdown',
+        'advance_toll_class_override',
+        'advance_tolls',
+        'advance_accommodation',
+        'advance_taxi',
+        'advance_food',
+        'advance_food_waived',
+        'advance_total',
+        'advance_increase_reason',
+        'advance_assigned_by_user_id',
+        'advance_assigned_at',
         'customer_confirmed_at',
         'customer_confirmed_by',
         'planned_at',
@@ -452,6 +468,15 @@ class Job extends Model
             'estimated_duration_minutes' => 'integer',
             'is_round_trip' => 'boolean',
             'estimated_toll_cost' => 'decimal:2',
+            'advance_toll_breakdown' => 'array',
+            'advance_toll_class_override' => 'integer',
+            'advance_tolls' => 'decimal:2',
+            'advance_accommodation' => 'decimal:2',
+            'advance_taxi' => 'decimal:2',
+            'advance_food' => 'decimal:2',
+            'advance_food_waived' => 'boolean',
+            'advance_total' => 'decimal:2',
+            'advance_assigned_at' => 'datetime',
             'customer_confirmed_at' => 'datetime',
             'planned_at' => 'datetime',
             'ready_for_collection_at' => 'datetime',
@@ -915,6 +940,11 @@ class Job extends Model
     public function driver(): BelongsTo
     {
         return $this->belongsTo(User::class, 'driver_user_id');
+    }
+
+    public function advanceAssignedBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'advance_assigned_by_user_id');
     }
 
     public function trip(): BelongsTo

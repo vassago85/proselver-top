@@ -13,11 +13,25 @@ class VehicleClassSeeder extends Seeder
         // 95%+ of bookings are commercial. The sort_order numbers leave
         // gaps so ops can later wedge a new class in without renumbering
         // the whole list (e.g. an "MCV+" between MCV and HCV at 25).
+        // toll_class follows SANRAL bands, not the Trident weight buckets:
+        //   Class 1 = 2-axle, height < 2.6m (cars, bakkies, motorbikes)
+        //   Class 2 = 2-axle, height ≥ 2.6m (light trucks, minibuses)
+        //   Class 3 = 3 or 4 axles (rigid trucks, larger buses)
+        //   Class 4 = 5+ axles (articulated truck-tractor + trailer)
+        //
+        // Caveat: Trident's labels are by TONNAGE; SANRAL classifies by
+        // AXLES.  A "Heavy Commercial" (8-16t rigid) is *typically*
+        // 3-axle = Class 3, and an "Extra Heavy" is *typically*
+        // articulated 5+ axle = Class 4 -- so those are the defaults
+        // here.  But real fleets contain 2-axle HCVs and 3-axle Extra
+        // Heavies, so the per-class default below is only a starting
+        // point.  A future task introduces a per-trip axle override
+        // (see project memory) so the wrong default doesn't lock ops in.
         $classes = [
             ['name' => 'LCV',             'description' => 'Light commercial vehicle (panel van, etc.)', 'toll_class' => 1, 'sort_order' => 10],
             ['name' => 'MCV',             'description' => 'Medium commercial vehicle (4-8 ton)',         'toll_class' => 2, 'sort_order' => 20],
-            ['name' => 'HCV',             'description' => 'Heavy commercial vehicle (8-16 ton)',         'toll_class' => 2, 'sort_order' => 30],
-            ['name' => 'Extra Heavy',     'description' => 'Extra heavy commercial vehicle (16+ ton)',    'toll_class' => 3, 'sort_order' => 40],
+            ['name' => 'HCV',             'description' => 'Heavy commercial vehicle (8-16 ton)',         'toll_class' => 3, 'sort_order' => 30],
+            ['name' => 'Extra Heavy',     'description' => 'Extra heavy commercial vehicle (16+ ton)',    'toll_class' => 4, 'sort_order' => 40],
             ['name' => 'Bus',             'description' => 'Passenger bus / minibus',                     'toll_class' => 2, 'sort_order' => 50],
             ['name' => 'Trailer',         'description' => 'Trailer unit',                                'toll_class' => 4, 'sort_order' => 60],
             ['name' => 'Bakkie / Pickup', 'description' => 'Light commercial pickup truck',               'toll_class' => 1, 'sort_order' => 70],

@@ -3,6 +3,7 @@
 use App\Models\Job;
 use App\Models\User;
 use App\Services\AuditService;
+use App\Services\TripCostEstimator;
 use Livewire\Volt\Component;
 use Livewire\Attributes\Layout;
 
@@ -46,6 +47,28 @@ new #[Layout('components.layouts.app')] class extends Component {
     public string $newSelfCollectName = '';
     public string $newSelfCollectPhone = '';
     public string $newSelfCollectIdNumber = '';
+
+    // Petty cash / driver advance panel.  Optional in v1 — opens only
+    // when ops clicks the "Petty Cash / Advance" button.  Tolls are
+    // auto-computed by TripCostEstimator; accommodation/taxi/food are
+    // ops-typed.  See saveAdvance() for the audit-on-increase rule.
+    public bool $showAdvancePanel = false;
+    public array $advanceTollResult = [
+        'status' => 'idle',
+        'plazas' => [],
+        'toll_total' => 0.0,
+    ];
+    public ?float $advanceAccommodation = null;
+    public ?float $advanceTaxi = null;
+    public ?float $advanceFood = null;
+    public bool $advanceFoodWaived = false;
+    public ?float $advanceTotal = null;
+    public string $advanceIncreaseReason = '';
+    // Per-trip SANRAL toll-class override (1-4, or null to use vehicle
+    // class default).  Picked from the dropdown on the modal -- the
+    // estimator re-runs whenever this changes so the toll list updates
+    // live.
+    public ?int $advanceTollClassOverride = null;
 
     public function mount(Job $job): void
     {
@@ -446,6 +469,171 @@ new #[Layout('components.layouts.app')] class extends Component {
         $this->showRecallModal = false;
         $this->recallReason = '';
         session()->flash('success', 'Order sent back to planning — driver cleared, schedule reset.');
+    }
+
+    /* ----------------------------------------------------------------
+     | Petty cash / driver advance
+     |
+     | Optional ops workflow.  Tolls auto-compute from the route polyline
+     | (cached per pickup→delivery pair in route_estimates) crossed with
+     | the vehicle's toll class.  Accommodation/taxi/food are typed by
+     | ops -- v1 deliberately has no rate table so we don't block the
+     | boss demo on a settings page that may never get used.
+     |
+     | The advance_total can be set higher than the computed sum, but
+     | requires a free-text reason that goes into the audit log.  That
+     | covers the "blocked route forced an extra night" scenario the
+     | user flagged.
+     |---------------------------------------------------------------*/
+
+    public function openAdvancePanel(TripCostEstimator $estimator): void
+    {
+        // Internal-only -- customers and dealers must never see driver
+        // advance numbers.  Same posture as the petty cash review page.
+        if (!auth()->user()?->isInternal()) {
+            abort(403);
+        }
+
+        // Seed the form with whatever was previously saved on the job so
+        // re-opening shows the last committed advance rather than zeroes.
+        $this->advanceAccommodation = $this->job->advance_accommodation !== null
+            ? (float) $this->job->advance_accommodation
+            : null;
+        $this->advanceTotal = $this->job->advance_total !== null
+            ? (float) $this->job->advance_total
+            : null;
+        $this->advanceIncreaseReason = (string) ($this->job->advance_increase_reason ?? '');
+        $this->advanceFoodWaived = (bool) $this->job->advance_food_waived;
+        $this->advanceTollClassOverride = $this->job->advance_toll_class_override
+            ? (int) $this->job->advance_toll_class_override
+            : null;
+
+        $this->advanceTollResult = $estimator->estimateTolls($this->job);
+
+        // Taxi: flat per-trip default (R50) -- ops can edit down/up.
+        // Stored value wins if a previous advance has been issued.
+        $this->advanceTaxi = $this->job->advance_taxi !== null
+            ? (float) $this->job->advance_taxi
+            : (float) ($this->advanceTollResult['suggested_taxi'] ?? 50);
+
+        // Food: <4h → R0, 4-9h → R150, ≥9h → R300.  Saved value wins
+        // on re-open.  If ops has waived food, force the field to 0
+        // regardless of what the suggestion says.
+        if ($this->advanceFoodWaived) {
+            $this->advanceFood = 0.0;
+        } else {
+            $this->advanceFood = $this->job->advance_food !== null
+                ? (float) $this->job->advance_food
+                : (float) ($this->advanceTollResult['suggested_food'] ?? 0);
+        }
+
+        $this->showAdvancePanel = true;
+    }
+
+    public function closeAdvancePanel(): void
+    {
+        $this->showAdvancePanel = false;
+    }
+
+    public function recalculateRoute(TripCostEstimator $estimator): void
+    {
+        if (!auth()->user()?->isInternal()) {
+            abort(403);
+        }
+        $estimator->invalidateRoute($this->job);
+        $this->advanceTollResult = $estimator->estimateTolls($this->job);
+        session()->flash('success', 'Route recalculated.');
+    }
+
+    /**
+     * Re-run the toll-plaza calc with the chosen override class.  The
+     * dropdown is wire:model.live on advanceTollClassOverride; Livewire
+     * fires this hook on every change so the plaza list + subtotal
+     * update without leaving the modal.  We don't persist the override
+     * here -- only on Issue Advance -- to keep "look but don't commit"
+     * cheap.
+     */
+    public function updatedAdvanceTollClassOverride(TripCostEstimator $estimator): void
+    {
+        if (!auth()->user()?->isInternal()) {
+            abort(403);
+        }
+        // Temporarily stamp the override on the in-memory model so the
+        // estimator sees it without a DB write.  The persisted column
+        // is only touched on saveAdvance().
+        $this->job->advance_toll_class_override = $this->advanceTollClassOverride;
+        $this->advanceTollResult = $estimator->estimateTolls($this->job);
+    }
+
+    public function saveAdvance(): void
+    {
+        if (!auth()->user()?->isInternal()) {
+            abort(403);
+        }
+
+        $this->validate([
+            'advanceAccommodation'       => 'nullable|numeric|min:0|max:1000000',
+            'advanceTaxi'                => 'nullable|numeric|min:0|max:1000000',
+            'advanceFood'                => 'nullable|numeric|min:0|max:1000000',
+            'advanceFoodWaived'          => 'boolean',
+            'advanceTotal'               => 'nullable|numeric|min:0|max:1000000',
+            'advanceIncreaseReason'      => 'nullable|string|max:500',
+            'advanceTollClassOverride'   => 'nullable|integer|min:1|max:4',
+        ]);
+
+        // Computed estimate the panel is showing.  Tolls come from the
+        // estimator (snapshotted into advance_toll_breakdown below) so
+        // a later plaza-fee change can't retroactively redefine "what
+        // ops calculated at the time".  Waiver forces food to 0 -- the
+        // checkbox is an audit-grade signal that ops decided this trip
+        // doesn't qualify, separate from "typed zero by accident".
+        $tolls         = (float) ($this->advanceTollResult['toll_total'] ?? 0);
+        $accommodation = (float) ($this->advanceAccommodation ?? 0);
+        $taxi          = (float) ($this->advanceTaxi ?? 0);
+        $food          = $this->advanceFoodWaived ? 0.0 : (float) ($this->advanceFood ?? 0);
+        $computed      = round($tolls + $accommodation + $taxi + $food, 2);
+        $total         = $this->advanceTotal !== null ? round((float) $this->advanceTotal, 2) : $computed;
+
+        // Audit-on-overage rule: any number above the computed estimate
+        // demands a written reason.  Half-rand tolerance avoids tripping
+        // on decimal rounding.
+        if ($total > $computed + 0.5 && trim($this->advanceIncreaseReason) === '') {
+            $this->addError('advanceIncreaseReason', 'A reason is required when the advance is higher than the computed estimate.');
+            return;
+        }
+
+        $before = $this->job->only([
+            'advance_tolls', 'advance_accommodation', 'advance_taxi',
+            'advance_food', 'advance_total', 'advance_increase_reason',
+        ]);
+
+        $this->job->forceFill([
+            'advance_toll_breakdown'        => $this->advanceTollResult['plazas'] ?? [],
+            'advance_toll_class_override'   => $this->advanceTollClassOverride,
+            'advance_tolls'                 => $tolls,
+            'advance_accommodation'         => $accommodation,
+            'advance_taxi'                  => $taxi,
+            'advance_food'                  => $food,
+            'advance_food_waived'           => $this->advanceFoodWaived,
+            'advance_total'                 => $total,
+            'advance_increase_reason'       => $total > $computed + 0.5 ? trim($this->advanceIncreaseReason) : null,
+            'advance_assigned_by_user_id'   => auth()->id(),
+            'advance_assigned_at'           => now(),
+        ])->save();
+
+        AuditService::log(
+            'order_advance_assigned',
+            'job',
+            $this->job->id,
+            $before,
+            $this->job->fresh()->only([
+                'advance_tolls', 'advance_accommodation', 'advance_taxi',
+                'advance_food', 'advance_total', 'advance_increase_reason',
+            ]),
+        );
+
+        $this->showAdvancePanel = false;
+        session()->flash('success', 'Driver advance issued: R ' . number_format($total, 2) . '.');
     }
 
     public function cancelOrder(): void
@@ -1034,6 +1222,20 @@ new #[Layout('components.layouts.app')] class extends Component {
                         @endif
                     @endcan
 
+                    {{-- Trip petty-cash report.  Internal-only -- the PDF
+                         carries driver cellphone numbers and the advance
+                         reconciliation, so we hide it from external users.
+                         Always available (even on terminal jobs) because
+                         finance pulls it after delivery for paper-trail. --}}
+                    @if(auth()->user()?->isInternal())
+                        <a href="{{ route('trip-report.download', $job) }}" target="_blank"
+                            class="inline-flex items-center gap-2 rounded-lg border border-emerald-200 bg-white px-3.5 py-2.5 text-sm font-medium text-emerald-800 hover:bg-emerald-50 transition-colors"
+                            title="Per-vehicle petty cash report with slip images.">
+                            <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="14" x2="15" y2="14"/><line x1="9" y1="18" x2="15" y2="18"/></svg>
+                            Trip Report (PDF)
+                        </a>
+                    @endif
+
                     @if($isCancellable)
                         @can('cancel', $job)
                             <button wire:click="openCancelModal"
@@ -1073,6 +1275,23 @@ new #[Layout('components.layouts.app')] class extends Component {
                             class="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3.5 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">
                             <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
                             Change Executor
+                        </button>
+                    @endif
+
+                    {{-- Petty Cash / Driver Advance --}}
+                    @if(auth()->user()?->isInternal() && !$isTerminal)
+                        <button wire:click="openAdvancePanel"
+                            class="inline-flex items-center gap-2 rounded-lg border px-3.5 py-2.5 text-sm font-medium transition-colors
+                                {{ $job->advance_total !== null
+                                    ? 'border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
+                                    : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50' }}"
+                            title="Compute tolls and assign a driver advance for this trip.">
+                            <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/><path d="M6 12h.01M18 12h.01"/></svg>
+                            @if($job->advance_total !== null)
+                                Petty Cash · R {{ number_format((float) $job->advance_total, 2) }}
+                            @else
+                                Petty Cash / Advance
+                            @endif
                         </button>
                     @endif
 
@@ -1693,6 +1912,212 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <button wire:click="cancelOrder" class="rounded-lg bg-red-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-red-500 transition-colors">
                     Cancel Order
                 </button>
+            </div>
+        </div>
+    </div>
+    @endif
+
+    {{-- Petty Cash / Driver Advance panel.  Optional ops workflow; opens
+         on demand via the button above the modal stack.  Three sections:
+         (1) auto-computed toll plaza list, (2) typed accommodation/taxi/
+         food, (3) total + audit-on-overage. --}}
+    @if($showAdvancePanel)
+    @php
+        $tollsRand    = (float) ($advanceTollResult['toll_total'] ?? 0);
+        $accomRand    = (float) ($advanceAccommodation ?? 0);
+        $taxiRand     = (float) ($advanceTaxi ?? 0);
+        $foodRand     = (float) ($advanceFood ?? 0);
+        $computedRand = round($tollsRand + $accomRand + $taxiRand + $foodRand, 2);
+        $displayTotal = $advanceTotal !== null ? (float) $advanceTotal : $computedRand;
+        $isOverage    = $displayTotal > $computedRand + 0.5;
+    @endphp
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 overflow-y-auto py-8" wire:click.self="closeAdvancePanel">
+        <div class="relative w-full max-w-3xl mx-4 bg-white rounded-2xl shadow-2xl overflow-hidden">
+            <div class="border-b border-gray-200 px-6 py-4 bg-emerald-50">
+                <div class="flex items-center gap-2">
+                    <svg class="h-5 w-5 text-emerald-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/><path d="M6 12h.01M18 12h.01"/></svg>
+                    <h3 class="text-lg font-semibold text-emerald-900">Petty Cash / Driver Advance</h3>
+                </div>
+                <p class="text-sm text-emerald-800/80 mt-0.5">{{ $job->job_number }} · {{ $job->pickupLocation?->company_name ?? '—' }} → {{ $job->deliveryLocation?->company_name ?? '—' }}</p>
+            </div>
+
+            <div class="px-6 py-5 space-y-5 max-h-[70vh] overflow-y-auto">
+
+                {{-- Route summary + toll breakdown --}}
+                <section>
+                    <div class="flex items-center justify-between mb-2 flex-wrap gap-2">
+                        <h4 class="text-sm font-semibold text-gray-800">Tolls along route</h4>
+                        <div class="flex items-center gap-2">
+                            {{-- SANRAL toll-class override.  Vehicle class
+                                 default is shown as "Auto (Class N)"; the
+                                 four bands are spelled out so ops doesn't
+                                 need to remember the axle rules. --}}
+                            <label class="flex items-center gap-1.5 text-xs">
+                                <span class="text-gray-600">Toll class:</span>
+                                <select wire:model.live="advanceTollClassOverride"
+                                    class="rounded-md border border-gray-300 bg-white px-2 py-1 text-xs focus:border-emerald-500 focus:ring-emerald-500">
+                                    <option value="">Auto ({{ $job->vehicleClass?->name ?? 'unset' }} — Class {{ $job->vehicleClass?->toll_class ?? '?' }})</option>
+                                    <option value="1">Class 1 — light vehicle (cars / bakkies)</option>
+                                    <option value="2">Class 2 — 2-axle truck / bus</option>
+                                    <option value="3">Class 3 — 3-4 axle</option>
+                                    <option value="4">Class 4 — 5+ axle (articulated)</option>
+                                </select>
+                            </label>
+                            <button wire:click="recalculateRoute" type="button"
+                                class="text-xs rounded-md border border-gray-200 bg-white px-2.5 py-1 text-gray-700 hover:bg-gray-50">
+                                Recalculate route
+                            </button>
+                        </div>
+                    </div>
+
+                    @if($advanceTollResult['status'] === 'ok')
+                        <p class="text-xs text-gray-500 mb-2">
+                            {{ number_format((float) $advanceTollResult['distance_km'], 1) }} km ·
+                            {{ (int) floor($advanceTollResult['duration_minutes'] / 60) }}h {{ $advanceTollResult['duration_minutes'] % 60 }}m ·
+                            toll class {{ $advanceTollResult['toll_class'] }}
+                            @if($advanceTollResult['cached'])
+                                <span class="ml-1 text-gray-400">(cached)</span>
+                            @endif
+                        </p>
+
+                        @if(empty($advanceTollResult['plazas']))
+                            <div class="rounded-lg bg-gray-50 border border-gray-200 px-3 py-2 text-xs text-gray-600">
+                                No toll plazas detected along this route.
+                            </div>
+                        @else
+                            <div class="rounded-lg border border-gray-200 overflow-hidden">
+                                <table class="w-full text-xs">
+                                    <thead class="bg-gray-50 text-gray-500 uppercase tracking-wide">
+                                        <tr>
+                                            <th class="text-left px-3 py-1.5 font-medium">Plaza</th>
+                                            <th class="text-left px-3 py-1.5 font-medium">Road</th>
+                                            <th class="text-left px-3 py-1.5 font-medium">Type</th>
+                                            <th class="text-right px-3 py-1.5 font-medium">Fee (R)</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody class="divide-y divide-gray-100">
+                                        @foreach($advanceTollResult['plazas'] as $plaza)
+                                            <tr>
+                                                <td class="px-3 py-1.5 text-gray-900">{{ $plaza['plaza_name'] }}</td>
+                                                <td class="px-3 py-1.5 text-gray-600">{{ $plaza['road_name'] }}</td>
+                                                <td class="px-3 py-1.5 text-gray-500">{{ $plaza['plaza_type'] }}</td>
+                                                <td class="px-3 py-1.5 text-right font-mono text-gray-900">{{ number_format((float) $plaza['fee'], 2) }}</td>
+                                            </tr>
+                                        @endforeach
+                                        <tr class="bg-gray-50">
+                                            <td colspan="3" class="px-3 py-1.5 text-right font-semibold text-gray-700">Toll subtotal</td>
+                                            <td class="px-3 py-1.5 text-right font-mono font-bold text-emerald-700">R {{ number_format($tollsRand, 2) }}</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        @endif
+                    @else
+                        <div class="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800">
+                            {{ $advanceTollResult['message'] }}
+                        </div>
+                    @endif
+                </section>
+
+                {{-- Manual quantities --}}
+                <section>
+                    <h4 class="text-sm font-semibold text-gray-800 mb-2">Other expenses</h4>
+                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <label class="block">
+                            <span class="block text-[11px] uppercase tracking-wide text-gray-500 mb-1">Accommodation (R)</span>
+                            <input wire:model.live.debounce.300ms="advanceAccommodation" type="number" min="0" step="0.01" placeholder="0.00"
+                                class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-emerald-500 focus:ring-emerald-500">
+                        </label>
+                        <label class="block">
+                            <span class="block text-[11px] uppercase tracking-wide text-gray-500 mb-1">
+                                Taxi (R)
+                                <span class="ml-1 font-semibold text-emerald-700 normal-case tracking-normal">· standard R{{ number_format((float) ($advanceTollResult['suggested_taxi'] ?? 50), 0) }} (no slip)</span>
+                            </span>
+                            <input wire:model.live.debounce.300ms="advanceTaxi" type="number" min="0" step="0.01" placeholder="0.00"
+                                class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-emerald-500 focus:ring-emerald-500">
+                        </label>
+                        <label class="block">
+                            <span class="block text-[11px] uppercase tracking-wide text-gray-500 mb-1">
+                                Food (R)
+                                @if($advanceFoodWaived)
+                                    <span class="ml-1 font-semibold text-rose-700 normal-case tracking-normal">· waived by ops</span>
+                                @elseif(($advanceTollResult['days_count'] ?? 0) === 2)
+                                    <span class="ml-1 font-semibold text-emerald-700 normal-case tracking-normal">· 2-day trip (auto)</span>
+                                @elseif(($advanceTollResult['days_count'] ?? 0) === 1)
+                                    <span class="ml-1 font-semibold text-emerald-700 normal-case tracking-normal">· single-day (auto)</span>
+                                @elseif(($advanceTollResult['status'] ?? '') === 'ok')
+                                    <span class="ml-1 font-semibold text-gray-400 normal-case tracking-normal">· under {{ (int) ($advanceTollResult['food_minimum_hours'] ?? 4) }}h, no food</span>
+                                @endif
+                            </span>
+                            <input wire:model.live.debounce.300ms="advanceFood" type="number" min="0" step="0.01" placeholder="0.00"
+                                @if($advanceFoodWaived) disabled @endif
+                                class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-emerald-500 focus:ring-emerald-500 {{ $advanceFoodWaived ? 'bg-gray-100 text-gray-400' : '' }}">
+                            <label class="mt-1.5 flex items-center gap-1.5 text-[11px] text-gray-600 cursor-pointer">
+                                <input type="checkbox" wire:model.live="advanceFoodWaived" class="rounded border-gray-300 text-emerald-600 focus:ring-emerald-500">
+                                Trip does not qualify for food allowance
+                            </label>
+                            <span class="mt-1 block text-[10px] text-gray-400">
+                                Rule: R{{ number_format((float) ($advanceTollResult['food_rate_per_day'] ?? 150), 0) }}/day.
+                                Under {{ (int) ($advanceTollResult['food_minimum_hours'] ?? 4) }}h = none;
+                                {{ (int) ($advanceTollResult['food_minimum_hours'] ?? 4) }}–{{ (int) ($advanceTollResult['food_threshold_hours'] ?? 9) }}h = 1 day;
+                                ≥{{ (int) ($advanceTollResult['food_threshold_hours'] ?? 9) }}h = 2 days.
+                            </span>
+                        </label>
+                    </div>
+                </section>
+
+                {{-- Total + audit-on-overage --}}
+                <section>
+                    <div class="flex items-center justify-between rounded-lg border border-gray-200 bg-gray-50 px-4 py-3">
+                        <span class="text-sm font-semibold text-gray-800">Computed estimate</span>
+                        <span class="font-mono text-base font-bold text-gray-900">R {{ number_format($computedRand, 2) }}</span>
+                    </div>
+
+                    <div class="mt-3">
+                        <label class="block text-sm font-medium text-gray-700 mb-1.5">
+                            Advance to assign (R)
+                            <span class="ml-1 text-xs text-gray-400">leave blank to use the computed estimate</span>
+                        </label>
+                        <input wire:model.live.debounce.300ms="advanceTotal" type="number" min="0" step="0.01" placeholder="{{ number_format($computedRand, 2, '.', '') }}"
+                            class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-emerald-500 focus:ring-emerald-500">
+                    </div>
+
+                    @if($isOverage)
+                        <div class="mt-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3">
+                            <p class="text-xs font-semibold text-amber-900 mb-1">Above the computed estimate (+R {{ number_format($displayTotal - $computedRand, 2) }}) — reason required</p>
+                            <textarea wire:model.live.debounce.300ms="advanceIncreaseReason" rows="2" maxlength="500"
+                                placeholder="e.g. blocked route via N3 (detour through N11), extra night in Harrismith…"
+                                class="mt-1 w-full rounded-lg border border-amber-300 px-3 py-2 text-sm focus:border-amber-500 focus:ring-amber-500"></textarea>
+                            @error('advanceIncreaseReason') <p class="mt-1 text-xs text-red-600">{{ $message }}</p> @enderror
+                        </div>
+                    @endif
+
+                    @if($job->advance_assigned_at && $job->advanceAssignedBy)
+                        <p class="mt-3 text-[11px] text-gray-500">
+                            Issued by {{ $job->advanceAssignedBy->name }} · {{ $job->advance_assigned_at->diffForHumans() }}
+                            @if($job->advance_increase_reason)
+                                · reason: <span class="italic">{{ $job->advance_increase_reason }}</span>
+                            @endif
+                        </p>
+                    @endif
+                </section>
+            </div>
+
+            <div class="border-t border-gray-200 px-6 py-4 flex items-center justify-between gap-3 bg-gray-50">
+                <p class="text-[11px] text-gray-500 leading-snug">
+                    Issuing locks the amount as the driver's advance and stamps who/when. The driver reconciles against this on return.
+                </p>
+                <div class="flex items-center gap-3">
+                    <button wire:click="closeAdvancePanel" type="button"
+                        class="rounded-lg px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-100 transition-colors">
+                        Close
+                    </button>
+                    <button wire:click="saveAdvance" type="button"
+                        wire:confirm="Issue this advance to the driver? An audit entry will be recorded."
+                        class="rounded-lg bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-emerald-500 transition-colors">
+                        @if($job->advance_total !== null) Re-issue advance @else Issue advance @endif
+                    </button>
+                </div>
             </div>
         </div>
     </div>

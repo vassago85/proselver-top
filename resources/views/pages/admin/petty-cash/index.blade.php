@@ -2,8 +2,10 @@
 
 use App\Models\Company;
 use App\Models\PettyCashEntry;
+use App\Models\SystemSetting;
 use App\Models\User;
 use App\Services\AuditService;
+use Illuminate\Support\Facades\DB;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\Url;
 use Livewire\Volt\Component;
@@ -33,6 +35,9 @@ use Livewire\WithPagination;
 new #[Layout('components.layouts.app')] class extends Component {
     use WithPagination;
 
+    #[Url(as: 'view', except: 'slips')]
+    public string $tab = 'slips';
+
     #[Url]
     public string $status = 'submitted';
 
@@ -48,8 +53,12 @@ new #[Layout('components.layouts.app')] class extends Component {
     /** Per-row reimbursement reference input; keyed by entry id. */
     public array $reimburseDrafts = [];
 
+    // Owner-only: edit the slip-scan incentive rate (R per approved slip).
+    public ?float $incentiveAmountDraft = null;
+
     public const RANGES = ['today', 'this_week', 'this_month', 'this_year', 'all'];
     public const STATUSES = ['submitted', 'approved', 'rejected', 'reimbursed', 'all'];
+    public const TABS = ['slips', 'trips', 'incentives'];
 
     public function mount(): void
     {
@@ -57,6 +66,43 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         if (!in_array($this->status, self::STATUSES, true)) $this->status = 'submitted';
         if (!in_array($this->range, self::RANGES, true)) $this->range = 'this_month';
+        if (!in_array($this->tab, self::TABS, true)) $this->tab = 'slips';
+
+        $this->incentiveAmountDraft = (float) SystemSetting::get('slip_scan_incentive_amount', 5);
+    }
+
+    public function switchTab(string $tab): void
+    {
+        if (in_array($tab, self::TABS, true)) {
+            $this->tab = $tab;
+            $this->resetPage();
+        }
+    }
+
+    /**
+     * Save the slip-scan incentive rate.  Owner-only; rejected with a
+     * 403 for any other role (server-side guard since the UI hides the
+     * input from non-owners anyway).
+     */
+    public function saveIncentiveRate(): void
+    {
+        if (!auth()->user()?->isOwner()) {
+            abort(403);
+        }
+
+        $this->validate([
+            'incentiveAmountDraft' => 'required|numeric|min:0|max:10000',
+        ]);
+
+        $before = (float) SystemSetting::get('slip_scan_incentive_amount', 5);
+        $new = round((float) $this->incentiveAmountDraft, 2);
+
+        if (abs($before - $new) > 0.001) {
+            SystemSetting::set('slip_scan_incentive_amount', $new, 'float', 'ZAR earned per approved petty-cash slip. Owner only.');
+            AuditService::log('slip_incentive_rate_changed', 'system_setting', 0, ['amount' => $before], ['amount' => $new]);
+        }
+
+        session()->flash('success', 'Incentive rate set to R ' . number_format($new, 2) . ' per approved slip.');
     }
 
     public function approveEntry(int $id): void
@@ -95,6 +141,17 @@ new #[Layout('components.layouts.app')] class extends Component {
         $entry = PettyCashEntry::findOrFail($id);
         $this->authorize('reimburse', $entry);
 
+        // Bank-send routing: the reimbursement is paid to the driver's
+        // cellphone (SA cash-send / Send-iMali style).  If the driver
+        // has no phone on file the EFT can't actually be sent, so refuse
+        // to mark the slip reimbursed -- protects the audit trail from
+        // claiming a payment was made when it can't have been.
+        $driverPhone = $entry->driver?->phone ?: ($entry->driver?->driverProfile?->cellphone ?? null);
+        if (!$driverPhone) {
+            $this->addError('reimburse_' . $id, 'Driver has no cellphone on file — banking needs the cellphone to route the payment.');
+            return;
+        }
+
         $ref = trim($this->reimburseDrafts[$id] ?? '');
         $before = $entry->only(['status', 'reimbursed_at', 'reimbursement_reference']);
         if ($entry->reimburse(auth()->user(), $ref ?: null)) {
@@ -122,7 +179,14 @@ new #[Layout('components.layouts.app')] class extends Component {
     private function buildQuery(): \Illuminate\Database\Eloquent\Builder
     {
         $q = PettyCashEntry::query()
-            ->with(['driver:id,name', 'job:id,job_number,company_id', 'job.company:id,name', 'document:id,disk,path,mime_type', 'approver:id,name']);
+            ->with([
+                'driver:id,name,phone',
+                'driver.driverProfile:user_id,cellphone',
+                'job:id,job_number,company_id',
+                'job.company:id,name',
+                'document:id,disk,path,mime_type',
+                'approver:id,name',
+            ]);
 
         if ($this->status !== 'all') {
             $q->where('status', $this->status);
@@ -147,10 +211,9 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     public function with(): array
     {
-        $entries = $this->buildQuery()->paginate(25);
-
-        // Counters across the chosen date range — useful "I've approved
-        // R12,300 this month" feedback for the operator.
+        // Counters across the chosen date range — shown on every tab so
+        // the operator's "what's the financial state right now" question
+        // is always one glance away.
         $base = $this->buildQueryWithoutStatus();
         $counts = [
             'submitted' => (clone $base)->where('status', PettyCashEntry::STATUS_SUBMITTED)->sum('amount_cents'),
@@ -159,7 +222,141 @@ new #[Layout('components.layouts.app')] class extends Component {
             'reimbursed' => (clone $base)->where('status', PettyCashEntry::STATUS_REIMBURSED)->sum('amount_cents'),
         ];
 
-        return ['entries' => $entries, 'counts' => $counts];
+        $incentiveAmount = (float) SystemSetting::get('slip_scan_incentive_amount', 5);
+        $incentiveEnabled = (bool) SystemSetting::get('slip_scan_incentive_enabled', true);
+
+        $payload = [
+            'counts' => $counts,
+            'incentiveAmount' => $incentiveAmount,
+            'incentiveEnabled' => $incentiveEnabled,
+        ];
+
+        if ($this->tab === 'slips') {
+            $payload['entries'] = $this->buildQuery()->paginate(25);
+        } elseif ($this->tab === 'trips') {
+            $payload['tripGroups'] = $this->tripReconciliation();
+        } else {
+            $payload['incentiveRows'] = $this->incentiveRollup($incentiveAmount);
+        }
+
+        return $payload;
+    }
+
+    /**
+     * Group submitted slips by job for the "By Trip" reconciliation view.
+     * For each job we expose: the advance issued (from transport_jobs)
+     * vs the per-category spend (from petty_cash_entries), per-category
+     * variance, the slip list, and the driver's payment-routing phone.
+     *
+     * Excludes entries that have no job_id (in-between-jobs expenses) --
+     * those don't have an advance to reconcile against and surface in
+     * the slip-level view instead.
+     */
+    private function tripReconciliation(): \Illuminate\Support\Collection
+    {
+        $base = $this->buildQueryWithoutStatus()
+            ->whereNotNull('job_id');
+
+        $jobIds = (clone $base)->distinct()->pluck('job_id');
+
+        if ($jobIds->isEmpty()) {
+            return collect();
+        }
+
+        // Pre-load the slips so the per-trip card can show its slip list
+        // without a per-job round-trip back to the DB.
+        $slipsByJob = (clone $base)
+            ->with(['driver:id,name,phone', 'driver.driverProfile:user_id,cellphone', 'document:id,disk,path,mime_type'])
+            ->whereIn('job_id', $jobIds)
+            ->get()
+            ->groupBy('job_id');
+
+        $jobs = \App\Models\Job::query()
+            ->whereIn('id', $jobIds)
+            ->with(['company:id,name', 'pickupLocation:id,company_name', 'deliveryLocation:id,company_name', 'driver:id,name,phone', 'driver.driverProfile:user_id,cellphone'])
+            ->orderByDesc('advance_assigned_at')
+            ->orderByDesc('updated_at')
+            ->get();
+
+        return $jobs->map(function ($job) use ($slipsByJob) {
+            $slips = $slipsByJob->get($job->id, collect());
+
+            // Map slip categories onto the same buckets used for the
+            // advance so the variance table compares like-with-like.
+            $approvedByCategory = $slips
+                ->where('status', PettyCashEntry::STATUS_APPROVED)
+                ->groupBy('category')
+                ->map(fn ($group) => $group->sum('amount_cents') / 100);
+
+            $tollsSpent = (float) ($approvedByCategory->get(PettyCashEntry::CATEGORY_TOLL, 0));
+            $foodSpent = (float) ($approvedByCategory->get(PettyCashEntry::CATEGORY_FOOD, 0));
+            $accomSpent = (float) ($approvedByCategory->get(PettyCashEntry::CATEGORY_ACCOMMODATION, 0));
+            // Parking + taxi roll into the "taxi" advance line for v1.
+            $taxiSpent = (float) ($approvedByCategory->get(PettyCashEntry::CATEGORY_PARKING, 0) + ($approvedByCategory->get('taxi_slip', 0)));
+
+            $totalSpent = round($slips->where('status', '!=', PettyCashEntry::STATUS_REJECTED)->sum('amount_cents') / 100, 2);
+            $advanceIssued = (float) ($job->advance_total ?? 0);
+
+            return (object) [
+                'job' => $job,
+                'driverPhone' => $job->driver?->phone ?: ($job->driver?->driverProfile?->cellphone ?? null),
+                'advance' => [
+                    'tolls' => (float) ($job->advance_tolls ?? 0),
+                    'accommodation' => (float) ($job->advance_accommodation ?? 0),
+                    'taxi' => (float) ($job->advance_taxi ?? 0),
+                    'food' => (float) ($job->advance_food ?? 0),
+                    'total' => $advanceIssued,
+                ],
+                'spent' => [
+                    'tolls' => $tollsSpent,
+                    'accommodation' => $accomSpent,
+                    'taxi' => $taxiSpent,
+                    'food' => $foodSpent,
+                    'total' => $totalSpent,
+                ],
+                'variance' => round($totalSpent - $advanceIssued, 2),
+                'slips' => $slips,
+                'slipCount' => $slips->count(),
+                'approvedSlipCount' => $slips->where('status', PettyCashEntry::STATUS_APPROVED)->count(),
+                'pendingSlipCount' => $slips->where('status', PettyCashEntry::STATUS_SUBMITTED)->count(),
+            ];
+        });
+    }
+
+    /**
+     * Per-driver rollup of approved scanned slips × the configured
+     * incentive amount.  Drives the "Incentives" tab.  Only the owner
+     * may change the rate; everyone with petty-cash view rights can
+     * see the rollup.
+     */
+    private function incentiveRollup(float $rate): array
+    {
+        $base = $this->buildQueryWithoutStatus()
+            ->where('status', PettyCashEntry::STATUS_APPROVED);
+
+        $rows = (clone $base)
+            ->select('driver_user_id', DB::raw('COUNT(*) as approved_count'))
+            ->groupBy('driver_user_id')
+            ->orderByDesc('approved_count')
+            ->get();
+
+        $userIds = $rows->pluck('driver_user_id')->filter()->values()->all();
+        $users = User::query()
+            ->whereIn('id', $userIds)
+            ->with('driverProfile:user_id,cellphone')
+            ->get(['id', 'name', 'phone'])
+            ->keyBy('id');
+
+        return $rows->map(function ($r) use ($users, $rate) {
+            $u = $users->get($r->driver_user_id);
+            return [
+                'driver_user_id' => $r->driver_user_id,
+                'name' => $u?->name ?? 'Unknown driver',
+                'phone' => $u?->phone ?: $u?->driverProfile?->cellphone,
+                'approved_count' => (int) $r->approved_count,
+                'earned' => round($r->approved_count * $rate, 2),
+            ];
+        })->all();
     }
 
     private function buildQueryWithoutStatus(): \Illuminate\Database\Eloquent\Builder
@@ -211,7 +408,26 @@ new #[Layout('components.layouts.app')] class extends Component {
         </button>
     </section>
 
-    {{-- Filters --}}
+    {{-- Tabs: slip-level | trip-level reconciliation | scan incentives --}}
+    <div class="mb-4 flex items-center gap-1 rounded-xl bg-slate-100 p-1 w-full sm:w-fit">
+        <button type="button" wire:click="switchTab('slips')"
+            class="inline-flex items-center gap-2 rounded-lg px-3.5 py-1.5 text-xs font-semibold transition
+            {{ $tab === 'slips' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900' }}">
+            By slip
+        </button>
+        <button type="button" wire:click="switchTab('trips')"
+            class="inline-flex items-center gap-2 rounded-lg px-3.5 py-1.5 text-xs font-semibold transition
+            {{ $tab === 'trips' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900' }}">
+            By trip · reconcile
+        </button>
+        <button type="button" wire:click="switchTab('incentives')"
+            class="inline-flex items-center gap-2 rounded-lg px-3.5 py-1.5 text-xs font-semibold transition
+            {{ $tab === 'incentives' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900' }}">
+            Scan incentives
+        </button>
+    </div>
+
+    {{-- Range filter is shared by every tab (drives the counters and rollups). --}}
     <section class="mb-4 rounded-xl bg-white border border-slate-200 p-3 flex flex-wrap items-center gap-3">
         <div class="flex items-center gap-1 text-xs">
             <span class="text-slate-500 mr-1">Range:</span>
@@ -225,22 +441,24 @@ new #[Layout('components.layouts.app')] class extends Component {
             @endforeach
         </div>
 
-        <div class="flex items-center gap-1 text-xs">
-            <span class="text-slate-500 mr-1">Status:</span>
-            @foreach (['submitted' => 'Pending', 'approved' => 'Approved', 'reimbursed' => 'Reimbursed', 'rejected' => 'Rejected', 'all' => 'All'] as $val => $lbl)
-                <button type="button" wire:click="$set('status', '{{ $val }}')"
-                        @class([
-                            'rounded-full px-2.5 py-1 font-semibold',
-                            'bg-blue-600 text-white' => $status === $val,
-                            'bg-slate-100 text-slate-600 hover:bg-slate-200' => $status !== $val,
-                        ])>{{ $lbl }}</button>
-            @endforeach
-        </div>
+        @if($tab === 'slips')
+            <div class="flex items-center gap-1 text-xs">
+                <span class="text-slate-500 mr-1">Status:</span>
+                @foreach (['submitted' => 'Pending', 'approved' => 'Approved', 'reimbursed' => 'Reimbursed', 'rejected' => 'Rejected', 'all' => 'All'] as $val => $lbl)
+                    <button type="button" wire:click="$set('status', '{{ $val }}')"
+                            @class([
+                                'rounded-full px-2.5 py-1 font-semibold',
+                                'bg-blue-600 text-white' => $status === $val,
+                                'bg-slate-100 text-slate-600 hover:bg-slate-200' => $status !== $val,
+                            ])>{{ $lbl }}</button>
+                @endforeach
+            </div>
+        @endif
 
         <div class="flex items-center gap-2 text-xs ml-auto">
             <input type="search" wire:model.live.debounce.500ms="driverSearch" placeholder="Driver name…"
                    class="rounded border border-slate-300 px-3 py-1.5 text-xs w-44">
-            @if($status === 'submitted' && $entries->total() > 0)
+            @if($tab === 'slips' && $status === 'submitted' && isset($entries) && $entries->total() > 0)
                 <button type="button"
                         wire:click="bulkApproveSubmitted"
                         wire:confirm="Approve up to 50 pending entries on this page?"
@@ -251,13 +469,17 @@ new #[Layout('components.layouts.app')] class extends Component {
         </div>
     </section>
 
-    {{-- Entries --}}
+    @if($tab === 'slips')
+    {{-- Slip-level entries (existing behaviour). --}}
     <section class="rounded-xl bg-white border border-slate-200 overflow-hidden">
         @if($entries->isEmpty())
             <p class="p-8 text-center text-sm text-slate-500">No entries match the current filters.</p>
         @else
         <ul class="divide-y divide-slate-100">
             @foreach($entries as $entry)
+                @php
+                    $driverPhone = $entry->driver?->phone ?: ($entry->driver?->driverProfile?->cellphone ?? null);
+                @endphp
                 <li class="p-4">
                     <div class="flex items-start gap-4">
                         {{-- Slip thumbnail --}}
@@ -282,6 +504,9 @@ new #[Layout('components.layouts.app')] class extends Component {
 
                             <p class="mt-1 text-xs text-slate-600">
                                 <strong>{{ $entry->driver->name ?? 'Driver' }}</strong>
+                                @if($driverPhone)
+                                    <span class="ml-1 font-mono text-[11px] text-slate-500" title="Bank-send routing key">{{ $driverPhone }}</span>
+                                @endif
                                 @if($entry->job)
                                     · job <a href="{{ route('admin.orders.show', $entry->job_id) }}" class="text-blue-600 hover:underline">{{ $entry->job->job_number }}</a>
                                     @if($entry->job->company) · {{ $entry->job->company->name }} @endif
@@ -336,8 +561,9 @@ new #[Layout('components.layouts.app')] class extends Component {
                                            class="rounded border border-slate-300 px-2 py-1 text-xs w-44">
                                     <button type="button"
                                             wire:click="reimburseEntry({{ $entry->id }})"
-                                            wire:confirm="Mark this entry as reimbursed?"
+                                            wire:confirm="Mark this entry as reimbursed? (sent to {{ $driverPhone ?: 'driver' }})"
                                             class="rounded bg-blue-600 hover:bg-blue-500 text-white px-3 py-1 text-xs font-semibold">Mark reimbursed</button>
+                                    @error('reimburse_' . $entry->id) <span class="text-[11px] text-rose-600">{{ $message }}</span> @enderror
                                 </div>
                             @endif
                         </div>
@@ -348,4 +574,184 @@ new #[Layout('components.layouts.app')] class extends Component {
         <div class="p-3 border-t border-slate-100">{{ $entries->links() }}</div>
         @endif
     </section>
+
+    @elseif($tab === 'trips')
+    {{-- Trip-level reconciliation.  Each card shows advance-vs-spend per
+         category, total variance, the slip list with thumbnails, and the
+         driver's bank-send phone number. --}}
+    <section class="space-y-4">
+        @forelse($tripGroups as $tg)
+            @php
+                $isOver = $tg->variance > 0.5;
+                $isUnder = $tg->variance < -0.5;
+                $advTotal = $tg->advance['total'];
+                $spentTotal = $tg->spent['total'];
+            @endphp
+            <article class="rounded-xl bg-white border border-slate-200 overflow-hidden">
+                <header class="px-4 py-3 border-b border-slate-100 flex flex-wrap items-center justify-between gap-2">
+                    <div class="min-w-0">
+                        <a href="{{ route('admin.orders.show', $tg->job) }}" class="text-sm font-bold text-blue-700 hover:underline">{{ $tg->job->job_number }}</a>
+                        <span class="ml-2 text-xs text-slate-500">
+                            {{ $tg->job->company?->name ?? '—' }} ·
+                            {{ $tg->job->pickupLocation?->company_name ?? '—' }} → {{ $tg->job->deliveryLocation?->company_name ?? '—' }}
+                        </span>
+                        <p class="text-[11px] text-slate-500 mt-0.5">
+                            Driver:
+                            <span class="font-semibold text-slate-700">{{ $tg->job->driver?->name ?? 'unassigned' }}</span>
+                            @if($tg->driverPhone)
+                                <span class="ml-1 font-mono text-slate-500" title="Bank-send routing key">{{ $tg->driverPhone }}</span>
+                            @endif
+                        </p>
+                    </div>
+                    <div class="text-right">
+                        @if($advTotal > 0)
+                            <p class="text-[10px] uppercase tracking-wide text-slate-500">Issued / Spent</p>
+                            <p class="text-sm font-semibold tabular-nums">
+                                <span class="text-emerald-700">R {{ number_format($advTotal, 2) }}</span>
+                                <span class="text-slate-400">/</span>
+                                <span class="text-slate-900">R {{ number_format($spentTotal, 2) }}</span>
+                            </p>
+                            <p class="text-[11px] font-semibold tabular-nums
+                                {{ $isOver ? 'text-rose-600' : ($isUnder ? 'text-emerald-700' : 'text-slate-500') }}">
+                                Variance {{ $isOver ? '+' : '' }}R {{ number_format($tg->variance, 2) }}
+                            </p>
+                        @else
+                            <p class="text-[11px] italic text-slate-500">No advance issued</p>
+                            <p class="text-sm font-semibold text-slate-900 tabular-nums">Spent R {{ number_format($spentTotal, 2) }}</p>
+                        @endif
+                    </div>
+                </header>
+
+                @if($advTotal > 0)
+                <div class="px-4 py-3 grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                    @foreach (['tolls' => 'Tolls', 'accommodation' => 'Accommodation', 'taxi' => 'Taxi', 'food' => 'Food'] as $k => $lbl)
+                        @php
+                            $a = (float) ($tg->advance[$k] ?? 0);
+                            $s = (float) ($tg->spent[$k] ?? 0);
+                            $vk = round($s - $a, 2);
+                        @endphp
+                        <div class="rounded-lg bg-slate-50 border border-slate-100 p-2">
+                            <p class="text-[10px] uppercase tracking-wide text-slate-500">{{ $lbl }}</p>
+                            <p class="text-[11px] mt-0.5 tabular-nums">
+                                <span class="text-slate-500">R {{ number_format($a, 2) }}</span>
+                                <span class="text-slate-400 mx-1">/</span>
+                                <span class="font-semibold text-slate-900">R {{ number_format($s, 2) }}</span>
+                            </p>
+                            @if(abs($vk) > 0.5)
+                                <p class="text-[10px] font-semibold tabular-nums {{ $vk > 0 ? 'text-rose-600' : 'text-emerald-700' }}">
+                                    {{ $vk > 0 ? '+' : '' }}R {{ number_format($vk, 2) }}
+                                </p>
+                            @endif
+                        </div>
+                    @endforeach
+                </div>
+                @endif
+
+                @if($tg->slips->isNotEmpty())
+                <div class="px-4 pb-4">
+                    <p class="text-[11px] font-semibold text-slate-500 mb-2">
+                        Slips · {{ $tg->slipCount }} total
+                        @if($tg->pendingSlipCount > 0) · <span class="text-amber-700">{{ $tg->pendingSlipCount }} pending</span> @endif
+                    </p>
+                    <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2">
+                        @foreach($tg->slips as $slip)
+                            <div class="rounded-lg border border-slate-200 overflow-hidden">
+                                <div class="h-24 bg-slate-100">
+                                    @if($slip->document && str_starts_with((string) $slip->document->mime_type, 'image/'))
+                                        <a href="{{ route('document.view', $slip->document) }}" target="_blank">
+                                            <img src="{{ route('document.view', $slip->document) }}" class="h-full w-full object-cover hover:opacity-90" alt="">
+                                        </a>
+                                    @else
+                                        <div class="flex items-center justify-center h-full text-[10px] text-slate-400">no image</div>
+                                    @endif
+                                </div>
+                                <div class="p-1.5">
+                                    <p class="text-[11px] font-semibold tabular-nums">R {{ number_format($slip->amount_cents / 100, 2) }}</p>
+                                    <p class="text-[10px] text-slate-500 truncate">{{ $slip->categoryLabel() }}</p>
+                                    <p class="text-[9px] uppercase tracking-wide font-semibold rounded {{ $slip->statusBadgeClasses() }} inline-block px-1 mt-0.5">{{ $slip->statusLabel() }}</p>
+                                </div>
+                            </div>
+                        @endforeach
+                    </div>
+                </div>
+                @endif
+            </article>
+        @empty
+            <div class="rounded-xl bg-white border border-slate-200 p-8 text-center text-sm text-slate-500">
+                No trips with petty-cash activity in the selected range.
+            </div>
+        @endforelse
+    </section>
+
+    @else
+    {{-- Scan incentives.  Owner can edit the rate; everyone with view
+         rights can see the rollup.  Default is a "displayed earnings"
+         counter -- payroll acts on it manually each pay cycle. --}}
+    <section class="space-y-4">
+        <div class="rounded-xl bg-white border border-slate-200 p-4">
+            <div class="flex flex-wrap items-center gap-3">
+                <div>
+                    <p class="text-[11px] uppercase tracking-wide text-slate-500">Slip-scan incentive</p>
+                    @if($incentiveEnabled)
+                        <p class="text-sm">Drivers earn <strong>R {{ number_format($incentiveAmount, 2) }}</strong> for every approved petty-cash slip.</p>
+                    @else
+                        <p class="text-sm text-slate-500"><em>Currently disabled.</em></p>
+                    @endif
+                </div>
+                @if(auth()->user()?->isOwner())
+                    <div class="ml-auto flex items-end gap-2">
+                        <label class="block">
+                            <span class="block text-[10px] uppercase tracking-wide text-slate-500 mb-0.5">Owner — set rate (R)</span>
+                            <input wire:model="incentiveAmountDraft" type="number" min="0" step="0.01"
+                                class="rounded border border-slate-300 px-3 py-1.5 text-sm w-32">
+                        </label>
+                        <button type="button" wire:click="saveIncentiveRate"
+                            class="rounded bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 text-sm font-semibold">
+                            Save rate
+                        </button>
+                    </div>
+                @endif
+            </div>
+            @error('incentiveAmountDraft') <p class="mt-2 text-xs text-rose-600">{{ $message }}</p> @enderror
+        </div>
+
+        <div class="rounded-xl bg-white border border-slate-200 overflow-hidden">
+            @if(empty($incentiveRows))
+                <p class="p-8 text-center text-sm text-slate-500">No approved slips in the selected range.</p>
+            @else
+                <table class="w-full text-sm">
+                    <thead class="bg-slate-50 text-[11px] uppercase tracking-wide text-slate-500">
+                        <tr>
+                            <th class="text-left px-4 py-2 font-medium">Driver</th>
+                            <th class="text-left px-4 py-2 font-medium">Phone (bank send)</th>
+                            <th class="text-right px-4 py-2 font-medium">Approved slips</th>
+                            <th class="text-right px-4 py-2 font-medium">Earned (R)</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100">
+                        @foreach($incentiveRows as $row)
+                            <tr class="hover:bg-slate-50">
+                                <td class="px-4 py-2 font-semibold text-slate-900">{{ $row['name'] }}</td>
+                                <td class="px-4 py-2 font-mono text-slate-600">
+                                    @if($row['phone']) {{ $row['phone'] }} @else <span class="text-rose-600">— no phone on file</span> @endif
+                                </td>
+                                <td class="px-4 py-2 text-right tabular-nums">{{ $row['approved_count'] }}</td>
+                                <td class="px-4 py-2 text-right tabular-nums font-semibold text-emerald-700">R {{ number_format($row['earned'], 2) }}</td>
+                            </tr>
+                        @endforeach
+                        @php
+                            $totalSlips = collect($incentiveRows)->sum('approved_count');
+                            $totalEarned = collect($incentiveRows)->sum('earned');
+                        @endphp
+                        <tr class="bg-slate-50 font-semibold">
+                            <td class="px-4 py-2" colspan="2">Total</td>
+                            <td class="px-4 py-2 text-right tabular-nums">{{ $totalSlips }}</td>
+                            <td class="px-4 py-2 text-right tabular-nums text-emerald-700">R {{ number_format($totalEarned, 2) }}</td>
+                        </tr>
+                    </tbody>
+                </table>
+            @endif
+        </div>
+    </section>
+    @endif
 </div>

@@ -9,6 +9,11 @@ use Livewire\Volt\Volt;
 // has been retired in favour of this consolidated view.
 Volt::route('dashboard', 'admin.dashboard')->name('dashboard');
 
+// Petty-cash overview dashboard. Owner + developer only -- the component's
+// mount() will 403 anyone else, so this is a soft gate that just hides
+// the URL from accidental visitors.
+Volt::route('overview', 'admin.overview')->name('overview');
+
 // Keep the old /admin/executive link resolvable for anyone who bookmarked
 // the short-lived standalone route. Single 302 to /admin/dashboard.
 Route::redirect('executive', '/admin/dashboard')->name('executive');
@@ -21,10 +26,11 @@ Volt::route('orders', 'admin.orders.index')->name('orders.index');
 Volt::route('orders/bulk-upload', 'admin.orders.bulk-upload')->name('orders.bulk-upload');
 Volt::route('orders/{job}', 'admin.orders.show')->name('orders.show');
 Volt::route('dispatch', 'admin.dispatch')->name('dispatch');
-// Ops Wallboard — second-screen overview (drivers / live events / map).
-// Designed to live on a dispatch TV; uses Livewire wire:poll.5s for the
-// "live" feel rather than Reverb/Echo.
-Volt::route('wallboard', 'admin.wallboard.index')->name('wallboard');
+// Wallboard route retired 2026-05-26: the TrackSolid position feed it
+// depended on isn't going to be available. The Live Display below still
+// works for the 3-lane status board. We keep a redirect rather than a
+// 404 so any bookmark / TV browser lands on something useful.
+Route::redirect('wallboard', '/admin/live-display')->name('wallboard');
 // Live Movements board — system-wide 3-lane view (waiting / in
 // transit / delivered today) for ops controllers, owners, super
 // admins and developers.  Same Volt component as the customer
