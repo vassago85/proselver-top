@@ -820,16 +820,13 @@ new #[Layout('components.layouts.app')] class extends Component {
             return;
         }
 
-        // Sign-off gate: a trip needs to be approved via a Petty-cash
-        // Plan before ops can issue an advance without an explicit
-        // override.  Override path requires a reason and is logged in
-        // the audit trail with action_type 'advance_override_used'.
+        // Sign-off awareness, not enforcement.  Owner asked for "just
+        // warnings for now, we can put locks in place later" -- so we
+        // surface that the trip is unsigned but don't block save.
+        // advance_override_reason still captures whatever ops typed
+        // (if anything) so the audit trail has it.
         $hasApproval = $this->job->advance_approved_at !== null;
         $isNewIssue = !$isReissue;
-        if ($isNewIssue && !$hasApproval && trim($this->advanceOverrideReason) === '') {
-            $this->addError('advanceOverrideReason', 'This trip has not been approved via a Petty-cash Plan. Provide a reason to bypass the sign-off workflow.');
-            return;
-        }
 
         $before = $this->job->only([
             'advance_tolls', 'advance_accommodation', 'advance_taxi',
@@ -918,8 +915,115 @@ new #[Layout('components.layouts.app')] class extends Component {
             }
         }
 
+        // Auto-add to a Petty-Cash Plan as a side effect of saving.
+        // Owner stated: "save must add it to petty cash plan".  We
+        // build the item snapshot from the values we just persisted so
+        // the plan reflects exactly what ops decided, and the plan
+        // total recalcs to include the new (or refreshed) item.
+        $planLabel = $this->autoAddToPettyCashPlan([
+            'tolls' => (float) $tolls,
+            'accommodation' => (float) $accommodation,
+            'taxi' => (float) $taxi,
+            'food' => (float) $food,
+            'custom_items' => $customItems,
+            'computed_total' => (float) $total,
+        ]);
+
         $this->showAdvancePanel = false;
-        session()->flash('success', 'Driver advance saved: R ' . number_format($total, 2) . '.');
+        session()->flash('success', 'Driver advance saved: R ' . number_format($total, 2) . ($planLabel ? ' · added to ' . $planLabel : '') . '.');
+    }
+
+    /**
+     * Snapshot this job into the most recent draft Petty-Cash Plan, or
+     * spin up a fresh one if no current draft exists.  Idempotent: if
+     * the job is already in an active (pending / approved) plan we
+     * REFRESH that plan's snapshot rather than creating a duplicate
+     * entry in a new plan.
+     *
+     * Returns the plan label so the saveAdvance flash can name it.
+     */
+    private function autoAddToPettyCashPlan(array $breakdown): ?string
+    {
+        // Already tagged to an active (non-rejected) plan?  Refresh
+        // that plan's item snapshot instead of creating a new draft.
+        if ($this->job->advance_plan_id) {
+            $existing = PettyCashPlan::find($this->job->advance_plan_id);
+            if ($existing && $existing->status !== PettyCashPlan::STATUS_REJECTED) {
+                $this->updatePlanItemForCurrentJob($existing, $breakdown);
+                return $existing->label;
+            }
+        }
+
+        // Find today's draft (so a busy ops session lands every
+        // trip into one bundle for the owner instead of a forest of
+        // single-trip plans).  generated_at is timestampTz; cast to
+        // date for the day match.
+        $draft = PettyCashPlan::query()
+            ->where('status', PettyCashPlan::STATUS_DRAFT)
+            ->whereDate('generated_at', now()->toDateString())
+            ->where('generated_by_user_id', auth()->id())
+            ->latest('generated_at')
+            ->first();
+
+        if (!$draft) {
+            $draft = PettyCashPlan::create([
+                'label' => 'Pay-run ' . now()->format('D d M Y'),
+                'status' => PettyCashPlan::STATUS_DRAFT,
+                'total_amount' => 0,
+                'items_json' => [],
+                'generated_by_user_id' => auth()->id(),
+                'generated_at' => now(),
+            ]);
+            AuditService::log('petty_cash_plan_created', 'petty_cash_plan', $draft->id, null, ['auto' => true]);
+        }
+
+        $this->updatePlanItemForCurrentJob($draft, $breakdown);
+        return $draft->label;
+    }
+
+    /**
+     * Add or replace the current job's entry in the given plan's
+     * items_json and recompute the total.  Also stamps the job's
+     * advance_plan_id so the order detail "approved by plan #N"
+     * banner / Issue gate know which plan to wait on.
+     */
+    private function updatePlanItemForCurrentJob(PettyCashPlan $plan, array $breakdown): void
+    {
+        $items = collect($plan->items_json ?? [])
+            ->reject(fn ($i) => (int) ($i['job_id'] ?? 0) === $this->job->id)
+            ->values()
+            ->all();
+
+        $this->job->refresh();  // make sure relations are fresh after the forceFill above
+        $items[] = [
+            'job_id'          => $this->job->id,
+            'job_number'      => $this->job->job_number,
+            'company'         => $this->job->company?->name,
+            'route'           => trim(($this->job->pickupLocation?->company_name ?? '') . ' → ' . ($this->job->deliveryLocation?->company_name ?? '')),
+            'scheduled_date'  => $this->job->scheduled_date?->toDateString(),
+            'vehicle_class'   => $this->job->vehicleClass?->name,
+            'toll_class'      => (int) ($this->advanceTollResult['toll_class'] ?? $this->job->vehicleClass?->toll_class ?? 0),
+            'tolls'           => round((float) $breakdown['tolls'], 2),
+            'accommodation'   => round((float) $breakdown['accommodation'], 2),
+            'taxi'            => round((float) $breakdown['taxi'], 2),
+            'food'            => round((float) $breakdown['food'], 2),
+            'custom_items'    => $breakdown['custom_items'] ?? [],
+            'computed_total'  => round((float) $breakdown['computed_total'], 2),
+        ];
+
+        $plan->forceFill([
+            'items_json' => $items,
+            'total_amount' => round(collect($items)->sum('computed_total'), 2),
+        ])->save();
+
+        // Link the job to the plan so the order detail page shows
+        // "added to plan #N" and the Issue gate knows what to check.
+        // If the plan is still in draft, advance_approved_at stays
+        // null until the owner signs the plan off -- that's exactly
+        // the warnings-not-locks behaviour the owner asked for.
+        if ($this->job->advance_plan_id !== $plan->id) {
+            $this->job->forceFill(['advance_plan_id' => $plan->id])->save();
+        }
     }
 
     /* ----------------------------------------------------------------
@@ -2520,7 +2624,11 @@ new #[Layout('components.layouts.app')] class extends Component {
 
                 @if(!$job->advance_approved_at)
                     <div class="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800">
-                        ⚠ This trip has not been signed off via a Petty-cash Plan. Owner will see the override on the audit trail.
+                        ⚠ Heads up: this trip hasn't been signed off via a Petty-cash Plan yet.
+                        @if($job->advance_plan_id)
+                            It's on <a href="{{ route('admin.petty-cash.plans', ['tab' => 'drafts']) }}" target="_blank" class="font-semibold underline">draft plan #{{ $job->advance_plan_id }}</a> waiting for owner approval.
+                        @endif
+                        Issuing now will record an audit entry for the owner to review.
                     </div>
                 @endif
 
@@ -2859,33 +2967,40 @@ new #[Layout('components.layouts.app')] class extends Component {
                         </div>
                     @endif
 
-                    {{-- Sign-off status banner.  Trip-level approval is
-                         the gate ops needs before issuing.  Approved
-                         trips show a green "approved by plan #N" badge;
-                         unapproved trips show an amber prompt with an
-                         override-reason input. --}}
-                    @if($job->advance_total === null)
-                        @if($job->advance_approved_at && $job->advance_plan_id)
-                            <div class="mt-3 rounded-lg border border-emerald-300 bg-emerald-50 px-4 py-2 flex items-center gap-2">
-                                <svg class="h-4 w-4 text-emerald-700 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
-                                <p class="text-xs text-emerald-900">
-                                    Approved by <a href="{{ route('admin.petty-cash.plans', ['tab' => 'approved']) }}" target="_blank" class="font-semibold underline">plan #{{ $job->advance_plan_id }}</a>
-                                    · {{ $job->advance_approved_at->diffForHumans() }}
-                                </p>
-                            </div>
-                        @else
-                            <div class="mt-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3">
-                                <p class="text-xs font-semibold text-amber-900 mb-1">No owner sign-off on file — issue requires an override reason</p>
-                                <p class="text-[11px] text-amber-800/80 mb-2">
-                                    Best practice: add this trip to a <a href="{{ route('admin.petty-cash.plans', ['tab' => 'create']) }}" target="_blank" class="font-semibold underline">Petty-cash Plan</a> for the owner to sign off.
-                                    Otherwise type why you're bypassing the workflow.
-                                </p>
-                                <textarea wire:model.live.debounce.300ms="advanceOverrideReason" rows="2" maxlength="500"
-                                    placeholder="e.g. emergency after-hours collection, customer changed schedule, etc."
-                                    class="w-full rounded-lg border border-amber-300 px-3 py-2 text-sm focus:border-amber-500 focus:ring-amber-500"></textarea>
-                                @error('advanceOverrideReason') <p class="mt-1 text-xs text-red-600">{{ $message }}</p> @enderror
-                            </div>
-                        @endif
+                    {{-- Sign-off status banner.  Approved trips show a
+                         green "approved by plan #N" badge.  Unapproved
+                         trips show an informational amber banner --
+                         saving auto-adds the trip to a draft plan, so
+                         this is just a "heads up, no owner sign-off
+                         yet" note.  No required input; ops can type an
+                         optional note if they want it in the audit log. --}}
+                    @if($job->advance_approved_at && $job->advance_plan_id)
+                        <div class="mt-3 rounded-lg border border-emerald-300 bg-emerald-50 px-4 py-2 flex items-center gap-2">
+                            <svg class="h-4 w-4 text-emerald-700 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                            <p class="text-xs text-emerald-900">
+                                Approved by <a href="{{ route('admin.petty-cash.plans', ['tab' => 'approved']) }}" target="_blank" class="font-semibold underline">plan #{{ $job->advance_plan_id }}</a>
+                                · {{ $job->advance_approved_at->diffForHumans() }}
+                            </p>
+                        </div>
+                    @elseif($job->advance_plan_id)
+                        <div class="mt-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 flex items-center gap-2">
+                            <svg class="h-4 w-4 text-amber-700 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/></svg>
+                            <p class="text-xs text-amber-900">
+                                On <a href="{{ route('admin.petty-cash.plans', ['tab' => 'drafts']) }}" target="_blank" class="font-semibold underline">draft plan #{{ $job->advance_plan_id }}</a>
+                                · awaiting owner sign-off
+                            </p>
+                        </div>
+                    @else
+                        <div class="mt-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3">
+                            <p class="text-xs font-semibold text-amber-900 mb-1">No owner sign-off yet</p>
+                            <p class="text-[11px] text-amber-800/80 mb-2">
+                                Saving will automatically add this trip to today's Petty-cash Plan for owner sign-off.
+                                Optionally type a note for the audit log if there's anything the owner should know.
+                            </p>
+                            <textarea wire:model.live.debounce.300ms="advanceOverrideReason" rows="2" maxlength="500"
+                                placeholder="(optional) e.g. emergency after-hours collection, customer changed schedule…"
+                                class="w-full rounded-lg border border-amber-300 px-3 py-2 text-sm focus:border-amber-500 focus:ring-amber-500"></textarea>
+                        </div>
                     @endif
 
                     {{-- Re-issue audit reason.  Required when this order
