@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\Job;
+use App\Models\ModelTollClassHint;
 use App\Models\User;
 use App\Services\AuditService;
 use App\Services\TripCostEstimator;
@@ -69,6 +70,12 @@ new #[Layout('components.layouts.app')] class extends Component {
     // estimator re-runs whenever this changes so the toll list updates
     // live.
     public ?int $advanceTollClassOverride = null;
+    // Manual toll override.  When ops types a value here it wins over
+    // the auto-detected plaza total -- belt-and-braces for the cases
+    // where Google's polyline doesn't pass close enough to a plaza
+    // coordinate, or we just don't have the plaza seeded.  Empty/null
+    // = use the auto-detected subtotal.
+    public ?float $advanceTollsManual = null;
 
     public function mount(Job $job): void
     {
@@ -504,9 +511,30 @@ new #[Layout('components.layouts.app')] class extends Component {
             : null;
         $this->advanceIncreaseReason = (string) ($this->job->advance_increase_reason ?? '');
         $this->advanceFoodWaived = (bool) $this->job->advance_food_waived;
-        $this->advanceTollClassOverride = $this->job->advance_toll_class_override
-            ? (int) $this->job->advance_toll_class_override
-            : null;
+        // Toll class override: prefer the value previously committed
+        // on this job; otherwise see if we have a remembered correction
+        // for the model name (e.g. "Powerstar VX4035 → Class 3").  Only
+        // applies when the job has no per-trip value of its own -- ops
+        // edits on the current job always win.
+        if ($this->job->advance_toll_class_override) {
+            $this->advanceTollClassOverride = (int) $this->job->advance_toll_class_override;
+        } else {
+            $hint = ModelTollClassHint::classFor($this->job->model_name);
+            $this->advanceTollClassOverride = $hint;
+            // Stamp the hint onto the in-memory model so the estimator
+            // picks it up on this open -- the persisted column stays
+            // null until ops actually Issues the advance, so a "just
+            // looking" hover doesn't accidentally save the hint.
+            if ($hint) {
+                $this->job->advance_toll_class_override = $hint;
+            }
+        }
+
+        // Same shape for the manual toll override: re-open shows the
+        // committed value (null = use auto-detected subtotal).
+        $this->advanceTollsManual = $this->job->advance_tolls !== null && $this->job->advance_toll_breakdown
+            ? null  // had an auto-detected breakdown last time -- start fresh on the override
+            : ($this->job->advance_tolls !== null ? (float) $this->job->advance_tolls : null);
 
         $this->advanceTollResult = $estimator->estimateTolls($this->job);
 
@@ -579,15 +607,19 @@ new #[Layout('components.layouts.app')] class extends Component {
             'advanceTotal'               => 'nullable|numeric|min:0|max:1000000',
             'advanceIncreaseReason'      => 'nullable|string|max:500',
             'advanceTollClassOverride'   => 'nullable|integer|min:1|max:4',
+            'advanceTollsManual'         => 'nullable|numeric|min:0|max:1000000',
         ]);
 
-        // Computed estimate the panel is showing.  Tolls come from the
-        // estimator (snapshotted into advance_toll_breakdown below) so
-        // a later plaza-fee change can't retroactively redefine "what
-        // ops calculated at the time".  Waiver forces food to 0 -- the
-        // checkbox is an audit-grade signal that ops decided this trip
-        // doesn't qualify, separate from "typed zero by accident".
-        $tolls         = (float) ($this->advanceTollResult['toll_total'] ?? 0);
+        // Computed estimate the panel is showing.  Manual toll override
+        // (typed by ops) wins over the auto-detected plaza subtotal --
+        // covers routes Google misses or plazas we haven't seeded.
+        // Snapshot still records the auto-detected breakdown so the
+        // historical record shows what we computed AND what ops decided.
+        // Waiver forces food to 0 -- checkbox is an audit-grade signal
+        // that ops decided this trip doesn't qualify, separate from
+        // "typed zero by accident".
+        $autoTolls     = (float) ($this->advanceTollResult['toll_total'] ?? 0);
+        $tolls         = $this->advanceTollsManual !== null ? round((float) $this->advanceTollsManual, 2) : $autoTolls;
         $accommodation = (float) ($this->advanceAccommodation ?? 0);
         $taxi          = (float) ($this->advanceTaxi ?? 0);
         $food          = $this->advanceFoodWaived ? 0.0 : (float) ($this->advanceFood ?? 0);
@@ -631,6 +663,20 @@ new #[Layout('components.layouts.app')] class extends Component {
                 'advance_food', 'advance_total', 'advance_increase_reason',
             ]),
         );
+
+        // Teach the global model -> toll-class memory.  When ops set a
+        // per-trip class override and the order has a model_name, we
+        // remember that mapping for next time -- so the Powerstar VX4035
+        // example (an 8x4 that defaults to Class 2 from its HCV/Extra
+        // Heavy class) only needs to be corrected once.  Lookups are
+        // applied on openAdvancePanel().
+        if ($this->advanceTollClassOverride && $this->job->model_name) {
+            ModelTollClassHint::remember(
+                $this->job->model_name,
+                (int) $this->advanceTollClassOverride,
+                auth()->id(),
+            );
+        }
 
         $this->showAdvancePanel = false;
         session()->flash('success', 'Driver advance issued: R ' . number_format($total, 2) . '.');
@@ -1971,6 +2017,9 @@ new #[Layout('components.layouts.app')] class extends Component {
                     </div>
 
                     @if($advanceTollResult['status'] === 'ok')
+                        @php
+                            $rememberedHint = $job->model_name ? \App\Models\ModelTollClassHint::classFor($job->model_name) : null;
+                        @endphp
                         <p class="text-xs text-gray-500 mb-2">
                             {{ number_format((float) $advanceTollResult['distance_km'], 1) }} km ·
                             {{ (int) floor($advanceTollResult['duration_minutes'] / 60) }}h {{ $advanceTollResult['duration_minutes'] % 60 }}m ·
@@ -1978,11 +2027,17 @@ new #[Layout('components.layouts.app')] class extends Component {
                             @if($advanceTollResult['cached'])
                                 <span class="ml-1 text-gray-400">(cached)</span>
                             @endif
+                            @if($rememberedHint && (int) $rememberedHint === (int) $advanceTollResult['toll_class'])
+                                <span class="ml-1 inline-flex items-center gap-1 text-emerald-700 font-semibold" title="Remembered from a previous trip with the same model.">
+                                    <svg class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><polyline points="21 3 21 8 16 8"/></svg>
+                                    remembered
+                                </span>
+                            @endif
                         </p>
 
                         @if(empty($advanceTollResult['plazas']))
                             <div class="rounded-lg bg-gray-50 border border-gray-200 px-3 py-2 text-xs text-gray-600">
-                                No toll plazas detected along this route.
+                                No toll plazas detected along this route. Type the rand value below if you know there are tolls.
                             </div>
                         @else
                             <div class="rounded-lg border border-gray-200 overflow-hidden">
@@ -2017,6 +2072,25 @@ new #[Layout('components.layouts.app')] class extends Component {
                             {{ $advanceTollResult['message'] }}
                         </div>
                     @endif
+
+                    {{-- Manual toll override.  Always available -- ops
+                         can type a rand value here to win over the
+                         auto-detected subtotal.  Useful when (a) the
+                         route runs through a plaza we haven't seeded,
+                         (b) Directions API is disabled, or (c) the
+                         polyline-to-plaza haversine match missed.
+                         Empty = use auto-detected. --}}
+                    <div class="mt-3 flex flex-wrap items-end gap-2 rounded-lg border border-dashed border-gray-300 px-3 py-2">
+                        <label class="text-[11px] font-semibold uppercase tracking-wide text-gray-500 flex flex-col gap-1">
+                            Override toll subtotal (R)
+                            <input wire:model.live.debounce.300ms="advanceTollsManual" type="number" min="0" step="0.01"
+                                placeholder="auto: {{ number_format((float) ($advanceTollResult['toll_total'] ?? 0), 2) }}"
+                                class="rounded-md border border-gray-300 px-3 py-1.5 text-sm w-40 focus:border-emerald-500 focus:ring-emerald-500 normal-case tracking-normal">
+                        </label>
+                        <span class="text-[10px] text-gray-500 leading-snug max-w-md">
+                            Auto-detected is <strong>R {{ number_format((float) ($advanceTollResult['toll_total'] ?? 0), 2) }}</strong>. Leave blank to use it, or type a value to override.
+                        </span>
+                    </div>
                 </section>
 
                 {{-- Manual quantities --}}
