@@ -2907,13 +2907,13 @@ new #[Layout('components.layouts.app')] class extends Component {
                         <div class="space-y-1.5">
                             @foreach($advanceCustomItems as $idx => $item)
                                 <div class="flex items-start gap-2" wire:key="custom-{{ $idx }}">
-                                    <input wire:model.live.debounce.300ms="advanceCustomItems.{{ $idx }}.label"
+                                    <input wire:model="advanceCustomItems.{{ $idx }}.label"
                                         type="text"
                                         list="{{ $datalistId }}"
                                         maxlength="120"
                                         placeholder="Label (e.g. customs clearance)"
                                         class="flex-1 min-w-0 rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-emerald-500 focus:ring-emerald-500">
-                                    <input wire:model.live.debounce.300ms="advanceCustomItems.{{ $idx }}.amount"
+                                    <input wire:model.live.debounce.500ms="advanceCustomItems.{{ $idx }}.amount"
                                         type="number" min="0" step="0.01"
                                         placeholder="R 0.00"
                                         class="w-28 shrink-0 rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-emerald-500 focus:ring-emerald-500">
@@ -2960,7 +2960,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                     @if($isOverage)
                         <div class="mt-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3">
                             <p class="text-xs font-semibold text-amber-900 mb-1">Above the computed estimate (+R {{ number_format($displayTotal - $computedRand, 2) }}) — reason required</p>
-                            <textarea wire:model.live.debounce.300ms="advanceIncreaseReason" rows="2" maxlength="500"
+                            <textarea wire:model="advanceIncreaseReason" rows="2" maxlength="500"
                                 placeholder="e.g. blocked route via N3 (detour through N11), extra night in Harrismith…"
                                 class="mt-1 w-full rounded-lg border border-amber-300 px-3 py-2 text-sm focus:border-amber-500 focus:ring-amber-500"></textarea>
                             @error('advanceIncreaseReason') <p class="mt-1 text-xs text-red-600">{{ $message }}</p> @enderror
@@ -2997,7 +2997,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                                 Saving will automatically add this trip to today's Petty-cash Plan for owner sign-off.
                                 Optionally type a note for the audit log if there's anything the owner should know.
                             </p>
-                            <textarea wire:model.live.debounce.300ms="advanceOverrideReason" rows="2" maxlength="500"
+                            <textarea wire:model="advanceOverrideReason" rows="2" maxlength="500"
                                 placeholder="(optional) e.g. emergency after-hours collection, customer changed schedule…"
                                 class="w-full rounded-lg border border-amber-300 px-3 py-2 text-sm focus:border-amber-500 focus:ring-amber-500"></textarea>
                         </div>
@@ -3010,7 +3010,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                     @if($job->advance_total !== null)
                         <div class="mt-3 rounded-lg border border-blue-300 bg-blue-50 px-4 py-3">
                             <p class="text-xs font-semibold text-blue-900 mb-1">Change reason (required if you change any amount)</p>
-                            <textarea wire:model.live.debounce.300ms="advanceChangeReason" rows="2" maxlength="500"
+                            <textarea wire:model="advanceChangeReason" rows="2" maxlength="500"
                                 placeholder="e.g. driver lost the original advance, route extended, customer added a stop…"
                                 class="mt-1 w-full rounded-lg border border-blue-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500"></textarea>
                             @error('advanceChangeReason') <p class="mt-1 text-xs text-red-600">{{ $message }}</p> @enderror
