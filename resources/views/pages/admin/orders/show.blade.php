@@ -549,6 +549,17 @@ new #[Layout('components.layouts.app')] class extends Component {
             ? null  // had an auto-detected breakdown last time -- start fresh on the override
             : ($this->job->advance_tolls !== null ? (float) $this->job->advance_tolls : null);
 
+        // Custom petty-cash line items.  Normalise on load so missing
+        // keys don't blow up the render.
+        $this->advanceCustomItems = collect($this->job->advance_custom_items ?? [])
+            ->map(fn ($item) => [
+                'label' => (string) ($item['label'] ?? ''),
+                'amount' => (float) ($item['amount'] ?? 0),
+                'needs_slip' => (bool) ($item['needs_slip'] ?? true),
+            ])
+            ->values()
+            ->all();
+
         $this->advanceTollResult = $estimator->estimateTolls($this->job, $this->advanceTollClassOverride);
 
         // Taxi: opt-in.  If this trip had taxi previously enabled keep
@@ -580,6 +591,32 @@ new #[Layout('components.layouts.app')] class extends Component {
     public function closeAdvancePanel(): void
     {
         $this->showAdvancePanel = false;
+    }
+
+    /**
+     * Custom petty-cash line items.  Free-form rows for things outside
+     * the predefined buckets (bridge fee, customs, escort, permit,
+     * vehicle wash, depot parking, etc.).  Labels are remembered per
+     * customer company on save so the next trip for the same customer
+     * auto-suggests previously used labels.
+     */
+    public function addCustomItem(): void
+    {
+        if (!auth()->user()?->isInternal()) abort(403);
+        $this->advanceCustomItems[] = [
+            'label' => '',
+            'amount' => 0,
+            'needs_slip' => true,
+        ];
+    }
+
+    public function removeCustomItem(int $index): void
+    {
+        if (!auth()->user()?->isInternal()) abort(403);
+        if (isset($this->advanceCustomItems[$index])) {
+            unset($this->advanceCustomItems[$index]);
+            $this->advanceCustomItems = array_values($this->advanceCustomItems);
+        }
     }
 
     public function recalculateRoute(TripCostEstimator $estimator): void
@@ -667,6 +704,10 @@ new #[Layout('components.layouts.app')] class extends Component {
             'advanceTollClassOverride'   => 'nullable|integer|min:1|max:4',
             'advanceTollsManual'         => 'nullable|numeric|min:0|max:1000000',
             'advanceChangeReason'        => 'nullable|string|max:500',
+            'advanceCustomItems'             => 'array|max:30',
+            'advanceCustomItems.*.label'     => 'nullable|string|max:120',
+            'advanceCustomItems.*.amount'    => 'nullable|numeric|min:0|max:1000000',
+            'advanceCustomItems.*.needs_slip'=> 'boolean',
         ]);
 
         // Was this job already issued?  If so the audit trail demands a
@@ -691,7 +732,23 @@ new #[Layout('components.layouts.app')] class extends Component {
         // but a stale typed value could otherwise survive a flip).
         $taxi          = $this->advanceTaxiIncluded ? (float) ($this->advanceTaxi ?? 0) : 0.0;
         $food          = $this->advanceFoodWaived ? 0.0 : (float) ($this->advanceFood ?? 0);
-        $computed      = round($tolls + $accommodation + $taxi + $food, 2);
+        // Normalise custom items: drop empty rows (no label or zero amount),
+        // round amounts.  Empty rows can survive when ops added a row but
+        // didn't fill it in -- we don't persist or count those.
+        $customItems = [];
+        $customTotal = 0.0;
+        foreach ($this->advanceCustomItems as $item) {
+            $label = trim((string) ($item['label'] ?? ''));
+            $amount = round((float) ($item['amount'] ?? 0), 2);
+            if ($label === '' || $amount <= 0) continue;
+            $customItems[] = [
+                'label' => $label,
+                'amount' => $amount,
+                'needs_slip' => (bool) ($item['needs_slip'] ?? true),
+            ];
+            $customTotal += $amount;
+        }
+        $computed      = round($tolls + $accommodation + $taxi + $food + $customTotal, 2);
         $total         = $this->advanceTotal !== null ? round((float) $this->advanceTotal, 2) : $computed;
 
         // Audit-on-overage rule: any number above the computed estimate
@@ -751,6 +808,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             'advance_taxi_included'         => $this->advanceTaxiIncluded,
             'advance_food'                  => $food,
             'advance_food_waived'           => $this->advanceFoodWaived,
+            'advance_custom_items'          => $customItems,
             'advance_total'                 => $total,
             'advance_increase_reason'       => $total > $computed + 0.5 ? trim($this->advanceIncreaseReason) : null,
             'advance_assigned_by_user_id'   => auth()->id(),
@@ -785,6 +843,28 @@ new #[Layout('components.layouts.app')] class extends Component {
                 (int) $this->advanceTollClassOverride,
                 auth()->id(),
             );
+        }
+
+        // Per-customer-company memory of custom petty-cash labels.
+        // Subsequent trips for the same company will auto-suggest the
+        // labels ops used on previous trips.  Stored on
+        // companies.movement_csv_mapping['custom_petty_cash_labels'] as
+        // an array of strings; deduplicated, capped at 50 entries so
+        // a typo storm can't unbound-grow the JSON column.
+        if ($this->job->company && !empty($customItems)) {
+            $mapping = (array) ($this->job->company->movement_csv_mapping ?? []);
+            $existing = (array) ($mapping['custom_petty_cash_labels'] ?? []);
+            $newLabels = collect($customItems)->pluck('label')->all();
+            $merged = collect(array_merge($existing, $newLabels))
+                ->filter()
+                ->unique()
+                ->take(-50)
+                ->values()
+                ->all();
+            if ($merged !== $existing) {
+                $mapping['custom_petty_cash_labels'] = $merged;
+                $this->job->company->forceFill(['movement_csv_mapping' => $mapping])->save();
+            }
         }
 
         $this->showAdvancePanel = false;
@@ -2250,11 +2330,19 @@ new #[Layout('components.layouts.app')] class extends Component {
          food, (3) total + audit-on-overage. --}}
     @if($showAdvancePanel)
     @php
-        $tollsRand    = (float) ($advanceTollResult['toll_total'] ?? 0);
-        $accomRand    = (float) ($advanceAccommodation ?? 0);
-        $taxiRand     = (float) ($advanceTaxi ?? 0);
-        $foodRand     = (float) ($advanceFood ?? 0);
-        $computedRand = round($tollsRand + $accomRand + $taxiRand + $foodRand, 2);
+        $tollsRand     = $advanceTollsManual !== null ? (float) $advanceTollsManual : (float) ($advanceTollResult['toll_total'] ?? 0);
+        $accomRand     = (float) ($advanceAccommodation ?? 0);
+        $taxiRand      = $advanceTaxiIncluded ? (float) ($advanceTaxi ?? 0) : 0.0;
+        $foodRand      = $advanceFoodWaived ? 0.0 : (float) ($advanceFood ?? 0);
+        // Same normalisation as saveAdvance() so the live "Computed
+        // estimate" matches the value that will actually persist.
+        $customTotalRand = 0.0;
+        foreach ($advanceCustomItems as $ci) {
+            $lbl = trim((string) ($ci['label'] ?? ''));
+            $amt = (float) ($ci['amount'] ?? 0);
+            if ($lbl !== '' && $amt > 0) $customTotalRand += round($amt, 2);
+        }
+        $computedRand = round($tollsRand + $accomRand + $taxiRand + $foodRand + $customTotalRand, 2);
         $displayTotal = $advanceTotal !== null ? (float) $advanceTotal : $computedRand;
         $isOverage    = $displayTotal > $computedRand + 0.5;
     @endphp
@@ -2440,6 +2528,64 @@ new #[Layout('components.layouts.app')] class extends Component {
                             </span>
                         </label>
                     </div>
+                </section>
+
+                {{-- Custom petty-cash line items.  Free-form rows for
+                     items outside the 4 predefined buckets -- bridge
+                     fees, customs clearance, escorts, permits, wash etc.
+                     Labels are remembered per customer company. --}}
+                @php
+                    $rememberedLabels = (array) ($job->company?->movement_csv_mapping['custom_petty_cash_labels'] ?? []);
+                    $datalistId = 'custom-labels-' . $job->id;
+                @endphp
+                <section>
+                    <div class="flex items-center justify-between mb-2">
+                        <h4 class="text-sm font-semibold text-gray-800">Custom line items</h4>
+                        <button wire:click="addCustomItem" type="button"
+                            class="inline-flex items-center gap-1 text-xs rounded-md border border-gray-200 bg-white px-2.5 py-1 text-gray-700 hover:bg-gray-50">
+                            <svg class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
+                            Add line
+                        </button>
+                    </div>
+
+                    @if(!empty($rememberedLabels))
+                        <datalist id="{{ $datalistId }}">
+                            @foreach($rememberedLabels as $label)
+                                <option value="{{ $label }}"></option>
+                            @endforeach
+                        </datalist>
+                    @endif
+
+                    @if(empty($advanceCustomItems))
+                        <p class="text-[11px] text-gray-400 italic">No custom items. Click "Add line" for things like customs clearance, bridge fee, escort, permit, vehicle wash.</p>
+                    @else
+                        <div class="space-y-1.5">
+                            @foreach($advanceCustomItems as $idx => $item)
+                                <div class="flex items-start gap-2" wire:key="custom-{{ $idx }}">
+                                    <input wire:model.live.debounce.300ms="advanceCustomItems.{{ $idx }}.label"
+                                        type="text"
+                                        list="{{ $datalistId }}"
+                                        maxlength="120"
+                                        placeholder="Label (e.g. customs clearance)"
+                                        class="flex-1 min-w-0 rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-emerald-500 focus:ring-emerald-500">
+                                    <input wire:model.live.debounce.300ms="advanceCustomItems.{{ $idx }}.amount"
+                                        type="number" min="0" step="0.01"
+                                        placeholder="R 0.00"
+                                        class="w-28 shrink-0 rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-emerald-500 focus:ring-emerald-500">
+                                    <label class="flex items-center gap-1 text-[10px] text-gray-500 cursor-pointer pt-2 shrink-0">
+                                        <input type="checkbox" wire:model.live="advanceCustomItems.{{ $idx }}.needs_slip"
+                                            class="rounded border-gray-300 text-emerald-600 focus:ring-emerald-500">
+                                        slip
+                                    </label>
+                                    <button wire:click="removeCustomItem({{ $idx }})" type="button"
+                                        class="shrink-0 rounded-md p-1.5 text-gray-400 hover:text-rose-600 hover:bg-rose-50"
+                                        title="Remove this line">
+                                        <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
+                                    </button>
+                                </div>
+                            @endforeach
+                        </div>
+                    @endif
                 </section>
 
                 {{-- Total + audit-on-overage --}}
