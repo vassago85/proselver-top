@@ -22,16 +22,27 @@ use Illuminate\Console\Command;
  */
 class TollsDebug extends Command
 {
-    protected $signature = 'tolls:debug {job : Order ID (transport_jobs.id, not job_number)}';
+    protected $signature = 'tolls:debug {job : Job ID or job_number (either works)}';
     protected $description = 'Diagnose why specific plazas are or are not matching on a job\'s route';
 
     public function handle(TripCostEstimator $estimator): int
     {
-        $jobId = (int) $this->argument('job');
-        /** @var Job|null $job */
-        $job = Job::with(['pickupLocation', 'deliveryLocation', 'vehicleClass'])->find($jobId);
+        $arg = (string) $this->argument('job');
+
+        // Accept either the numeric DB id OR the job_number that shows
+        // in the URL / on the order page header.  Numeric is tried as
+        // an id first since that's the original signature.
+        $job = null;
+        if (ctype_digit($arg)) {
+            $job = Job::with(['pickupLocation', 'deliveryLocation', 'vehicleClass'])->find((int) $arg);
+        }
         if (!$job) {
-            $this->error("Job #{$jobId} not found.");
+            $job = Job::with(['pickupLocation', 'deliveryLocation', 'vehicleClass'])
+                ->where('job_number', $arg)
+                ->first();
+        }
+        if (!$job) {
+            $this->error("Job '{$arg}' not found (tried as id and as job_number).");
             return self::FAILURE;
         }
 
