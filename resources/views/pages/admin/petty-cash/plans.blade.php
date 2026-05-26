@@ -36,6 +36,11 @@ new #[Layout('components.layouts.app')] class extends Component {
     /** ids of trips ops has ticked for the new plan */
     public array $selectedJobIds = [];
 
+    /** Optional deep-link from the planning page: ?preselect=NNN
+     *  pre-ticks that job id on the create tab so ops can plan a
+     *  single trip without manually finding it in the list. */
+    #[Url(as: 'preselect')] public ?int $preselect = null;
+
     /** Per-plan notes input for approve/reject */
     public array $signOffNotes = [];
 
@@ -57,6 +62,28 @@ new #[Layout('components.layouts.app')] class extends Component {
         // widen the range if they want to batch a few days together.
         $this->rangeFrom = now()->copy()->addDay()->toDateString();
         $this->rangeTo = $this->rangeFrom;
+
+        // If we came in via /admin/planning's "Petty Cash Plan" link,
+        // jump to the create tab with the trip pre-ticked.  Also widen
+        // the date range to bracket the trip's scheduled date so the
+        // eligibility query actually surfaces it.
+        if ($this->preselect) {
+            $job = Job::find($this->preselect);
+            if ($job) {
+                $this->tab = 'create';
+                $this->selectedJobIds = [$this->preselect];
+                if ($job->scheduled_date) {
+                    $d = $job->scheduled_date->toDateString();
+                    if ($d < $this->rangeFrom) $this->rangeFrom = $d;
+                    if ($d > $this->rangeTo)   $this->rangeTo = $d;
+                } else {
+                    // No scheduled date -- clear the range so the
+                    // null-scheduled filter branch picks it up.
+                    $this->rangeFrom = '';
+                    $this->rangeTo = '';
+                }
+            }
+        }
     }
 
     public function switchTab(string $tab): void

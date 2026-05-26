@@ -80,6 +80,12 @@ new #[Layout('components.layouts.app')] class extends Component {
     // collection after hours).  Surfaces in the audit log so the owner
     // sees who bypassed and why.
     public string $advanceOverrideReason = '';
+
+    // "Issue to driver" modal -- the moment the cash physically goes
+    // out (or the bank-send EFT is confirmed).  Distinct from saving
+    // the breakdown (which only commits the AMOUNT decision).
+    public bool $showIssueModal = false;
+    public string $advanceIssueReference = '';
     // Per-trip SANRAL toll-class override (1-4, or null to use vehicle
     // class default).  Picked from the dropdown on the modal -- the
     // estimator re-runs whenever this changes so the toll list updates
@@ -900,7 +906,70 @@ new #[Layout('components.layouts.app')] class extends Component {
         }
 
         $this->showAdvancePanel = false;
-        session()->flash('success', 'Driver advance issued: R ' . number_format($total, 2) . '.');
+        session()->flash('success', 'Driver advance saved: R ' . number_format($total, 2) . '.');
+    }
+
+    /* ----------------------------------------------------------------
+     | Issue to driver -- the moment the cash physically goes out.
+     |
+     | Distinct from saveAdvance (which commits the amount decision).
+     | Enabled only when:
+     |   (a) an advance has been saved (advance_total is set), AND
+     |   (b) the trip has owner sign-off (advance_approved_at) OR an
+     |       override reason was recorded on save.
+     | Records advance_issued_at, advance_issued_by_user_id, and an
+     | optional issue reference (bank-send ref / cash receipt #) for
+     | the audit trail.
+     |---------------------------------------------------------------*/
+
+    public function openIssueModal(): void
+    {
+        if (!auth()->user()?->isInternal()) abort(403);
+        if ($this->job->advance_total === null) {
+            session()->flash('error', 'No advance has been saved for this trip yet. Use Petty Cash / Advance first.');
+            return;
+        }
+        $this->advanceIssueReference = (string) ($this->job->advance_issue_reference ?? '');
+        $this->showIssueModal = true;
+    }
+
+    public function closeIssueModal(): void
+    {
+        $this->showIssueModal = false;
+    }
+
+    public function markAsIssued(): void
+    {
+        if (!auth()->user()?->isInternal()) abort(403);
+        if ($this->job->advance_total === null) {
+            session()->flash('error', 'No advance to issue.');
+            return;
+        }
+
+        $this->validate([
+            'advanceIssueReference' => 'nullable|string|max:255',
+        ]);
+
+        $alreadyIssued = $this->job->advance_issued_at !== null;
+        $before = $this->job->only(['advance_issued_at', 'advance_issued_by_user_id', 'advance_issue_reference']);
+
+        $this->job->forceFill([
+            'advance_issued_at' => now(),
+            'advance_issued_by_user_id' => auth()->id(),
+            'advance_issue_reference' => trim($this->advanceIssueReference) ?: null,
+        ])->save();
+
+        AuditService::log(
+            $alreadyIssued ? 'advance_re_issued_to_driver' : 'advance_issued_to_driver',
+            'job',
+            $this->job->id,
+            $before,
+            $this->job->fresh()->only(['advance_issued_at', 'advance_issued_by_user_id', 'advance_issue_reference']),
+        );
+
+        $this->showIssueModal = false;
+        $this->job->refresh();
+        session()->flash('success', 'Advance issued to driver: R ' . number_format((float) $this->job->advance_total, 2) . ($this->advanceIssueReference ? ' · ref ' . trim($this->advanceIssueReference) : '') . '.');
     }
 
     public function cancelOrder(): void
@@ -1574,14 +1643,18 @@ new #[Layout('components.layouts.app')] class extends Component {
                         </button>
                     @endif
 
-                    {{-- Petty Cash / Driver Advance --}}
+                    {{-- Petty Cash / Driver Advance -- manages the
+                         breakdown (toll class, custom items, override
+                         reasons).  This is the "decide the amounts"
+                         step; physical hand-over is the separate
+                         "Issue to driver" button below. --}}
                     @if(auth()->user()?->isInternal() && !$isTerminal)
                         <button wire:click="openAdvancePanel"
                             class="inline-flex items-center gap-2 rounded-lg border px-3.5 py-2.5 text-sm font-medium transition-colors
                                 {{ $job->advance_total !== null
                                     ? 'border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
                                     : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50' }}"
-                            title="Compute tolls and assign a driver advance for this trip.">
+                            title="Compute tolls and decide the driver's advance for this trip.">
                             <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/><path d="M6 12h.01M18 12h.01"/></svg>
                             @if($job->advance_total !== null)
                                 Petty Cash · R {{ number_format((float) $job->advance_total, 2) }}
@@ -1589,6 +1662,29 @@ new #[Layout('components.layouts.app')] class extends Component {
                                 Petty Cash / Advance
                             @endif
                         </button>
+                    @endif
+
+                    {{-- Issue to Driver -- the moment cash physically
+                         goes out.  Distinct from saving the breakdown.
+                         Disabled until an advance amount has been saved.
+                         Visually changes once issued so ops sees the
+                         status at a glance. --}}
+                    @if(auth()->user()?->isInternal() && !$isTerminal && $job->advance_total !== null)
+                        @if($job->advance_issued_at)
+                            <button wire:click="openIssueModal"
+                                class="inline-flex items-center gap-2 rounded-lg border border-blue-300 bg-blue-50 px-3.5 py-2.5 text-sm font-medium text-blue-800 hover:bg-blue-100 transition-colors"
+                                title="Already issued {{ $job->advance_issued_at->diffForHumans() }}. Click to re-issue or update the reference.">
+                                <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                                Issued {{ $job->advance_issued_at->format('d M') }}
+                            </button>
+                        @else
+                            <button wire:click="openIssueModal"
+                                class="inline-flex items-center gap-2 rounded-lg border border-blue-300 bg-blue-600 px-3.5 py-2.5 text-sm font-semibold text-white hover:bg-blue-500 transition-colors"
+                                title="Record that the cash has been handed to the driver / EFT sent.">
+                                <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+                                Issue to Driver
+                            </button>
+                        @endif
                     @endif
 
                     @if($canArchive)
@@ -2356,6 +2452,71 @@ new #[Layout('components.layouts.app')] class extends Component {
     </div>
     @endif
 
+    {{-- Issue to Driver modal -- compact confirmation; records the
+         moment cash physically went out and lets ops drop in a
+         bank-send reference / receipt # for the paper trail. --}}
+    @if($showIssueModal)
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60" wire:click.self="closeIssueModal">
+        <div class="relative w-full max-w-md mx-4 bg-white rounded-2xl shadow-2xl overflow-hidden">
+            <div class="border-b border-gray-200 px-6 py-4 bg-blue-50">
+                <div class="flex items-center gap-2">
+                    <svg class="h-5 w-5 text-blue-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+                    <h3 class="text-lg font-semibold text-blue-900">Issue to driver</h3>
+                </div>
+                <p class="text-sm text-blue-800/80 mt-0.5">{{ $job->job_number }} · {{ $job->driver?->name ?? 'no driver yet' }}</p>
+            </div>
+            <div class="px-6 py-5 space-y-4">
+                <div class="rounded-lg bg-blue-50 border border-blue-200 p-3 text-sm text-blue-900">
+                    Confirming this records <strong>R {{ number_format((float) $job->advance_total, 2) }}</strong>
+                    as physically handed to the driver
+                    @php
+                        $phone = $job->driver?->phone ?: $job->driver?->driverProfile?->cellphone;
+                    @endphp
+                    @if($phone)
+                        (bank-send: <span class="font-mono">{{ $phone }}</span>)
+                    @endif
+                    at <strong>{{ now()->format('H:i') }}</strong>.
+                </div>
+
+                @if(!$job->advance_approved_at)
+                    <div class="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800">
+                        ⚠ This trip has not been signed off via a Petty-cash Plan. Owner will see the override on the audit trail.
+                    </div>
+                @endif
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1.5">
+                        Reference <span class="text-gray-400 font-normal">(optional — bank-send ref, cash receipt #, etc.)</span>
+                    </label>
+                    <input wire:model="advanceIssueReference" type="text" maxlength="255"
+                        placeholder="e.g. CASHSEND-A4B7C9 or RCT-2026-0142"
+                        class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
+                    @error('advanceIssueReference') <p class="mt-1 text-xs text-red-600">{{ $message }}</p> @enderror
+                </div>
+
+                @if($job->advance_issued_at)
+                    <p class="text-[11px] text-gray-500">
+                        Previously issued {{ $job->advance_issued_at->diffForHumans() }}
+                        @if($job->advanceIssuedBy) by {{ $job->advanceIssuedBy->name }} @endif
+                        @if($job->advance_issue_reference) · ref <span class="font-mono">{{ $job->advance_issue_reference }}</span> @endif
+                    </p>
+                @endif
+            </div>
+            <div class="border-t border-gray-200 px-6 py-4 flex items-center justify-end gap-3 bg-gray-50">
+                <button wire:click="closeIssueModal" type="button"
+                    class="rounded-lg px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-100 transition-colors">
+                    Cancel
+                </button>
+                <button wire:click="markAsIssued" type="button"
+                    wire:confirm="Record this advance as physically issued to the driver?"
+                    class="rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-blue-500 transition-colors">
+                    @if($job->advance_issued_at) Re-issue & update ref @else Confirm issued @endif
+                </button>
+            </div>
+        </div>
+    </div>
+    @endif
+
     {{-- Petty Cash / Driver Advance panel.  Optional ops workflow; opens
          on demand via the button above the modal stack.  Three sections:
          (1) auto-computed toll plaza list, (2) typed accommodation/taxi/
@@ -2711,9 +2872,9 @@ new #[Layout('components.layouts.app')] class extends Component {
                         Close
                     </button>
                     <button wire:click="saveAdvance" type="button"
-                        wire:confirm="Issue this advance to the driver? An audit entry will be recorded."
+                        wire:confirm="Save this advance amount? Issuing the cash to the driver is a separate step done from the order page."
                         class="rounded-lg bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-emerald-500 transition-colors">
-                        @if($job->advance_total !== null) Re-issue advance @else Issue advance @endif
+                        @if($job->advance_total !== null) Save changes @else Save advance @endif
                     </button>
                 </div>
             </div>

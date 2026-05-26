@@ -483,14 +483,23 @@ new #[Layout('components.layouts.app')] class extends Component {
                             <td class="px-6 py-4 text-sm text-gray-500">{{ $job->scheduled_date?->format('d M Y') ?? '—' }}</td>
                             <td class="px-6 py-4 text-sm text-gray-500">{{ $job->created_at->format('d M Y') }}</td>
                             <td class="px-6 py-4 text-right">
-                                <button
-                                    wire:click="planJob({{ $job->id }})"
-                                    wire:confirm="Move order {{ $job->job_number }} to planned?"
-                                    class="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3.5 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-blue-700 transition-colors"
-                                >
-                                    <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/></svg>
-                                    Plan
-                                </button>
+                                <div class="inline-flex items-center gap-1.5 flex-wrap justify-end">
+                                    <a href="{{ route('admin.petty-cash.plans', ['tab' => 'create', 'preselect' => $job->id]) }}"
+                                        target="_blank"
+                                        title="Open the petty-cash plan with this trip pre-selected; submit for owner sign-off."
+                                        class="inline-flex items-center gap-1.5 rounded-lg border border-emerald-300 bg-white px-3 py-1.5 text-xs font-semibold text-emerald-800 hover:bg-emerald-50 transition-colors">
+                                        <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 12h.01M18 12h.01"/><circle cx="12" cy="12" r="2.5"/></svg>
+                                        Petty Cash Plan
+                                    </a>
+                                    <button
+                                        wire:click="planJob({{ $job->id }})"
+                                        wire:confirm="Move order {{ $job->job_number }} to planned?"
+                                        class="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3.5 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-blue-700 transition-colors"
+                                    >
+                                        <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/></svg>
+                                        Plan
+                                    </button>
+                                </div>
                             </td>
                         </tr>
                         @empty
@@ -558,11 +567,27 @@ new #[Layout('components.layouts.app')] class extends Component {
                             <td class="px-6 py-4 text-sm text-gray-500">{{ $job->deliveryLocation?->company_name ?? '—' }}</td>
                             <td class="px-6 py-4 text-sm text-gray-500">{{ $job->scheduled_date?->format('d M Y') ?? '—' }}</td>
                             <td class="px-6 py-4 text-right">
-                                <a href="{{ route('admin.orders.show', $job) }}"
-                                   class="inline-flex items-center gap-1.5 rounded-lg bg-amber-600 px-3.5 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-amber-700 transition-colors">
-                                    <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-                                    Assign Driver
-                                </a>
+                                <div class="inline-flex items-center gap-1.5 flex-wrap justify-end">
+                                    @if($job->advance_plan_id)
+                                        <span class="inline-flex items-center gap-1 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider" title="Already on plan #{{ $job->advance_plan_id }}">
+                                            <svg class="h-2.5 w-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+                                            on plan
+                                        </span>
+                                    @else
+                                        <a href="{{ route('admin.petty-cash.plans', ['tab' => 'create', 'preselect' => $job->id]) }}"
+                                            target="_blank"
+                                            title="Add this trip to a petty-cash plan for owner sign-off."
+                                            class="inline-flex items-center gap-1.5 rounded-lg border border-emerald-300 bg-white px-3 py-1.5 text-xs font-semibold text-emerald-800 hover:bg-emerald-50 transition-colors">
+                                            <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 12h.01M18 12h.01"/><circle cx="12" cy="12" r="2.5"/></svg>
+                                            Petty Cash Plan
+                                        </a>
+                                    @endif
+                                    <a href="{{ route('admin.orders.show', $job) }}"
+                                       class="inline-flex items-center gap-1.5 rounded-lg bg-amber-600 px-3.5 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-amber-700 transition-colors">
+                                        <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                                        Assign Driver
+                                    </a>
+                                </div>
                             </td>
                         </tr>
                         @empty
