@@ -65,6 +65,11 @@ new #[Layout('components.layouts.app')] class extends Component {
     public bool $advanceFoodWaived = false;
     public ?float $advanceTotal = null;
     public string $advanceIncreaseReason = '';
+    // Change reason on re-issue.  Required whenever ops is changing an
+    // already-issued advance -- audit row carries it for the boss's
+    // review.  Empty on first issue (initial state is captured by the
+    // before/after JSON diff alone).
+    public string $advanceChangeReason = '';
     // Per-trip SANRAL toll-class override (1-4, or null to use vehicle
     // class default).  Picked from the dropdown on the modal -- the
     // estimator re-runs whenever this changes so the toll list updates
@@ -510,6 +515,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             ? (float) $this->job->advance_total
             : null;
         $this->advanceIncreaseReason = (string) ($this->job->advance_increase_reason ?? '');
+        $this->advanceChangeReason = '';  // always blank on open -- ops re-types each time
         $this->advanceFoodWaived = (bool) $this->job->advance_food_waived;
         // Toll class override: prefer the value previously committed
         // on this job; otherwise see if we have a remembered correction
@@ -608,7 +614,14 @@ new #[Layout('components.layouts.app')] class extends Component {
             'advanceIncreaseReason'      => 'nullable|string|max:500',
             'advanceTollClassOverride'   => 'nullable|integer|min:1|max:4',
             'advanceTollsManual'         => 'nullable|numeric|min:0|max:1000000',
+            'advanceChangeReason'        => 'nullable|string|max:500',
         ]);
+
+        // Was this job already issued?  If so the audit trail demands a
+        // reason for the change so the owner can see why ops touched
+        // it.  First-time issues skip this -- the JSON diff alone tells
+        // the whole story when there was no prior value.
+        $isReissue = $this->job->advance_total !== null;
 
         // Computed estimate the panel is showing.  Manual toll override
         // (typed by ops) wins over the auto-detected plaza subtotal --
@@ -634,6 +647,41 @@ new #[Layout('components.layouts.app')] class extends Component {
             return;
         }
 
+        // Audit-on-reissue rule: any change to an already-issued advance
+        // requires a change reason -- the boss sees that note in the
+        // audit history on the order page.  Only enforced when something
+        // actually changed (re-clicking with no edits is a no-op).
+        $beforeForDiff = $this->job->only([
+            'advance_tolls', 'advance_accommodation', 'advance_taxi',
+            'advance_food', 'advance_food_waived', 'advance_total',
+            'advance_toll_class_override',
+        ]);
+        $afterForDiff = [
+            'advance_tolls' => $tolls,
+            'advance_accommodation' => $accommodation,
+            'advance_taxi' => $taxi,
+            'advance_food' => $food,
+            'advance_food_waived' => $this->advanceFoodWaived,
+            'advance_total' => $total,
+            'advance_toll_class_override' => $this->advanceTollClassOverride,
+        ];
+        $actuallyChanged = false;
+        foreach ($afterForDiff as $k => $v) {
+            $b = $beforeForDiff[$k] ?? null;
+            // Loose compare on numbers (decimal cast vs float) but
+            // strict on the boolean so an unchanged tick doesn't flag.
+            if (is_bool($v)) {
+                if ((bool) $b !== $v) { $actuallyChanged = true; break; }
+            } else {
+                if ((float) $b !== (float) $v) { $actuallyChanged = true; break; }
+            }
+        }
+
+        if ($isReissue && $actuallyChanged && trim($this->advanceChangeReason) === '') {
+            $this->addError('advanceChangeReason', 'A reason is required when changing an already-issued advance. The owner sees this note.');
+            return;
+        }
+
         $before = $this->job->only([
             'advance_tolls', 'advance_accommodation', 'advance_taxi',
             'advance_food', 'advance_total', 'advance_increase_reason',
@@ -653,15 +701,20 @@ new #[Layout('components.layouts.app')] class extends Component {
             'advance_assigned_at'           => now(),
         ])->save();
 
+        // The audit row carries both the diff AND the change reason
+        // (when present).  action_type distinguishes the first issue
+        // from a re-issue so the boss can filter on "edits" specifically.
         AuditService::log(
-            'order_advance_assigned',
+            $isReissue ? 'order_advance_reissued' : 'order_advance_issued',
             'job',
             $this->job->id,
             $before,
             $this->job->fresh()->only([
                 'advance_tolls', 'advance_accommodation', 'advance_taxi',
-                'advance_food', 'advance_total', 'advance_increase_reason',
+                'advance_food', 'advance_food_waived', 'advance_total',
+                'advance_increase_reason', 'advance_toll_class_override',
             ]),
+            $isReissue ? trim($this->advanceChangeReason) ?: null : null,
         );
 
         // Teach the global model -> toll-class memory.  When ops set a
@@ -892,6 +945,19 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         $user = auth()->user();
 
+        // Advance audit trail.  Pulls every "issued / reissued" entry
+        // for this job so the owner can see the full history of
+        // changes -- each row shows who, when, the change reason
+        // (mandatory on reissue), and a diff of the amounts.
+        $advanceAudit = \App\Models\AuditLog::query()
+            ->whereIn('action_type', ['order_advance_issued', 'order_advance_reissued', 'order_advance_assigned'])
+            ->where('entity_type', 'job')
+            ->where('entity_id', $this->job->id)
+            ->with('actor:id,name')
+            ->orderByDesc('created_at')
+            ->limit(20)
+            ->get();
+
         return [
             'drivers' => $drivers,
             'driverOptions' => $driverOptions,
@@ -907,6 +973,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             'canArchive' => $user->can('archive', $this->job),
             'canUnarchive' => $user->can('unarchive', $this->job),
             'executorChoices' => Job::EXECUTOR_LABELS,
+            'advanceAudit' => $advanceAudit,
         ];
     }
 };
@@ -1708,6 +1775,103 @@ new #[Layout('components.layouts.app')] class extends Component {
             </div>
             @endif
 
+            {{-- Petty cash / advance audit trail.  Visible to anyone who
+                 can see the order; meant for the owner to review every
+                 change ops makes to an issued advance.  Each entry shows
+                 who, when, the change reason (mandatory on reissue),
+                 and the rand delta against the prior state. --}}
+            @if(auth()->user()?->isInternal() && $advanceAudit->isNotEmpty())
+                <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+                    <h4 class="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
+                        <svg class="h-4 w-4 text-blue-600" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8v4l3 3"/><circle cx="12" cy="12" r="10"/></svg>
+                        Advance audit trail
+                        <span class="ml-auto text-[10px] uppercase tracking-wide text-gray-400 font-normal">For owner review</span>
+                    </h4>
+                    <ul class="divide-y divide-gray-100">
+                        @foreach($advanceAudit as $entry)
+                            @php
+                                $before = is_array($entry->before_json) ? $entry->before_json : [];
+                                $after  = is_array($entry->after_json) ? $entry->after_json : [];
+                                $beforeTotal = $before['advance_total'] ?? null;
+                                $afterTotal  = $after['advance_total'] ?? null;
+                                $isReissueAction = $entry->action_type === 'order_advance_reissued';
+                            @endphp
+                            <li class="py-3 first:pt-0 last:pb-0">
+                                <div class="flex items-start gap-3">
+                                    <span class="mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[10px] font-bold
+                                        {{ $isReissueAction ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800' }}">
+                                        {{ $isReissueAction ? 'EDIT' : 'NEW' }}
+                                    </span>
+                                    <div class="min-w-0 flex-1">
+                                        <p class="text-sm font-semibold text-gray-900">
+                                            @if($isReissueAction) Re-issued @else Issued @endif
+                                            @if($afterTotal !== null)
+                                                <span class="ml-1 font-mono">R {{ number_format((float) $afterTotal, 2) }}</span>
+                                            @endif
+                                            @if($isReissueAction && $beforeTotal !== null && $afterTotal !== null)
+                                                @php $diff = round((float) $afterTotal - (float) $beforeTotal, 2); @endphp
+                                                <span class="ml-2 text-[11px] font-semibold tabular-nums {{ $diff > 0 ? 'text-rose-600' : ($diff < 0 ? 'text-emerald-600' : 'text-gray-500') }}">
+                                                    ({{ $diff >= 0 ? '+' : '' }}R {{ number_format($diff, 2) }} from R {{ number_format((float) $beforeTotal, 2) }})
+                                                </span>
+                                            @endif
+                                        </p>
+                                        @if($entry->reason)
+                                            <p class="mt-0.5 text-xs text-gray-700"><span class="font-semibold">Reason:</span> {{ $entry->reason }}</p>
+                                        @elseif($isReissueAction)
+                                            <p class="mt-0.5 text-[11px] italic text-rose-600">No reason recorded — pre-dates the audit requirement.</p>
+                                        @endif
+                                        <p class="mt-0.5 text-[11px] text-gray-500">
+                                            {{ $entry->actor?->name ?? 'Unknown' }}
+                                            @if($entry->actor_roles_snapshot)
+                                                <span class="text-gray-400">· {{ $entry->actor_roles_snapshot }}</span>
+                                            @endif
+                                            · {{ $entry->created_at?->format('D d M Y · H:i') }}
+                                            <span class="text-gray-400">({{ $entry->created_at?->diffForHumans() }})</span>
+                                        </p>
+
+                                        {{-- Per-category diff for re-issues, compact one-line.
+                                             Only render fields where the value actually
+                                             changed so the row stays readable. --}}
+                                        @if($isReissueAction)
+                                            @php
+                                                $cats = [
+                                                    'advance_tolls' => 'Tolls',
+                                                    'advance_accommodation' => 'Accommodation',
+                                                    'advance_taxi' => 'Taxi',
+                                                    'advance_food' => 'Food',
+                                                ];
+                                                $deltas = [];
+                                                foreach ($cats as $k => $lbl) {
+                                                    $b = (float) ($before[$k] ?? 0);
+                                                    $a = (float) ($after[$k] ?? 0);
+                                                    if (abs($a - $b) > 0.5) {
+                                                        $sign = $a > $b ? '+' : '−';
+                                                        $deltas[] = $lbl . ' ' . $sign . 'R ' . number_format(abs($a - $b), 2);
+                                                    }
+                                                }
+                                                $bWaived = (bool) ($before['advance_food_waived'] ?? false);
+                                                $aWaived = (bool) ($after['advance_food_waived'] ?? false);
+                                                if ($bWaived !== $aWaived) {
+                                                    $deltas[] = $aWaived ? 'Food waived' : 'Food unwaived';
+                                                }
+                                                $bTcl = (int) ($before['advance_toll_class_override'] ?? 0);
+                                                $aTcl = (int) ($after['advance_toll_class_override'] ?? 0);
+                                                if ($bTcl !== $aTcl) {
+                                                    $deltas[] = 'Toll class ' . ($bTcl ?: 'auto') . ' → ' . ($aTcl ?: 'auto');
+                                                }
+                                            @endphp
+                                            @if(!empty($deltas))
+                                                <p class="mt-1 text-[11px] text-gray-600">{{ implode(' · ', $deltas) }}</p>
+                                            @endif
+                                        @endif
+                                    </div>
+                                </div>
+                            </li>
+                        @endforeach
+                    </ul>
+                </div>
+            @endif
+
             {{-- Driver section --}}
             @if($job->driver)
             @php
@@ -2224,6 +2388,21 @@ new #[Layout('components.layouts.app')] class extends Component {
                                 placeholder="e.g. blocked route via N3 (detour through N11), extra night in Harrismith…"
                                 class="mt-1 w-full rounded-lg border border-amber-300 px-3 py-2 text-sm focus:border-amber-500 focus:ring-amber-500"></textarea>
                             @error('advanceIncreaseReason') <p class="mt-1 text-xs text-red-600">{{ $message }}</p> @enderror
+                        </div>
+                    @endif
+
+                    {{-- Re-issue audit reason.  Required when this order
+                         already had an advance issued and ops is now
+                         changing it.  The boss reads this on the audit
+                         trail panel below to know what changed and why. --}}
+                    @if($job->advance_total !== null)
+                        <div class="mt-3 rounded-lg border border-blue-300 bg-blue-50 px-4 py-3">
+                            <p class="text-xs font-semibold text-blue-900 mb-1">Change reason (required if you change any amount)</p>
+                            <textarea wire:model.live.debounce.300ms="advanceChangeReason" rows="2" maxlength="500"
+                                placeholder="e.g. driver lost the original advance, route extended, customer added a stop…"
+                                class="mt-1 w-full rounded-lg border border-blue-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500"></textarea>
+                            @error('advanceChangeReason') <p class="mt-1 text-xs text-red-600">{{ $message }}</p> @enderror
+                            <p class="mt-1 text-[10px] text-blue-700/80">Every re-issue is recorded in the audit trail with who, when, and what changed. The owner sees it on this order.</p>
                         </div>
                     @endif
 
