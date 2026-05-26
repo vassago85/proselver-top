@@ -586,17 +586,27 @@ new #[Layout('components.layouts.app')] class extends Component {
      * update without leaving the modal.  We don't persist the override
      * here -- only on Issue Advance -- to keep "look but don't commit"
      * cheap.
+     *
+     * NOTE: Livewire 3's updated{Property} hook passes the new value as
+     * the first positional arg.  If we type-hinted a service here it
+     * would be clobbered.  Resolve via the container instead.
      */
-    public function updatedAdvanceTollClassOverride(TripCostEstimator $estimator): void
+    public function updatedAdvanceTollClassOverride(): void
     {
         if (!auth()->user()?->isInternal()) {
             abort(403);
         }
+        // Empty string from <option value=""> means "use vehicle class
+        // default".  Anything else gets cast to int and used as the
+        // per-trip override.
+        $override = $this->advanceTollClassOverride;
+        $this->advanceTollClassOverride = ($override === '' || $override === null) ? null : (int) $override;
+
         // Temporarily stamp the override on the in-memory model so the
         // estimator sees it without a DB write.  The persisted column
         // is only touched on saveAdvance().
         $this->job->advance_toll_class_override = $this->advanceTollClassOverride;
-        $this->advanceTollResult = $estimator->estimateTolls($this->job);
+        $this->advanceTollResult = app(TripCostEstimator::class)->estimateTolls($this->job);
     }
 
     public function saveAdvance(): void
