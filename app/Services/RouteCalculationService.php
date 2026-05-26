@@ -55,6 +55,25 @@ class RouteCalculationService
         }
     }
 
+    /**
+     * Match seeded toll_plazas against the route polyline.
+     *
+     * Threshold notes:
+     * - Google's `overview_polyline` is ALREADY heavily simplified by
+     *   their server (a 600km route is often <1500 points).  An extra
+     *   sub-sampling step on top of that left big enough gaps that a
+     *   plaza sitting between two polyline points was missed even
+     *   though the road clearly passes through it.  We now match
+     *   against every decoded point.
+     * - 5km haversine threshold (was 2km).  Simplification approximates
+     *   highway curves as straight lines, which can put a plaza 3-4km
+     *   from the nearest polyline point even when the plaza is right
+     *   on the road.  SA mainline plazas are spaced 30+km apart and
+     *   parallel highways are 20+km apart, so a 5km window won't false-
+     *   match across alternate routes.
+     */
+    public const TOLL_MATCH_RADIUS_KM = 5.0;
+
     public static function detectTolls(string $polyline, int $tollClass): array
     {
         $points = self::decodePolyline($polyline);
@@ -69,7 +88,7 @@ class RouteCalculationService
         foreach ($plazas as $plaza) {
             foreach ($points as $point) {
                 $distance = self::haversine($point[0], $point[1], (float) $plaza->latitude, (float) $plaza->longitude);
-                if ($distance <= 2.0) {
+                if ($distance <= self::TOLL_MATCH_RADIUS_KM) {
                     $fee = $plaza->feeForClass($tollClass);
                     $matched[] = [
                         'plaza' => $plaza,
@@ -116,15 +135,11 @@ class RouteCalculationService
             $points[] = [$lat / 1e5, $lng / 1e5];
         }
 
-        // Sample every 10th point for performance
-        $sampled = [];
-        foreach ($points as $i => $point) {
-            if ($i % 10 === 0) {
-                $sampled[] = $point;
-            }
-        }
-
-        return $sampled ?: $points;
+        // No sub-sampling.  Google's overview_polyline is already a
+        // simplified version of the route -- skipping points on top of
+        // that was masking plaza matches.  Even a long trip is only a
+        // few thousand points and the haversine inner loop is cheap.
+        return $points;
     }
 
     private static function haversine(float $lat1, float $lon1, float $lat2, float $lon2): float
