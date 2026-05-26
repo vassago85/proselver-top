@@ -86,6 +86,12 @@ new #[Layout('components.layouts.app')] class extends Component {
     // = use the auto-detected subtotal.
     public ?float $advanceTollsManual = null;
 
+    // Free-form custom petty-cash line items.  Each entry is
+    // ['label' => string, 'amount' => float, 'needs_slip' => bool].
+    // Persisted to advance_custom_items (JSON) on save.  Labels are
+    // remembered per customer company so future trips auto-suggest.
+    public array $advanceCustomItems = [];
+
     public function mount(Job $job): void
     {
         $this->job = $job->load([
@@ -529,15 +535,12 @@ new #[Layout('components.layouts.app')] class extends Component {
         if ($this->job->advance_toll_class_override) {
             $this->advanceTollClassOverride = (int) $this->job->advance_toll_class_override;
         } else {
-            $hint = ModelTollClassHint::classFor($this->job->model_name);
-            $this->advanceTollClassOverride = $hint;
-            // Stamp the hint onto the in-memory model so the estimator
-            // picks it up on this open -- the persisted column stays
-            // null until ops actually Issues the advance, so a "just
-            // looking" hover doesn't accidentally save the hint.
-            if ($hint) {
-                $this->job->advance_toll_class_override = $hint;
-            }
+            // Hint from past trips of the same model -- seeds the
+            // dropdown but is NOT stamped onto the in-memory job
+            // (Livewire would discard the mutation across the request
+            // boundary anyway; the estimator parameter is the single
+            // source of truth from here on).
+            $this->advanceTollClassOverride = ModelTollClassHint::classFor($this->job->model_name);
         }
 
         // Same shape for the manual toll override: re-open shows the
@@ -546,7 +549,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             ? null  // had an auto-detected breakdown last time -- start fresh on the override
             : ($this->job->advance_tolls !== null ? (float) $this->job->advance_tolls : null);
 
-        $this->advanceTollResult = $estimator->estimateTolls($this->job);
+        $this->advanceTollResult = $estimator->estimateTolls($this->job, $this->advanceTollClassOverride);
 
         // Taxi: opt-in.  If this trip had taxi previously enabled keep
         // it on (and keep the saved value); if it's a fresh trip start
@@ -585,7 +588,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             abort(403);
         }
         $estimator->invalidateRoute($this->job);
-        $this->advanceTollResult = $estimator->estimateTolls($this->job);
+        $this->advanceTollResult = $estimator->estimateTolls($this->job, $this->advanceTollClassOverride);
         session()->flash('success', 'Route recalculated.');
     }
 
@@ -639,11 +642,13 @@ new #[Layout('components.layouts.app')] class extends Component {
         $override = $this->advanceTollClassOverride;
         $this->advanceTollClassOverride = ($override === '' || $override === null) ? null : (int) $override;
 
-        // Temporarily stamp the override on the in-memory model so the
-        // estimator sees it without a DB write.  The persisted column
-        // is only touched on saveAdvance().
-        $this->job->advance_toll_class_override = $this->advanceTollClassOverride;
-        $this->advanceTollResult = app(TripCostEstimator::class)->estimateTolls($this->job);
+        // Pass the chosen class explicitly to the estimator so it
+        // doesn't depend on any in-memory mutation of $this->job (which
+        // Livewire discards across the request boundary).  Until ops
+        // clicks Issue Advance, the chosen class lives only in this
+        // public property and is passed in by every call site.
+        $this->advanceTollResult = app(TripCostEstimator::class)
+            ->estimateTolls($this->job, $this->advanceTollClassOverride);
     }
 
     public function saveAdvance(): void

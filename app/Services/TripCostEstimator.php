@@ -61,7 +61,15 @@ class TripCostEstimator
      *    'suggested_taxi' => float,                 // rand. Standard per-trip taxi allowance
      *  ]
      */
-    public function estimateTolls(Job $job): array
+    /**
+     * Compute the toll breakdown.  $overrideTollClass wins over any
+     * per-job column.  Passing it explicitly is the robust path
+     * because Livewire dehydrates Eloquent models and reloads them
+     * from the DB on the next request -- any in-memory mutation we
+     * make to $job->advance_toll_class_override is lost across the
+     * boundary.  Always pass the actor's intended class here.
+     */
+    public function estimateTolls(Job $job, ?int $overrideTollClass = null): array
     {
         $pickup = $job->pickupLocation;
         $delivery = $job->deliveryLocation;
@@ -107,15 +115,17 @@ class TripCostEstimator
         // rather than a list of plazas at R 0.00.
         $vehicleClass = $job->vehicleClass ?? ($job->vehicle_class_id ? VehicleClass::find($job->vehicle_class_id) : null);
 
-        // Per-trip override wins.  Ops sets this on the advance modal
-        // when the rig on the road doesn't match the vehicle-class
-        // default -- e.g. a 2-axle HCV that should be SANRAL Class 2
-        // rather than the Class-3 default the class carries.  Override
-        // is clamped to 1-4 (the SANRAL bands).
-        $override = $job->advance_toll_class_override;
-        $tollClass = ($override && $override >= 1 && $override <= 4)
-            ? (int) $override
-            : $vehicleClass?->toll_class;
+        // Per-trip override wins.  Three sources, in priority order:
+        //  1. $overrideTollClass parameter (live UI state, survives the
+        //     Livewire request boundary)
+        //  2. $job->advance_toll_class_override column (last issued)
+        //  3. $vehicleClass->toll_class (system default for the class)
+        // Override is clamped to the SANRAL bands 1-4.
+        $param = ($overrideTollClass && $overrideTollClass >= 1 && $overrideTollClass <= 4) ? (int) $overrideTollClass : null;
+        $stored = $job->advance_toll_class_override;
+        $tollClass = $param
+            ?? (($stored && $stored >= 1 && $stored <= 4) ? (int) $stored : null)
+            ?? $vehicleClass?->toll_class;
 
         if (!$tollClass) {
             return $this->emptyResult(
