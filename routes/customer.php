@@ -25,6 +25,10 @@ Volt::route('team', 'customer.team.index')->name('team.index');
 // alongside team management because both create User rows attached to
 // the dealer's company via company_users.
 Volt::route('drivers', 'customer.drivers.index')->name('drivers.index');
+// Dealer-side petty cash queue.  Scoped to slips submitted by the
+// dealer's own drivers; the page enforces tenant scoping via
+// PettyCashEntryPolicy + an explicit company-id intersection.
+Volt::route('petty-cash', 'customer.petty-cash.index')->name('petty-cash.index');
 // Body-builder stock view — vehicles delivered to a body builder that
 // are still in the dealer's stock (no return movement booked yet).
 Volt::route('stock/at-body-builder', 'customer.stock.at-body-builder')->name('stock.at-body-builder');

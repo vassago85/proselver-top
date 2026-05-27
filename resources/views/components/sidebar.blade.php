@@ -532,6 +532,15 @@
                             <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg></x-slot:icon>
                             Drivers
                         </x-sidebar-link>
+                        {{-- Petty cash queue for the dealer's drivers.
+                             Shown to anyone who plans movements — admins
+                             can act on slips, dispatchers see the queue
+                             read-only.  Hidden for OEMs (no internal
+                             driver pool, so nothing to reconcile). --}}
+                        <x-sidebar-link :href="route('customer.petty-cash.index')" :active="request()->routeIs('customer.petty-cash.*')">
+                            <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/><path d="M6 12h.01M18 12h.01"/></svg></x-slot:icon>
+                            Petty Cash
+                        </x-sidebar-link>
                         @endif
                     </ul>
                 </li>

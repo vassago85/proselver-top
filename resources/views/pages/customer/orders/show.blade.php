@@ -545,6 +545,96 @@ new #[Layout('components.layouts.app')] class extends Component {
         </div>
     @endif
 
+    {{-- ──────────────────────────────────────────────────────────────
+         Advance & toll estimate (read-only for dealers).
+
+         Surfaces the carrier's estimated toll cost and any advance plan
+         already attached to the trip. Helps dealers who run executor=
+         internal jobs see what cash their driver is expected to need.
+         Hidden when nothing has been calculated yet.
+
+         Driver phone shows as a copy-friendly pill so the dealer admin
+         can paste it straight into the banking app when paying out
+         petty cash on the dedicated /customer/petty-cash queue.
+         ────────────────────────────────────────────────────────────── --}}
+    @php
+        $hasAdvance = (float) ($job->advance_total ?? 0) > 0;
+        $hasTollEstimate = (float) ($job->estimated_toll_cost ?? 0) > 0;
+        $driverPhone = $job->driver?->phone;
+    @endphp
+    @if($hasAdvance || $hasTollEstimate)
+        <section class="mb-6 rounded-xl bg-white border border-slate-200 p-5">
+            <div class="flex items-center justify-between gap-3 mb-3">
+                <h3 class="text-base font-semibold text-slate-900">Driver advance & tolls</h3>
+                @if(auth()->user()?->canPlanMovements())
+                    <a href="{{ route('customer.petty-cash.index') }}" class="text-xs font-semibold text-blue-700 hover:underline">Petty cash queue →</a>
+                @endif
+            </div>
+
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-sm">
+                @if($hasTollEstimate)
+                    <div class="rounded-lg bg-slate-50 border border-slate-200 p-3">
+                        <p class="text-[10px] uppercase tracking-wide text-slate-500 font-semibold">Toll estimate</p>
+                        <p class="mt-1 text-lg font-bold tabular-nums text-slate-900">R {{ number_format((float) $job->estimated_toll_cost, 2) }}</p>
+                        @if($job->distance_km)
+                            <p class="text-[11px] text-slate-500 mt-0.5">{{ number_format((float) $job->distance_km, 0) }} km · main-highway routing</p>
+                        @endif
+                    </div>
+                @endif
+                @if($hasAdvance)
+                    <div class="rounded-lg bg-emerald-50 border border-emerald-200 p-3">
+                        <p class="text-[10px] uppercase tracking-wide text-emerald-800 font-semibold">Advance total</p>
+                        <p class="mt-1 text-lg font-bold tabular-nums text-emerald-900">R {{ number_format((float) $job->advance_total, 2) }}</p>
+                        <p class="text-[11px] text-emerald-700/80 mt-0.5">
+                            @if($job->advance_issued_at)
+                                Issued {{ $job->advance_issued_at->format('d M Y') }}
+                            @elseif($job->advance_approved_at)
+                                Approved, not yet paid
+                            @elseif($job->advance_assigned_at)
+                                Proposed, awaiting approval
+                            @endif
+                        </p>
+                    </div>
+                    @if((float) ($job->advance_tolls ?? 0) > 0)
+                        <div class="rounded-lg bg-slate-50 border border-slate-200 p-3">
+                            <p class="text-[10px] uppercase tracking-wide text-slate-500 font-semibold">For tolls</p>
+                            <p class="mt-1 text-lg font-bold tabular-nums text-slate-900">R {{ number_format((float) $job->advance_tolls, 2) }}</p>
+                        </div>
+                    @endif
+                    @if((float) ($job->advance_accommodation ?? 0) > 0)
+                        <div class="rounded-lg bg-slate-50 border border-slate-200 p-3">
+                            <p class="text-[10px] uppercase tracking-wide text-slate-500 font-semibold">Accommodation</p>
+                            <p class="mt-1 text-lg font-bold tabular-nums text-slate-900">R {{ number_format((float) $job->advance_accommodation, 2) }}</p>
+                        </div>
+                    @endif
+                    @if((float) ($job->advance_food ?? 0) > 0)
+                        <div class="rounded-lg bg-slate-50 border border-slate-200 p-3">
+                            <p class="text-[10px] uppercase tracking-wide text-slate-500 font-semibold">Food</p>
+                            <p class="mt-1 text-lg font-bold tabular-nums text-slate-900">R {{ number_format((float) $job->advance_food, 2) }}</p>
+                        </div>
+                    @endif
+                    @if((float) ($job->advance_taxi ?? 0) > 0)
+                        <div class="rounded-lg bg-slate-50 border border-slate-200 p-3">
+                            <p class="text-[10px] uppercase tracking-wide text-slate-500 font-semibold">Taxi / parking</p>
+                            <p class="mt-1 text-lg font-bold tabular-nums text-slate-900">R {{ number_format((float) $job->advance_taxi, 2) }}</p>
+                        </div>
+                    @endif
+                @endif
+            </div>
+
+            @if($job->driver && $driverPhone)
+                <div class="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                    <span>Allocate cash to</span>
+                    <strong class="text-slate-900">{{ $job->driver->name }}</strong>
+                    <span class="inline-flex items-center gap-1 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[12px] font-semibold text-slate-900 select-all" title="Cellphone for bank-send">
+                        <svg class="h-3 w-3 text-emerald-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.37 1.9.72 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.35 1.85.59 2.81.72A2 2 0 0 1 22 16.92z"/></svg>
+                        {{ $driverPhone }}
+                    </span>
+                </div>
+            @endif
+        </section>
+    @endif
+
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div class="lg:col-span-2 space-y-6">
             {{-- Order Details --}}
