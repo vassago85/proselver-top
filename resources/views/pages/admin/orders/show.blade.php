@@ -1185,7 +1185,7 @@ new #[Layout('components.layouts.app')] class extends Component {
 
             $this->showRemoveModal = false;
             $this->job->refresh();
-            session()->flash('success', 'Removal request submitted. Awaiting owner sign-off.');
+            session()->flash('success', 'Removal request submitted. Awaiting Accounts sign-off (owner fallback).');
             return;
         }
 
@@ -1197,13 +1197,13 @@ new #[Layout('components.layouts.app')] class extends Component {
     }
 
     /**
-     * Owner / developer action: accept a pending removal request.
+     * Accounts / owner / developer action: accept a pending removal request.
      * Wipes the advance fields and clears the pending flag.
      */
     public function confirmRemoval(): void
     {
         $u = auth()->user();
-        if (!$u || (!$u->isOwner() && !$u->isDeveloper())) abort(403);
+        if (!$u || (!$u->isAccounts() && !$u->isOwner() && !$u->isDeveloper())) abort(403);
         if (!$this->job->advance_removal_pending) {
             session()->flash('error', 'No removal request pending on this trip.');
             return;
@@ -1216,13 +1216,13 @@ new #[Layout('components.layouts.app')] class extends Component {
     }
 
     /**
-     * Owner / developer action: reject a pending removal request.
+     * Accounts / owner / developer action: reject a pending removal request.
      * Clears the pending flag and leaves the advance untouched.
      */
     public function rejectRemoval(): void
     {
         $u = auth()->user();
-        if (!$u || (!$u->isOwner() && !$u->isDeveloper())) abort(403);
+        if (!$u || (!$u->isAccounts() && !$u->isOwner() && !$u->isDeveloper())) abort(403);
         if (!$this->job->advance_removal_pending) {
             session()->flash('error', 'No removal request pending on this trip.');
             return;
@@ -1613,8 +1613,9 @@ new #[Layout('components.layouts.app')] class extends Component {
         </div>
     @endif
 
-    {{-- Advance removal request -- pending owner sign-off.  Renders
-         to internal staff as an informational banner.  Owner/dev get
+    {{-- Advance removal request -- pending accounts sign-off (owner
+         fallback).  Renders to internal staff as an informational banner.
+         Accounts/owner/dev get
          Accept / Reject buttons inline. --}}
     @if($job->advance_removal_pending && auth()->user()?->isInternal())
         <div class="mb-4 rounded-xl border-2 border-amber-300 bg-amber-50 px-4 py-3">
@@ -1631,7 +1632,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                         <div class="mt-1 text-sm text-amber-900/80"><strong>Reason:</strong> {{ $job->advance_removal_reason }}</div>
                     @endif
                 </div>
-                @if(auth()->user()?->isOwner() || auth()->user()?->isDeveloper())
+                @if(auth()->user()?->isAccounts() || auth()->user()?->isOwner() || auth()->user()?->isDeveloper())
                     <div class="flex items-center gap-2 shrink-0">
                         <button wire:click="rejectRemoval"
                             wire:confirm="Reject the removal request? The existing advance will remain in place."
@@ -1645,7 +1646,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                         </button>
                     </div>
                 @else
-                    <span class="text-[11px] text-amber-700/80 italic shrink-0">Waiting on owner.</span>
+                    <span class="text-[11px] text-amber-700/80 italic shrink-0">Waiting on Accounts (owner fallback).</span>
                 @endif
             </div>
         </div>
@@ -2891,7 +2892,7 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     {{-- Remove advance modal.  Branches on advance_approved_at:
          unapproved -> immediate wipe with audit; approved -> filed
-         as a removal request awaiting owner sign-off.  Reason is
+         as a removal request awaiting accounts sign-off (owner fallback). Reason is
          required when the advance is approved, optional otherwise. --}}
     @if($showRemoveModal)
     <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60" wire:click.self="closeRemoveModal">
@@ -2906,8 +2907,8 @@ new #[Layout('components.layouts.app')] class extends Component {
             <div class="px-6 py-5 space-y-4">
                 @if($job->advance_approved_at)
                     <div class="rounded-lg bg-amber-50 border border-amber-200 px-3 py-3 text-xs text-amber-800">
-                        <p class="font-semibold mb-1">⚠ This advance was approved by the owner.</p>
-                        <p>Removing it requires a second sign-off.  The request will be filed and the existing advance stays in place until the owner accepts or rejects.</p>
+                        <p class="font-semibold mb-1">⚠ This advance was already approved.</p>
+                        <p>Removing it requires a second sign-off by Accounts (owner fallback). The request will be filed and the existing advance stays in place until it is accepted or rejected.</p>
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1.5">Reason for removal <span class="text-rose-600">*</span></label>
@@ -2934,7 +2935,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                     Cancel
                 </button>
                 <button wire:click="submitRemovalRequest" type="button"
-                    wire:confirm="@if($job->advance_approved_at) Submit removal request for owner sign-off? @else Wipe the advance for this trip? @endif"
+                    wire:confirm="@if($job->advance_approved_at) Submit removal request for Accounts sign-off (owner fallback)? @else Wipe the advance for this trip? @endif"
                     class="rounded-lg bg-rose-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-rose-500 transition-colors">
                     @if($job->advance_approved_at) Submit removal request @else Remove advance @endif
                 </button>

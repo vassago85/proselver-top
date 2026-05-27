@@ -133,6 +133,11 @@ trait HasRoles
         return $this->hasRole('owner');
     }
 
+    public function isAccounts(): bool
+    {
+        return $this->hasRole('accounts');
+    }
+
     public function isOperationsController(): bool
     {
         return $this->hasRole('operations_controller');

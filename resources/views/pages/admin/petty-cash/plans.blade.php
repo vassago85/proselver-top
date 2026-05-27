@@ -12,7 +12,7 @@ use Livewire\Attributes\Url;
 use Livewire\Volt\Component;
 
 /**
- * Pre-issue petty-cash plan + owner sign-off.
+ * Pre-issue petty-cash plan + accounts-first sign-off.
  *
  * Flow:
  *   1. Ops picks a date range (default: tomorrow).
@@ -20,8 +20,9 @@ use Livewire\Volt\Component;
  *      ready, scheduled in the range, advance not yet issued).
  *   3. Ops ticks the trips to include, snapshots their breakdowns
  *      into a plan, clicks "Send for sign-off".
- *   4. Plan goes to status=pending.  Owner opens the page, sees
- *      pending plans on the "Awaiting sign-off" tab, clicks Approve
+ *   4. Plan goes to status=pending.  Accounts (or owner fallback)
+ *      opens the page, sees pending plans on the "Awaiting sign-off"
+ *      tab, clicks Approve
  *      or Reject (with notes).
  *   5. Approved trips have advance_plan_id + advance_approved_at
  *      stamped -- the Issue Advance button on the order page checks
@@ -57,16 +58,16 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     public function mount(): void
     {
-        // Internal staff (ops, dispatchers, ops_manager, owner, super,
+        // Internal staff (ops, dispatchers, ops_manager, owner, accounts, super,
         // developer).  External users (customers, dealers, drivers) never
-        // see this page.  Approval action is owner/developer only -- see
+        // see this page.  Approval action is accounts/owner/developer -- see
         // approvePlan() / rejectPlan().
         if (!auth()->user()?->isInternal()) {
             abort(403);
         }
         if (!in_array($this->tab, self::TABS, true)) $this->tab = 'pending';
 
-        // Default the date range to "tomorrow only" -- owner's stated
+        // Default the date range to "tomorrow only" -- business's stated
         // workflow is "approve next-day trips end-of-day".  Ops can
         // widen the range if they want to batch a few days together.
         $this->rangeFrom = now()->copy()->addDay()->toDateString();
@@ -319,7 +320,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         ));
 
         $this->tab = 'pending';
-        session()->flash('success', count($selectedJobIds) . ' trip' . (count($selectedJobIds) === 1 ? '' : 's') . ' sent for owner sign-off.');
+        session()->flash('success', count($selectedJobIds) . ' trip' . (count($selectedJobIds) === 1 ? '' : 's') . ' sent for accounts sign-off.');
     }
 
     /**
@@ -366,13 +367,13 @@ new #[Layout('components.layouts.app')] class extends Component {
         $plan->forceFill(['status' => PettyCashPlan::STATUS_PENDING])->save();
         AuditService::log('petty_cash_plan_sent', 'petty_cash_plan', $plan->id);
         $this->tab = 'pending';
-        session()->flash('success', 'Plan #' . $plan->id . ' sent for owner sign-off.');
+        session()->flash('success', 'Plan #' . $plan->id . ' sent for accounts sign-off.');
     }
 
     public function approvePlan(int $planId): void
     {
         $u = auth()->user();
-        if (!$u || (!$u->isOwner() && !$u->isDeveloper())) {
+        if (!$u || (!$u->isAccounts() && !$u->isOwner() && !$u->isDeveloper())) {
             abort(403);
         }
         $plan = PettyCashPlan::findOrFail($planId);
@@ -415,7 +416,7 @@ new #[Layout('components.layouts.app')] class extends Component {
     public function rejectPlan(int $planId): void
     {
         $u = auth()->user();
-        if (!$u || (!$u->isOwner() && !$u->isDeveloper())) {
+        if (!$u || (!$u->isAccounts() && !$u->isOwner() && !$u->isDeveloper())) {
             abort(403);
         }
         $plan = PettyCashPlan::findOrFail($planId);
@@ -468,7 +469,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             'approvedPlans' => (clone $base)->where('status', PettyCashPlan::STATUS_APPROVED)->latest('approved_at')->limit(30)->get(),
             'rejectedPlans' => (clone $base)->where('status', PettyCashPlan::STATUS_REJECTED)->latest('approved_at')->limit(30)->get(),
             'eligibleJobs'  => $this->tab === 'create' ? $this->eligibleJobs() : collect(),
-            'canApprove'    => auth()->user()?->isOwner() || auth()->user()?->isDeveloper(),
+            'canApprove'    => auth()->user()?->isAccounts() || auth()->user()?->isOwner() || auth()->user()?->isDeveloper(),
         ];
     }
 }; ?>
@@ -478,7 +479,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         <div class="flex items-center gap-3">
             <span>Petty Cash Plans · Sign-off</span>
             @if($canApprove)
-                <span class="inline-flex items-center gap-1 rounded-full bg-amber-50 border border-amber-200 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-800">Owner approval</span>
+                <span class="inline-flex items-center gap-1 rounded-full bg-amber-50 border border-amber-200 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-800">Accounts sign-off</span>
             @endif
         </div>
     </x-slot:header>
@@ -747,7 +748,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                                     @if($selectedCount > 0 && $selectedCount < $totalItems)
                                         <span class="text-[11px] text-slate-500">{{ $selectedCount }} of {{ $totalItems }} selected</span>
                                         <button wire:click="sendSelectedForSignOff({{ $plan->id }})"
-                                            wire:confirm="Send {{ $selectedCount }} selected trip{{ $selectedCount === 1 ? '' : 's' }} to the owner for sign-off? Remaining items stay in this draft."
+                                            wire:confirm="Send {{ $selectedCount }} selected trip{{ $selectedCount === 1 ? '' : 's' }} for accounts sign-off? Remaining items stay in this draft."
                                             class="text-xs rounded-md bg-amber-600 hover:bg-amber-500 text-white px-3 py-1.5 font-semibold">
                                             Send {{ $selectedCount }} selected for sign-off
                                         </button>
@@ -775,7 +776,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                                     </div>
                                 </div>
                             @elseif($plan->status === 'pending')
-                                <p class="text-xs text-slate-500 italic">Awaiting sign-off by an owner or developer.</p>
+                                <p class="text-xs text-slate-500 italic">Awaiting sign-off by Accounts (owner fallback).</p>
                             @elseif($plan->status === 'rejected')
                                 <div class="flex items-center justify-end gap-2">
                                     <button wire:click="sendForSignOff({{ $plan->id }})"
