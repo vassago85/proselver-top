@@ -429,11 +429,12 @@ new #[Layout('components.layouts.app')] class extends Component {
                                             wire:click="confirmDriverPayment({{ $row->driver_user_id }})"
                                             wire:confirm="Confirm payment of R {{ number_format((float) $row->total, 2) }} to {{ $row->name }}? Marks all {{ $row->slip_count }} approved slip(s) as reimbursed."
                                             @class([
-                                                'rounded-lg px-3.5 py-2 text-xs font-semibold text-white transition-colors',
+                                                'inline-flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-semibold text-white transition-colors',
                                                 'bg-blue-600 hover:bg-blue-500' => (bool) $row->phone,
                                                 'bg-slate-300 cursor-not-allowed' => !$row->phone,
                                             ])
                                             @if(!$row->phone) disabled @endif>
+                                        <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"/><path d="m21.854 2.147-10.94 10.939"/></svg>
                                         Confirm payment made
                                     </button>
                                 @else

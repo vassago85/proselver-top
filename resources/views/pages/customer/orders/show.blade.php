@@ -574,7 +574,11 @@ new #[Layout('components.layouts.app')] class extends Component {
             <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-sm">
                 @if($hasTollEstimate)
                     <div class="rounded-lg bg-slate-50 border border-slate-200 p-3">
-                        <p class="text-[10px] uppercase tracking-wide text-slate-500 font-semibold">Toll estimate</p>
+                        <div class="flex items-center gap-1.5 text-slate-500">
+                            {{-- Lucide route --}}
+                            <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></svg>
+                            <p class="text-[10px] uppercase tracking-wide font-semibold">Toll estimate</p>
+                        </div>
                         <p class="mt-1 text-lg font-bold tabular-nums text-slate-900">R {{ number_format((float) $job->estimated_toll_cost, 2) }}</p>
                         @if($job->distance_km)
                             <p class="text-[11px] text-slate-500 mt-0.5">{{ number_format((float) $job->distance_km, 0) }} km · main-highway routing</p>
@@ -583,7 +587,11 @@ new #[Layout('components.layouts.app')] class extends Component {
                 @endif
                 @if($hasAdvance)
                     <div class="rounded-lg bg-emerald-50 border border-emerald-200 p-3">
-                        <p class="text-[10px] uppercase tracking-wide text-emerald-800 font-semibold">Advance total</p>
+                        <div class="flex items-center gap-1.5 text-emerald-800">
+                            {{-- Lucide wallet --}}
+                            <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 7V5a2 2 0 0 0-2-2H5a2 2 0 0 0 0 4h15a1 1 0 0 1 1 1v4"/><path d="M3 5v14a2 2 0 0 0 2 2h15a1 1 0 0 0 1-1v-4"/><path d="M18 12a2 2 0 0 0 0 4h4v-4Z"/></svg>
+                            <p class="text-[10px] uppercase tracking-wide font-semibold">Advance total</p>
+                        </div>
                         <p class="mt-1 text-lg font-bold tabular-nums text-emerald-900">R {{ number_format((float) $job->advance_total, 2) }}</p>
                         <p class="text-[11px] text-emerald-700/80 mt-0.5">
                             @if($job->advance_issued_at)
@@ -597,25 +605,41 @@ new #[Layout('components.layouts.app')] class extends Component {
                     </div>
                     @if((float) ($job->advance_tolls ?? 0) > 0)
                         <div class="rounded-lg bg-slate-50 border border-slate-200 p-3">
-                            <p class="text-[10px] uppercase tracking-wide text-slate-500 font-semibold">For tolls</p>
+                            <div class="flex items-center gap-1.5 text-slate-500">
+                                {{-- Lucide landmark --}}
+                                <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" x2="21" y1="22" y2="22"/><line x1="6" x2="6" y1="18" y2="11"/><line x1="10" x2="10" y1="18" y2="11"/><line x1="14" x2="14" y1="18" y2="11"/><line x1="18" x2="18" y1="18" y2="11"/><polygon points="12 2 20 7 4 7"/></svg>
+                                <p class="text-[10px] uppercase tracking-wide font-semibold">For tolls</p>
+                            </div>
                             <p class="mt-1 text-lg font-bold tabular-nums text-slate-900">R {{ number_format((float) $job->advance_tolls, 2) }}</p>
                         </div>
                     @endif
                     @if((float) ($job->advance_accommodation ?? 0) > 0)
                         <div class="rounded-lg bg-slate-50 border border-slate-200 p-3">
-                            <p class="text-[10px] uppercase tracking-wide text-slate-500 font-semibold">Accommodation</p>
+                            <div class="flex items-center gap-1.5 text-slate-500">
+                                {{-- Lucide bed --}}
+                                <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4v16"/><path d="M2 8h18a2 2 0 0 1 2 2v10"/><path d="M2 17h20"/><path d="M6 8v9"/></svg>
+                                <p class="text-[10px] uppercase tracking-wide font-semibold">Accommodation</p>
+                            </div>
                             <p class="mt-1 text-lg font-bold tabular-nums text-slate-900">R {{ number_format((float) $job->advance_accommodation, 2) }}</p>
                         </div>
                     @endif
                     @if((float) ($job->advance_food ?? 0) > 0)
                         <div class="rounded-lg bg-slate-50 border border-slate-200 p-3">
-                            <p class="text-[10px] uppercase tracking-wide text-slate-500 font-semibold">Food</p>
+                            <div class="flex items-center gap-1.5 text-slate-500">
+                                {{-- Lucide utensils --}}
+                                <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2"/><path d="M7 2v20"/><path d="M21 15V2a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3Zm0 0v7"/></svg>
+                                <p class="text-[10px] uppercase tracking-wide font-semibold">Food</p>
+                            </div>
                             <p class="mt-1 text-lg font-bold tabular-nums text-slate-900">R {{ number_format((float) $job->advance_food, 2) }}</p>
                         </div>
                     @endif
                     @if((float) ($job->advance_taxi ?? 0) > 0)
                         <div class="rounded-lg bg-slate-50 border border-slate-200 p-3">
-                            <p class="text-[10px] uppercase tracking-wide text-slate-500 font-semibold">Taxi / parking</p>
+                            <div class="flex items-center gap-1.5 text-slate-500">
+                                {{-- Lucide car-front --}}
+                                <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8 19 6c-.3-.4-.7-.6-1.2-.6h-11.6c-.5 0-.9.2-1.2.6L3 8"/><path d="M7 14h.01"/><path d="M17 14h.01"/><rect width="18" height="8" x="3" y="10" rx="2"/><path d="M5 18v2"/><path d="M19 18v2"/></svg>
+                                <p class="text-[10px] uppercase tracking-wide font-semibold">Taxi / parking</p>
+                            </div>
                             <p class="mt-1 text-lg font-bold tabular-nums text-slate-900">R {{ number_format((float) $job->advance_taxi, 2) }}</p>
                         </div>
                     @endif
