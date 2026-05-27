@@ -2420,6 +2420,14 @@ new #[Layout('components.layouts.app')] class extends Component {
                                 no coords
                             </a>
                         @endif
+                        @if($job->pickupLocation)
+                            <a href="{{ route('admin.settings.locations') }}?focus={{ $job->pickup_location_id }}" target="_blank"
+                                class="ml-auto inline-flex items-center gap-1 text-[11px] font-medium text-blue-600 hover:text-blue-800"
+                                title="Open this location in the address book to correct the address or coordinates.">
+                                <svg class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
+                                Edit
+                            </a>
+                        @endif
                     </h4>
                     <p class="text-sm font-semibold text-gray-900">{{ $job->pickupLocation?->company_name ?? '—' }}</p>
                     @if($job->pickupLocation?->address && strcasecmp(trim($job->pickupLocation->address), trim((string) $job->pickupLocation->company_name)) !== 0)
@@ -2450,6 +2458,14 @@ new #[Layout('components.layouts.app')] class extends Component {
                                 title="No latitude/longitude — toll auto-detection won't work for this order until geocoded.">
                                 <svg class="h-2.5 w-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path d="M12 9v2m0 4h.01"/><circle cx="12" cy="12" r="10"/></svg>
                                 no coords
+                            </a>
+                        @endif
+                        @if($job->deliveryLocation)
+                            <a href="{{ route('admin.settings.locations') }}?focus={{ $job->delivery_location_id }}" target="_blank"
+                                class="ml-auto inline-flex items-center gap-1 text-[11px] font-medium text-blue-600 hover:text-blue-800"
+                                title="Open this location in the address book to correct the address or coordinates.">
+                                <svg class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
+                                Edit
                             </a>
                         @endif
                     </h4>

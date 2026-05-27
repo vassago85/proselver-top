@@ -5,6 +5,7 @@ use App\Models\Zone;
 use App\Services\GeocodingService;
 use Livewire\Volt\Component;
 use Livewire\Attributes\Layout;
+use Livewire\Attributes\Url;
 use Livewire\WithPagination;
 
 new #[Layout('components.layouts.app')] class extends Component {
@@ -15,6 +16,12 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     public bool $showAddForm = false;
     public ?int $editingId = null;
+
+    // Deep-link: /admin/settings/locations?focus=123 auto-opens that
+    // location's edit form on page load.  Order detail "Edit address"
+    // buttons use this so ops doesn't have to hunt for the entry in
+    // the list.
+    #[Url(as: 'focus')] public ?int $focusLocationId = null;
 
     // Add form
     public string $addCompanyId = '';
@@ -41,6 +48,19 @@ new #[Layout('components.layouts.app')] class extends Component {
     public string $editCustomerName = '';
     public string $editCustomerPhone = '';
     public string $editCustomerEmail = '';
+
+    public function mount(): void
+    {
+        // Auto-open the edit form when ?focus=id is in the URL --
+        // entry point from the order detail "Edit address" links so
+        // ops doesn't have to find the row manually.
+        if ($this->focusLocationId) {
+            $loc = Location::find($this->focusLocationId);
+            if ($loc) {
+                $this->startEdit($loc->id);
+            }
+        }
+    }
 
     public function updatingSearch(): void
     {
