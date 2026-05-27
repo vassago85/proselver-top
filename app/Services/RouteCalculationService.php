@@ -34,9 +34,17 @@ class RouteCalculationService
         }
 
         try {
+            // alternatives=true asks Google for up to 3 routes.  Drivers
+            // are expected to take the main highway (N-road) network
+            // rather than the literal shortest path, so we score each
+            // returned alternative on how much of its distance is on N-
+            // roads and pick the heaviest-N route.  Falls back to the
+            // first (shortest) result if scoring finds nothing or only
+            // one route comes back.
             $response = Http::get('https://maps.googleapis.com/maps/api/directions/json', [
                 'origin' => "{$pickup->latitude},{$pickup->longitude}",
                 'destination' => "{$delivery->latitude},{$delivery->longitude}",
+                'alternatives' => 'true',
                 'key' => $apiKey,
             ]);
 
@@ -65,7 +73,7 @@ class RouteCalculationService
                 return null;
             }
 
-            $route = $data['routes'][0];
+            $route = self::pickMainHighwayRoute($data['routes'], $pickup->id, $delivery->id);
             $leg = $route['legs'][0];
 
             $distanceKm = round($leg['distance']['value'] / 1000, 2);
@@ -100,6 +108,75 @@ class RouteCalculationService
             ]);
             return null;
         }
+    }
+
+    /**
+     * National-route tokens we treat as "main highways" for scoring.
+     * Listed in alphanumeric order; the regex below matches any of them
+     * as a whole word in Google's step instructions (e.g. "N3", "N12").
+     * If SANRAL adds another national route, append it here.
+     */
+    private const NATIONAL_ROUTES = ['N1', 'N2', 'N3', 'N4', 'N5', 'N6', 'N7', 'N8', 'N9', 'N10', 'N11', 'N12', 'N14', 'N17', 'N18'];
+
+    /**
+     * From a list of Google route alternatives, pick the one that spends
+     * the most distance on N-roads.  Ties (or all-zero scores) fall back
+     * to the first route, which is Google's recommended/shortest pick.
+     *
+     * Scoring is "step distance × is-on-N-road", summed across the leg.
+     * A step is considered N-road if its html_instructions mentions any
+     * token from NATIONAL_ROUTES, or if the route's overall `summary`
+     * lists one and the step has no instructions of its own.  We log
+     * the chosen route so the laravel.log shows which alternative won.
+     */
+    private static function pickMainHighwayRoute(array $routes, ?int $pickupId = null, ?int $deliveryId = null): array
+    {
+        if (count($routes) === 1) {
+            return $routes[0];
+        }
+
+        $pattern = '/\b(?:' . implode('|', self::NATIONAL_ROUTES) . ')\b/i';
+        $bestIndex = 0;
+        $bestScore = -1.0;
+        $scores = [];
+
+        foreach ($routes as $idx => $route) {
+            $leg = $route['legs'][0] ?? null;
+            if (!$leg) continue;
+
+            $summary = (string) ($route['summary'] ?? '');
+            $summaryMentionsN = (bool) preg_match($pattern, $summary);
+
+            $nMetres = 0;
+            foreach ($leg['steps'] ?? [] as $step) {
+                $instructions = (string) ($step['html_instructions'] ?? '');
+                $isN = (bool) preg_match($pattern, $instructions);
+                if (!$isN && $instructions === '' && $summaryMentionsN) {
+                    $isN = true;
+                }
+                if ($isN) {
+                    $nMetres += (int) ($step['distance']['value'] ?? 0);
+                }
+            }
+
+            $scores[$idx] = $nMetres;
+            if ($nMetres > $bestScore) {
+                $bestScore = (float) $nMetres;
+                $bestIndex = $idx;
+            }
+        }
+
+        Log::info('Route calc: picked main-highway alternative', [
+            'pickup_id' => $pickupId,
+            'delivery_id' => $deliveryId,
+            'alternatives' => count($routes),
+            'picked_index' => $bestIndex,
+            'picked_n_road_km' => round($bestScore / 1000, 1),
+            'summary' => $routes[$bestIndex]['summary'] ?? null,
+            'all_scores_km' => array_map(fn ($m) => round($m / 1000, 1), $scores),
+        ]);
+
+        return $routes[$bestIndex];
     }
 
     /**
