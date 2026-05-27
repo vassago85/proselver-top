@@ -69,10 +69,25 @@ class PettyCashEntryPolicy
             ], true);
     }
 
+    /**
+     * Reimbursement is a financial cash-out and only Accounts (primary),
+     * Owner (fallback), Super-Admin and Developer may sign it off.
+     *
+     * Ops are intentionally excluded — they approve the *slip* (it's a
+     * legitimate expense), but the EFT/cash-send itself is Accounts'
+     * responsibility. Same accounts-first / owner-fallback pattern used
+     * for petty-cash plans and advance-removal sign-off.
+     */
     public function reimburse(User $user, PettyCashEntry $entry): bool
     {
-        return ($user->isInternal() || $user->isSuperAdmin())
-            && $entry->status === PettyCashEntry::STATUS_APPROVED;
+        if ($entry->status !== PettyCashEntry::STATUS_APPROVED) {
+            return false;
+        }
+
+        return $user->isAccounts()
+            || $user->isOwner()
+            || $user->isSuperAdmin()
+            || $user->isDeveloper();
     }
 
     public function delete(User $user, PettyCashEntry $entry): bool

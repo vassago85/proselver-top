@@ -141,6 +141,14 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     public function reimburseEntry(int $id): void
     {
+        // Ops can view approved slips and the driver phone, but only
+        // Accounts (with Owner/Dev fallback) may actually flip a slip
+        // to reimbursed — the EFT is their responsibility.
+        $u = auth()->user();
+        if (!$u || (!$u->isAccounts() && !$u->isOwner() && !$u->isDeveloper())) {
+            abort(403);
+        }
+
         $entry = PettyCashEntry::findOrFail($id);
         $this->authorize('reimburse', $entry);
 
@@ -179,6 +187,15 @@ new #[Layout('components.layouts.app')] class extends Component {
      */
     public function confirmDriverPayment(int $driverId): void
     {
+        // Same role gate as the per-slip path. Belt-and-braces — the
+        // policy is still enforced per slip inside the loop, but the
+        // up-front check gives a clean 403 instead of silently looping
+        // through zero authorised entries.
+        $u = auth()->user();
+        if (!$u || (!$u->isAccounts() && !$u->isOwner() && !$u->isDeveloper())) {
+            abort(403);
+        }
+
         $driver = User::with('driverProfile')->findOrFail($driverId);
         $phone = $driver->phone ?: ($driver->driverProfile?->cellphone ?? null);
         if (!$phone) {
@@ -682,17 +699,24 @@ new #[Layout('components.layouts.app')] class extends Component {
                                     @error('reason_' . $entry->id) <span class="text-[11px] text-rose-600">{{ $message }}</span> @enderror
                                 </div>
                             @elseif($entry->status === \App\Models\PettyCashEntry::STATUS_APPROVED)
-                                <div class="mt-2 flex flex-wrap items-center gap-2">
-                                    <input type="text"
-                                           wire:model="reimburseDrafts.{{ $entry->id }}"
-                                           placeholder="EFT ref (optional)"
-                                           class="rounded border border-slate-300 px-2 py-1 text-xs w-44">
-                                    <button type="button"
-                                            wire:click="reimburseEntry({{ $entry->id }})"
-                                            wire:confirm="Mark this entry as reimbursed? (sent to {{ $driverPhone ?: 'driver' }})"
-                                            class="rounded bg-blue-600 hover:bg-blue-500 text-white px-3 py-1 text-xs font-semibold">Mark reimbursed</button>
-                                    @error('reimburse_' . $entry->id) <span class="text-[11px] text-rose-600">{{ $message }}</span> @enderror
-                                </div>
+                                @php
+                                    $canPay = auth()->user()?->isAccounts() || auth()->user()?->isOwner() || auth()->user()?->isDeveloper();
+                                @endphp
+                                @if($canPay)
+                                    <div class="mt-2 flex flex-wrap items-center gap-2">
+                                        <input type="text"
+                                               wire:model="reimburseDrafts.{{ $entry->id }}"
+                                               placeholder="EFT ref (optional)"
+                                               class="rounded border border-slate-300 px-2 py-1 text-xs w-44">
+                                        <button type="button"
+                                                wire:click="reimburseEntry({{ $entry->id }})"
+                                                wire:confirm="Mark this entry as reimbursed? (sent to {{ $driverPhone ?: 'driver' }})"
+                                                class="rounded bg-blue-600 hover:bg-blue-500 text-white px-3 py-1 text-xs font-semibold">Mark reimbursed</button>
+                                        @error('reimburse_' . $entry->id) <span class="text-[11px] text-rose-600">{{ $message }}</span> @enderror
+                                    </div>
+                                @else
+                                    <p class="mt-2 text-[11px] italic text-slate-500">Awaiting Accounts EFT (view only — only Accounts can mark reimbursed).</p>
+                                @endif
                             @endif
                         </div>
                     </div>
@@ -710,7 +734,14 @@ new #[Layout('components.layouts.app')] class extends Component {
          button that reimburses every approved slip for that driver in
          one shot (across all dates, not just the current range — the
          payment is a cash-out, it doesn't care about analysis windows).
+
+         Auth: only Accounts (with Owner/Developer fallback) can confirm
+         payment.  Ops see the list (and the phones) so they can answer
+         a driver query, but the EFT itself is Accounts' responsibility.
          ────────────────────────────────────────────────────────────── --}}
+    @php
+        $canPay = auth()->user()?->isAccounts() || auth()->user()?->isOwner() || auth()->user()?->isDeveloper();
+    @endphp
     <section class="space-y-3">
         @php
             $grandTotal = $payRows->sum('total');
@@ -724,7 +755,11 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <p class="text-[11px] text-emerald-700/80">{{ $grandSlips }} {{ Str::plural('slip', $grandSlips) }} across {{ $payRows->count() }} {{ Str::plural('driver', $payRows->count()) }}</p>
             </div>
             <div class="ml-auto text-[11px] text-emerald-700/80 max-w-md">
-                Pay each driver via cash-send to their cellphone, paste the EFT reference, then hit <strong>Confirm payment made</strong> — every approved slip for that driver flips to reimbursed.
+                @if($canPay)
+                    Pay each driver via cash-send to their cellphone, paste the EFT reference, then hit <strong>Confirm payment made</strong> — every approved slip for that driver flips to reimbursed.
+                @else
+                    Read-only view. Only <strong>Accounts</strong> (with Owner fallback) can confirm payments — ops sees this so they can answer driver queries about outstanding amounts.
+                @endif
             </div>
         </div>
 
@@ -780,24 +815,31 @@ new #[Layout('components.layouts.app')] class extends Component {
 
                                 {{-- Action --}}
                                 <div class="flex items-end gap-2 shrink-0 w-full sm:w-auto">
-                                    <label class="block">
-                                        <span class="block text-[10px] uppercase tracking-wide text-slate-500 mb-0.5">EFT reference (optional)</span>
-                                        <input type="text"
-                                               wire:model="payDrafts.{{ $row->driver_user_id }}"
-                                               placeholder="e.g. EFT 27 May"
-                                               class="rounded border border-slate-300 px-2 py-1.5 text-xs w-44">
-                                    </label>
-                                    <button type="button"
-                                            wire:click="confirmDriverPayment({{ $row->driver_user_id }})"
-                                            wire:confirm="Confirm payment of R {{ number_format((float) $row->total, 2) }} to {{ $row->name }}? This marks all {{ $row->slip_count }} approved slip(s) as reimbursed."
-                                            @class([
-                                                'rounded-lg px-3.5 py-2 text-xs font-semibold text-white transition-colors',
-                                                'bg-blue-600 hover:bg-blue-500' => (bool) $row->phone,
-                                                'bg-slate-300 cursor-not-allowed' => !$row->phone,
-                                            ])
-                                            @if(!$row->phone) disabled @endif>
-                                        Confirm payment made
-                                    </button>
+                                    @if($canPay)
+                                        <label class="block">
+                                            <span class="block text-[10px] uppercase tracking-wide text-slate-500 mb-0.5">EFT reference (optional)</span>
+                                            <input type="text"
+                                                   wire:model="payDrafts.{{ $row->driver_user_id }}"
+                                                   placeholder="e.g. EFT 27 May"
+                                                   class="rounded border border-slate-300 px-2 py-1.5 text-xs w-44">
+                                        </label>
+                                        <button type="button"
+                                                wire:click="confirmDriverPayment({{ $row->driver_user_id }})"
+                                                wire:confirm="Confirm payment of R {{ number_format((float) $row->total, 2) }} to {{ $row->name }}? This marks all {{ $row->slip_count }} approved slip(s) as reimbursed."
+                                                @class([
+                                                    'rounded-lg px-3.5 py-2 text-xs font-semibold text-white transition-colors',
+                                                    'bg-blue-600 hover:bg-blue-500' => (bool) $row->phone,
+                                                    'bg-slate-300 cursor-not-allowed' => !$row->phone,
+                                                ])
+                                                @if(!$row->phone) disabled @endif>
+                                            Confirm payment made
+                                        </button>
+                                    @else
+                                        <span class="inline-flex items-center gap-1 rounded-lg bg-slate-100 px-3 py-2 text-[11px] font-semibold text-slate-500 italic">
+                                            <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z"/></svg>
+                                            Accounts pays
+                                        </span>
+                                    @endif
                                 </div>
                             </div>
                             @error('pay_' . $row->driver_user_id) <p class="mt-2 text-xs text-rose-600">{{ $message }}</p> @enderror
