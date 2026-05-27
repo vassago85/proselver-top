@@ -407,6 +407,10 @@ class Job extends Model
         'advance_issued_at',
         'advance_issued_by_user_id',
         'advance_issue_reference',
+        'advance_removal_pending',
+        'advance_removal_requested_at',
+        'advance_removal_requested_by_user_id',
+        'advance_removal_reason',
         'customer_confirmed_at',
         'customer_confirmed_by',
         'planned_at',
@@ -489,6 +493,8 @@ class Job extends Model
             'advance_assigned_at' => 'datetime',
             'advance_approved_at' => 'datetime',
             'advance_issued_at' => 'datetime',
+            'advance_removal_pending' => 'boolean',
+            'advance_removal_requested_at' => 'datetime',
             'customer_confirmed_at' => 'datetime',
             'planned_at' => 'datetime',
             'ready_for_collection_at' => 'datetime',
@@ -967,6 +973,11 @@ class Job extends Model
     public function advanceIssuedBy(): BelongsTo
     {
         return $this->belongsTo(User::class, 'advance_issued_by_user_id');
+    }
+
+    public function advanceRemovalRequestedBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'advance_removal_requested_by_user_id');
     }
 
     public function trip(): BelongsTo

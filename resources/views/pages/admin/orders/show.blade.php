@@ -86,6 +86,13 @@ new #[Layout('components.layouts.app')] class extends Component {
     // the breakdown (which only commits the AMOUNT decision).
     public bool $showIssueModal = false;
     public string $advanceIssueReference = '';
+
+    // "Remove advance" flow.  Ops can wipe an unapproved advance
+    // immediately; an APPROVED advance needs owner sign-off for the
+    // removal -- ops files the request here, owner accepts or rejects
+    // it on the order page.  removalReason captures why.
+    public bool $showRemoveModal = false;
+    public string $advanceRemovalReason = '';
     // Per-trip SANRAL toll-class override (1-4, or null to use vehicle
     // class default).  Picked from the dropdown on the modal -- the
     // estimator re-runs whenever this changes so the toll list updates
@@ -1106,6 +1113,212 @@ new #[Layout('components.layouts.app')] class extends Component {
         session()->flash('success', 'Advance issued to driver: R ' . number_format((float) $this->job->advance_total, 2) . ($this->advanceIssueReference ? ' · ref ' . trim($this->advanceIssueReference) : '') . '.');
     }
 
+    /* ----------------------------------------------------------------
+     | Remove advance.
+     |
+     | Two states, owner-stated rule:
+     |   - Not approved yet -> ops can wipe immediately.  No fields are
+     |     locked; the trip just goes back to "no advance" and slides
+     |     out of any draft plan it was in.
+     |   - Approved by owner -> ops files a removal request; owner has
+     |     to second-sign before the wipe applies.  Until then, the
+     |     advance stays exactly as it was.
+     |---------------------------------------------------------------*/
+
+    public function openRemoveModal(): void
+    {
+        if (!auth()->user()?->isInternal()) abort(403);
+        if ($this->job->advance_total === null) {
+            session()->flash('error', 'No advance on this trip to remove.');
+            return;
+        }
+        $this->advanceRemovalReason = '';
+        $this->showRemoveModal = true;
+    }
+
+    public function closeRemoveModal(): void
+    {
+        $this->showRemoveModal = false;
+        $this->advanceRemovalReason = '';
+    }
+
+    /**
+     * Ops action: wipe (unapproved) OR file a removal request (approved).
+     * The dispatch on advance_approved_at is the gate.
+     */
+    public function submitRemovalRequest(): void
+    {
+        if (!auth()->user()?->isInternal()) abort(403);
+        if ($this->job->advance_total === null) {
+            session()->flash('error', 'No advance on this trip to remove.');
+            return;
+        }
+
+        $this->validate([
+            'advanceRemovalReason' => 'nullable|string|max:500',
+        ]);
+
+        if ($this->job->advance_approved_at) {
+            // Owner-approved advance -- can't be wiped without a second
+            // sign-off.  Stamp the pending state and bail; the actual
+            // wipe happens on confirmRemoval() when an owner/dev
+            // accepts the request.
+            if (trim($this->advanceRemovalReason) === '') {
+                $this->addError('advanceRemovalReason', 'A reason is required to request removal of an already-approved advance.');
+                return;
+            }
+            $this->job->forceFill([
+                'advance_removal_pending' => true,
+                'advance_removal_requested_at' => now(),
+                'advance_removal_requested_by_user_id' => auth()->id(),
+                'advance_removal_reason' => trim($this->advanceRemovalReason),
+            ])->save();
+
+            AuditService::log(
+                'advance_removal_requested',
+                'job',
+                $this->job->id,
+                null,
+                ['amount' => (float) $this->job->advance_total, 'plan_id' => $this->job->advance_plan_id],
+                trim($this->advanceRemovalReason),
+            );
+
+            $this->showRemoveModal = false;
+            $this->job->refresh();
+            session()->flash('success', 'Removal request submitted. Awaiting owner sign-off.');
+            return;
+        }
+
+        // Unapproved -- ops can wipe immediately.
+        $this->wipeAdvanceState('advance_removed_unapproved', trim($this->advanceRemovalReason) ?: null);
+        $this->showRemoveModal = false;
+        $this->job->refresh();
+        session()->flash('success', 'Advance removed.');
+    }
+
+    /**
+     * Owner / developer action: accept a pending removal request.
+     * Wipes the advance fields and clears the pending flag.
+     */
+    public function confirmRemoval(): void
+    {
+        $u = auth()->user();
+        if (!$u || (!$u->isOwner() && !$u->isDeveloper())) abort(403);
+        if (!$this->job->advance_removal_pending) {
+            session()->flash('error', 'No removal request pending on this trip.');
+            return;
+        }
+
+        $reason = $this->job->advance_removal_reason ?? '';
+        $this->wipeAdvanceState('advance_removed_after_signoff', $reason);
+        $this->job->refresh();
+        session()->flash('success', 'Removal approved. The advance has been cleared.');
+    }
+
+    /**
+     * Owner / developer action: reject a pending removal request.
+     * Clears the pending flag and leaves the advance untouched.
+     */
+    public function rejectRemoval(): void
+    {
+        $u = auth()->user();
+        if (!$u || (!$u->isOwner() && !$u->isDeveloper())) abort(403);
+        if (!$this->job->advance_removal_pending) {
+            session()->flash('error', 'No removal request pending on this trip.');
+            return;
+        }
+
+        $reason = $this->job->advance_removal_reason ?? '';
+        $this->job->forceFill([
+            'advance_removal_pending' => false,
+            'advance_removal_requested_at' => null,
+            'advance_removal_requested_by_user_id' => null,
+            'advance_removal_reason' => null,
+        ])->save();
+
+        AuditService::log(
+            'advance_removal_rejected',
+            'job',
+            $this->job->id,
+            ['removal_reason' => $reason],
+            null,
+        );
+
+        $this->job->refresh();
+        session()->flash('success', 'Removal request rejected. Advance is unchanged.');
+    }
+
+    /**
+     * Shared wipe: zeros out every advance_* field on the job,
+     * detaches from any plan, and records the action in the audit
+     * log.  Used by both the unapproved-wipe path and the owner-
+     * confirmed-wipe path.
+     */
+    private function wipeAdvanceState(string $auditAction, ?string $reason): void
+    {
+        $before = $this->job->only([
+            'advance_total', 'advance_tolls', 'advance_accommodation',
+            'advance_taxi', 'advance_food', 'advance_food_waived',
+            'advance_taxi_included', 'advance_custom_items',
+            'advance_toll_breakdown', 'advance_toll_class_override',
+            'advance_increase_reason', 'advance_assigned_by_user_id',
+            'advance_assigned_at', 'advance_plan_id',
+            'advance_approved_at', 'advance_override_reason',
+        ]);
+
+        // If the trip was linked to a draft plan, snip its item out
+        // of items_json so the plan total reflects the removal too.
+        if ($this->job->advance_plan_id) {
+            $plan = PettyCashPlan::find($this->job->advance_plan_id);
+            if ($plan && $plan->status === PettyCashPlan::STATUS_DRAFT) {
+                $items = collect($plan->items_json ?? [])
+                    ->reject(fn ($i) => (int) ($i['job_id'] ?? 0) === $this->job->id)
+                    ->values()
+                    ->all();
+                if (empty($items)) {
+                    $plan->delete();
+                } else {
+                    $plan->forceFill([
+                        'items_json' => $items,
+                        'total_amount' => round((float) collect($items)->sum('computed_total'), 2),
+                    ])->save();
+                }
+            }
+        }
+
+        $this->job->forceFill([
+            'advance_total' => null,
+            'advance_tolls' => null,
+            'advance_accommodation' => null,
+            'advance_taxi' => null,
+            'advance_taxi_included' => false,
+            'advance_food' => null,
+            'advance_food_waived' => false,
+            'advance_custom_items' => null,
+            'advance_toll_breakdown' => null,
+            'advance_toll_class_override' => null,
+            'advance_increase_reason' => null,
+            'advance_assigned_by_user_id' => null,
+            'advance_assigned_at' => null,
+            'advance_plan_id' => null,
+            'advance_approved_at' => null,
+            'advance_override_reason' => null,
+            'advance_removal_pending' => false,
+            'advance_removal_requested_at' => null,
+            'advance_removal_requested_by_user_id' => null,
+            'advance_removal_reason' => null,
+        ])->save();
+
+        AuditService::log(
+            $auditAction,
+            'job',
+            $this->job->id,
+            $before,
+            null,
+            $reason,
+        );
+    }
+
     public function cancelOrder(): void
     {
         // Server-side guard. The UI hides the button when the user isn't
@@ -1396,6 +1609,44 @@ new #[Layout('components.layouts.app')] class extends Component {
                     @endif
                     {{ $job->recalled_at->diffForHumans() }} · {{ $job->recalled_at->format('D d M Y H:i') }}
                 </div>
+            </div>
+        </div>
+    @endif
+
+    {{-- Advance removal request -- pending owner sign-off.  Renders
+         to internal staff as an informational banner.  Owner/dev get
+         Accept / Reject buttons inline. --}}
+    @if($job->advance_removal_pending && auth()->user()?->isInternal())
+        <div class="mb-4 rounded-xl border-2 border-amber-300 bg-amber-50 px-4 py-3">
+            <div class="flex items-start gap-3 flex-wrap">
+                <svg class="h-5 w-5 mt-0.5 shrink-0 text-amber-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                <div class="min-w-0 flex-1">
+                    <div class="text-sm font-bold uppercase tracking-wider text-amber-900">Advance removal — pending sign-off</div>
+                    <div class="mt-0.5 text-sm text-amber-900/90">
+                        <strong>{{ $job->advanceRemovalRequestedBy?->name ?? 'Ops' }}</strong>
+                        requested removal of <strong>R {{ number_format((float) $job->advance_total, 2) }}</strong>
+                        {{ $job->advance_removal_requested_at?->diffForHumans() }}.
+                    </div>
+                    @if($job->advance_removal_reason)
+                        <div class="mt-1 text-sm text-amber-900/80"><strong>Reason:</strong> {{ $job->advance_removal_reason }}</div>
+                    @endif
+                </div>
+                @if(auth()->user()?->isOwner() || auth()->user()?->isDeveloper())
+                    <div class="flex items-center gap-2 shrink-0">
+                        <button wire:click="rejectRemoval"
+                            wire:confirm="Reject the removal request? The existing advance will remain in place."
+                            class="rounded-lg border border-amber-400 bg-white px-3.5 py-2 text-xs font-semibold text-amber-800 hover:bg-amber-100 transition-colors">
+                            Reject removal
+                        </button>
+                        <button wire:click="confirmRemoval"
+                            wire:confirm="Approve removal and wipe the advance for this trip? This is irreversible."
+                            class="rounded-lg bg-rose-600 hover:bg-rose-500 px-4 py-2 text-xs font-semibold text-white transition-colors">
+                            Approve removal
+                        </button>
+                    </div>
+                @else
+                    <span class="text-[11px] text-amber-700/80 italic shrink-0">Waiting on owner.</span>
+                @endif
             </div>
         </div>
     @endif
@@ -1796,6 +2047,32 @@ new #[Layout('components.layouts.app')] class extends Component {
                                 Petty Cash / Advance
                             @endif
                         </button>
+                    @endif
+
+                    {{-- Remove advance.  Visible whenever an advance
+                         exists.  Two flows handled server-side:
+                           - unapproved -> ops can wipe immediately
+                           - approved -> ops files a removal request
+                             that owner has to second-sign before the
+                             actual wipe applies.  Pending removals
+                             change this button into a "pending" pill.
+                         --}}
+                    @if(auth()->user()?->isInternal() && !$isTerminal && $job->advance_total !== null)
+                        @if($job->advance_removal_pending)
+                            <span
+                                class="inline-flex items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3.5 py-2.5 text-sm font-medium text-amber-800"
+                                title="Removal requested by {{ $job->advanceRemovalRequestedBy?->name }} {{ $job->advance_removal_requested_at?->diffForHumans() }}">
+                                <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                                Removal pending sign-off
+                            </span>
+                        @else
+                            <button wire:click="openRemoveModal"
+                                class="inline-flex items-center gap-2 rounded-lg border border-rose-200 bg-white px-3.5 py-2.5 text-sm font-medium text-rose-700 hover:bg-rose-50 transition-colors"
+                                title="@if($job->advance_approved_at) Removal requires owner sign-off (advance was already approved). @else Wipe the saved advance for this trip. @endif">
+                                <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                                Remove advance
+                            </button>
+                        @endif
                     @endif
 
                     {{-- Issue to Driver -- the moment cash physically
@@ -2590,6 +2867,60 @@ new #[Layout('components.layouts.app')] class extends Component {
                 </button>
                 <button wire:click="cancelOrder" class="rounded-lg bg-red-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-red-500 transition-colors">
                     Cancel Order
+                </button>
+            </div>
+        </div>
+    </div>
+    @endif
+
+    {{-- Remove advance modal.  Branches on advance_approved_at:
+         unapproved -> immediate wipe with audit; approved -> filed
+         as a removal request awaiting owner sign-off.  Reason is
+         required when the advance is approved, optional otherwise. --}}
+    @if($showRemoveModal)
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60" wire:click.self="closeRemoveModal">
+        <div class="relative w-full max-w-md mx-4 bg-white rounded-2xl shadow-2xl overflow-hidden">
+            <div class="border-b border-gray-200 px-6 py-4 bg-rose-50">
+                <div class="flex items-center gap-2">
+                    <svg class="h-5 w-5 text-rose-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                    <h3 class="text-lg font-semibold text-rose-900">Remove advance</h3>
+                </div>
+                <p class="text-sm text-rose-800/80 mt-0.5">{{ $job->job_number }} · R {{ number_format((float) $job->advance_total, 2) }}</p>
+            </div>
+            <div class="px-6 py-5 space-y-4">
+                @if($job->advance_approved_at)
+                    <div class="rounded-lg bg-amber-50 border border-amber-200 px-3 py-3 text-xs text-amber-800">
+                        <p class="font-semibold mb-1">⚠ This advance was approved by the owner.</p>
+                        <p>Removing it requires a second sign-off.  The request will be filed and the existing advance stays in place until the owner accepts or rejects.</p>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1.5">Reason for removal <span class="text-rose-600">*</span></label>
+                        <textarea wire:model="advanceRemovalReason" rows="3" maxlength="500"
+                            placeholder="e.g. trip cancelled, driver swap, customer rebooked next week…"
+                            class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-rose-500 focus:ring-rose-500"></textarea>
+                        @error('advanceRemovalReason') <p class="mt-1 text-xs text-red-600">{{ $message }}</p> @enderror
+                    </div>
+                @else
+                    <div class="rounded-lg bg-rose-50 border border-rose-200 px-3 py-2 text-sm text-rose-800">
+                        This advance hasn't been approved yet — removing wipes it immediately and pulls the trip out of any draft plan.
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1.5">Reason <span class="text-gray-400 font-normal">(optional)</span></label>
+                        <textarea wire:model="advanceRemovalReason" rows="2" maxlength="500"
+                            placeholder="(optional)"
+                            class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-rose-500 focus:ring-rose-500"></textarea>
+                    </div>
+                @endif
+            </div>
+            <div class="border-t border-gray-200 px-6 py-4 flex items-center justify-end gap-3 bg-gray-50">
+                <button wire:click="closeRemoveModal" type="button"
+                    class="rounded-lg px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-100 transition-colors">
+                    Cancel
+                </button>
+                <button wire:click="submitRemovalRequest" type="button"
+                    wire:confirm="@if($job->advance_approved_at) Submit removal request for owner sign-off? @else Wipe the advance for this trip? @endif"
+                    class="rounded-lg bg-rose-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-rose-500 transition-colors">
+                    @if($job->advance_approved_at) Submit removal request @else Remove advance @endif
                 </button>
             </div>
         </div>
