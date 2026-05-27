@@ -4,6 +4,7 @@ use App\Models\Job;
 use App\Models\PettyCashEntry;
 use App\Models\SystemSetting;
 use App\Models\User;
+use App\Services\AuditService;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Livewire\Attributes\Layout;
@@ -33,17 +34,94 @@ use Livewire\Volt\Component;
 new #[Layout('components.layouts.app')] class extends Component {
     #[Url] public string $range = 'this_month';
 
+    /**
+     * Modal state for the "Clear reconciliation query" action.  Lives on
+     * the dashboard so Accounts/Owner can sign off the issued-on-cancelled
+     * query without having to bounce through the order detail page.
+     */
+    public ?int $clearQueryJobId = null;
+    public string $clearQueryNote = '';
+    public bool $showClearQueryModal = false;
+
     public const RANGES = ['today', 'this_week', 'this_month', 'this_year', 'all'];
 
     public function mount(): void
     {
+        // Accounts is allowed alongside owner+developer because the petty
+        // cash + reconciliation queries on this page are Accounts' day-to-day
+        // work (matches the new accounts-first sign-off model elsewhere).
         $u = auth()->user();
-        if (!$u || (!$u->isOwner() && !$u->isDeveloper())) {
+        if (!$u || (!$u->isAccounts() && !$u->isOwner() && !$u->isDeveloper())) {
             abort(403);
         }
         if (!in_array($this->range, self::RANGES, true)) {
             $this->range = 'this_month';
         }
+    }
+
+    /**
+     * Open the "Clear reconciliation query" modal for a specific job.
+     * Gated on roles up front so a crafted Livewire call can't bypass
+     * the UI guard.
+     */
+    public function openClearQuery(int $jobId): void
+    {
+        $u = auth()->user();
+        if (!$u || (!$u->isAccounts() && !$u->isOwner() && !$u->isDeveloper())) {
+            abort(403);
+        }
+        $this->clearQueryJobId = $jobId;
+        $this->clearQueryNote = '';
+        $this->showClearQueryModal = true;
+    }
+
+    public function cancelClearQuery(): void
+    {
+        $this->clearQueryJobId = null;
+        $this->clearQueryNote = '';
+        $this->showClearQueryModal = false;
+    }
+
+    /**
+     * Persist the clearance + write the audit log entry.  Mirrors the
+     * order-page action so either entry point produces the same trail.
+     */
+    public function submitClearQuery(): void
+    {
+        $u = auth()->user();
+        if (!$u || (!$u->isAccounts() && !$u->isOwner() && !$u->isDeveloper())) {
+            abort(403);
+        }
+
+        $this->validate([
+            'clearQueryJobId' => 'required|integer|exists:transport_jobs,id',
+            'clearQueryNote'  => 'required|string|min:5|max:2000',
+        ], [
+            'clearQueryNote.required' => 'Please describe how the cash was reconciled.',
+            'clearQueryNote.min' => 'Explanation needs to be at least 5 characters so the audit trail makes sense.',
+        ]);
+
+        $job = Job::find($this->clearQueryJobId);
+        if (!$job || !$job->hasOpenIssuedCancellationQuery()) {
+            session()->flash('error', 'That query is no longer open.');
+            $this->cancelClearQuery();
+            return;
+        }
+
+        $job->issued_cancellation_cleared_at = now();
+        $job->issued_cancellation_cleared_by_user_id = $u->id;
+        $job->issued_cancellation_cleared_note = trim($this->clearQueryNote);
+        $job->save();
+
+        AuditService::log('issued_cancellation_query_cleared', 'job', $job->id, null, [
+            'note' => $job->issued_cancellation_cleared_note,
+            'cleared_by_roles' => $u->roles->pluck('slug')->values()->all(),
+            'advance_total' => (float) ($job->advance_total ?? 0),
+            'source' => 'overview_dashboard',
+        ]);
+
+        session()->flash('success', "Reconciliation query cleared on {$job->job_number}.");
+        $this->cancelClearQuery();
     }
 
     public function setRange(string $range): void
@@ -247,6 +325,22 @@ new #[Layout('components.layouts.app')] class extends Component {
             ->where('status', PettyCashEntry::STATUS_SUBMITTED)
             ->count();
 
+        // -- Open "advance issued + trip cancelled" reconciliation queries --
+        // Always shown regardless of range (the reconciliation obligation
+        // doesn't expire) so old open queries can't quietly drop off.
+        $openQueries = Job::query()
+            ->issuedCancellationQueryOpen()
+            ->with([
+                'company:id,name',
+                'driver:id,name',
+                'advanceIssuedBy:id,name',
+            ])
+            ->orderByDesc('cancelled_at')
+            ->orderByDesc('updated_at')
+            ->limit(50)
+            ->get();
+        $openQueryTotal = (float) $openQueries->sum('advance_total');
+
         return compact(
             'win',
             'totalIssued', 'totalSpent', 'totalReimbursed', 'totalApproved', 'totalSubmitted',
@@ -258,6 +352,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             'perDriver', 'missingPhoneCount',
             'incentiveRate', 'incentiveEnabled', 'approvedSlipCount', 'incentiveEarned',
             'pendingSlipCount',
+            'openQueries', 'openQueryTotal',
         );
     }
 }; ?>
@@ -374,6 +469,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         if ($pendingSlipCount > 0)  $alerts[] = ['icon' => 'M12 8v4M12 16h.01', 'color' => 'amber',  'text' => "$pendingSlipCount slip" . ($pendingSlipCount === 1 ? '' : 's') . " waiting on ops to approve or reject"];
         if ($missingPhoneCount > 0) $alerts[] = ['icon' => 'M22 16.92v3a2 2 0 0 1-2.18 2', 'color' => 'rose',  'text' => "$missingPhoneCount driver" . ($missingPhoneCount === 1 ? '' : 's') . " with claims have no cellphone on file — bank-send can't be routed"];
         if ($overageCount > 0)      $alerts[] = ['icon' => 'M12 9v2m0 4h.01', 'color' => 'rose',   'text' => "$overageCount trip" . ($overageCount === 1 ? '' : 's') . " spent more than the issued advance"];
+        if ($openQueries->count() > 0) $alerts[] = ['icon' => 'M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z', 'color' => 'rose', 'text' => $openQueries->count() . ' cancelled trip' . ($openQueries->count() === 1 ? '' : 's') . " with an issued advance awaiting Accounts sign-off (R " . number_format($openQueryTotal, 2) . ')'];
     @endphp
     @if(!empty($alerts))
         <section class="mb-4 rounded-xl bg-white border border-amber-300 p-3">
@@ -388,6 +484,71 @@ new #[Layout('components.layouts.app')] class extends Component {
                     </li>
                 @endforeach
             </ul>
+        </section>
+    @endif
+
+    {{-- ──────────────────────────────────────────────────────────────
+         Open reconciliation queries — advance issued + trip cancelled
+
+         Every cancelled trip whose advance had already been issued
+         (cash physically out of the till) shows up here until Accounts
+         or Owner records how it was reconciled.  Window-independent: a
+         legitimate query from three months ago must still be cleared.
+         ────────────────────────────────────────────────────────────── --}}
+    @if($openQueries->count() > 0)
+        <section class="mb-5 rounded-xl bg-white border-2 border-rose-300 overflow-hidden">
+            <div class="flex items-center justify-between gap-3 px-4 py-3 bg-rose-50/60 border-b border-rose-200">
+                <div class="flex items-center gap-2">
+                    <svg class="h-4 w-4 text-rose-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" x2="12" y1="9" y2="13"/><line x1="12" x2="12.01" y1="17" y2="17"/></svg>
+                    <h2 class="text-sm font-semibold text-rose-900">Reconciliation queries — advance issued, trip cancelled</h2>
+                </div>
+                <div class="text-xs text-rose-900/80">
+                    <span class="font-semibold tabular-nums">{{ $openQueries->count() }}</span> open ·
+                    <span class="font-semibold tabular-nums">R {{ number_format($openQueryTotal, 2) }}</span> outstanding
+                </div>
+            </div>
+            <table class="w-full text-sm">
+                <thead class="bg-slate-50 text-[11px] uppercase tracking-wide text-slate-500">
+                    <tr>
+                        <th class="text-left px-4 py-2 font-medium">Order</th>
+                        <th class="text-left px-4 py-2 font-medium">Customer</th>
+                        <th class="text-left px-4 py-2 font-medium">Driver</th>
+                        <th class="text-right px-4 py-2 font-medium">Issued</th>
+                        <th class="text-left px-4 py-2 font-medium">Issued by</th>
+                        <th class="text-left px-4 py-2 font-medium">Cancelled</th>
+                        <th class="text-left px-4 py-2 font-medium">Reason</th>
+                        <th class="text-right px-4 py-2 font-medium">Action</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100">
+                    @foreach($openQueries as $q)
+                        <tr class="hover:bg-rose-50/40">
+                            <td class="px-4 py-2">
+                                <a href="{{ route('admin.orders.show', $q) }}" class="font-semibold text-blue-700 hover:underline">{{ $q->job_number }}</a>
+                            </td>
+                            <td class="px-4 py-2 text-slate-700">{{ $q->company?->name ?? '—' }}</td>
+                            <td class="px-4 py-2 text-slate-700">{{ $q->driver?->name ?? '—' }}</td>
+                            <td class="px-4 py-2 text-right tabular-nums font-semibold text-rose-700">R {{ number_format((float) $q->advance_total, 2) }}</td>
+                            <td class="px-4 py-2 text-slate-600 text-xs">{{ $q->advanceIssuedBy?->name ?? '—' }}</td>
+                            <td class="px-4 py-2 text-slate-600 text-xs">
+                                {{ $q->cancelled_at?->format('d M Y') ?? '—' }}
+                                @if($q->cancelled_at)
+                                    <span class="block text-[10px] text-slate-400">{{ $q->cancelled_at->diffForHumans() }}</span>
+                                @endif
+                            </td>
+                            <td class="px-4 py-2 text-slate-600 text-xs max-w-xs">
+                                <span class="line-clamp-2">{{ $q->cancellation_reason ?: '—' }}</span>
+                            </td>
+                            <td class="px-4 py-2 text-right">
+                                <button type="button" wire:click="openClearQuery({{ $q->id }})"
+                                    class="rounded-lg bg-rose-600 hover:bg-rose-500 px-3 py-1.5 text-[11px] font-semibold text-white transition-colors">
+                                    Clear with note
+                                </button>
+                            </td>
+                        </tr>
+                    @endforeach
+                </tbody>
+            </table>
         </section>
     @endif
 
@@ -580,4 +741,41 @@ new #[Layout('components.layouts.app')] class extends Component {
             @endif
         </div>
     </section>
+
+    {{-- Clear-query modal (dashboard entry point — mirrors the order page one). --}}
+    @if($showClearQueryModal)
+        @php
+            $modalJob = $clearQueryJobId ? $openQueries->firstWhere('id', $clearQueryJobId) : null;
+        @endphp
+        <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60" wire:click.self="cancelClearQuery">
+            <div class="relative w-full max-w-md mx-4 bg-white rounded-2xl shadow-2xl overflow-hidden">
+                <div class="border-b border-gray-200 px-6 py-4">
+                    <h3 class="text-lg font-semibold text-gray-900">Clear Reconciliation Query</h3>
+                    @if($modalJob)
+                        <p class="text-sm text-gray-500 mt-0.5">{{ $modalJob->job_number }} — R {{ number_format((float) $modalJob->advance_total, 2) }} issued before cancellation</p>
+                    @endif
+                </div>
+                <div class="px-6 py-5 space-y-4">
+                    <div class="rounded-lg bg-rose-50 border border-rose-200 p-3 text-sm text-rose-900">
+                        Describe how the cash was reconciled. The explanation is permanent and visible on the order's audit trail.
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1.5">Explanation</label>
+                        <textarea wire:model="clearQueryNote" rows="4"
+                            placeholder="e.g. Driver returned cash on 27 May, booked back into petty cash float."
+                            class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-rose-500 focus:ring-rose-500"></textarea>
+                        @error('clearQueryNote') <p class="mt-1 text-xs text-rose-600">{{ $message }}</p> @enderror
+                    </div>
+                </div>
+                <div class="border-t border-gray-200 px-6 py-4 flex items-center justify-end gap-3 bg-gray-50">
+                    <button wire:click="cancelClearQuery" type="button" class="rounded-lg px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-100 transition-colors">
+                        Cancel
+                    </button>
+                    <button wire:click="submitClearQuery" type="button" class="rounded-lg bg-rose-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-rose-500 transition-colors">
+                        Clear query
+                    </button>
+                </div>
+            </div>
+        </div>
+    @endif
 </div>

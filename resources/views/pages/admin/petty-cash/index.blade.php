@@ -56,9 +56,12 @@ new #[Layout('components.layouts.app')] class extends Component {
     // Owner-only: edit the slip-scan incentive rate (R per approved slip).
     public ?float $incentiveAmountDraft = null;
 
+    /** Per-driver EFT reference draft for the "Pay drivers" tab. */
+    public array $payDrafts = [];
+
     public const RANGES = ['today', 'this_week', 'this_month', 'this_year', 'all'];
     public const STATUSES = ['submitted', 'approved', 'rejected', 'reimbursed', 'all'];
-    public const TABS = ['slips', 'trips', 'incentives'];
+    public const TABS = ['slips', 'pay', 'trips', 'incentives'];
 
     public function mount(): void
     {
@@ -161,6 +164,112 @@ new #[Layout('components.layouts.app')] class extends Component {
         }
     }
 
+    /**
+     * Confirm an EFT to a single driver — flips every approved slip for
+     * that driver (across all time, not just the current range) to
+     * reimbursed in one go, stamping the same EFT reference on each so
+     * the bank statement reconciles cleanly back to the slips.
+     *
+     * Policy check is enforced per slip via the existing PettyCashEntry
+     * policy ('reimburse') so a crafted Livewire call can't bypass the
+     * server-side gate.
+     *
+     * Refuses to run if the driver has no cellphone on file — bank-send
+     * needs the phone, same protection as reimburseEntry().
+     */
+    public function confirmDriverPayment(int $driverId): void
+    {
+        $driver = User::with('driverProfile')->findOrFail($driverId);
+        $phone = $driver->phone ?: ($driver->driverProfile?->cellphone ?? null);
+        if (!$phone) {
+            $this->addError('pay_' . $driverId, 'Driver has no cellphone on file — banking needs the cellphone to route the payment.');
+            return;
+        }
+
+        $ref = trim($this->payDrafts[$driverId] ?? '');
+
+        $entries = PettyCashEntry::query()
+            ->where('driver_user_id', $driverId)
+            ->where('status', PettyCashEntry::STATUS_APPROVED)
+            ->get();
+
+        if ($entries->isEmpty()) {
+            session()->flash('error', 'No approved slips to pay for that driver.');
+            return;
+        }
+
+        $paid = 0;
+        $totalCents = 0;
+        foreach ($entries as $entry) {
+            if (!auth()->user()?->can('reimburse', $entry)) {
+                continue;
+            }
+            $before = $entry->only(['status', 'reimbursed_at', 'reimbursement_reference']);
+            if ($entry->reimburse(auth()->user(), $ref ?: null)) {
+                $paid++;
+                $totalCents += (int) $entry->amount_cents;
+                AuditService::log('petty_cash_reimbursed', 'petty_cash_entry', $entry->id, $before, [
+                    'status' => $entry->status,
+                    'reimbursed_at' => $entry->reimbursed_at?->toIso8601String(),
+                    'reimbursement_reference' => $entry->reimbursement_reference,
+                    'bulk_driver_payout' => true,
+                ]);
+            }
+        }
+
+        if ($paid > 0) {
+            AuditService::log('petty_cash_driver_payout', 'user', $driverId, null, [
+                'slip_count' => $paid,
+                'total' => round($totalCents / 100, 2),
+                'reference' => $ref ?: null,
+                'phone' => $phone,
+                'paid_by_roles' => auth()->user()?->roles->pluck('slug')->values()->all() ?? [],
+            ]);
+            unset($this->payDrafts[$driverId]);
+            session()->flash('success', "Paid {$driver->name} — {$paid} slip" . ($paid === 1 ? '' : 's') . ' totalling R ' . number_format($totalCents / 100, 2) . '.');
+        }
+    }
+
+    /**
+     * Per-driver rollup of every approved (not yet reimbursed) slip,
+     * regardless of date range.  Drives the "Pay drivers" tab so
+     * Accounts can do one EFT per driver against the full outstanding
+     * balance instead of one click per slip.
+     */
+    private function paymentRollup(): \Illuminate\Support\Collection
+    {
+        $entries = PettyCashEntry::query()
+            ->with([
+                'driver:id,name,phone',
+                'driver.driverProfile:user_id,cellphone',
+                'job:id,job_number',
+            ])
+            ->where('status', PettyCashEntry::STATUS_APPROVED)
+            ->orderBy('created_at')
+            ->get();
+
+        return $entries
+            ->groupBy('driver_user_id')
+            ->map(function ($group, $driverUserId) {
+                $first = $group->first();
+                $driver = $first?->driver;
+                $phone = $driver?->phone ?: ($driver?->driverProfile?->cellphone ?? null);
+                $oldest = $group->min('created_at');
+                return (object) [
+                    'driver_user_id' => (int) $driverUserId,
+                    'name' => $driver?->name ?? 'Unknown driver',
+                    'phone' => $phone,
+                    'slip_count' => $group->count(),
+                    'total' => round($group->sum('amount_cents') / 100, 2),
+                    'oldest_at' => $oldest,
+                    'job_numbers' => $group->pluck('job.job_number')->filter()->unique()->take(6)->values()->all(),
+                    'slips' => $group->values(),
+                ];
+            })
+            ->sortByDesc('total')
+            ->values();
+    }
+
     public function bulkApproveSubmitted(): void
     {
         $entries = $this->buildQuery()->where('status', PettyCashEntry::STATUS_SUBMITTED)->limit(50)->get();
@@ -233,6 +342,8 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         if ($this->tab === 'slips') {
             $payload['entries'] = $this->buildQuery()->paginate(25);
+        } elseif ($this->tab === 'pay') {
+            $payload['payRows'] = $this->paymentRollup();
         } elseif ($this->tab === 'trips') {
             $payload['tripGroups'] = $this->tripReconciliation();
         } else {
@@ -415,6 +526,12 @@ new #[Layout('components.layouts.app')] class extends Component {
             {{ $tab === 'slips' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900' }}">
             By slip
         </button>
+        <button type="button" wire:click="switchTab('pay')"
+            class="inline-flex items-center gap-2 rounded-lg px-3.5 py-1.5 text-xs font-semibold transition
+            {{ $tab === 'pay' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900' }}">
+            <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/></svg>
+            Pay drivers
+        </button>
         <button type="button" wire:click="switchTab('trips')"
             class="inline-flex items-center gap-2 rounded-lg px-3.5 py-1.5 text-xs font-semibold transition
             {{ $tab === 'trips' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900' }}">
@@ -505,7 +622,18 @@ new #[Layout('components.layouts.app')] class extends Component {
                             <p class="mt-1 text-xs text-slate-600">
                                 <strong>{{ $entry->driver->name ?? 'Driver' }}</strong>
                                 @if($driverPhone)
-                                    <span class="ml-1 font-mono text-[11px] text-slate-500" title="Bank-send routing key">{{ $driverPhone }}</span>
+                                    @if($entry->status === \App\Models\PettyCashEntry::STATUS_APPROVED)
+                                        <span class="ml-1 inline-flex items-center gap-1 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[12px] font-semibold text-slate-900 select-all" title="Pay to this cellphone">
+                                            <svg class="h-3 w-3 text-emerald-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.37 1.9.72 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.35 1.85.59 2.81.72A2 2 0 0 1 22 16.92z"/></svg>
+                                            {{ $driverPhone }}
+                                        </span>
+                                    @else
+                                        <span class="ml-1 font-mono text-[11px] text-slate-500" title="Bank-send routing key">{{ $driverPhone }}</span>
+                                    @endif
+                                @elseif($entry->status === \App\Models\PettyCashEntry::STATUS_APPROVED)
+                                    <span class="ml-1 inline-flex items-center gap-1 rounded bg-rose-50 border border-rose-200 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-rose-700" title="Cellphone required for bank-send">
+                                        no phone on file
+                                    </span>
                                 @endif
                                 @if($entry->job)
                                     · job <a href="{{ route('admin.orders.show', $entry->job_id) }}" class="text-blue-600 hover:underline">{{ $entry->job->job_number }}</a>
@@ -572,6 +700,111 @@ new #[Layout('components.layouts.app')] class extends Component {
             @endforeach
         </ul>
         <div class="p-3 border-t border-slate-100">{{ $entries->links() }}</div>
+        @endif
+    </section>
+
+    @elseif($tab === 'pay')
+    {{-- ──────────────────────────────────────────────────────────────
+         Pay drivers — one row per driver with prominent name + phone,
+         the outstanding rand total, and a single "Confirm payment made"
+         button that reimburses every approved slip for that driver in
+         one shot (across all dates, not just the current range — the
+         payment is a cash-out, it doesn't care about analysis windows).
+         ────────────────────────────────────────────────────────────── --}}
+    <section class="space-y-3">
+        @php
+            $grandTotal = $payRows->sum('total');
+            $grandSlips = $payRows->sum('slip_count');
+        @endphp
+
+        <div class="rounded-xl bg-emerald-50/60 border border-emerald-200 p-3 flex flex-wrap items-center gap-3">
+            <div>
+                <p class="text-[11px] uppercase tracking-wide text-emerald-800/80 font-semibold">Approved — awaiting EFT</p>
+                <p class="text-xl font-bold tabular-nums text-emerald-900">R {{ number_format($grandTotal, 2) }}</p>
+                <p class="text-[11px] text-emerald-700/80">{{ $grandSlips }} {{ Str::plural('slip', $grandSlips) }} across {{ $payRows->count() }} {{ Str::plural('driver', $payRows->count()) }}</p>
+            </div>
+            <div class="ml-auto text-[11px] text-emerald-700/80 max-w-md">
+                Pay each driver via cash-send to their cellphone, paste the EFT reference, then hit <strong>Confirm payment made</strong> — every approved slip for that driver flips to reimbursed.
+            </div>
+        </div>
+
+        @if($payRows->isEmpty())
+            <div class="rounded-xl bg-white border border-slate-200 p-8 text-center text-sm text-slate-500">
+                Nothing to pay — no approved slips waiting for EFT.
+            </div>
+        @else
+            <div class="rounded-xl bg-white border border-slate-200 overflow-hidden">
+                <ul class="divide-y divide-slate-100">
+                    @foreach($payRows as $row)
+                        <li class="p-4">
+                            <div class="flex flex-wrap items-start gap-4">
+                                {{-- Identity --}}
+                                <div class="min-w-0 flex-1">
+                                    <div class="flex items-center gap-2 flex-wrap">
+                                        <p class="text-base font-bold text-slate-900">{{ $row->name }}</p>
+                                        <span class="text-[10px] uppercase tracking-wide rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 font-semibold">{{ $row->slip_count }} {{ Str::plural('slip', $row->slip_count) }}</span>
+                                    </div>
+                                    <div class="mt-1 flex items-center gap-2">
+                                        @if($row->phone)
+                                            <span class="inline-flex items-center gap-1 rounded-lg bg-slate-100 px-2 py-1 font-mono text-sm font-semibold text-slate-900 select-all" title="Cellphone for bank-send">
+                                                <svg class="h-3.5 w-3.5 text-emerald-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.37 1.9.72 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.35 1.85.59 2.81.72A2 2 0 0 1 22 16.92z"/></svg>
+                                                {{ $row->phone }}
+                                            </span>
+                                            <span class="text-[11px] text-slate-500">cellphone · bank-send routing</span>
+                                        @else
+                                            <span class="inline-flex items-center gap-1 rounded-lg bg-rose-50 border border-rose-200 px-2 py-1 font-mono text-xs font-semibold text-rose-700">
+                                                <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="4.93" x2="19.07" y1="4.93" y2="19.07"/></svg>
+                                                No cellphone on file — can't bank-send
+                                            </span>
+                                        @endif
+                                    </div>
+                                    @if(!empty($row->job_numbers))
+                                        <p class="mt-1.5 text-[11px] text-slate-500">
+                                            Trips:
+                                            @foreach($row->job_numbers as $jn)
+                                                <span class="font-mono text-slate-700">{{ $jn }}</span>@if(!$loop->last), @endif
+                                            @endforeach
+                                            @if($row->slip_count > count($row->job_numbers)) … @endif
+                                        </p>
+                                    @endif
+                                    @if($row->oldest_at)
+                                        <p class="mt-0.5 text-[11px] text-slate-400">Oldest slip submitted {{ $row->oldest_at->diffForHumans() }}</p>
+                                    @endif
+                                </div>
+
+                                {{-- Amount --}}
+                                <div class="text-right shrink-0">
+                                    <p class="text-[10px] uppercase tracking-wide text-slate-500">To pay</p>
+                                    <p class="text-2xl font-bold tabular-nums text-emerald-700">R {{ number_format((float) $row->total, 2) }}</p>
+                                </div>
+
+                                {{-- Action --}}
+                                <div class="flex items-end gap-2 shrink-0 w-full sm:w-auto">
+                                    <label class="block">
+                                        <span class="block text-[10px] uppercase tracking-wide text-slate-500 mb-0.5">EFT reference (optional)</span>
+                                        <input type="text"
+                                               wire:model="payDrafts.{{ $row->driver_user_id }}"
+                                               placeholder="e.g. EFT 27 May"
+                                               class="rounded border border-slate-300 px-2 py-1.5 text-xs w-44">
+                                    </label>
+                                    <button type="button"
+                                            wire:click="confirmDriverPayment({{ $row->driver_user_id }})"
+                                            wire:confirm="Confirm payment of R {{ number_format((float) $row->total, 2) }} to {{ $row->name }}? This marks all {{ $row->slip_count }} approved slip(s) as reimbursed."
+                                            @class([
+                                                'rounded-lg px-3.5 py-2 text-xs font-semibold text-white transition-colors',
+                                                'bg-blue-600 hover:bg-blue-500' => (bool) $row->phone,
+                                                'bg-slate-300 cursor-not-allowed' => !$row->phone,
+                                            ])
+                                            @if(!$row->phone) disabled @endif>
+                                        Confirm payment made
+                                    </button>
+                                </div>
+                            </div>
+                            @error('pay_' . $row->driver_user_id) <p class="mt-2 text-xs text-rose-600">{{ $message }}</p> @enderror
+                        </li>
+                    @endforeach
+                </ul>
+            </div>
         @endif
     </section>
 

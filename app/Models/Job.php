@@ -411,6 +411,9 @@ class Job extends Model
         'advance_removal_requested_at',
         'advance_removal_requested_by_user_id',
         'advance_removal_reason',
+        'issued_cancellation_cleared_at',
+        'issued_cancellation_cleared_by_user_id',
+        'issued_cancellation_cleared_note',
         'customer_confirmed_at',
         'customer_confirmed_by',
         'planned_at',
@@ -495,6 +498,7 @@ class Job extends Model
             'advance_issued_at' => 'datetime',
             'advance_removal_pending' => 'boolean',
             'advance_removal_requested_at' => 'datetime',
+            'issued_cancellation_cleared_at' => 'datetime',
             'customer_confirmed_at' => 'datetime',
             'planned_at' => 'datetime',
             'ready_for_collection_at' => 'datetime',
@@ -978,6 +982,31 @@ class Job extends Model
     public function advanceRemovalRequestedBy(): BelongsTo
     {
         return $this->belongsTo(User::class, 'advance_removal_requested_by_user_id');
+    }
+
+    public function issuedCancellationClearedBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'issued_cancellation_cleared_by_user_id');
+    }
+
+    /**
+     * Cancelled trips where the advance had already been issued
+     * (i.e. cash is out of the till) and Accounts/Owner has not yet
+     * signed off an explanation. Drives the "Open queries" dashboard
+     * widget and the inline banner on the order page.
+     */
+    public function scopeIssuedCancellationQueryOpen($q)
+    {
+        return $q->where('status', self::STATUS_CANCELLED)
+            ->whereNotNull('advance_issued_at')
+            ->whereNull('issued_cancellation_cleared_at');
+    }
+
+    public function hasOpenIssuedCancellationQuery(): bool
+    {
+        return $this->status === self::STATUS_CANCELLED
+            && !is_null($this->advance_issued_at)
+            && is_null($this->issued_cancellation_cleared_at);
     }
 
     public function trip(): BelongsTo

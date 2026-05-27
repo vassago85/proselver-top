@@ -1339,9 +1339,86 @@ new #[Layout('components.layouts.app')] class extends Component {
         AuditService::log('order_cancelled', 'job', $this->job->id, null, [
             'reason' => $this->cancelReason,
             'cancelled_by_roles' => auth()->user()?->roles->pluck('slug')->values()->all() ?? [],
+            // Surface the financial query the cancellation just opened so
+            // the audit trail makes the reconciliation obligation obvious
+            // at the moment of cancellation, not only when Accounts clears it.
+            'advance_was_issued' => !is_null($this->job->advance_issued_at),
+            'advance_total' => (float) ($this->job->advance_total ?? 0),
         ]);
+
+        if (!is_null($this->job->advance_issued_at) && (float) ($this->job->advance_total ?? 0) > 0) {
+            AuditService::log('issued_cancellation_query_opened', 'job', $this->job->id, null, [
+                'advance_total' => (float) $this->job->advance_total,
+                'advance_issued_at' => $this->job->advance_issued_at?->toIso8601String(),
+                'cancellation_reason' => $this->cancelReason,
+            ]);
+        }
+
         $this->showCancelModal = false;
         session()->flash('success', "Order {$this->job->job_number} cancelled.");
+    }
+
+    /**
+     * Accounts/Owner signs off the "advance was issued and then the trip
+     * got cancelled" reconciliation query, explaining how the money was
+     * recovered (driver returned cash, applied to swap trip, deducted
+     * from next slip, written off, etc.). Recorded on the job itself so
+     * the dashboard query drops off and the explanation lives with the
+     * order forever.
+     */
+    public string $clearIssuedCancellationNote = '';
+    public bool $showClearIssuedCancellationModal = false;
+
+    public function openClearIssuedCancellation(): void
+    {
+        $u = auth()->user();
+        if (!$u || (!$u->isAccounts() && !$u->isOwner() && !$u->isDeveloper())) {
+            abort(403);
+        }
+        $this->clearIssuedCancellationNote = '';
+        $this->showClearIssuedCancellationModal = true;
+    }
+
+    public function cancelClearIssuedCancellation(): void
+    {
+        $this->showClearIssuedCancellationModal = false;
+        $this->clearIssuedCancellationNote = '';
+    }
+
+    public function clearIssuedCancellationQuery(): void
+    {
+        $u = auth()->user();
+        if (!$u || (!$u->isAccounts() && !$u->isOwner() && !$u->isDeveloper())) {
+            abort(403);
+        }
+
+        if (!$this->job->hasOpenIssuedCancellationQuery()) {
+            session()->flash('error', 'No open issued-on-cancelled query on this order.');
+            $this->showClearIssuedCancellationModal = false;
+            return;
+        }
+
+        $this->validate([
+            'clearIssuedCancellationNote' => 'required|string|min:5|max:2000',
+        ], [
+            'clearIssuedCancellationNote.required' => 'Please describe how the cash was reconciled.',
+            'clearIssuedCancellationNote.min' => 'Explanation needs to be at least 5 characters so the audit trail makes sense.',
+        ]);
+
+        $this->job->issued_cancellation_cleared_at = now();
+        $this->job->issued_cancellation_cleared_by_user_id = $u->id;
+        $this->job->issued_cancellation_cleared_note = trim($this->clearIssuedCancellationNote);
+        $this->job->save();
+
+        AuditService::log('issued_cancellation_query_cleared', 'job', $this->job->id, null, [
+            'note' => $this->job->issued_cancellation_cleared_note,
+            'cleared_by_roles' => $u->roles->pluck('slug')->values()->all(),
+            'advance_total' => (float) ($this->job->advance_total ?? 0),
+        ]);
+
+        $this->showClearIssuedCancellationModal = false;
+        $this->clearIssuedCancellationNote = '';
+        session()->flash('success', 'Reconciliation query cleared.');
     }
 
     /**
@@ -1648,6 +1725,69 @@ new #[Layout('components.layouts.app')] class extends Component {
                 @else
                     <span class="text-[11px] text-amber-700/80 italic shrink-0">Waiting on Accounts (owner fallback).</span>
                 @endif
+            </div>
+        </div>
+    @endif
+
+    {{-- ──────────────────────────────────────────────────────────────
+         Issued-on-cancelled reconciliation query
+
+         Surfaces whenever the trip is cancelled AND an advance was
+         already issued (cash out of the till). Accounts/Owner must
+         attach a written explanation — driver returned cash, applied
+         to swap trip, deducted from next slip, etc. — before this
+         row clears from the owner dashboard.
+         ────────────────────────────────────────────────────────────── --}}
+    @if($job->hasOpenIssuedCancellationQuery() && auth()->user()?->isInternal())
+        <div class="mb-4 rounded-xl border-2 border-rose-300 bg-rose-50 px-4 py-3">
+            <div class="flex items-start gap-3 flex-wrap">
+                <svg class="h-5 w-5 mt-0.5 shrink-0 text-rose-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/></svg>
+                <div class="min-w-0 flex-1">
+                    <div class="text-sm font-bold uppercase tracking-wider text-rose-900">Reconciliation query — advance issued, trip cancelled</div>
+                    <div class="mt-0.5 text-sm text-rose-900/90">
+                        <strong>R {{ number_format((float) $job->advance_total, 2) }}</strong>
+                        was issued
+                        @if($job->advance_issued_at)
+                            {{ $job->advance_issued_at->diffForHumans() }}
+                        @endif
+                        @if($job->advanceIssuedBy)
+                            by <strong>{{ $job->advanceIssuedBy->name }}</strong>
+                        @endif
+                        and the trip was then cancelled. Accounts/Owner needs to record how the cash was reconciled before the dashboard query clears.
+                    </div>
+                    @if($job->cancellation_reason)
+                        <div class="mt-1 text-sm text-rose-900/80"><strong>Cancellation reason:</strong> {{ $job->cancellation_reason }}</div>
+                    @endif
+                </div>
+                @if(auth()->user()?->isAccounts() || auth()->user()?->isOwner() || auth()->user()?->isDeveloper())
+                    <div class="flex items-center gap-2 shrink-0">
+                        <button wire:click="openClearIssuedCancellation" type="button"
+                            class="rounded-lg bg-rose-600 hover:bg-rose-500 px-4 py-2 text-xs font-semibold text-white transition-colors">
+                            Clear with explanation
+                        </button>
+                    </div>
+                @else
+                    <span class="text-[11px] text-rose-700/80 italic shrink-0">Waiting on Accounts (owner fallback).</span>
+                @endif
+            </div>
+        </div>
+    @endif
+
+    {{-- Cleared note (audit trail, sticks around forever once signed off). --}}
+    @if($job->issued_cancellation_cleared_at && auth()->user()?->isInternal())
+        <div class="mb-4 rounded-xl border border-emerald-200 bg-emerald-50/60 px-4 py-2.5">
+            <div class="flex items-start gap-2.5">
+                <svg class="h-4 w-4 mt-0.5 shrink-0 text-emerald-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                <div class="min-w-0 flex-1 text-xs text-emerald-900/90">
+                    <span class="font-semibold">Reconciliation cleared</span>
+                    @if($job->issuedCancellationClearedBy)
+                        by <strong>{{ $job->issuedCancellationClearedBy->name }}</strong>
+                    @endif
+                    {{ $job->issued_cancellation_cleared_at->diffForHumans() }}.
+                    @if($job->issued_cancellation_cleared_note)
+                        <div class="mt-0.5 text-emerald-900/80"><strong>Note:</strong> {{ $job->issued_cancellation_cleared_note }}</div>
+                    @endif
+                </div>
             </div>
         </div>
     @endif
@@ -2853,6 +2993,38 @@ new #[Layout('components.layouts.app')] class extends Component {
                         'bg-amber-600 hover:bg-amber-500' => !$recallOnRoad,
                 ])>
                     Send back to planning
+                </button>
+            </div>
+        </div>
+    </div>
+    @endif
+
+    {{-- Clear Issued-on-Cancelled Reconciliation Query Modal --}}
+    @if($showClearIssuedCancellationModal)
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60" wire:click.self="cancelClearIssuedCancellation">
+        <div class="relative w-full max-w-md mx-4 bg-white rounded-2xl shadow-2xl overflow-hidden">
+            <div class="border-b border-gray-200 px-6 py-4">
+                <h3 class="text-lg font-semibold text-gray-900">Clear Reconciliation Query</h3>
+                <p class="text-sm text-gray-500 mt-0.5">{{ $job->job_number }} — R {{ number_format((float) $job->advance_total, 2) }} issued before cancellation</p>
+            </div>
+            <div class="px-6 py-5 space-y-4">
+                <div class="rounded-lg bg-rose-50 border border-rose-200 p-3 text-sm text-rose-900">
+                    Describe how the cash was reconciled (driver returned cash, applied to swap trip <em>NNNNN</em>, deducted from next slip, written off, etc.). This explanation is permanent and shows on the audit log.
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1.5">Explanation</label>
+                    <textarea wire:model="clearIssuedCancellationNote" rows="4"
+                        placeholder="e.g. Driver returned R 438.00 cash to ops on 27 May. Booked back into petty cash float."
+                        class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-rose-500 focus:ring-rose-500"></textarea>
+                    @error('clearIssuedCancellationNote') <p class="mt-1 text-xs text-rose-600">{{ $message }}</p> @enderror
+                </div>
+            </div>
+            <div class="border-t border-gray-200 px-6 py-4 flex items-center justify-end gap-3 bg-gray-50">
+                <button wire:click="cancelClearIssuedCancellation" type="button" class="rounded-lg px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-100 transition-colors">
+                    Cancel
+                </button>
+                <button wire:click="clearIssuedCancellationQuery" type="button" class="rounded-lg bg-rose-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-rose-500 transition-colors">
+                    Clear query
                 </button>
             </div>
         </div>
