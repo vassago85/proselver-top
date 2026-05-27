@@ -235,6 +235,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                         <th class="px-4 py-3 text-left text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-500">VIN</th>
                         <th class="px-4 py-3 text-left text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-500">Route</th>
                         <th class="px-4 py-3 text-left text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-500">Status</th>
+                        <th class="px-4 py-3 text-left text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-500" title="Petty cash workflow state">Petty Cash</th>
                         <th class="px-4 py-3 text-left text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-500">Driver</th>
                         <th class="px-4 py-3 text-right text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-500">Date</th>
                     </tr>
@@ -286,6 +287,42 @@ new #[Layout('components.layouts.app')] class extends Component {
                         </td>
                         <td class="px-4 py-3.5"><x-status-badge :status="$job->status" /></td>
                         <td class="px-4 py-3.5">
+                            @php
+                                // Compute the petty-cash workflow state in priority
+                                // order so we surface the most-recent / most-load-
+                                // bearing stamp first.  Removal-pending wins because
+                                // it's the actionable owner gate; issued wins next
+                                // because cash is already out; etc.  All four pieces
+                                // come straight off transport_jobs -- no extra
+                                // queries needed.
+                                $pcState = null;
+                                if ($job->advance_total !== null) {
+                                    if ($job->advance_removal_pending) {
+                                        $pcState = ['label' => 'Removal pending', 'cls' => 'bg-amber-100 text-amber-800 border-amber-200', 'icon' => 'M12 9v2m0 4h.01'];
+                                    } elseif ($job->advance_issued_at) {
+                                        $pcState = ['label' => 'Issued', 'cls' => 'bg-blue-100 text-blue-800 border-blue-200', 'icon' => 'M5 13l4 4L19 7'];
+                                    } elseif ($job->advance_approved_at) {
+                                        $pcState = ['label' => 'Approved', 'cls' => 'bg-emerald-100 text-emerald-800 border-emerald-200', 'icon' => 'M5 13l4 4L19 7'];
+                                    } elseif ($job->advance_plan_id) {
+                                        $pcState = ['label' => 'On plan', 'cls' => 'bg-indigo-100 text-indigo-800 border-indigo-200', 'icon' => 'M9 12h6M12 9v6'];
+                                    } else {
+                                        $pcState = ['label' => 'Saved', 'cls' => 'bg-slate-100 text-slate-700 border-slate-200', 'icon' => 'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4'];
+                                    }
+                                }
+                            @endphp
+                            @if($pcState)
+                                <div class="flex flex-col gap-0.5">
+                                    <span class="inline-flex items-center gap-1 self-start rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider {{ $pcState['cls'] }}">
+                                        <svg class="h-2.5 w-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="{{ $pcState['icon'] }}"/></svg>
+                                        {{ $pcState['label'] }}
+                                    </span>
+                                    <span class="text-[11px] font-mono tabular-nums text-slate-600">R {{ number_format((float) $job->advance_total, 2) }}</span>
+                                </div>
+                            @else
+                                <span class="text-xs text-slate-400">—</span>
+                            @endif
+                        </td>
+                        <td class="px-4 py-3.5">
                             @if($job->driver)
                                 <div class="flex items-center gap-2">
                                     <span class="h-6 w-6 rounded-full bg-gradient-to-br from-slate-700 to-slate-900 text-white text-[10px] font-semibold flex items-center justify-center">{{ strtoupper(substr($job->driver->name, 0, 1)) }}</span>
@@ -301,7 +338,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                     </tr>
                     @empty
                     <tr>
-                        <td colspan="8">
+                        <td colspan="9">
                             <x-empty-state
                                 :title="$search || $statusFilter ? 'No matches' : 'No orders yet'"
                                 :description="$search || $statusFilter ? 'Try adjusting your search or filters.' : 'Orders will appear here as soon as customers submit bookings.'">
