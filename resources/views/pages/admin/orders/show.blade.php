@@ -3432,7 +3432,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                             <div class="mt-2 flex flex-wrap items-end gap-2 rounded-lg border border-dashed border-emerald-300 bg-emerald-50/40 px-3 py-2">
                                 <label class="text-[11px] font-semibold uppercase tracking-wide text-gray-500 flex flex-col gap-1 flex-1 min-w-[240px]">
                                     Add a toll gate (remembered for this lane)
-                                    <select wire:model="advanceAddPlazaId"
+                                    <select wire:model.live="advanceAddPlazaId"
                                         class="rounded-md border border-gray-300 bg-white px-2 py-1.5 text-sm focus:border-emerald-500 focus:ring-emerald-500 normal-case tracking-normal">
                                         <option value="">Choose a plaza…</option>
                                         @foreach($pickerOptions as $opt)
