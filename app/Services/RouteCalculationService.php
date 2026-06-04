@@ -34,13 +34,13 @@ class RouteCalculationService
         }
 
         try {
-            // alternatives=true asks Google for up to 3 routes.  Drivers
-            // are expected to take the main highway (N-road) network
-            // rather than the literal shortest path, so we score each
-            // returned alternative on how much of its distance is on N-
-            // roads and pick the heaviest-N route.  Falls back to the
-            // first (shortest) result if scoring finds nothing or only
-            // one route comes back.
+            // alternatives=true asks Google for up to 3 routes.  Heavy
+            // trucks take the main *tolled* national corridor (better
+            // road, what dispatch plans the advance against) rather than
+            // the literal shortest path or an inland R-road shortcut, so
+            // we score each returned alternative on toll-network coverage
+            // and pick the best (see pickBestRoute).  Falls back to the
+            // first (shortest) result if only one route comes back.
             $response = Http::get('https://maps.googleapis.com/maps/api/directions/json', [
                 'origin' => "{$pickup->latitude},{$pickup->longitude}",
                 'destination' => "{$delivery->latitude},{$delivery->longitude}",
@@ -73,27 +73,19 @@ class RouteCalculationService
                 return null;
             }
 
-            $route = self::pickMainHighwayRoute($data['routes'], $pickup->id, $delivery->id);
+            $route = self::pickBestRoute($data['routes'], $pickup->id, $delivery->id);
             $leg = $route['legs'][0];
 
             $distanceKm = round($leg['distance']['value'] / 1000, 2);
             $durationMinutes = (int) ceil($leg['duration']['value'] / 60);
 
-            // Build a denser polyline by concatenating each step's
-            // polyline rather than relying on Google's heavily-
-            // simplified overview_polyline.  Steps give 10-30x more
-            // points so plaza matching is far more accurate.  Stored as
-            // a JSON array of [lat, lng] pairs; decodePolyline detects
-            // and handles both formats so cached overview polylines
-            // keep working until they're refreshed.
-            $allPoints = [];
-            foreach ($leg['steps'] ?? [] as $step) {
-                if (empty($step['polyline']['points'])) continue;
-                $allPoints = array_merge($allPoints, self::decodeGooglePolyline($step['polyline']['points']));
-            }
-
-            $polyline = !empty($allPoints)
-                ? json_encode($allPoints)
+            // Dense per-step polyline (see buildRoutePoints), stored as a
+            // JSON array of [lat, lng] pairs.  decodePolyline detects and
+            // handles both this and the legacy encoded-overview format so
+            // older cached rows keep working until refreshed.
+            $points = self::buildRoutePoints($route);
+            $polyline = !empty($points)
+                ? json_encode($points)
                 : ($route['overview_polyline']['points'] ?? null);
 
             return [
@@ -119,17 +111,22 @@ class RouteCalculationService
     private const NATIONAL_ROUTES = ['N1', 'N2', 'N3', 'N4', 'N5', 'N6', 'N7', 'N8', 'N9', 'N10', 'N11', 'N12', 'N14', 'N17', 'N18'];
 
     /**
-     * From a list of Google route alternatives, pick the one that spends
-     * the most distance on N-roads.  Ties (or all-zero scores) fall back
-     * to the first route, which is Google's recommended/shortest pick.
+     * From Google's route alternatives, pick the one a heavy truck would
+     * actually drive — the main *tolled* national corridor.
      *
-     * Scoring is "step distance × is-on-N-road", summed across the leg.
-     * A step is considered N-road if its html_instructions mentions any
-     * token from NATIONAL_ROUTES, or if the route's overall `summary`
-     * lists one and the step has no instructions of its own.  We log
-     * the chosen route so the laravel.log shows which alternative won.
+     * Primary score is toll-network coverage: how many seeded plazas the
+     * route's polyline passes (via matchPlazas).  This is what fixes the
+     * Joburg→Richards Bay class of bug, where Google also offers an
+     * inland R-road shortcut that clips the N17 only as far as Leandra
+     * (3 plazas) then bypasses Trichardt + Ermelo and the N2 — cheaper on
+     * paper but not the route trucks take.  The N17→Ermelo→N2 corridor
+     * passes far more plazas and now wins.
+     *
+     * Ties (e.g. genuinely toll-free trips where every alternative scores
+     * 0) fall back to the previous heuristic: most metres on N-roads,
+     * then Google's own ordering (index 0 = recommended/shortest).
      */
-    private static function pickMainHighwayRoute(array $routes, ?int $pickupId = null, ?int $deliveryId = null): array
+    private static function pickBestRoute(array $routes, ?int $pickupId = null, ?int $deliveryId = null): array
     {
         if (count($routes) === 1) {
             return $routes[0];
@@ -137,46 +134,88 @@ class RouteCalculationService
 
         $pattern = '/\b(?:' . implode('|', self::NATIONAL_ROUTES) . ')\b/i';
         $bestIndex = 0;
-        $bestScore = -1.0;
-        $scores = [];
+        $bestPlazas = -1;
+        $bestNMetres = -1.0;
+        $log = [];
 
         foreach ($routes as $idx => $route) {
             $leg = $route['legs'][0] ?? null;
             if (!$leg) continue;
 
-            $summary = (string) ($route['summary'] ?? '');
-            $summaryMentionsN = (bool) preg_match($pattern, $summary);
+            $plazaCount = count(self::matchPlazas(self::buildRoutePoints($route)));
+            $nMetres = self::nRoadMetres($leg, $route, $pattern);
 
-            $nMetres = 0;
-            foreach ($leg['steps'] ?? [] as $step) {
-                $instructions = (string) ($step['html_instructions'] ?? '');
-                $isN = (bool) preg_match($pattern, $instructions);
-                if (!$isN && $instructions === '' && $summaryMentionsN) {
-                    $isN = true;
-                }
-                if ($isN) {
-                    $nMetres += (int) ($step['distance']['value'] ?? 0);
-                }
-            }
+            $log[$idx] = [
+                'summary' => $route['summary'] ?? null,
+                'plazas' => $plazaCount,
+                'n_road_km' => round($nMetres / 1000, 1),
+            ];
 
-            $scores[$idx] = $nMetres;
-            if ($nMetres > $bestScore) {
-                $bestScore = (float) $nMetres;
+            // Lexicographic: more plazas wins; tie → more N-road metres;
+            // tie → keep the earlier (Google-preferred) index.
+            if ($plazaCount > $bestPlazas
+                || ($plazaCount === $bestPlazas && $nMetres > $bestNMetres)) {
+                $bestPlazas = $plazaCount;
+                $bestNMetres = $nMetres;
                 $bestIndex = $idx;
             }
         }
 
-        Log::info('Route calc: picked main-highway alternative', [
+        Log::info('Route calc: picked best toll-corridor alternative', [
             'pickup_id' => $pickupId,
             'delivery_id' => $deliveryId,
             'alternatives' => count($routes),
             'picked_index' => $bestIndex,
-            'picked_n_road_km' => round($bestScore / 1000, 1),
-            'summary' => $routes[$bestIndex]['summary'] ?? null,
-            'all_scores_km' => array_map(fn ($m) => round($m / 1000, 1), $scores),
+            'picked_plazas' => $bestPlazas,
+            'picked_n_road_km' => round($bestNMetres / 1000, 1),
+            'scores' => $log,
         ]);
 
         return $routes[$bestIndex];
+    }
+
+    /**
+     * Metres of a route's leg spent on N-roads.  A step counts if its
+     * html_instructions name a NATIONAL_ROUTES token, or the route
+     * summary names one and the step has no instructions of its own.
+     */
+    private static function nRoadMetres(array $leg, array $route, string $pattern): float
+    {
+        $summaryMentionsN = (bool) preg_match($pattern, (string) ($route['summary'] ?? ''));
+        $nMetres = 0;
+        foreach ($leg['steps'] ?? [] as $step) {
+            $instructions = (string) ($step['html_instructions'] ?? '');
+            $isN = (bool) preg_match($pattern, $instructions);
+            if (!$isN && $instructions === '' && $summaryMentionsN) {
+                $isN = true;
+            }
+            if ($isN) {
+                $nMetres += (int) ($step['distance']['value'] ?? 0);
+            }
+        }
+        return (float) $nMetres;
+    }
+
+    /**
+     * Build a dense [lat,lng] point array for a Google route by
+     * concatenating each step's polyline (10-30x more points than the
+     * heavily-simplified overview_polyline, so plaza matching is far more
+     * accurate).  Falls back to the overview polyline if steps carry no
+     * geometry.  Shared by route scoring and the stored polyline so both
+     * see identical geometry.
+     */
+    private static function buildRoutePoints(array $route): array
+    {
+        $leg = $route['legs'][0] ?? null;
+        $points = [];
+        foreach ($leg['steps'] ?? [] as $step) {
+            if (empty($step['polyline']['points'])) continue;
+            $points = array_merge($points, self::decodeGooglePolyline($step['polyline']['points']));
+        }
+        if (empty($points) && !empty($route['overview_polyline']['points'])) {
+            $points = self::decodeGooglePolyline($route['overview_polyline']['points']);
+        }
+        return $points;
     }
 
     /**
@@ -189,7 +228,7 @@ class RouteCalculationService
      *   plaza sitting between two polyline points was missed even
      *   though the road clearly passes through it.  We now match
      *   against every decoded point.
-     * - 5km haversine threshold (was 2km).  Simplification approximates
+     * - 5km threshold (was 2km).  Simplification approximates
      *   highway curves as straight lines, which can put a plaza 3-4km
      *   from the nearest polyline point even when the plaza is right
      *   on the road.  SA mainline plazas are spaced 30+km apart and
@@ -210,23 +249,43 @@ class RouteCalculationService
     public static function detectTolls(string $polyline, int $tollClass): array
     {
         $points = self::decodePolyline($polyline);
+        $plazas = self::matchPlazas($points);
+
+        $matched = [];
+        $totalCost = 0;
+        foreach ($plazas as $plaza) {
+            $fee = $plaza->feeForClass($tollClass);
+            $matched[] = ['plaza' => $plaza, 'fee' => $fee];
+            $totalCost += $fee;
+        }
+
+        return ['plazas' => $matched, 'total_cost' => round($totalCost, 2)];
+    }
+
+    /**
+     * Core geometry: which active toll plazas does this polyline pass?
+     * Returns the matched TollPlaza models (no fees) so it can be reused
+     * both for the fee total (detectTolls) and for ranking route
+     * alternatives by toll-network coverage (pickBestRoute).
+     */
+    public static function matchPlazas(array $points): array
+    {
         if (empty($points)) {
-            return ['plazas' => [], 'total_cost' => 0];
+            return [];
         }
 
         // Bounding-box prefilter.  Per-step polylines run 5-10k points;
         // multiplying that by 36+ plazas = hundreds of thousands of
-        // haversine calcs per modal recalc, which lands as visible UI
-        // latency.  Computing the polyline's bbox once and DB-filtering
-        // plazas to the same bbox + buffer drops the candidate set to
-        // single digits for most routes -- haversines we actually do
-        // run drop by ~80%.
+        // distance calcs per recalc, which lands as visible UI latency.
+        // Computing the polyline's bbox once and DB-filtering plazas to
+        // the same bbox + buffer drops the candidate set to single
+        // digits for most routes.
         //
         // 1 degree of latitude ≈ 111 km on Earth; longitude varies but
         // at SA latitudes is ~95 km/deg, so 111 is a safe over-estimate.
         // We use 111 for both axes which makes the bbox slightly bigger
         // than the true 5km radius -- false positives are then filtered
-        // out by the precise haversine in the inner loop.
+        // out by the precise point-to-segment check in the inner loop.
         $minLat = $maxLat = $points[0][0];
         $minLng = $maxLng = $points[0][1];
         foreach ($points as $p) {
@@ -243,7 +302,6 @@ class RouteCalculationService
             ->get();
 
         $matched = [];
-        $totalCost = 0;
         $pointCount = count($points);
 
         foreach ($plazas as $plaza) {
@@ -254,9 +312,7 @@ class RouteCalculationService
             // a straight point distance so a degenerate route still works.
             if ($pointCount === 1) {
                 if (self::pointToSegmentKm($plat, $plng, $points[0][0], $points[0][1], $points[0][0], $points[0][1]) <= self::TOLL_MATCH_RADIUS_KM) {
-                    $fee = $plaza->feeForClass($tollClass);
-                    $matched[] = ['plaza' => $plaza, 'fee' => $fee];
-                    $totalCost += $fee;
+                    $matched[] = $plaza;
                 }
                 continue;
             }
@@ -268,18 +324,13 @@ class RouteCalculationService
                     $points[$i][0], $points[$i][1],
                 );
                 if ($distance <= self::TOLL_MATCH_RADIUS_KM) {
-                    $fee = $plaza->feeForClass($tollClass);
-                    $matched[] = [
-                        'plaza' => $plaza,
-                        'fee' => $fee,
-                    ];
-                    $totalCost += $fee;
+                    $matched[] = $plaza;
                     break;
                 }
             }
         }
 
-        return ['plazas' => $matched, 'total_cost' => round($totalCost, 2)];
+        return $matched;
     }
 
     /**
@@ -411,17 +462,5 @@ class RouteCalculationService
         }
 
         return $points;
-    }
-
-    private static function haversine(float $lat1, float $lon1, float $lat2, float $lon2): float
-    {
-        $earthRadius = 6371;
-        $dLat = deg2rad($lat2 - $lat1);
-        $dLon = deg2rad($lon2 - $lon1);
-        $a = sin($dLat / 2) * sin($dLat / 2) +
-            cos(deg2rad($lat1)) * cos(deg2rad($lat2)) *
-            sin($dLon / 2) * sin($dLon / 2);
-        $c = 2 * atan2(sqrt($a), sqrt(1 - $a));
-        return $earthRadius * $c;
     }
 }
