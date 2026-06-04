@@ -255,7 +255,16 @@ class RouteCalculationService
         $totalCost = 0;
         foreach ($plazas as $plaza) {
             $fee = $plaza->feeForClass($tollClass);
-            $matched[] = ['plaza' => $plaza, 'fee' => $fee];
+            // toll_plaza_id + source let the estimator dedupe against
+            // remembered lane plazas, and let the UI tell auto-detected
+            // gates apart from ops-added ones (which carry a "remembered"
+            // badge and a remove button).
+            $matched[] = [
+                'plaza' => $plaza,
+                'fee' => $fee,
+                'toll_plaza_id' => (int) $plaza->id,
+                'source' => 'auto',
+            ];
             $totalCost += $fee;
         }
 

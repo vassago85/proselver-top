@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\Job;
 use App\Models\RouteEstimate;
+use App\Models\RouteTollPlazaHint;
 use App\Models\SystemSetting;
 use App\Models\TollPlaza;
 use App\Models\VehicleClass;
@@ -187,12 +188,51 @@ class TripCostEstimator
         // next estimate without manual cache invalidation.
         $detected = RouteCalculationService::detectTolls($route['polyline'], (int) $tollClass);
 
-        $plazas = collect($detected['plazas'] ?? [])
+        // Merge in any plazas ops has manually attached to this exact
+        // lane (pickup, delivery).  These are gates whose booth sits too
+        // far from Google's chosen polyline to auto-match -- typically
+        // because Google only offers a bypass alternative for the lane.
+        // De-dupe by toll_plaza_id so the same plaza never appears twice
+        // if a later route recalc happens to start including it.
+        $detectedIds = collect($detected['plazas'] ?? [])
+            ->pluck('toll_plaza_id')
+            ->filter()
+            ->map(fn ($id) => (int) $id)
+            ->all();
+
+        $rememberedIds = array_values(array_diff(
+            RouteTollPlazaHint::plazaIdsForRoute($pickup->id, $delivery->id),
+            $detectedIds,
+        ));
+
+        $rememberedEntries = [];
+        $rememberedTotal = 0.0;
+        if (!empty($rememberedIds)) {
+            $rememberedPlazas = TollPlaza::active()
+                ->whereIn('id', $rememberedIds)
+                ->get();
+            foreach ($rememberedPlazas as $plaza) {
+                $fee = (float) $plaza->feeForClass((int) $tollClass);
+                $rememberedEntries[] = [
+                    'plaza' => $plaza,
+                    'fee' => $fee,
+                    'toll_plaza_id' => (int) $plaza->id,
+                    'source' => 'remembered',
+                ];
+                $rememberedTotal += $fee;
+            }
+        }
+
+        $mergedEntries = array_merge($detected['plazas'] ?? [], $rememberedEntries);
+
+        $plazas = collect($mergedEntries)
             ->map(fn ($entry) => [
                 'plaza_name' => $entry['plaza']->plaza_name,
                 'road_name' => $entry['plaza']->road_name,
                 'plaza_type' => $entry['plaza']->plaza_type,
                 'fee' => (float) $entry['fee'],
+                'toll_plaza_id' => (int) ($entry['toll_plaza_id'] ?? $entry['plaza']->id),
+                'source' => (string) ($entry['source'] ?? 'auto'),
             ])
             ->values()
             ->all();
@@ -238,7 +278,7 @@ class TripCostEstimator
             'duration_minutes' => $durationMinutes,
             'toll_class' => (int) $tollClass,
             'plazas' => $plazas,
-            'toll_total' => round((float) ($detected['total_cost'] ?? 0), 2),
+            'toll_total' => round((float) ($detected['total_cost'] ?? 0) + $rememberedTotal, 2),
             'days_count' => $daysCount,
             'suggested_food' => $suggestedFood,
             'food_rate_per_day' => $foodRate,

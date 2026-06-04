@@ -3,6 +3,8 @@
 use App\Models\Job;
 use App\Models\ModelTollClassHint;
 use App\Models\PettyCashPlan;
+use App\Models\RouteTollPlazaHint;
+use App\Models\TollPlaza;
 use App\Models\User;
 use App\Services\AuditService;
 use App\Services\TripCostEstimator;
@@ -110,6 +112,13 @@ new #[Layout('components.layouts.app')] class extends Component {
     // Persisted to advance_custom_items (JSON) on save.  Labels are
     // remembered per customer company so future trips auto-suggest.
     public array $advanceCustomItems = [];
+
+    // Picker state for "Add gate" -- the toll_plaza_id selected in
+    // the dropdown next to the toll table.  Cleared after each add.
+    // The act of adding writes a RouteTollPlazaHint for the lane so
+    // the same plaza re-applies on every future trip of this
+    // (pickup, delivery) pair.  See addTollGate() / removeTollGate().
+    public ?int $advanceAddPlazaId = null;
 
     public function mount(Job $job): void
     {
@@ -650,6 +659,69 @@ new #[Layout('components.layouts.app')] class extends Component {
     }
 
     /**
+     * Attach a specific seeded toll plaza to this lane.  Used when
+     * Google's polyline misses a real booth -- adding it here also
+     * teaches the per-lane memory (RouteTollPlazaHint), so the same
+     * plaza re-applies on every future trip of this (pickup, delivery)
+     * pair without ops touching it.
+     *
+     * Refuses if the plaza is already in the current list (auto-detected
+     * or already remembered) -- avoids accidental double-counting.
+     */
+    public function addTollGate(TripCostEstimator $estimator): void
+    {
+        if (!auth()->user()?->isInternal()) {
+            abort(403);
+        }
+        $plazaId = $this->advanceAddPlazaId ? (int) $this->advanceAddPlazaId : null;
+        if (!$plazaId) {
+            return;
+        }
+        if (!$this->job->pickup_location_id || !$this->job->delivery_location_id) {
+            session()->flash('error', 'Cannot remember a toll gate without both pickup and delivery locations set.');
+            return;
+        }
+        if (!TollPlaza::active()->whereKey($plazaId)->exists()) {
+            session()->flash('error', 'That toll plaza is not active.');
+            return;
+        }
+
+        RouteTollPlazaHint::remember(
+            (int) $this->job->pickup_location_id,
+            (int) $this->job->delivery_location_id,
+            $plazaId,
+            auth()->id(),
+        );
+
+        $this->advanceAddPlazaId = null;
+        $this->advanceTollResult = $estimator->estimateTolls($this->job, $this->advanceTollClassOverride);
+    }
+
+    /**
+     * Drop a remembered gate from this lane.  Only valid for entries
+     * with source === 'remembered' -- auto-detected plazas are not
+     * removable (clear them by deactivating the plaza or correcting
+     * its coordinates).  Re-estimates so the toll subtotal updates.
+     */
+    public function removeTollGate(int $plazaId, TripCostEstimator $estimator): void
+    {
+        if (!auth()->user()?->isInternal()) {
+            abort(403);
+        }
+        if (!$this->job->pickup_location_id || !$this->job->delivery_location_id) {
+            return;
+        }
+
+        RouteTollPlazaHint::forget(
+            (int) $this->job->pickup_location_id,
+            (int) $this->job->delivery_location_id,
+            $plazaId,
+        );
+
+        $this->advanceTollResult = $estimator->estimateTolls($this->job, $this->advanceTollClassOverride);
+    }
+
+    /**
      * Re-run the toll-plaza calc with the chosen override class.  The
      * dropdown is wire:model.live on advanceTollClassOverride; Livewire
      * fires this hook on every change so the plaza list + subtotal
@@ -899,6 +971,16 @@ new #[Layout('components.layouts.app')] class extends Component {
                 auth()->id(),
             );
         }
+
+        // Bump last_used_at on every remembered toll-gate for this
+        // lane.  use_count is bumped by addTollGate() so it counts
+        // "ops re-affirmed the gate"; markUsed here is the "this lane
+        // actually carried a trip" signal -- useful when curating
+        // which lane corrections are still active routes.
+        RouteTollPlazaHint::markUsed(
+            (int) $this->job->pickup_location_id,
+            (int) $this->job->delivery_location_id,
+        );
 
         // Per-customer-company memory of custom petty-cash labels.
         // Subsequent trips for the same company will auto-suggest the
@@ -3269,9 +3351,25 @@ new #[Layout('components.layouts.app')] class extends Component {
                             @endif
                         </p>
 
+                        @php
+                            // Plaza ids already on this trip (auto or
+                            // remembered).  Used to filter the picker so
+                            // ops can't add a duplicate.
+                            $existingPlazaIds = collect($advanceTollResult['plazas'] ?? [])
+                                ->pluck('toll_plaza_id')
+                                ->filter()
+                                ->map(fn ($id) => (int) $id)
+                                ->all();
+                            $pickerOptions = \App\Models\TollPlaza::active()
+                                ->orderBy('road_name')
+                                ->orderBy('plaza_name')
+                                ->get(['id', 'road_name', 'plaza_name', 'plaza_type'])
+                                ->reject(fn ($p) => in_array((int) $p->id, $existingPlazaIds, true));
+                        @endphp
+
                         @if(empty($advanceTollResult['plazas']))
                             <div class="rounded-lg bg-gray-50 border border-gray-200 px-3 py-2 text-xs text-gray-600">
-                                No toll plazas detected along this route. Type the rand value below if you know there are tolls.
+                                No toll plazas detected along this route. Add a gate below if Google's route is missing one, or type the rand value further down.
                             </div>
                         @else
                             <div class="rounded-lg border border-gray-200 overflow-hidden">
@@ -3282,23 +3380,75 @@ new #[Layout('components.layouts.app')] class extends Component {
                                             <th class="text-left px-3 py-1.5 font-medium">Road</th>
                                             <th class="text-left px-3 py-1.5 font-medium">Type</th>
                                             <th class="text-right px-3 py-1.5 font-medium">Fee (R)</th>
+                                            <th class="w-6"></th>
                                         </tr>
                                     </thead>
                                     <tbody class="divide-y divide-gray-100">
                                         @foreach($advanceTollResult['plazas'] as $plaza)
-                                            <tr>
-                                                <td class="px-3 py-1.5 text-gray-900">{{ $plaza['plaza_name'] }}</td>
+                                            @php $isRemembered = ($plaza['source'] ?? 'auto') === 'remembered'; @endphp
+                                            <tr class="{{ $isRemembered ? 'bg-emerald-50/40' : '' }}">
+                                                <td class="px-3 py-1.5 text-gray-900">
+                                                    {{ $plaza['plaza_name'] }}
+                                                    @if($isRemembered)
+                                                        <span class="ml-1 inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-700" title="Manually added to this lane. Auto-applies on future trips with the same pickup and delivery.">
+                                                            <svg class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><polyline points="21 3 21 8 16 8"/></svg>
+                                                            remembered
+                                                        </span>
+                                                    @endif
+                                                </td>
                                                 <td class="px-3 py-1.5 text-gray-600">{{ $plaza['road_name'] }}</td>
                                                 <td class="px-3 py-1.5 text-gray-500">{{ $plaza['plaza_type'] }}</td>
                                                 <td class="px-3 py-1.5 text-right font-mono text-gray-900">{{ number_format((float) $plaza['fee'], 2) }}</td>
+                                                <td class="px-2 py-1.5 text-right">
+                                                    @if($isRemembered && !empty($plaza['toll_plaza_id']))
+                                                        <button type="button"
+                                                            wire:click="removeTollGate({{ (int) $plaza['toll_plaza_id'] }})"
+                                                            wire:loading.attr="disabled"
+                                                            class="text-gray-400 hover:text-rose-600 disabled:opacity-50"
+                                                            title="Remove this gate from the lane memory.">
+                                                            <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                                                        </button>
+                                                    @endif
+                                                </td>
                                             </tr>
                                         @endforeach
                                         <tr class="bg-gray-50">
                                             <td colspan="3" class="px-3 py-1.5 text-right font-semibold text-gray-700">Toll subtotal</td>
                                             <td class="px-3 py-1.5 text-right font-mono font-bold text-emerald-700">R {{ number_format($tollsRand, 2) }}</td>
+                                            <td></td>
                                         </tr>
                                     </tbody>
                                 </table>
+                            </div>
+                        @endif
+
+                        {{-- Add a missing gate.  Writes a per-lane
+                             RouteTollPlazaHint, so the next trip on the
+                             same (pickup, delivery) pair will include it
+                             automatically.  Hidden when both endpoint
+                             ids aren't set (estimator already shows a
+                             warning above in that case). --}}
+                        @if($job->pickup_location_id && $job->delivery_location_id)
+                            <div class="mt-2 flex flex-wrap items-end gap-2 rounded-lg border border-dashed border-emerald-300 bg-emerald-50/40 px-3 py-2">
+                                <label class="text-[11px] font-semibold uppercase tracking-wide text-gray-500 flex flex-col gap-1 flex-1 min-w-[240px]">
+                                    Add a toll gate (remembered for this lane)
+                                    <select wire:model="advanceAddPlazaId"
+                                        class="rounded-md border border-gray-300 bg-white px-2 py-1.5 text-sm focus:border-emerald-500 focus:ring-emerald-500 normal-case tracking-normal">
+                                        <option value="">Choose a plaza…</option>
+                                        @foreach($pickerOptions as $opt)
+                                            <option value="{{ $opt->id }}">{{ $opt->road_name }} — {{ $opt->plaza_name }} ({{ $opt->plaza_type }})</option>
+                                        @endforeach
+                                    </select>
+                                </label>
+                                <button wire:click="addTollGate" type="button"
+                                    wire:loading.attr="disabled"
+                                    @if(!$advanceAddPlazaId) disabled @endif
+                                    class="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50">
+                                    Add gate
+                                </button>
+                                <span class="basis-full text-[10px] text-gray-500 leading-snug">
+                                    Use this when Google's route skips a real booth (e.g. an inland bypass alternative). It'll re-apply on every future trip with the same pickup and delivery.
+                                </span>
                             </div>
                         @endif
                     @else
