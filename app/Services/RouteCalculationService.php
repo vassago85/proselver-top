@@ -195,6 +195,15 @@ class RouteCalculationService
      *   on the road.  SA mainline plazas are spaced 30+km apart and
      *   parallel highways are 20+km apart, so a 5km window won't false-
      *   match across alternate routes.
+     * - Distance is measured plaza→nearest line SEGMENT, not plaza→
+     *   nearest vertex.  On a long straight stretch (e.g. the ~73km
+     *   Trichardt→Ermelo leg on the N17) Google's polyline keeps only
+     *   a handful of widely-spaced vertices, so a booth sitting between
+     *   two of them can be >5km from every *vertex* while being right
+     *   on the road (≈0km from the *segment* joining them).  Measuring
+     *   to the segment fixes those drops and is robust to sparse or
+     *   legacy cached polylines.  It only ever *adds* matches (segment
+     *   distance ≤ vertex distance), never removes them.
      */
     public const TOLL_MATCH_RADIUS_KM = 5.0;
 
@@ -235,10 +244,29 @@ class RouteCalculationService
 
         $matched = [];
         $totalCost = 0;
+        $pointCount = count($points);
 
         foreach ($plazas as $plaza) {
-            foreach ($points as $point) {
-                $distance = self::haversine($point[0], $point[1], (float) $plaza->latitude, (float) $plaza->longitude);
+            $plat = (float) $plaza->latitude;
+            $plng = (float) $plaza->longitude;
+
+            // Single-point polyline can't form a segment -- fall back to
+            // a straight point distance so a degenerate route still works.
+            if ($pointCount === 1) {
+                if (self::pointToSegmentKm($plat, $plng, $points[0][0], $points[0][1], $points[0][0], $points[0][1]) <= self::TOLL_MATCH_RADIUS_KM) {
+                    $fee = $plaza->feeForClass($tollClass);
+                    $matched[] = ['plaza' => $plaza, 'fee' => $fee];
+                    $totalCost += $fee;
+                }
+                continue;
+            }
+
+            for ($i = 1; $i < $pointCount; $i++) {
+                $distance = self::pointToSegmentKm(
+                    $plat, $plng,
+                    $points[$i - 1][0], $points[$i - 1][1],
+                    $points[$i][0], $points[$i][1],
+                );
                 if ($distance <= self::TOLL_MATCH_RADIUS_KM) {
                     $fee = $plaza->feeForClass($tollClass);
                     $matched[] = [
@@ -252,6 +280,76 @@ class RouteCalculationService
         }
 
         return ['plazas' => $matched, 'total_cost' => round($totalCost, 2)];
+    }
+
+    /**
+     * Minimum distance (km) from a plaza to a route polyline, measured to
+     * the nearest line *segment* between consecutive points (not just the
+     * nearest vertex).  Exposed for the tolls:debug diagnostic so it
+     * reports the same number detectTolls() actually matches on.
+     */
+    public static function distanceToPolylineKm(array $points, float $lat, float $lng): float
+    {
+        $count = count($points);
+        if ($count === 0) {
+            return INF;
+        }
+        if ($count === 1) {
+            return self::pointToSegmentKm($lat, $lng, $points[0][0], $points[0][1], $points[0][0], $points[0][1]);
+        }
+
+        $min = INF;
+        for ($i = 1; $i < $count; $i++) {
+            $d = self::pointToSegmentKm($lat, $lng, $points[$i - 1][0], $points[$i - 1][1], $points[$i][0], $points[$i][1]);
+            if ($d < $min) {
+                $min = $d;
+                if ($min === 0.0) break;
+            }
+        }
+        return $min;
+    }
+
+    /**
+     * Distance (km) from point P to the line segment A→B.
+     *
+     * Uses a local equirectangular projection (degrees → km on a plane
+     * centred near the points) so we can do plain planar point-to-segment
+     * geometry.  Over the few-km spans between adjacent polyline points at
+     * SA latitudes the projection error is well under 1% — far tighter
+     * than the 5km match window — and it's much cheaper than running
+     * haversine at every clamp step.
+     */
+    private static function pointToSegmentKm(
+        float $plat, float $plng,
+        float $alat, float $alng,
+        float $blat, float $blng,
+    ): float {
+        $kmPerDegLat = 111.32;
+        $kmPerDegLng = 111.32 * cos(deg2rad($plat));
+
+        // Translate so the plaza sits at the origin.
+        $ax = ($alng - $plng) * $kmPerDegLng;
+        $ay = ($alat - $plat) * $kmPerDegLat;
+        $bx = ($blng - $plng) * $kmPerDegLng;
+        $by = ($blat - $plat) * $kmPerDegLat;
+
+        $dx = $bx - $ax;
+        $dy = $by - $ay;
+        $segLenSq = $dx * $dx + $dy * $dy;
+
+        if ($segLenSq <= 1e-12) {
+            // A and B coincide -- segment degenerates to a point.
+            return sqrt($ax * $ax + $ay * $ay);
+        }
+
+        // Parameter of the origin's projection onto AB, clamped to the
+        // segment so we never measure past either endpoint.
+        $t = -($ax * $dx + $ay * $dy) / $segLenSq;
+        $t = max(0.0, min(1.0, $t));
+
+        $cx = $ax + $t * $dx;
+        $cy = $ay + $t * $dy;
+        return sqrt($cx * $cx + $cy * $cy);
     }
 
     /**

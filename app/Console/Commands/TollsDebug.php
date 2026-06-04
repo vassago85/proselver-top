@@ -89,17 +89,15 @@ class TollsDebug extends Command
         $this->line(sprintf("  Match radius:  %.1f km (RouteCalculationService::TOLL_MATCH_RADIUS_KM)", RouteCalculationService::TOLL_MATCH_RADIUS_KM));
         $this->newLine();
 
-        // For every active plaza, compute the minimum distance to any
-        // polyline point.  Sorted ascending so the nearest plazas (most
-        // likely matches or near-misses) appear first.
+        // For every active plaza, compute the minimum distance to the
+        // nearest route segment.  Sorted ascending so the nearest plazas
+        // (most likely matches or near-misses) appear first.
         $plazas = TollPlaza::active()->get();
         $rows = [];
         foreach ($plazas as $plaza) {
-            $minDist = INF;
-            foreach ($points as $point) {
-                $d = $this->haversine((float) $point[0], (float) $point[1], (float) $plaza->latitude, (float) $plaza->longitude);
-                if ($d < $minDist) $minDist = $d;
-            }
+            // Same point-to-segment metric detectTolls() matches on, so
+            // the min distance shown here is exactly what decides a hit.
+            $minDist = RouteCalculationService::distanceToPolylineKm($points, (float) $plaza->latitude, (float) $plaza->longitude);
             $matches = $minDist <= RouteCalculationService::TOLL_MATCH_RADIUS_KM;
             $rows[] = [
                 'plaza' => $plaza->plaza_name,
@@ -138,15 +136,5 @@ class TollsDebug extends Command
         }
 
         return self::SUCCESS;
-    }
-
-    /** Same haversine as RouteCalculationService -- duplicated here to keep this command self-contained. */
-    private function haversine(float $lat1, float $lon1, float $lat2, float $lon2): float
-    {
-        $earthRadius = 6371;
-        $dLat = deg2rad($lat2 - $lat1);
-        $dLon = deg2rad($lon2 - $lon1);
-        $a = sin($dLat / 2) ** 2 + cos(deg2rad($lat1)) * cos(deg2rad($lat2)) * sin($dLon / 2) ** 2;
-        return $earthRadius * 2 * atan2(sqrt($a), sqrt(1 - $a));
     }
 }
