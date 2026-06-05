@@ -50,14 +50,40 @@ class extends Component
             : ['customer_owner', 'customer_admin', 'customer_user', 'customer_dispatcher'];
     }
 
+    /**
+     * Who can add/edit/deactivate members from this page.
+     *
+     * canManageCompanyData() is the canonical "this user runs their
+     * tenant's customer-portal data" check used by the sidebar, drivers
+     * page, and petty-cash page -- it covers customer_owner /
+     * customer_admin AND the legacy dealer-tier roles (dealer_principal,
+     * stock_controller, sales_manager_new/used, oem_admin).  We tack
+     * body_builder_owner on top because that slug isn't included in
+     * canManageCompanyData() but legitimately needs to manage its own
+     * body-builder team here.
+     *
+     * Used as both the Blade visibility flag (via $canManage in with())
+     * and as a hard guard at the top of every mutating action -- UI
+     * gating alone is bypassable through the Livewire wire payload,
+     * which the 2026-04-22 security audit flagged on this page.
+     */
+    protected function canManage(): bool
+    {
+        $user = auth()->user();
+        return $user && ($user->canManageCompanyData() || $user->hasRole('body_builder_owner'));
+    }
+
     public function create(): void
     {
+        abort_unless($this->canManage(), 403);
         $this->resetForm();
         $this->showForm = true;
     }
 
     public function edit(int $id): void
     {
+        abort_unless($this->canManage(), 403);
+
         // Account-owners cannot edit their own row from this screen — name,
         // password and role changes for the current user must go through
         // /profile so a single rogue session can't lock its own role to
@@ -89,6 +115,8 @@ class extends Component
 
     public function save(): void
     {
+        abort_unless($this->canManage(), 403);
+
         $rules = [
             'userName' => 'required|string|max:255',
             'userEmail' => 'required|email|max:255',
@@ -166,6 +194,8 @@ class extends Component
 
     public function toggleActive(int $id): void
     {
+        abort_unless($this->canManage(), 403);
+
         $user = User::whereHas('companies', fn($q) => $q->where('companies.id', $this->company->id))
             ->findOrFail($id);
 
@@ -186,8 +216,7 @@ class extends Component
 
     public function with(): array
     {
-        $user = auth()->user();
-        $canManage = $user->hasAnyRole(['customer_owner', 'customer_admin', 'body_builder_owner']);
+        $canManage = $this->canManage();
 
         $members = User::whereHas('companies', fn($q) => $q->where('companies.id', $this->company->id))
             ->with(['roles', 'companies' => fn($q) => $q->where('companies.id', $this->company->id)])
