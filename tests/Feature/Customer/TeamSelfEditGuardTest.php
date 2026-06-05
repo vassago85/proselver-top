@@ -92,6 +92,16 @@ test('OEM-typed company shows OEM role labels in the team page', function () {
         ->assertDontSee('Customer Owner');
 });
 
+test('Dealer-typed company shows Dealer role labels in the team page', function () {
+    ['owner' => $owner] = makeOwnerScenario(Company::TYPE_DEALER);
+
+    $this->actingAs($owner);
+
+    Volt::test('customer.team.index')
+        ->assertSee('Dealer Owner')
+        ->assertDontSee('Customer Owner');
+});
+
 test('Customer-typed company keeps Customer role labels', function () {
     ['owner' => $owner] = makeOwnerScenario(Company::TYPE_CUSTOMER);
 

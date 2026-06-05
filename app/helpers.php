@@ -53,3 +53,28 @@ if (!function_exists('resolveUserHomePath')) {
         return route('profile.index');
     }
 }
+
+if (!function_exists('tenantRoleDisplayName')) {
+    /**
+     * Display label for a customer-tier role name, adjusted for the
+     * tenant's company type.  All customer-tier roles share the same
+     * underlying slugs (customer_owner / customer_admin / customer_user
+     * / customer_dispatcher) and are seeded with "Customer X" names,
+     * but dealers and OEMs want their portal to read "Dealer X" /
+     * "OEM X".  This is presentation-only -- slugs and permissions are
+     * unchanged.
+     *
+     * Centralised here so the user-menu header, profile page, and team
+     * page all relabel the same way.  $companyType is the
+     * Company::TYPE_* constant of the user's primary company (null is
+     * tolerated: returns the seeded name as-is).
+     */
+    function tenantRoleDisplayName(string $roleName, ?string $companyType = null): string
+    {
+        return match ($companyType) {
+            \App\Models\Company::TYPE_OEM    => str_replace('Customer ', 'OEM ', $roleName),
+            \App\Models\Company::TYPE_DEALER => str_replace('Customer ', 'Dealer ', $roleName),
+            default                          => $roleName,
+        };
+    }
+}

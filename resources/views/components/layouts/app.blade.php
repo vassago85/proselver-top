@@ -161,16 +161,14 @@
                             </span>
                             @php
                                 // Remap "Customer X" → "OEM X" / "Dealer X" when the
-                                // user's primary company is typed as such — see sidebar
-                                // notes; we keep the customer_* role slug for tenanting
-                                // but present an OEM/Dealer label to the human.
-                                $primaryRoleName = auth()->user()->roles->first()?->name ?? 'Member';
-                                $primaryCompanyType = optional(auth()->user()->companies()->first())->type;
-                                if ($primaryCompanyType === \App\Models\Company::TYPE_OEM) {
-                                    $primaryRoleName = str_replace('Customer ', 'OEM ', $primaryRoleName);
-                                } elseif ($primaryCompanyType === \App\Models\Company::TYPE_DEALER) {
-                                    $primaryRoleName = str_replace('Customer ', 'Dealer ', $primaryRoleName);
-                                }
+                                // user's primary company is typed as such — we keep
+                                // the customer_* role slug for tenanting but present
+                                // an OEM/Dealer label to the human.  Shared helper so
+                                // the profile + team pages relabel identically.
+                                $primaryRoleName = tenantRoleDisplayName(
+                                    auth()->user()->roles->first()?->name ?? 'Member',
+                                    optional(auth()->user()->companies()->first())->type,
+                                );
                             @endphp
                             <span class="hidden md:flex flex-col items-start leading-tight text-left">
                                 <span class="text-sm font-semibold text-slate-900 truncate max-w-[140px]">{{ auth()->user()->name }}</span>

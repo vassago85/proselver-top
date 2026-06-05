@@ -235,14 +235,12 @@ class extends Component
 
         // Customer / dealer / OEM all share this team page (the underlying
         // role slugs are the customer_* family for tenanted customers
-        // regardless of what they manufacture). Remap the user-facing label
-        // when the company self-identifies as an OEM so an FAW or Isuzu
-        // operator doesn't see "Customer Owner" everywhere — the data is
-        // unchanged, only the display.
-        $isOemCompany = $this->company->type === Company::TYPE_OEM;
-        $roleLabel = function (string $name) use ($isOemCompany): string {
-            return $isOemCompany ? str_replace('Customer ', 'OEM ', $name) : $name;
-        };
+        // regardless of what they manufacture). Remap the user-facing
+        // label by tenant type via the shared helper, so dealers see
+        // "Dealer Owner" and OEMs see "OEM Owner" -- matches the header
+        // and profile page, all driven from one place.
+        $companyType = $this->company->type;
+        $roleLabel = fn (string $name): string => tenantRoleDisplayName($name, $companyType);
 
         $roleOptions = $customerRoles->map(fn ($r) => [
             'value' => $r->slug,
@@ -258,7 +256,7 @@ class extends Component
 
         return compact(
             'members', 'canManage', 'locations', 'customerRoles',
-            'roleLabel', 'isOemCompany', 'roleOptions', 'locationOptions',
+            'roleLabel', 'roleOptions', 'locationOptions',
             'tenantRoleSlugs'
         );
     }
