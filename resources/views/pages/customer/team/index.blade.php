@@ -229,9 +229,23 @@ class extends Component
             ->orderBy('company_name')
             ->get(['id', 'company_name', 'city']);
 
+        // Eager-load permissions so the form can render a "what can
+        // each role do?" reference panel without N+1 queries.  Manual
+        // power ranking sorts owner → admin → dispatcher → user
+        // (descending privilege) rather than alphabetical, so the
+        // dropdown + reference card both read in a natural hierarchy.
         $customerRoles = Role::whereIn('slug', $this->tenantRoleSlugs())
-            ->orderBy('name')
-            ->get(['id', 'slug', 'name']);
+            ->with(['permissions' => fn ($q) => $q->orderBy('group')->orderBy('name')])
+            ->get(['id', 'slug', 'name', 'description']);
+
+        $rolePower = [
+            'customer_owner' => 1, 'customer_admin' => 2,
+            'customer_dispatcher' => 3, 'customer_user' => 4,
+            'body_builder_owner' => 1, 'body_builder_user' => 2,
+        ];
+        $customerRoles = $customerRoles
+            ->sortBy(fn ($r) => $rolePower[$r->slug] ?? 99)
+            ->values();
 
         // Customer / dealer / OEM all share this team page (the underlying
         // role slugs are the customer_* family for tenanted customers
@@ -247,6 +261,22 @@ class extends Component
             'label' => $roleLabel($r->name),
         ])->values()->all();
 
+        // Reference data for the in-form "what can each role do?" card.
+        // Permissions are pre-grouped by their .group column (Bookings,
+        // Documents, etc.) so the view can render compact bullet lists
+        // without re-shaping data inline.  Driven straight from the
+        // PermissionSeeder so any future perm change is reflected in the
+        // UI automatically -- no editorialised duplicate descriptions.
+        $roleReference = $customerRoles->map(fn ($r) => [
+            'slug' => $r->slug,
+            'label' => $roleLabel($r->name),
+            'description' => (string) ($r->description ?? ''),
+            'groups' => $r->permissions
+                ->groupBy('group')
+                ->map(fn ($perms) => $perms->pluck('name')->all())
+                ->toArray(),
+        ])->values()->all();
+
         $locationOptions = $locations->map(fn ($loc) => [
             'value' => (string) $loc->id,
             'label' => $loc->company_name . ($loc->city ? " — {$loc->city}" : ''),
@@ -256,7 +286,7 @@ class extends Component
 
         return compact(
             'members', 'canManage', 'locations', 'customerRoles',
-            'roleLabel', 'roleOptions', 'locationOptions',
+            'roleLabel', 'roleOptions', 'roleReference', 'locationOptions',
             'tenantRoleSlugs'
         );
     }
@@ -317,7 +347,7 @@ class extends Component
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1">Role <span class="text-red-500">*</span></label>
                         <x-searchable-select
-                            wire:model="userRole"
+                            wire:model.live="userRole"
                             :options="$roleOptions"
                             placeholder="Select role"
                             search-placeholder="Search roles…"
@@ -336,6 +366,41 @@ class extends Component
                         @error('userLocationId') <p class="mt-1 text-xs text-red-600">{{ $message }}</p> @enderror
                     </div>
                 </div>
+
+                {{-- What can each role do?  Built straight from
+                     PermissionSeeder via Role::with('permissions'), so
+                     the listing stays accurate if perms are added or
+                     removed in future seeds.  Closed by default to keep
+                     the form compact; the currently-selected role is
+                     highlighted when ops opens it. --}}
+                <details class="rounded-lg border border-blue-200 bg-blue-50/40">
+                    <summary class="cursor-pointer select-none px-4 py-2 text-xs font-semibold text-blue-900 flex items-center gap-1.5">
+                        <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+                        What can each role do?
+                    </summary>
+                    <div class="border-t border-blue-200 px-4 py-3 space-y-3 text-xs">
+                        @foreach($roleReference as $ref)
+                            @php $isSelected = $userRole === $ref['slug']; @endphp
+                            <div class="rounded-md p-2 {{ $isSelected ? 'ring-1 ring-blue-400 bg-blue-100/60' : '' }}">
+                                <p class="font-semibold text-gray-900 flex items-center gap-1.5">
+                                    {{ $ref['label'] }}
+                                    @if($isSelected)
+                                        <span class="inline-flex items-center rounded-full bg-blue-600 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-white">selected</span>
+                                    @endif
+                                </p>
+                                @if(!empty($ref['groups']))
+                                    <ul class="mt-1 ml-4 list-disc space-y-0.5 text-gray-700">
+                                        @foreach($ref['groups'] as $group => $perms)
+                                            <li><span class="font-medium text-gray-900">{{ $group }}:</span> {{ implode(', ', $perms) }}</li>
+                                        @endforeach
+                                    </ul>
+                                @else
+                                    <p class="mt-1 ml-4 text-gray-500 italic">No specific permissions configured.</p>
+                                @endif
+                            </div>
+                        @endforeach
+                    </div>
+                </details>
                 <div class="flex items-center gap-3 pt-2">
                     <button type="submit" class="rounded-lg bg-blue-600 px-5 py-2 text-sm font-semibold text-white hover:bg-blue-500 transition-colors">
                         {{ $editingId ? 'Update Member' : 'Add Member' }}
