@@ -131,18 +131,24 @@ new #[Layout('components.layouts.app')] class extends Component {
     public function startEdit(int $id): void
     {
         $loc = Location::findOrFail($id);
+        // All edit-form properties are typed `string`, but legacy rows
+        // can carry NULLs in company_name / address / city / province
+        // (the columns are nullable in the schema).  Coerce every read
+        // to a string so opening the edit form via ?focus=ID never
+        // explodes on a half-populated row -- the update() validator
+        // still requires these fields, so ops can't save blanks.
         $this->editingId        = $id;
         $this->editCompanyId    = (string) ($loc->company_id ?? '');
-        $this->editCompanyName  = $loc->company_name;
-        $this->editAddress      = $loc->address;
-        $this->editCity         = $loc->city;
-        $this->editProvince     = $loc->province;
+        $this->editCompanyName  = (string) ($loc->company_name ?? '');
+        $this->editAddress      = (string) ($loc->address ?? '');
+        $this->editCity         = (string) ($loc->city ?? '');
+        $this->editProvince     = (string) ($loc->province ?? '');
         $this->editLat          = (string) ($loc->latitude ?? '');
         $this->editLng          = (string) ($loc->longitude ?? '');
         $this->editZoneId       = (string) ($loc->zone_id ?? '');
-        $this->editCustomerName    = $loc->customer_name ?? '';
-        $this->editCustomerPhone   = $loc->customer_phone ?? '';
-        $this->editCustomerEmail   = $loc->customer_email ?? '';
+        $this->editCustomerName    = (string) ($loc->customer_name ?? '');
+        $this->editCustomerPhone   = (string) ($loc->customer_phone ?? '');
+        $this->editCustomerEmail   = (string) ($loc->customer_email ?? '');
     }
 
     public function update(): void
