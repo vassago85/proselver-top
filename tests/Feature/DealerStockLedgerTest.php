@@ -303,6 +303,98 @@ test('sending out on demo and returning restores the previous bucket', function 
     expect($stock->fresh()->current_location_type)->toBe(DealerStock::LOCATION_PREMISES);
 });
 
+// ----- Reverse sale / mark delivered --------------------------------
+
+function makeStockManager(Company $dealer): User
+{
+    Role::firstOrCreate(['slug' => 'stock_controller'], ['name' => 'Stock Controller', 'tier' => 'dealer']);
+    $perm = \App\Models\Permission::firstOrCreate(
+        ['slug' => 'manage_dealer_stock'],
+        ['name' => 'Manage dealer stock', 'group' => 'dealer_stock']
+    );
+    $view = \App\Models\Permission::firstOrCreate(
+        ['slug' => 'view_dealer_stock'],
+        ['name' => 'View dealer stock', 'group' => 'dealer_stock']
+    );
+    $role = Role::where('slug', 'stock_controller')->first();
+    $role->permissions()->syncWithoutDetaching([$perm->id, $view->id]);
+
+    $user = User::factory()->create();
+    $user->assignRole('stock_controller');
+    $dealer->users()->attach($user->id);
+
+    return $user;
+}
+
+test('a sold-but-undelivered unit can be reversed back to available', function () {
+    $dealer = makeDealer();
+    $manager = makeStockManager($dealer);
+    $this->actingAs($manager);
+
+    $stock = DealerStock::create([
+        'dealer_company_id'   => $dealer->id,
+        'vin'                 => 'REVVIN0001',
+        'current_location_type' => DealerStock::LOCATION_PREMISES,
+        'status'              => DealerStock::STATUS_SOLD,
+        'sale_customer_name'  => 'Swap Victim',
+        'sold_at'             => now(),
+    ]);
+
+    \Livewire\Volt\Volt::test('customer.stock.show', ['dealerStock' => $stock])
+        ->call('reverseSale')
+        ->assertHasNoErrors();
+
+    $stock->refresh();
+    expect($stock->status)->toBe(DealerStock::STATUS_AVAILABLE);
+    expect($stock->sale_customer_name)->toBeNull();
+    expect($stock->sold_at)->toBeNull();
+});
+
+test('a delivered sale can no longer be reversed', function () {
+    $dealer = makeDealer();
+    $manager = makeStockManager($dealer);
+    $this->actingAs($manager);
+
+    $stock = DealerStock::create([
+        'dealer_company_id'   => $dealer->id,
+        'vin'                 => 'REVVIN0002',
+        'current_location_type' => DealerStock::LOCATION_DELIVERED,
+        'status'              => DealerStock::STATUS_SOLD,
+        'sale_customer_name'  => 'Done Deal',
+        'sold_at'             => now()->subDay(),
+        'delivered_at'        => now(),
+    ]);
+
+    \Livewire\Volt\Volt::test('customer.stock.show', ['dealerStock' => $stock])
+        ->call('reverseSale')
+        ->assertStatus(422);
+
+    expect($stock->fresh()->status)->toBe(DealerStock::STATUS_SOLD);
+});
+
+test('marking a sold unit delivered stamps delivered_at and locks the sale', function () {
+    $dealer = makeDealer();
+    $manager = makeStockManager($dealer);
+    $this->actingAs($manager);
+
+    $stock = DealerStock::create([
+        'dealer_company_id'   => $dealer->id,
+        'vin'                 => 'DELVIN0001',
+        'current_location_type' => DealerStock::LOCATION_PREMISES,
+        'status'              => DealerStock::STATUS_SOLD,
+        'sale_customer_name'  => 'Final Buyer',
+        'sold_at'             => now(),
+    ]);
+
+    \Livewire\Volt\Volt::test('customer.stock.show', ['dealerStock' => $stock])
+        ->call('markDelivered')
+        ->assertHasNoErrors();
+
+    $stock->refresh();
+    expect($stock->delivered_at)->not->toBeNull();
+    expect($stock->current_location_type)->toBe(DealerStock::LOCATION_DELIVERED);
+});
+
 // ----- visibleTo scope ----------------------------------------------
 
 test('scopeVisibleTo limits to the user\'s visible company ids', function () {

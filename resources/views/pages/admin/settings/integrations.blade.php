@@ -10,6 +10,12 @@ new #[Layout('components.layouts.app')] class extends Component {
     public string $googleMapsApiKey = '';
     public bool $hasExistingKey = false;
 
+    // Separate browser (Maps JavaScript API) key. Google authenticates
+    // browser keys by HTTP referrer, so it can't share the IP-restricted
+    // server key — they need different application restrictions.
+    public string $googleMapsBrowserApiKey = '';
+    public bool $hasExistingBrowserKey = false;
+
     // TrackSolid GPS tracker integration. We never echo the saved app key
     // / secret back into the form (so a screenshot of this page can't
     // leak credentials); a "leave blank to keep current" sentinel keeps
@@ -30,6 +36,9 @@ new #[Layout('components.layouts.app')] class extends Component {
         $existing = (string) SystemSetting::get('google_maps_api_key', config('services.google_maps.api_key', ''));
         $this->hasExistingKey = !empty($existing);
 
+        $existingBrowser = (string) SystemSetting::get('google_maps_browser_api_key', config('services.google_maps.browser_api_key', ''));
+        $this->hasExistingBrowserKey = !empty($existingBrowser);
+
         $this->tsEnabled = (bool) SystemSetting::get(TrackSolidClient::SETTING_ENABLED, false);
         $this->tsBaseUrl = (string) SystemSetting::get(TrackSolidClient::SETTING_BASE_URL, '');
         $this->tsAccount = (string) SystemSetting::get(TrackSolidClient::SETTING_ACCOUNT, '');
@@ -41,25 +50,46 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     public function save(): void
     {
-        if ($this->googleMapsApiKey) {
-            $this->validate([
-                'googleMapsApiKey' => 'required|string|min:10|max:255',
-            ]);
+        $this->validate([
+            'googleMapsApiKey'        => 'nullable|string|min:10|max:255',
+            'googleMapsBrowserApiKey' => 'nullable|string|min:10|max:255',
+        ]);
 
-            SystemSetting::set('google_maps_api_key', $this->googleMapsApiKey, 'string', 'Google Maps Platform API key');
+        $changed = false;
+
+        if ($this->googleMapsApiKey) {
+            SystemSetting::set('google_maps_api_key', $this->googleMapsApiKey, 'string', 'Google Maps server key (Geocoding/Directions, IP-restricted)');
             $this->hasExistingKey = true;
             $this->googleMapsApiKey = '';
-            session()->flash('success', 'Google Maps API key saved.');
+            $changed = true;
+        }
+
+        if ($this->googleMapsBrowserApiKey) {
+            SystemSetting::set('google_maps_browser_api_key', $this->googleMapsBrowserApiKey, 'string', 'Google Maps browser key (Maps JS/Places, referrer-restricted)');
+            $this->hasExistingBrowserKey = true;
+            $this->googleMapsBrowserApiKey = '';
+            $changed = true;
+        }
+
+        if ($changed) {
+            session()->flash('success', 'Google Maps keys saved.');
         } else {
-            session()->flash('info', 'No changes made — leave blank to keep the current key.');
+            session()->flash('info', 'No changes made — leave blank to keep the current keys.');
         }
     }
 
     public function removeKey(): void
     {
-        SystemSetting::set('google_maps_api_key', '', 'string', 'Google Maps Platform API key');
+        SystemSetting::set('google_maps_api_key', '', 'string', 'Google Maps server key (Geocoding/Directions, IP-restricted)');
         $this->hasExistingKey = false;
-        session()->flash('success', 'Google Maps API key removed.');
+        session()->flash('success', 'Google Maps server key removed.');
+    }
+
+    public function removeBrowserKey(): void
+    {
+        SystemSetting::set('google_maps_browser_api_key', '', 'string', 'Google Maps browser key (Maps JS/Places, referrer-restricted)');
+        $this->hasExistingBrowserKey = false;
+        session()->flash('success', 'Google Maps browser key removed.');
     }
 
     /**
@@ -219,26 +249,27 @@ new #[Layout('components.layouts.app')] class extends Component {
                     </div>
                 </div>
 
+                {{-- Server key — backend Geocoding/Directions, safe to lock by IP. --}}
                 @if($hasExistingKey)
                     <div class="mb-4 flex items-center gap-2 rounded-lg bg-green-50 border border-green-200 px-4 py-2.5 text-sm text-green-700">
                         <svg class="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="m9 11 3 3L22 4"/></svg>
-                        API key is configured
+                        Server key is configured
                     </div>
                 @else
                     <div class="mb-4 flex items-center gap-2 rounded-lg bg-amber-50 border border-amber-200 px-4 py-2.5 text-sm text-amber-700">
                         <svg class="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
-                        No API key configured — geocoding and route features are disabled
+                        No server key configured — geocoding and route features are disabled
                     </div>
                 @endif
 
                 <div x-data="{ show: false }">
-                    <label class="block text-sm font-medium text-gray-700 mb-1">API Key</label>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Server key — Geocoding &amp; Directions</label>
                     <div class="relative">
                         <input
                             wire:model="googleMapsApiKey"
                             :type="show ? 'text' : 'password'"
                             class="w-full rounded-lg border border-gray-300 px-3 py-2.5 pr-10 text-sm focus:border-blue-500 focus:ring-blue-500"
-                            placeholder="{{ $hasExistingKey ? 'Leave blank to keep current key' : 'Enter your Google Maps API key' }}"
+                            placeholder="{{ $hasExistingKey ? 'Leave blank to keep current key' : 'Enter your Google Maps server key' }}"
                             autocomplete="off"
                         >
                         <button
@@ -251,7 +282,39 @@ new #[Layout('components.layouts.app')] class extends Component {
                         </button>
                     </div>
                     @error('googleMapsApiKey')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
-                    <p class="mt-1.5 text-xs text-gray-400">Requires Geocoding API and Directions API enabled in your Google Cloud Console project.</p>
+                    <p class="mt-1.5 text-xs text-gray-400">Backend calls (Geocoding + Directions APIs). Restrict by <strong>IP address</strong> (the server's IP) in Google Cloud Console.</p>
+                </div>
+
+                {{-- Browser key — Maps JS + Places, authenticated by referrer. --}}
+                <div class="mt-5 border-t border-gray-100 pt-5" x-data="{ showB: false }">
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Browser key — Maps &amp; address autocomplete</label>
+                    @if($hasExistingBrowserKey)
+                        <p class="mb-2 inline-flex items-center gap-1.5 text-xs font-medium text-green-700"><svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>Browser key is configured</p>
+                    @else
+                        <p class="mb-2 text-xs text-amber-700">Not set — the map &amp; autocomplete currently fall back to the server key (which fails if that key is IP-restricted).</p>
+                    @endif
+                    <div class="relative">
+                        <input
+                            wire:model="googleMapsBrowserApiKey"
+                            :type="showB ? 'text' : 'password'"
+                            class="w-full rounded-lg border border-gray-300 px-3 py-2.5 pr-10 text-sm focus:border-blue-500 focus:ring-blue-500"
+                            placeholder="{{ $hasExistingBrowserKey ? 'Leave blank to keep current key' : 'Enter your referrer-restricted browser key' }}"
+                            autocomplete="off"
+                        >
+                        <button
+                            type="button"
+                            @click="showB = !showB"
+                            class="absolute inset-y-0 right-0 flex items-center pr-3 text-gray-400 hover:text-gray-600"
+                        >
+                            <svg x-show="!showB" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
+                            <svg x-show="showB" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" x-cloak><path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/><line x1="2" x2="22" y1="2" y2="22"/></svg>
+                        </button>
+                    </div>
+                    @error('googleMapsBrowserApiKey')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
+                    <p class="mt-1.5 text-xs text-gray-400">In-browser map + Places autocomplete. Restrict by <strong>HTTP referrers</strong> (e.g. <code>https://tcdc.co.za/*</code>) — IP restriction can't work for browser traffic.</p>
+                    @if($hasExistingBrowserKey)
+                        <button type="button" wire:click="removeBrowserKey" wire:confirm="Remove the browser key? Maps will fall back to the server key." class="mt-2 text-xs font-semibold text-red-600 hover:text-red-500">Remove browser key</button>
+                    @endif
                 </div>
             </div>
 
@@ -259,8 +322,8 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <div class="flex gap-3">
                     <a href="{{ route('admin.settings.index') }}" class="rounded-lg border border-gray-300 bg-white px-6 py-3 text-sm font-semibold text-gray-700 hover:bg-gray-50">Back</a>
                     @if($hasExistingKey)
-                        <button type="button" wire:click="removeKey" wire:confirm="Are you sure you want to remove the Google Maps API key?" class="rounded-lg border border-red-300 bg-white px-4 py-3 text-sm font-semibold text-red-600 hover:bg-red-50">
-                            Remove Key
+                        <button type="button" wire:click="removeKey" wire:confirm="Are you sure you want to remove the Google Maps server key?" class="rounded-lg border border-red-300 bg-white px-4 py-3 text-sm font-semibold text-red-600 hover:bg-red-50">
+                            Remove server key
                         </button>
                     @endif
                 </div>

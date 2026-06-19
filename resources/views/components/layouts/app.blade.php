@@ -326,7 +326,14 @@
     @endif
 
     @php
-        $__gmapsKey = \App\Models\SystemSetting::get('google_maps_api_key', config('services.google_maps.api_key'));
+        // Browser (Maps JavaScript API) key. Google authenticates this by
+        // HTTP referrer, so it must be a referrer-restricted key — separate
+        // from the IP-restricted server key. Resolution order: dedicated
+        // browser system-setting → browser env key → (fallback) the shared
+        // server key, so existing single-key installs keep rendering maps.
+        $__gmapsKey = \App\Models\SystemSetting::get('google_maps_browser_api_key', null)
+            ?: config('services.google_maps.browser_api_key')
+            ?: \App\Models\SystemSetting::get('google_maps_api_key', config('services.google_maps.api_key'));
     @endphp
     @if($__gmapsKey)
     <script>

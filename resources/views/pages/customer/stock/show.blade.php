@@ -99,6 +99,56 @@ new #[Layout('components.layouts.app')] class extends Component {
         $this->showSaleForm = false;
     }
 
+    /**
+     * Reverse a sale that hasn't been delivered yet.
+     *
+     * Commercial deals get re-shuffled all the time -- a chassis is
+     * swapped for another for logistics reasons, a customer changes
+     * spec, finance falls through -- so a "sold" mark must stay easy
+     * to undo right up until the vehicle is physically delivered.
+     * Once delivered_at is stamped (either here via Mark as delivered
+     * or by the movement linker on a delivery job) the sale is final
+     * and this action is refused.
+     */
+    public function reverseSale(): void
+    {
+        $this->ensureManage();
+
+        abort_unless($this->stock->status === DealerStock::STATUS_SOLD, 422, 'This vehicle is not marked sold.');
+        abort_unless($this->stock->delivered_at === null, 422, 'A delivered sale cannot be reversed here.');
+
+        $this->stock->update([
+            'status'              => DealerStock::STATUS_AVAILABLE,
+            'salesperson_user_id' => null,
+            'sale_customer_name'  => null,
+            'sale_customer_phone' => null,
+            'sale_customer_email' => null,
+            'sold_at'             => null,
+        ]);
+
+        session()->flash('success', "Sale reversed — {$this->stock->vin} is back in available stock.");
+    }
+
+    /**
+     * Lock the sale in: the customer has taken delivery, so stamp
+     * delivered_at and move the unit into the delivered bucket. After
+     * this the sale can no longer be reversed from this page.
+     */
+    public function markDelivered(): void
+    {
+        $this->ensureManage();
+
+        abort_unless($this->stock->status === DealerStock::STATUS_SOLD, 422, 'Only a sold vehicle can be delivered.');
+
+        $this->stock->update([
+            'previous_location_type' => $this->stock->current_location_type,
+            'current_location_type'  => DealerStock::LOCATION_DELIVERED,
+            'delivered_at'           => now(),
+        ]);
+
+        session()->flash('success', "{$this->stock->vin} marked as delivered. The sale is now final.");
+    }
+
     public function sendOnDemo(): void
     {
         $this->ensureManage();
@@ -237,7 +287,8 @@ new #[Layout('components.layouts.app')] class extends Component {
                     <div><dt class="text-xs text-slate-500">Phone</dt><dd class="text-slate-900">{{ $stock->sale_customer_phone ?? '—' }}</dd></div>
                     <div><dt class="text-xs text-slate-500">Email</dt><dd class="text-slate-900">{{ $stock->sale_customer_email ?? '—' }}</dd></div>
                     <div><dt class="text-xs text-slate-500">Sold by</dt><dd class="text-slate-900">{{ $stock->salesperson?->name ?? '—' }}</dd></div>
-                    <div class="col-span-2"><dt class="text-xs text-slate-500">Sold at</dt><dd class="text-slate-900">{{ optional($stock->sold_at)->format('d M Y H:i') ?? '—' }}</dd></div>
+                    <div><dt class="text-xs text-slate-500">Sold at</dt><dd class="text-slate-900">{{ optional($stock->sold_at)->format('d M Y H:i') ?? '—' }}</dd></div>
+                    <div><dt class="text-xs text-slate-500">Delivered</dt><dd class="text-slate-900">{{ $stock->delivered_at ? $stock->delivered_at->format('d M Y H:i') : 'Not yet — sale still reversible' }}</dd></div>
                 </dl>
             @endif
 
@@ -278,6 +329,23 @@ new #[Layout('components.layouts.app')] class extends Component {
                                 wire:confirm="Mark {{ $stock->vin }} as returned from demo?"
                                 class="rounded-lg bg-blue-600 px-3 py-2 text-sm font-semibold text-white hover:bg-blue-500">
                             Return from demo
+                        </button>
+                    @endif
+
+                    {{-- Sold-but-not-delivered: keep the sale easily
+                         reversible (chassis swaps / spec changes happen
+                         right up to delivery), and let the dealer lock it
+                         in once the customer has taken the vehicle. --}}
+                    @if($stock->status === DealerStock::STATUS_SOLD && $stock->delivered_at === null)
+                        <button wire:click="markDelivered"
+                                wire:confirm="Confirm {{ $stock->vin }} has been delivered? This finalises the sale and it can no longer be reversed here."
+                                class="rounded-lg bg-blue-600 px-3 py-2 text-sm font-semibold text-white hover:bg-blue-500">
+                            Mark as delivered
+                        </button>
+                        <button wire:click="reverseSale"
+                                wire:confirm="Reverse the sale of {{ $stock->vin }}? It returns to available stock and the customer details are cleared."
+                                class="rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm font-semibold text-amber-700 hover:bg-amber-50">
+                            Reverse sale
                         </button>
                     @endif
 

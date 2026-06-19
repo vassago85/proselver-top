@@ -352,6 +352,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                     ['key' => 'premises',           'label' => 'At premises',              'count' => $this->countPremises,           'accent' => 'slate',    'icon' => 'office'],
                     ['key' => 'body_builder',       'label' => 'At body builder / fitment','count' => $this->countBodyBuilder,        'accent' => 'amber',    'icon' => 'wrench'],
                     ['key' => 'scheduled',          'label' => 'Scheduled for movement',   'count' => $this->countScheduled,          'accent' => 'blue',     'icon' => 'calendar'],
+                    ['key' => 'in_transit',         'label' => 'In transit',               'count' => $this->countInTransit,          'accent' => 'sky',      'icon' => 'truck'],
                     ['key' => 'storage',            'label' => 'At another storage',       'count' => $this->countStorage,            'accent' => 'indigo',   'icon' => 'box'],
                     ['key' => 'on_demo',            'label' => 'On demo with customer',    'count' => $this->countOnDemo,             'accent' => 'teal',     'icon' => 'user'],
                     ['key' => 'recently_delivered', 'label' => 'Recently delivered',       'count' => $this->countRecentlyDelivered,  'accent' => 'emerald',  'icon' => 'check'],
@@ -360,6 +361,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                     'slate'   => ['ring' => 'ring-slate-300',   'chip' => 'bg-slate-100   text-slate-700',   'active' => 'border-slate-900   bg-slate-50',   'count' => 'text-slate-900'],
                     'amber'   => ['ring' => 'ring-amber-300',   'chip' => 'bg-amber-100   text-amber-700',   'active' => 'border-amber-600   bg-amber-50',   'count' => 'text-amber-700'],
                     'blue'    => ['ring' => 'ring-blue-300',    'chip' => 'bg-blue-100    text-blue-700',    'active' => 'border-blue-600    bg-blue-50',    'count' => 'text-blue-700'],
+                    'sky'     => ['ring' => 'ring-sky-300',     'chip' => 'bg-sky-100     text-sky-700',     'active' => 'border-sky-600     bg-sky-50',     'count' => 'text-sky-700'],
                     'indigo'  => ['ring' => 'ring-indigo-300',  'chip' => 'bg-indigo-100  text-indigo-700',  'active' => 'border-indigo-600  bg-indigo-50',  'count' => 'text-indigo-700'],
                     'teal'    => ['ring' => 'ring-teal-300',    'chip' => 'bg-teal-100    text-teal-700',    'active' => 'border-teal-600    bg-teal-50',    'count' => 'text-teal-700'],
                     'emerald' => ['ring' => 'ring-emerald-300', 'chip' => 'bg-emerald-100 text-emerald-700', 'active' => 'border-emerald-600 bg-emerald-50', 'count' => 'text-emerald-700'],
@@ -368,13 +370,14 @@ new #[Layout('components.layouts.app')] class extends Component {
                     'premises'           => 'No vehicles sitting at your dealership right now.',
                     'body_builder'       => 'No vehicles at a body builder right now.',
                     'scheduled'          => 'Nothing scheduled for movement.',
+                    'in_transit'         => 'No vehicles on the road right now.',
                     'storage'            => 'No vehicles at another storage location.',
                     'on_demo'            => 'No vehicles out on demo with customers.',
                     'recently_delivered' => 'No sales in the last 30 days.',
                 ];
             @endphp
 
-            <div class="mb-6 grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
+            <div class="mb-6 grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-3">
                 @foreach($cards as $i => $c)
                     @php
                         $isActive = $selectedBucket === $c['key'];
@@ -400,6 +403,9 @@ new #[Layout('components.layouts.app')] class extends Component {
                                         @break
                                     @case('calendar')
                                         <svg viewBox="0 0 24 24" class="h-4.5 w-4.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M16 2v4"/><path d="M8 2v4"/><path d="M3 10h18"/></svg>
+                                        @break
+                                    @case('truck')
+                                        <svg viewBox="0 0 24 24" class="h-4.5 w-4.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 18V6a1 1 0 0 0-1-1H3a1 1 0 0 0-1 1v11a1 1 0 0 0 1 1h1"/><path d="M14 9h4l4 4v4a1 1 0 0 1-1 1h-1"/><circle cx="7" cy="18" r="2"/><circle cx="17" cy="18" r="2"/></svg>
                                         @break
                                     @case('box')
                                         <svg viewBox="0 0 24 24" class="h-4.5 w-4.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>

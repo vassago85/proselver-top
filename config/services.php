@@ -45,7 +45,18 @@ return [
     ],
 
     'google_maps' => [
+        // Server-side key — used by GeocodingService / RouteCalculationService /
+        // TripCostEstimator for backend calls (Geocoding, Directions). Safe to
+        // lock down by IP address (the server's IP) in Google Cloud Console.
         'api_key' => env('GOOGLE_MAPS_API_KEY'),
+
+        // Browser key — injected into the Maps JavaScript API <script> tag that
+        // runs in the end-user's browser (map display + Places autocomplete).
+        // Google authenticates browser keys by HTTP referrer, NOT IP, so this
+        // key must be restricted by HTTP referrers (your domain) — an IP
+        // restriction can't work for in-browser traffic. Falls back to the
+        // server key when unset so existing single-key setups keep working.
+        'browser_api_key' => env('GOOGLE_MAPS_BROWSER_API_KEY'),
     ],
 
     // Base URL used for public verification links (QR codes on collection notes).
