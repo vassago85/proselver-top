@@ -260,7 +260,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <div><dt class="text-xs text-slate-500">Model</dt><dd class="text-slate-900">{{ $stock->model_name ?? '—' }}</dd></div>
                 <div><dt class="text-xs text-slate-500">Variant</dt><dd class="text-slate-900">{{ $stock->variant ?? '—' }}</dd></div>
                 <div><dt class="text-xs text-slate-500">Suffix</dt><dd class="text-slate-900">{{ $stock->suffix ?? '—' }}</dd></div>
-                <div><dt class="text-xs text-slate-500">VIN / NIV</dt><dd class="font-mono text-slate-900">{{ $stock->vin }}</dd></div>
+                <div><dt class="text-xs text-slate-500">VIN</dt><dd class="font-mono text-slate-900">{{ $stock->vin }}</dd></div>
                 <div><dt class="text-xs text-slate-500">Engine number</dt><dd class="font-mono text-slate-900">{{ $stock->engine_number ?? '—' }}</dd></div>
                 <div><dt class="text-xs text-slate-500">Colour</dt><dd class="text-slate-900">{{ $stock->colour ?? '—' }}</dd></div>
                 <div><dt class="text-xs text-slate-500">Registration</dt><dd class="font-mono text-slate-900">{{ $stock->registration ?? '—' }}</dd></div>

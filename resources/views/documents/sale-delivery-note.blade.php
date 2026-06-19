@@ -98,7 +98,7 @@
             <td>
                 <div class="section-title">Vehicle</div>
                 <table class="detail">
-                    <tr><td class="label">VIN / NIV</td><td class="value">{{ $fmt($stock->vin) }}</td></tr>
+                    <tr><td class="label">VIN</td><td class="value">{{ $fmt($stock->vin) }}</td></tr>
                     <tr><td class="label">Brand</td><td class="value">{{ $fmt($stock->brand?->name) }}</td></tr>
                     <tr><td class="label">Model</td><td class="value">{{ $fmt($stock->model_name) }}</td></tr>
                     <tr><td class="label">Suffix</td><td class="value">{{ $fmt($stock->suffix) }}</td></tr>

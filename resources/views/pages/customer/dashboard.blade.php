@@ -473,7 +473,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                         <table class="min-w-full divide-y divide-slate-100">
                             <thead class="bg-slate-50">
                                 <tr>
-                                    <th class="px-4 py-2 text-left text-xs font-semibold uppercase text-slate-500">VIN / NIV</th>
+                                    <th class="px-4 py-2 text-left text-xs font-semibold uppercase text-slate-500">VIN</th>
                                     @if($isMultiCompany)
                                         <th class="px-4 py-2 text-left text-xs font-semibold uppercase text-slate-500">Dealership</th>
                                     @endif

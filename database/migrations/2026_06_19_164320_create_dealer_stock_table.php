@@ -14,9 +14,8 @@ use Illuminate\Support\Facades\Schema;
  *   - dealer staff actions on the customer.stock.* Volt pages
  *     (Mark-as-sold, Send-on-demo, Return-from-demo, Archive)
  *
- * Note: NIV == VIN.  Dealers call it NIV; the platform calls it
- * VIN.  Single column on the schema to keep matching with
- * transport_jobs.vin trivial.
+ * Identity is the VIN -- a single column on the schema to keep
+ * matching with transport_jobs.vin trivial.
  */
 return new class extends Migration
 {
