@@ -248,6 +248,61 @@ test('non-accounts/owner/developer users get 403 on the invoicing page', functio
     \Livewire\Volt\Volt::test('admin.reports.invoicing')->assertStatus(403);
 });
 
+test('toggleComplete flips invoicing_completed_at and stamps the user', function () {
+    $oem = makeOemCompany();
+    $job = makeProselverJob($oem);
+    $u = makeAccountant();
+    $this->actingAs($u);
+
+    \Livewire\Volt\Volt::test('admin.reports.invoicing')
+        ->call('toggleComplete', $job->id);
+
+    $job->refresh();
+    expect($job->invoicing_completed_at)->not->toBeNull();
+    expect($job->invoicing_completed_by_user_id)->toBe($u->id);
+
+    \Livewire\Volt\Volt::test('admin.reports.invoicing')
+        ->call('toggleComplete', $job->id);
+
+    $job->refresh();
+    expect($job->invoicing_completed_at)->toBeNull();
+    expect($job->invoicing_completed_by_user_id)->toBeNull();
+});
+
+test('completion filter hides rows marked complete by default (incomplete view)', function () {
+    $oem = makeOemCompany();
+    $incomplete = makeProselverJob($oem);
+    $complete   = makeProselverJob($oem, ['invoicing_completed_at' => now()]);
+
+    $this->actingAs(makeAccountant());
+
+    // Default ($completion === 'incomplete') -- only the unfinished row.
+    \Livewire\Volt\Volt::test('admin.reports.invoicing')
+        ->set('companyId', $oem->id)
+        ->set('dateFrom', now()->subDays(30)->toDateString())
+        ->set('dateTo',   now()->toDateString())
+        ->assertSee($incomplete->job_number)
+        ->assertDontSee($complete->job_number);
+
+    // Flip to 'all' -- both visible.
+    \Livewire\Volt\Volt::test('admin.reports.invoicing')
+        ->set('companyId', $oem->id)
+        ->set('dateFrom', now()->subDays(30)->toDateString())
+        ->set('dateTo',   now()->toDateString())
+        ->set('completion', 'all')
+        ->assertSee($incomplete->job_number)
+        ->assertSee($complete->job_number);
+
+    // Flip to 'complete' -- only the done row.
+    \Livewire\Volt\Volt::test('admin.reports.invoicing')
+        ->set('companyId', $oem->id)
+        ->set('dateFrom', now()->subDays(30)->toDateString())
+        ->set('dateTo',   now()->toDateString())
+        ->set('completion', 'complete')
+        ->assertSee($complete->job_number)
+        ->assertDontSee($incomplete->job_number);
+});
+
 test('exportExcel returns an xlsx download response when a customer is picked', function () {
     $oem = makeOemCompany();
     makeProselverJob($oem);

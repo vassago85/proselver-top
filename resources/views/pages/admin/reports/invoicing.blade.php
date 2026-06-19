@@ -28,6 +28,13 @@ new #[Layout('components.layouts.app')] class extends Component {
     #[Url] public string $dateTo = '';
 
     /**
+     * Visibility filter: 'incomplete' (default -- accounts working list),
+     * 'all' (incomplete + complete), 'complete' (housekeeping review).
+     * Saved into the URL so a refresh or share-link preserves the view.
+     */
+    #[Url] public string $completion = 'incomplete';
+
+    /**
      * Per-job finance inputs, keyed by job id.  Hydrated from the DB on
      * every render so the inputs reflect the current persisted values;
      * save() writes the diff back.
@@ -105,6 +112,13 @@ new #[Layout('components.layouts.app')] class extends Component {
             $q->whereBetween('delivered_at', [$from, $to]);
         }
 
+        if ($this->completion === 'incomplete') {
+            $q->whereNull('invoicing_completed_at');
+        } elseif ($this->completion === 'complete') {
+            $q->whereNotNull('invoicing_completed_at');
+        }
+        // 'all' applies no completion filter.
+
         return $q->with([
             'company:id,name',
             'pickupLocation:id,company_name',
@@ -166,6 +180,51 @@ new #[Layout('components.layouts.app')] class extends Component {
             session()->flash('success', "Saved finance details on {$touched} movement" . ($touched === 1 ? '' : 's') . '.');
         } else {
             session()->flash('error', 'Nothing to save -- no rows were changed.');
+        }
+    }
+
+    /**
+     * Toggle the "invoicing complete" flag on a single job.  Accounts +
+     * owner + developer can flip this; that matches who can land on
+     * this page.  We rely on the page-level gate (mount()) and re-check
+     * here so a stray Livewire payload can't bypass it.
+     */
+    public function toggleComplete(int $jobId): void
+    {
+        $u = auth()->user();
+        if (!$u || (!$u->isAccounts() && !$u->isOwner() && !$u->isDeveloper())) {
+            abort(403);
+        }
+
+        $job = Job::find($jobId);
+        if (!$job) {
+            return;
+        }
+
+        // Defence-in-depth: the page's baseQuery() only surfaces
+        // ProSelver-executed delivered jobs; refuse to flip anything
+        // that wouldn't normally appear here, in case someone replays
+        // the call with a stale id.
+        if ($job->executor_type !== Job::EXECUTOR_PROSELVER || $job->delivered_at === null) {
+            return;
+        }
+
+        if ($job->invoicing_completed_at) {
+            $job->forceFill([
+                'invoicing_completed_at' => null,
+                'invoicing_completed_by_user_id' => null,
+            ])->save();
+            AuditService::log('movement_invoice_completion_cleared', 'transport_job', $job->id, null, [
+                'company_id' => $job->company_id,
+            ]);
+        } else {
+            $job->forceFill([
+                'invoicing_completed_at' => now(),
+                'invoicing_completed_by_user_id' => $u->id,
+            ])->save();
+            AuditService::log('movement_invoice_completion_marked', 'transport_job', $job->id, null, [
+                'company_id' => $job->company_id,
+            ]);
         }
     }
 
@@ -253,6 +312,28 @@ new #[Layout('components.layouts.app')] class extends Component {
             ->map(fn ($c) => ['value' => $c->id, 'label' => $c->name])
             ->all();
 
+        // Window-wide counts: deliberately ignore the completion filter
+        // so the "X of Y complete" indicator is stable as the user toggles
+        // between Incomplete / All / Complete views.
+        $windowCounts = (function () {
+            $base = Job::query()
+                ->where('executor_type', Job::EXECUTOR_PROSELVER)
+                ->whereIn('status', [Job::STATUS_DELIVERED, Job::STATUS_COMPLETED, Job::STATUS_INVOICED])
+                ->whereNotNull('delivered_at');
+            if ($this->companyId) {
+                $base->where('company_id', (int) $this->companyId);
+            }
+            if ($this->dateFrom && $this->dateTo) {
+                $base->whereBetween('delivered_at', [
+                    Carbon::parse($this->dateFrom)->startOfDay(),
+                    Carbon::parse($this->dateTo)->endOfDay(),
+                ]);
+            }
+            $total = (clone $base)->count();
+            $done  = (clone $base)->whereNotNull('invoicing_completed_at')->count();
+            return ['total' => $total, 'done' => $done];
+        })();
+
         $totals = [
             'count'   => $jobs->count(),
             'invoice' => (float) $jobs->sum(fn ($j) => (float) ($j->invoice_amount ?? 0)),
@@ -260,6 +341,8 @@ new #[Layout('components.layouts.app')] class extends Component {
             'litres'  => (float) $jobs->sum(fn ($j) => (float) ($j->fuel_litres ?? 0)),
             'fuel'    => (float) $jobs->sum(fn ($j) => (float) ($j->fuel_amount ?? 0)),
             'missing' => $jobs->filter(fn ($j) => empty($j->invoice_number))->count(),
+            'window_total'    => $windowCounts['total'],
+            'window_complete' => $windowCounts['done'],
         ];
 
         return [
@@ -294,6 +377,19 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <button wire:click="applyRange('this_month')" class="rounded-md border border-gray-200 bg-white px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50">This month</button>
                 <button wire:click="applyRange('last_30')"    class="rounded-md border border-gray-200 bg-white px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50">Last 30 days</button>
                 <button wire:click="applyRange('this_year')"  class="rounded-md border border-gray-200 bg-white px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50">This year</button>
+
+                {{-- Completion view selector: incomplete (default working
+                     list) / all / complete (housekeeping review). Saved
+                     to the URL so a refresh holds the chosen view. --}}
+                <div class="inline-flex rounded-md border border-gray-200 bg-white text-xs">
+                    <button wire:click="$set('completion','incomplete')"
+                        class="px-2.5 py-1 font-medium rounded-l-md {{ $completion === 'incomplete' ? 'bg-slate-900 text-white' : 'text-gray-700 hover:bg-gray-50' }}">Incomplete</button>
+                    <button wire:click="$set('completion','all')"
+                        class="px-2.5 py-1 font-medium border-l border-gray-200 {{ $completion === 'all' ? 'bg-slate-900 text-white' : 'text-gray-700 hover:bg-gray-50' }}">All</button>
+                    <button wire:click="$set('completion','complete')"
+                        class="px-2.5 py-1 font-medium border-l border-gray-200 rounded-r-md {{ $completion === 'complete' ? 'bg-slate-900 text-white' : 'text-gray-700 hover:bg-gray-50' }}">Complete</button>
+                </div>
+
                 <button wire:click="save"
                     class="inline-flex items-center gap-1.5 rounded-md bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-500">
                     Save finance details
@@ -325,7 +421,8 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <input type="date" wire:model.live="dateTo" class="mt-1 w-full rounded-md border-gray-300 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"/>
             </div>
             <div class="rounded-lg bg-slate-50 border border-slate-200 px-3 py-2 text-xs text-slate-700 flex flex-col justify-center">
-                <div class="flex items-center justify-between gap-2"><span>Movements</span><strong>{{ $totals['count'] }}</strong></div>
+                <div class="flex items-center justify-between gap-2"><span>Movements ({{ $completion }})</span><strong>{{ $totals['count'] }}</strong></div>
+                <div class="flex items-center justify-between gap-2"><span>Window progress</span><strong>{{ $totals['window_complete'] }} / {{ $totals['window_total'] }}</strong></div>
                 <div class="flex items-center justify-between gap-2"><span>Missing invoice #</span><strong class="{{ $totals['missing'] ? 'text-rose-600' : 'text-emerald-600' }}">{{ $totals['missing'] }}</strong></div>
                 <div class="flex items-center justify-between gap-2"><span>Invoiced total</span><strong>R {{ number_format($totals['invoice'], 2) }}</strong></div>
             </div>
@@ -359,14 +456,17 @@ new #[Layout('components.layouts.app')] class extends Component {
                             <th class="px-3 py-2 text-right">Extras (incl VAT)</th>
                             <th class="px-3 py-2 text-right">Litres</th>
                             <th class="px-3 py-2 text-right">Fuel (excl VAT)</th>
+                            <th class="px-3 py-2 text-center">Complete</th>
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-slate-100">
                         @foreach($jobs as $job)
                             @php
                                 $hasInv = !empty($rows[$job->id]['invoice_number'] ?? $job->invoice_number);
+                                $isDone = (bool) $job->invoicing_completed_at;
+                                $rowTint = $isDone ? 'bg-emerald-50/50' : ($hasInv ? '' : 'bg-amber-50/40');
                             @endphp
-                            <tr class="hover:bg-slate-50 {{ $hasInv ? '' : 'bg-amber-50/40' }}">
+                            <tr class="hover:bg-slate-50 {{ $rowTint }}">
                                 <td class="px-3 py-1.5">
                                     <a href="{{ route('admin.orders.show', $job) }}" target="_blank" class="font-semibold text-blue-700 hover:underline">{{ $job->job_number }}</a>
                                 </td>
@@ -402,6 +502,22 @@ new #[Layout('components.layouts.app')] class extends Component {
                                     <input type="number" step="0.01" min="0" wire:model="rows.{{ $job->id }}.fuel_amount"
                                         class="w-24 rounded border border-slate-300 px-2 py-1 text-xs text-right tabular-nums"
                                         placeholder="0.00">
+                                </td>
+                                <td class="px-3 py-1.5 text-center">
+                                    @if($isDone)
+                                        <button wire:click="toggleComplete({{ $job->id }})"
+                                            title="Marked complete {{ $job->invoicing_completed_at?->format('d-m-Y H:i') }}. Click to undo."
+                                            class="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 hover:bg-emerald-200">
+                                            <svg class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                                            Done
+                                        </button>
+                                    @else
+                                        <button wire:click="toggleComplete({{ $job->id }})"
+                                            title="Mark this row complete to hide it from the working list."
+                                            class="inline-flex items-center gap-1 rounded-full border border-slate-300 bg-white px-2 py-0.5 text-[10px] font-semibold text-slate-500 hover:bg-slate-100 hover:text-slate-700">
+                                            Mark done
+                                        </button>
+                                    @endif
                                 </td>
                             </tr>
                         @endforeach

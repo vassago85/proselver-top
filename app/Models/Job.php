@@ -381,6 +381,8 @@ class Job extends Model
         'extras_amount',      // incl VAT
         'fuel_litres',
         'fuel_amount',        // excl VAT
+        'invoicing_completed_at',
+        'invoicing_completed_by_user_id',
         'cancelled_at',
         'cancellation_reason',
         'recalled_at',
@@ -487,6 +489,7 @@ class Job extends Model
             'extras_amount' => 'decimal:2',
             'fuel_litres' => 'decimal:2',
             'fuel_amount' => 'decimal:2',
+            'invoicing_completed_at' => 'datetime',
             'damage_report_released_at' => 'datetime',
             'damage_acknowledged_at' => 'datetime',
             'cancelled_at' => 'datetime',
