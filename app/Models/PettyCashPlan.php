@@ -42,6 +42,7 @@ class PettyCashPlan extends Model
         'label',
         'status',
         'total_amount',
+        'movement_date',
         'items_json',
         'generated_by_user_id',
         'generated_at',
@@ -54,6 +55,7 @@ class PettyCashPlan extends Model
     {
         return [
             'total_amount' => 'decimal:2',
+            'movement_date' => 'date',
             'items_json' => 'array',
             'generated_at' => 'datetime',
             'approved_at' => 'datetime',
@@ -114,6 +116,24 @@ class PettyCashPlan extends Model
     public function isEditable(): bool
     {
         return in_array($this->status, [self::STATUS_DRAFT, self::STATUS_REJECTED], true);
+    }
+
+    /**
+     * May this user edit the draft (set the movement date, reschedule the
+     * trips)? The person who created it always can; ops managers / owner /
+     * platform staff can too, so a colleague can finish a draft if the
+     * creator is unavailable.
+     */
+    public function isEditableBy(?User $user): bool
+    {
+        if (!$user || !$this->isEditable()) {
+            return false;
+        }
+
+        return $this->generated_by_user_id === $user->id
+            || $user->isOwner()
+            || $user->isOperationsController()
+            || $user->hasAnyRole(['ops_manager', 'super_admin', 'developer']);
     }
 
     public function isAwaitingSignOff(): bool

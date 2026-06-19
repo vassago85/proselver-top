@@ -7,6 +7,7 @@ use App\Services\AuditService;
 use App\Services\TripCostEstimator;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\Url;
 use Livewire\Volt\Component;
@@ -53,6 +54,9 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     /** Per-plan notes input for approve/reject */
     public array $signOffNotes = [];
+
+    /** Per-draft movement-date input, keyed by plan id (yyyy-mm-dd). */
+    public array $movementDates = [];
 
     public const TABS = ['pending', 'drafts', 'approved', 'rejected', 'create'];
 
@@ -357,6 +361,66 @@ new #[Layout('components.layouts.app')] class extends Component {
         session()->flash('success', 'Trip removed from the draft plan.');
     }
 
+    /**
+     * Set the movement (collection) date for an entire draft. The creator
+     * builds the bundle today for trips that roll tomorrow (or later);
+     * stamping the date here rewrites scheduled_date on every linked trip
+     * in one go, and updates the snapshot so the table reflects it. Only
+     * the creator (or elevated ops) may do this, and only while the plan
+     * is still a draft / rejected.
+     */
+    public function applyMovementDate(int $planId): void
+    {
+        $plan = PettyCashPlan::findOrFail($planId);
+
+        if (!$plan->isEditableBy(auth()->user())) {
+            session()->flash('error', 'Only the creator (or an ops manager) can change the movement date, and only while it is a draft.');
+            return;
+        }
+
+        $raw = trim((string) ($this->movementDates[$planId] ?? ''));
+        if ($raw === '') {
+            session()->flash('error', 'Pick a movement date first.');
+            return;
+        }
+
+        try {
+            $date = Carbon::parse($raw)->toDateString();
+        } catch (\Throwable $e) {
+            session()->flash('error', 'That movement date is not valid.');
+            return;
+        }
+
+        $items = collect($plan->items_json ?? []);
+        $jobIds = $items->pluck('job_id')->filter()->map(fn ($id) => (int) $id)->values()->all();
+
+        DB::transaction(function () use ($plan, $items, $jobIds, $date) {
+            if (!empty($jobIds)) {
+                Job::whereIn('id', $jobIds)->update(['scheduled_date' => $date]);
+            }
+
+            // Keep the snapshot in step so the "Scheduled" column matches
+            // the live trips the owner will sign off on.
+            $updatedItems = $items->map(function ($item) use ($date) {
+                $item['scheduled_date'] = $date;
+                return $item;
+            })->all();
+
+            $plan->forceFill([
+                'movement_date' => $date,
+                'items_json' => $updatedItems,
+            ])->save();
+        });
+
+        AuditService::log('petty_cash_plan_movement_date_set', 'petty_cash_plan', $plan->id, null, [
+            'movement_date' => $date,
+            'trip_count' => count($jobIds),
+        ]);
+
+        $count = count($jobIds);
+        session()->flash('success', "Movement date set to {$date} — {$count} " . Str::plural('trip', $count) . ' rescheduled to collect that day.');
+    }
+
     public function sendForSignOff(int $planId): void
     {
         $plan = PettyCashPlan::findOrFail($planId);
@@ -463,9 +527,22 @@ new #[Layout('components.layouts.app')] class extends Component {
         $base = PettyCashPlan::query()
             ->with(['generatedBy:id,name', 'approvedBy:id,name']);
 
+        $draftPlans = (clone $base)->where('status', PettyCashPlan::STATUS_DRAFT)->latest('generated_at')->get();
+
+        // Seed the per-draft movement-date input once: persisted value if
+        // set, else the first trip's scheduled date, else tomorrow. Guarded
+        // so it never clobbers a date the user is mid-edit.
+        foreach ($draftPlans as $p) {
+            if (!array_key_exists($p->id, $this->movementDates)) {
+                $this->movementDates[$p->id] = optional($p->movement_date)->toDateString()
+                    ?? collect($p->items_json ?? [])->pluck('scheduled_date')->filter()->first()
+                    ?? now()->addDay()->toDateString();
+            }
+        }
+
         return [
             'pendingPlans'  => (clone $base)->where('status', PettyCashPlan::STATUS_PENDING)->latest('generated_at')->get(),
-            'draftPlans'    => (clone $base)->where('status', PettyCashPlan::STATUS_DRAFT)->latest('generated_at')->get(),
+            'draftPlans'    => $draftPlans,
             'approvedPlans' => (clone $base)->where('status', PettyCashPlan::STATUS_APPROVED)->latest('approved_at')->limit(30)->get(),
             'rejectedPlans' => (clone $base)->where('status', PettyCashPlan::STATUS_REJECTED)->latest('approved_at')->limit(30)->get(),
             'eligibleJobs'  => $this->tab === 'create' ? $this->eligibleJobs() : collect(),
@@ -743,7 +820,31 @@ new #[Layout('components.layouts.app')] class extends Component {
                                         ->count();
                                     $itemsList = is_array($plan->items_json) ? $plan->items_json : [];
                                     $totalItems = count($itemsList);
+                                    $canEditDraft = $plan->isEditableBy(auth()->user());
                                 @endphp
+
+                                @if($canEditDraft)
+                                    <div class="mb-3 flex flex-wrap items-end justify-between gap-3 rounded-lg bg-blue-50/60 border border-blue-100 px-3 py-2">
+                                        <div>
+                                            <label class="block text-[11px] font-semibold text-slate-600 mb-0.5" for="movement-date-{{ $plan->id }}">Movement date (collection day)</label>
+                                            <div class="flex items-center gap-2">
+                                                <input id="movement-date-{{ $plan->id }}" type="date"
+                                                    wire:model="movementDates.{{ $plan->id }}"
+                                                    class="rounded border border-slate-300 px-2.5 py-1.5 text-sm">
+                                                <button wire:click="applyMovementDate({{ $plan->id }})"
+                                                    wire:confirm="Set the collection date for all {{ $totalItems }} {{ Str::plural('trip', $totalItems) }} on this draft to the chosen date?"
+                                                    type="button"
+                                                    class="text-xs rounded-md bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 font-semibold whitespace-nowrap">
+                                                    Apply to all trips
+                                                </button>
+                                            </div>
+                                        </div>
+                                        <p class="text-[11px] text-slate-500 max-w-xs">
+                                            Reschedules every vehicle on this draft to collect on this day — e.g. build today, move tomorrow.
+                                        </p>
+                                    </div>
+                                @endif
+
                                 <div class="flex flex-wrap items-center justify-end gap-2">
                                     @if($selectedCount > 0 && $selectedCount < $totalItems)
                                         <span class="text-[11px] text-slate-500">{{ $selectedCount }} of {{ $totalItems }} selected</span>

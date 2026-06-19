@@ -5,6 +5,7 @@ use App\Models\Company;
 use App\Models\Job;
 use App\Models\JobDocument;
 use App\Models\PettyCashEntry;
+use App\Models\PettyCashPlan;
 use App\Models\Role;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -287,6 +288,68 @@ it('damage tab accepts severity, location and notes and writes them as JSON', fu
     expect($payload['severity'])->toBe('high');
     expect($payload['location'])->toBe('front bumper, driver side');
     expect($payload['notes'])->toBe('Hairline crack');
+});
+
+it('applying a movement date to a draft reschedules every trip and updates the snapshot', function () {
+    $ops = pettyOps();
+    [$driver, $jobA, $company] = pettyDriverAndJob();
+    [, $jobB] = pettyDriverAndJob();
+
+    $jobA->update(['scheduled_date' => now()->toDateString()]);
+    $jobB->update(['scheduled_date' => now()->toDateString()]);
+
+    $plan = PettyCashPlan::create([
+        'label' => 'Pay-run test',
+        'status' => PettyCashPlan::STATUS_DRAFT,
+        'total_amount' => 0,
+        'items_json' => [
+            ['job_id' => $jobA->id, 'job_number' => $jobA->job_number, 'scheduled_date' => now()->toDateString(), 'computed_total' => 0],
+            ['job_id' => $jobB->id, 'job_number' => $jobB->job_number, 'scheduled_date' => now()->toDateString(), 'computed_total' => 0],
+        ],
+        'generated_by_user_id' => $ops->id,
+        'generated_at' => now(),
+    ]);
+
+    $newDate = now()->addDay()->toDateString();
+
+    Volt::actingAs($ops)->test('admin.petty-cash.plans')
+        ->set('movementDates.' . $plan->id, $newDate)
+        ->call('applyMovementDate', $plan->id)
+        ->assertHasNoErrors();
+
+    expect($jobA->fresh()->scheduled_date->toDateString())->toBe($newDate);
+    expect($jobB->fresh()->scheduled_date->toDateString())->toBe($newDate);
+
+    $plan->refresh();
+    expect($plan->movement_date->toDateString())->toBe($newDate);
+    expect($plan->items_json[0]['scheduled_date'])->toBe($newDate);
+    expect($plan->items_json[1]['scheduled_date'])->toBe($newDate);
+
+    expect(AuditLog::where('action_type', 'petty_cash_plan_movement_date_set')->where('entity_id', $plan->id)->exists())->toBeTrue();
+});
+
+it('refuses to reschedule once the plan has left draft', function () {
+    $ops = pettyOps();
+    [$driver, $jobA] = pettyDriverAndJob();
+    $jobA->update(['scheduled_date' => now()->toDateString()]);
+
+    $plan = PettyCashPlan::create([
+        'label' => 'Pay-run pending',
+        'status' => PettyCashPlan::STATUS_PENDING,
+        'total_amount' => 0,
+        'items_json' => [
+            ['job_id' => $jobA->id, 'job_number' => $jobA->job_number, 'scheduled_date' => now()->toDateString(), 'computed_total' => 0],
+        ],
+        'generated_by_user_id' => $ops->id,
+        'generated_at' => now(),
+    ]);
+
+    Volt::actingAs($ops)->test('admin.petty-cash.plans')
+        ->set('movementDates.' . $plan->id, now()->addDay()->toDateString())
+        ->call('applyMovementDate', $plan->id);
+
+    expect($jobA->fresh()->scheduled_date->toDateString())->toBe(now()->toDateString());
+    expect($plan->fresh()->movement_date)->toBeNull();
 });
 
 it('damage submission requires a location and a photo', function () {
