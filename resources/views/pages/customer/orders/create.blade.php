@@ -2,6 +2,7 @@
 
 use App\Models\Brand;
 use App\Models\Company;
+use App\Models\DealerStock;
 use App\Models\Job;
 use App\Models\Location;
 use App\Models\PurchaseOrder;
@@ -30,6 +31,12 @@ new #[Layout('components.layouts.app')] class extends Component {
     public string $vin = '';
     public string $registration = '';
     public ?int $vehicleClassId = null;
+
+    // VIN-against-stock lookup. When a dealer types a VIN that matches a
+    // unit on their (group-visible) books, we pre-fill the vehicle and
+    // show a confirmation; no match just lets them capture a new vehicle.
+    public ?array $matchedStock = null;
+    public bool $vinChecked = false;
     public string $scheduledDate = '';
     // HH:MM, optional. Captures "the truck will be ready for collection
     // at this time on the requested date" — required for same-day bookings
@@ -93,7 +100,77 @@ new #[Layout('components.layouts.app')] class extends Component {
         if (request()->filled('vehicle_class_id')) {
             $this->vehicleClassId = (int) request('vehicle_class_id');
         }
+
+        // A deep-linked VIN (e.g. "Book return" from the stock page) is
+        // an on-hand unit — run the lookup so the confirmation shows.
+        if ($this->vin !== '') {
+            $this->updatedVin();
+        }
     }
+
+    /**
+     * As the VIN is typed, look it up against the dealer's own (and any
+     * group-visible) stock.  A hit pre-fills the make/model/registration
+     * and confirms what's on hand; a miss just flags it so the user knows
+     * they're capturing a new vehicle.  Only runs for dealers — other
+     * tenants have no stock ledger.
+     */
+    public function updatedVin(): void
+    {
+        $this->matchedStock = null;
+        $this->vinChecked = false;
+
+        if (!$this->company?->isDealer()) {
+            return;
+        }
+
+        $needle = strtoupper(trim($this->vin));
+        // Wait until there's enough to be a real VIN/chassis fragment so
+        // we're not querying on the first keystroke.
+        if (strlen($needle) < 5) {
+            return;
+        }
+
+        $this->vinChecked = true;
+
+        $stock = DealerStock::query()
+            ->visibleTo(auth()->user())
+            ->whereRaw('UPPER(vin) = ?', [$needle])
+            ->where('status', '!=', DealerStock::STATUS_ARCHIVED)
+            ->with('brand:id,name')
+            ->first();
+
+        if (!$stock) {
+            return;
+        }
+
+        // Pre-fill from the stock record.  brandId drives the model
+        // suggestion list too, so set it first.
+        $this->brandId = $stock->brand_id;
+        $this->modelName = (string) ($stock->model_name ?? '');
+        if ($stock->registration) {
+            $this->registration = $stock->registration;
+        }
+
+        $this->matchedStock = [
+            'brand' => $stock->brand?->name,
+            'model' => $stock->model_name,
+            'colour' => $stock->colour,
+            'registration' => $stock->registration,
+            'where' => self::STOCK_LOCATION_LABELS[$stock->current_location_type] ?? $stock->current_location_type,
+            'status' => ucfirst((string) $stock->status),
+        ];
+    }
+
+    /** Human labels for the dealer_stock physical buckets. */
+    private const STOCK_LOCATION_LABELS = [
+        DealerStock::LOCATION_PREMISES     => 'At premises',
+        DealerStock::LOCATION_BODY_BUILDER => 'At body builder / fitment',
+        DealerStock::LOCATION_STORAGE      => 'At another storage location',
+        DealerStock::LOCATION_IN_TRANSIT   => 'In transit',
+        DealerStock::LOCATION_ON_DEMO      => 'On demo with customer',
+        DealerStock::LOCATION_DELIVERED    => 'Recently delivered',
+    ];
 
     public function submit(): void
     {
@@ -606,10 +683,24 @@ new #[Layout('components.layouts.app')] class extends Component {
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1">VIN / Chassis Number <span class="text-red-500">*</span></label>
-                        <input wire:model="vin" type="text" required
+                        <input wire:model.live.debounce.500ms="vin" type="text" required
                             class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm font-mono uppercase focus:border-blue-500 focus:ring-blue-500"
                             placeholder="Enter VIN or chassis number">
                         @error('vin') <p class="mt-1 text-xs text-red-600">{{ $message }}</p> @enderror
+
+                        @if($matchedStock)
+                            <div class="mt-2 flex items-start gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
+                                <svg class="h-4 w-4 mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"/></svg>
+                                <span>
+                                    <strong>Found in your stock.</strong>
+                                    {{ trim(($matchedStock['brand'] ?? '') . ' ' . ($matchedStock['model'] ?? '')) ?: 'Vehicle' }}@if($matchedStock['colour']) · {{ $matchedStock['colour'] }}@endif@if($matchedStock['registration']) · {{ $matchedStock['registration'] }}@endif
+                                    <span class="text-emerald-700">— currently {{ $matchedStock['where'] }}.</span>
+                                    Details filled in below.
+                                </span>
+                            </div>
+                        @elseif($vinChecked && $company?->isDealer())
+                            <p class="mt-2 text-xs text-slate-500">Not in your stock — capturing as a new vehicle.</p>
+                        @endif
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1">Registration</label>

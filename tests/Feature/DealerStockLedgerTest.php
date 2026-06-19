@@ -510,3 +510,43 @@ test('reassign-make refuses to run unscoped', function () {
         '--to' => 'Opel',
     ])->assertExitCode(1);
 });
+
+// ----- order form VIN lookup ----------------------------------------
+
+test('new order form pre-fills the vehicle from a matching VIN in stock', function () {
+    [$opel] = seedOpelCatalogue();
+    $dealer = makeDealer('Lookup Motors');
+    $user = makeStockManager($dealer);
+    $this->actingAs($user);
+
+    DealerStock::create([
+        'dealer_company_id'     => $dealer->id,
+        'vin'                   => 'LOOKUPVIN0001',
+        'brand_id'              => $opel->id,
+        'model_name'            => 'Mokka',
+        'registration'          => 'CA123456',
+        'colour'                => 'White',
+        'current_location_type' => DealerStock::LOCATION_PREMISES,
+        'status'                => DealerStock::STATUS_AVAILABLE,
+    ]);
+
+    $component = \Livewire\Volt\Volt::test('customer.orders.create')
+        ->set('vin', 'LOOKUPVIN0001')
+        ->assertSet('brandId', $opel->id)
+        ->assertSet('modelName', 'Mokka')
+        ->assertSet('registration', 'CA123456');
+
+    expect($component->get('matchedStock'))->not->toBeNull();
+    expect($component->get('matchedStock')['model'])->toBe('Mokka');
+});
+
+test('new order form flags an unknown VIN as a new vehicle', function () {
+    $dealer = makeDealer('NoMatch Motors');
+    $user = makeStockManager($dealer);
+    $this->actingAs($user);
+
+    \Livewire\Volt\Volt::test('customer.orders.create')
+        ->set('vin', 'UNKNOWNVIN99')
+        ->assertSet('matchedStock', null)
+        ->assertSet('vinChecked', true);
+});
