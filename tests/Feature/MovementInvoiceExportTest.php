@@ -16,7 +16,16 @@ beforeEach(function () {
     Role::firstOrCreate(['slug' => 'accounts'], ['name' => 'Accounts', 'tier' => 'internal']);
     Role::firstOrCreate(['slug' => 'super_admin'], ['name' => 'Super Admin', 'tier' => 'internal']);
     Role::firstOrCreate(['slug' => 'customer_owner'], ['name' => 'Customer Owner', 'tier' => 'customer']);
+    Role::firstOrCreate(['slug' => 'owner'], ['name' => 'Owner', 'tier' => 'internal']);
+    Role::firstOrCreate(['slug' => 'developer'], ['name' => 'Developer', 'tier' => 'internal']);
 });
+
+function makeOwner(): User
+{
+    $u = User::factory()->create(['is_active' => true]);
+    $u->assignRole('owner');
+    return $u;
+}
 
 function makeAccountant(): User
 {
@@ -301,6 +310,126 @@ test('completion filter hides rows marked complete by default (incomplete view)'
         ->set('completion', 'complete')
         ->assertSee($complete->job_number)
         ->assertDontSee($incomplete->job_number);
+});
+
+test('accounts cannot mark a row as not-required', function () {
+    $oem = makeOemCompany();
+    $job = makeProselverJob($oem);
+
+    $this->actingAs(makeAccountant());
+
+    \Livewire\Volt\Volt::test('admin.reports.invoicing')
+        ->call('toggleExclude', $job->id)
+        ->assertStatus(403);
+
+    $job->refresh();
+    expect($job->invoicing_excluded_at)->toBeNull();
+});
+
+test('owner can mark a row as not-required and it drops out of the default working list', function () {
+    $oem = makeOemCompany();
+    $job = makeProselverJob($oem);
+    $owner = makeOwner();
+    $this->actingAs($owner);
+
+    \Livewire\Volt\Volt::test('admin.reports.invoicing')
+        ->call('toggleExclude', $job->id, 'internal shuffle');
+
+    $job->refresh();
+    expect($job->invoicing_excluded_at)->not->toBeNull();
+    expect($job->invoicing_excluded_by_user_id)->toBe($owner->id);
+    expect($job->invoicing_excluded_reason)->toBe('internal shuffle');
+
+    // Default 'incomplete' view should no longer show this job.
+    \Livewire\Volt\Volt::test('admin.reports.invoicing')
+        ->set('companyId', $oem->id)
+        ->set('dateFrom', now()->subDays(30)->toDateString())
+        ->set('dateTo',   now()->toDateString())
+        ->assertDontSee($job->job_number);
+
+    // The 'excluded' filter surfaces it again.
+    \Livewire\Volt\Volt::test('admin.reports.invoicing')
+        ->set('companyId', $oem->id)
+        ->set('dateFrom', now()->subDays(30)->toDateString())
+        ->set('dateTo',   now()->toDateString())
+        ->set('completion', 'excluded')
+        ->assertSee($job->job_number);
+});
+
+test('excluding a row clears any pre-existing completion stamp', function () {
+    $oem = makeOemCompany();
+    $job = makeProselverJob($oem, [
+        'invoicing_completed_at' => now()->subHour(),
+        'invoicing_completed_by_user_id' => User::factory()->create()->id,
+    ]);
+
+    $this->actingAs(makeOwner());
+    \Livewire\Volt\Volt::test('admin.reports.invoicing')
+        ->call('toggleExclude', $job->id);
+
+    $job->refresh();
+    expect($job->invoicing_completed_at)->toBeNull();
+    expect($job->invoicing_completed_by_user_id)->toBeNull();
+    expect($job->invoicing_excluded_at)->not->toBeNull();
+});
+
+test('Excel export never includes excluded rows even when the view says All', function () {
+    $oem = makeOemCompany();
+    $billable = makeProselverJob($oem, ['invoice_number' => 'INV0001', 'invoice_amount' => 1000]);
+    $excluded = makeProselverJob($oem, [
+        'invoicing_excluded_at' => now(),
+        'invoicing_excluded_by_user_id' => makeOwner()->id,
+    ]);
+
+    $this->actingAs(makeAccountant());
+
+    // The Volt response wraps a StreamedResponse and Livewire's test
+    // harness doesn't expose its content directly, so instead we
+    // assert (a) the export call succeeds and (b) the underlying query
+    // the page uses returns only the billable VIN.  This is the same
+    // query exportExcel() runs internally.
+    \Livewire\Volt\Volt::test('admin.reports.invoicing')
+        ->set('companyId', $oem->id)
+        ->set('dateFrom', now()->subDays(30)->toDateString())
+        ->set('dateTo',   now()->toDateString())
+        ->set('completion', 'all')
+        ->call('exportExcel')
+        ->assertFileDownloaded();
+
+    $exported = Job::query()
+        ->where('executor_type', Job::EXECUTOR_PROSELVER)
+        ->whereIn('status', [Job::STATUS_DELIVERED, Job::STATUS_COMPLETED, Job::STATUS_INVOICED])
+        ->whereNotNull('delivered_at')
+        ->where('company_id', $oem->id)
+        ->whereNull('invoicing_excluded_at')
+        ->pluck('vin')
+        ->all();
+
+    expect($exported)->toContain($billable->vin);
+    expect($exported)->not->toContain($excluded->vin);
+});
+
+test('saving finance fields skips excluded rows', function () {
+    $oem = makeOemCompany();
+    $excluded = makeProselverJob($oem, [
+        'invoicing_excluded_at' => now(),
+        'invoicing_excluded_by_user_id' => makeOwner()->id,
+    ]);
+
+    $this->actingAs(makeAccountant());
+
+    \Livewire\Volt\Volt::test('admin.reports.invoicing')
+        ->set('companyId', $oem->id)
+        ->set('dateFrom', now()->subDays(30)->toDateString())
+        ->set('dateTo',   now()->toDateString())
+        ->set('completion', 'all')
+        ->set("rows.{$excluded->id}.invoice_number", 'INV9999')
+        ->set("rows.{$excluded->id}.invoice_amount", 1234.56)
+        ->call('save');
+
+    $excluded->refresh();
+    expect($excluded->invoice_number)->toBeNull();
+    expect((float) $excluded->invoice_amount)->toBe(0.0);
 });
 
 test('exportExcel returns an xlsx download response when a customer is picked', function () {

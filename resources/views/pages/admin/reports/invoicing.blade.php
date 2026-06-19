@@ -28,8 +28,14 @@ new #[Layout('components.layouts.app')] class extends Component {
     #[Url] public string $dateTo = '';
 
     /**
-     * Visibility filter: 'incomplete' (default -- accounts working list),
-     * 'all' (incomplete + complete), 'complete' (housekeeping review).
+     * Visibility filter:
+     *   'incomplete' (default working list -- excludes completed AND
+     *                 excluded rows, only what still needs capturing),
+     *   'all'        (everything in the window incl. excluded rows,
+     *                 each one badged so it's obvious),
+     *   'complete'   (finance has finished, audit/review view),
+     *   'excluded'   (owner/dev review of the not-required pile).
+     *
      * Saved into the URL so a refresh or share-link preserves the view.
      */
     #[Url] public string $completion = 'incomplete';
@@ -113,11 +119,15 @@ new #[Layout('components.layouts.app')] class extends Component {
         }
 
         if ($this->completion === 'incomplete') {
-            $q->whereNull('invoicing_completed_at');
+            $q->whereNull('invoicing_completed_at')
+              ->whereNull('invoicing_excluded_at');
         } elseif ($this->completion === 'complete') {
-            $q->whereNotNull('invoicing_completed_at');
+            $q->whereNotNull('invoicing_completed_at')
+              ->whereNull('invoicing_excluded_at');
+        } elseif ($this->completion === 'excluded') {
+            $q->whereNotNull('invoicing_excluded_at');
         }
-        // 'all' applies no completion filter.
+        // 'all' applies no completion / excluded filter.
 
         return $q->with([
             'company:id,name',
@@ -138,7 +148,9 @@ new #[Layout('components.layouts.app')] class extends Component {
             abort(403);
         }
 
-        $jobs = $this->baseQuery()->get(['id', 'invoice_number', 'invoice_amount', 'extras_amount', 'fuel_litres', 'fuel_amount']);
+        $jobs = $this->baseQuery()
+            ->whereNull('invoicing_excluded_at') // never write finance data onto excluded rows
+            ->get(['id', 'invoice_number', 'invoice_amount', 'extras_amount', 'fuel_litres', 'fuel_amount']);
         $touched = 0;
 
         foreach ($jobs as $job) {
@@ -184,10 +196,58 @@ new #[Layout('components.layouts.app')] class extends Component {
     }
 
     /**
+     * Owner / developer only.  Toggle "this movement is not required to
+     * be invoiced" -- test runs, internal shuffles, write-offs.  Hidden
+     * from the working list and always excluded from the Excel export
+     * regardless of which visibility filter is active.
+     */
+    public function toggleExclude(int $jobId, ?string $reason = null): void
+    {
+        $u = auth()->user();
+        if (!$u || (!$u->isOwner() && !$u->isDeveloper())) {
+            abort(403, 'Marking a movement as not-required is restricted to owner/developer.');
+        }
+
+        $job = Job::find($jobId);
+        if (!$job) {
+            return;
+        }
+        if ($job->executor_type !== Job::EXECUTOR_PROSELVER || $job->delivered_at === null) {
+            return;
+        }
+
+        if ($job->invoicing_excluded_at) {
+            $job->forceFill([
+                'invoicing_excluded_at' => null,
+                'invoicing_excluded_by_user_id' => null,
+                'invoicing_excluded_reason' => null,
+            ])->save();
+            AuditService::log('movement_invoice_exclusion_cleared', 'transport_job', $job->id, null, [
+                'company_id' => $job->company_id,
+            ]);
+        } else {
+            $job->forceFill([
+                'invoicing_excluded_at' => now(),
+                'invoicing_excluded_by_user_id' => $u->id,
+                'invoicing_excluded_reason' => trim((string) $reason) !== '' ? trim((string) $reason) : null,
+                // Clear any completion stamp -- excluded supersedes it.
+                'invoicing_completed_at' => null,
+                'invoicing_completed_by_user_id' => null,
+            ])->save();
+            AuditService::log('movement_invoice_exclusion_marked', 'transport_job', $job->id, null, [
+                'company_id' => $job->company_id,
+                'reason' => $reason,
+            ]);
+        }
+    }
+
+    /**
      * Toggle the "invoicing complete" flag on a single job.  Accounts +
      * owner + developer can flip this; that matches who can land on
      * this page.  We rely on the page-level gate (mount()) and re-check
      * here so a stray Livewire payload can't bypass it.
+     *
+     * No-op on excluded rows -- you have to un-exclude first.
      */
     public function toggleComplete(int $jobId): void
     {
@@ -206,6 +266,13 @@ new #[Layout('components.layouts.app')] class extends Component {
         // that wouldn't normally appear here, in case someone replays
         // the call with a stale id.
         if ($job->executor_type !== Job::EXECUTOR_PROSELVER || $job->delivered_at === null) {
+            return;
+        }
+
+        // Excluded rows can't be "completed" -- they're not work we're
+        // doing.  Owner/dev has to un-exclude first.
+        if ($job->invoicing_excluded_at) {
+            session()->flash('error', 'This movement is marked "not required" -- un-exclude it first.');
             return;
         }
 
@@ -238,7 +305,12 @@ new #[Layout('components.layouts.app')] class extends Component {
             return response()->streamDownload(fn () => null, 'no-customer.txt'); // 0-byte fallback to satisfy the return type
         }
 
-        $jobs = $this->baseQuery()->get();
+        // Excluded rows are never billed, regardless of which filter
+        // the user has active on screen.  Re-check here so a Live owner
+        // can't accidentally ship a "not required" line to FAW.
+        $jobs = $this->baseQuery()
+            ->whereNull('invoicing_excluded_at')
+            ->get();
         $company = Company::find($this->companyId);
         $customerName = $company?->name ?? 'Customer';
 
@@ -329,9 +401,22 @@ new #[Layout('components.layouts.app')] class extends Component {
                     Carbon::parse($this->dateTo)->endOfDay(),
                 ]);
             }
-            $total = (clone $base)->count();
-            $done  = (clone $base)->whereNotNull('invoicing_completed_at')->count();
-            return ['total' => $total, 'done' => $done];
+            // Billable = total - excluded.  We track excluded separately
+            // so the progress bar denominator is honest (jobs we will
+            // actually invoice) instead of being inflated by test runs.
+            $excluded = (clone $base)->whereNotNull('invoicing_excluded_at')->count();
+            $total    = (clone $base)->count();
+            $billable = $total - $excluded;
+            $done     = (clone $base)
+                ->whereNotNull('invoicing_completed_at')
+                ->whereNull('invoicing_excluded_at')
+                ->count();
+            return [
+                'total'    => $total,
+                'billable' => $billable,
+                'done'     => $done,
+                'excluded' => $excluded,
+            ];
         })();
 
         $totals = [
@@ -340,15 +425,21 @@ new #[Layout('components.layouts.app')] class extends Component {
             'extras'  => (float) $jobs->sum(fn ($j) => (float) ($j->extras_amount ?? 0)),
             'litres'  => (float) $jobs->sum(fn ($j) => (float) ($j->fuel_litres ?? 0)),
             'fuel'    => (float) $jobs->sum(fn ($j) => (float) ($j->fuel_amount ?? 0)),
-            'missing' => $jobs->filter(fn ($j) => empty($j->invoice_number))->count(),
+            'missing' => $jobs->filter(fn ($j) => empty($j->invoice_number) && !$j->invoicing_excluded_at)->count(),
             'window_total'    => $windowCounts['total'],
+            'window_billable' => $windowCounts['billable'],
             'window_complete' => $windowCounts['done'],
+            'window_excluded' => $windowCounts['excluded'],
         ];
+
+        $viewer = auth()->user();
+        $canExclude = $viewer && ($viewer->isOwner() || $viewer->isDeveloper());
 
         return [
             'jobs' => $jobs,
             'companyOptions' => $companyOptions,
             'totals' => $totals,
+            'canExclude' => $canExclude,
         ];
     }
 }; ?>
@@ -384,10 +475,12 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <div class="inline-flex rounded-md border border-gray-200 bg-white text-xs">
                     <button wire:click="$set('completion','incomplete')"
                         class="px-2.5 py-1 font-medium rounded-l-md {{ $completion === 'incomplete' ? 'bg-slate-900 text-white' : 'text-gray-700 hover:bg-gray-50' }}">Incomplete</button>
-                    <button wire:click="$set('completion','all')"
-                        class="px-2.5 py-1 font-medium border-l border-gray-200 {{ $completion === 'all' ? 'bg-slate-900 text-white' : 'text-gray-700 hover:bg-gray-50' }}">All</button>
                     <button wire:click="$set('completion','complete')"
-                        class="px-2.5 py-1 font-medium border-l border-gray-200 rounded-r-md {{ $completion === 'complete' ? 'bg-slate-900 text-white' : 'text-gray-700 hover:bg-gray-50' }}">Complete</button>
+                        class="px-2.5 py-1 font-medium border-l border-gray-200 {{ $completion === 'complete' ? 'bg-slate-900 text-white' : 'text-gray-700 hover:bg-gray-50' }}">Complete</button>
+                    <button wire:click="$set('completion','excluded')"
+                        class="px-2.5 py-1 font-medium border-l border-gray-200 {{ $completion === 'excluded' ? 'bg-slate-900 text-white' : 'text-gray-700 hover:bg-gray-50' }}">Not required</button>
+                    <button wire:click="$set('completion','all')"
+                        class="px-2.5 py-1 font-medium border-l border-gray-200 rounded-r-md {{ $completion === 'all' ? 'bg-slate-900 text-white' : 'text-gray-700 hover:bg-gray-50' }}">All</button>
                 </div>
 
                 <button wire:click="save"
@@ -422,7 +515,10 @@ new #[Layout('components.layouts.app')] class extends Component {
             </div>
             <div class="rounded-lg bg-slate-50 border border-slate-200 px-3 py-2 text-xs text-slate-700 flex flex-col justify-center">
                 <div class="flex items-center justify-between gap-2"><span>Movements ({{ $completion }})</span><strong>{{ $totals['count'] }}</strong></div>
-                <div class="flex items-center justify-between gap-2"><span>Window progress</span><strong>{{ $totals['window_complete'] }} / {{ $totals['window_total'] }}</strong></div>
+                <div class="flex items-center justify-between gap-2"><span>Window progress</span><strong>{{ $totals['window_complete'] }} / {{ $totals['window_billable'] }}</strong></div>
+                @if($totals['window_excluded'])
+                    <div class="flex items-center justify-between gap-2 text-slate-500"><span>Not required</span><strong>{{ $totals['window_excluded'] }}</strong></div>
+                @endif
                 <div class="flex items-center justify-between gap-2"><span>Missing invoice #</span><strong class="{{ $totals['missing'] ? 'text-rose-600' : 'text-emerald-600' }}">{{ $totals['missing'] }}</strong></div>
                 <div class="flex items-center justify-between gap-2"><span>Invoiced total</span><strong>R {{ number_format($totals['invoice'], 2) }}</strong></div>
             </div>
@@ -464,7 +560,10 @@ new #[Layout('components.layouts.app')] class extends Component {
                             @php
                                 $hasInv = !empty($rows[$job->id]['invoice_number'] ?? $job->invoice_number);
                                 $isDone = (bool) $job->invoicing_completed_at;
-                                $rowTint = $isDone ? 'bg-emerald-50/50' : ($hasInv ? '' : 'bg-amber-50/40');
+                                $isExcluded = (bool) $job->invoicing_excluded_at;
+                                $rowTint = $isExcluded
+                                    ? 'bg-slate-100 text-slate-400'
+                                    : ($isDone ? 'bg-emerald-50/50' : ($hasInv ? '' : 'bg-amber-50/40'));
                             @endphp
                             <tr class="hover:bg-slate-50 {{ $rowTint }}">
                                 <td class="px-3 py-1.5">
@@ -480,44 +579,72 @@ new #[Layout('components.layouts.app')] class extends Component {
                                 <td class="px-3 py-1.5 text-slate-500">{{ optional($job->delivered_at)->format('d-m-Y') }}</td>
                                 <td class="px-3 py-1.5">
                                     <input type="text" wire:model="rows.{{ $job->id }}.invoice_number"
-                                        class="w-32 rounded border border-slate-300 px-2 py-1 text-xs font-mono"
+                                        @disabled($isExcluded)
+                                        class="w-32 rounded border border-slate-300 px-2 py-1 text-xs font-mono disabled:bg-slate-100 disabled:text-slate-400"
                                         placeholder="INV…">
                                 </td>
                                 <td class="px-3 py-1.5 text-right">
                                     <input type="number" step="0.01" min="0" wire:model="rows.{{ $job->id }}.invoice_amount"
-                                        class="w-28 rounded border border-slate-300 px-2 py-1 text-xs text-right tabular-nums"
+                                        @disabled($isExcluded)
+                                        class="w-28 rounded border border-slate-300 px-2 py-1 text-xs text-right tabular-nums disabled:bg-slate-100 disabled:text-slate-400"
                                         placeholder="0.00">
                                 </td>
                                 <td class="px-3 py-1.5 text-right">
                                     <input type="number" step="0.01" min="0" wire:model="rows.{{ $job->id }}.extras_amount"
-                                        class="w-24 rounded border border-slate-300 px-2 py-1 text-xs text-right tabular-nums"
+                                        @disabled($isExcluded)
+                                        class="w-24 rounded border border-slate-300 px-2 py-1 text-xs text-right tabular-nums disabled:bg-slate-100 disabled:text-slate-400"
                                         placeholder="0.00">
                                 </td>
                                 <td class="px-3 py-1.5 text-right">
                                     <input type="number" step="0.01" min="0" wire:model="rows.{{ $job->id }}.fuel_litres"
-                                        class="w-20 rounded border border-slate-300 px-2 py-1 text-xs text-right tabular-nums"
+                                        @disabled($isExcluded)
+                                        class="w-20 rounded border border-slate-300 px-2 py-1 text-xs text-right tabular-nums disabled:bg-slate-100 disabled:text-slate-400"
                                         placeholder="0">
                                 </td>
                                 <td class="px-3 py-1.5 text-right">
                                     <input type="number" step="0.01" min="0" wire:model="rows.{{ $job->id }}.fuel_amount"
-                                        class="w-24 rounded border border-slate-300 px-2 py-1 text-xs text-right tabular-nums"
+                                        @disabled($isExcluded)
+                                        class="w-24 rounded border border-slate-300 px-2 py-1 text-xs text-right tabular-nums disabled:bg-slate-100 disabled:text-slate-400"
                                         placeholder="0.00">
                                 </td>
                                 <td class="px-3 py-1.5 text-center">
-                                    @if($isDone)
-                                        <button wire:click="toggleComplete({{ $job->id }})"
-                                            title="Marked complete {{ $job->invoicing_completed_at?->format('d-m-Y H:i') }}. Click to undo."
-                                            class="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 hover:bg-emerald-200">
-                                            <svg class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-                                            Done
-                                        </button>
-                                    @else
-                                        <button wire:click="toggleComplete({{ $job->id }})"
-                                            title="Mark this row complete to hide it from the working list."
-                                            class="inline-flex items-center gap-1 rounded-full border border-slate-300 bg-white px-2 py-0.5 text-[10px] font-semibold text-slate-500 hover:bg-slate-100 hover:text-slate-700">
-                                            Mark done
-                                        </button>
-                                    @endif
+                                    <div class="inline-flex flex-col gap-1 items-stretch">
+                                        @if($isExcluded)
+                                            <span class="inline-flex items-center gap-1 rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-semibold text-slate-600"
+                                                title="Excluded {{ $job->invoicing_excluded_at?->format('d-m-Y H:i') }}{{ $job->invoicing_excluded_reason ? ' -- ' . $job->invoicing_excluded_reason : '' }}">
+                                                Not required
+                                            </span>
+                                            @if($canExclude)
+                                                <button wire:click="toggleExclude({{ $job->id }})"
+                                                    class="text-[10px] text-slate-500 underline hover:text-slate-700">
+                                                    Un-exclude
+                                                </button>
+                                            @endif
+                                        @else
+                                            @if($isDone)
+                                                <button wire:click="toggleComplete({{ $job->id }})"
+                                                    title="Marked complete {{ $job->invoicing_completed_at?->format('d-m-Y H:i') }}. Click to undo."
+                                                    class="inline-flex items-center justify-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 hover:bg-emerald-200">
+                                                    <svg class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                                                    Done
+                                                </button>
+                                            @else
+                                                <button wire:click="toggleComplete({{ $job->id }})"
+                                                    title="Mark this row complete to hide it from the working list."
+                                                    class="inline-flex items-center justify-center gap-1 rounded-full border border-slate-300 bg-white px-2 py-0.5 text-[10px] font-semibold text-slate-500 hover:bg-slate-100 hover:text-slate-700">
+                                                    Mark done
+                                                </button>
+                                            @endif
+                                            @if($canExclude)
+                                                <button wire:click="toggleExclude({{ $job->id }})"
+                                                    wire:confirm="Mark this movement as not required to invoice? It will be dropped from the FAW export."
+                                                    title="Owner/dev only: mark this movement as not required to invoice (test run, internal shuffle, write-off)."
+                                                    class="text-[10px] text-slate-400 underline hover:text-rose-600">
+                                                    Not required
+                                                </button>
+                                            @endif
+                                        @endif
+                                    </div>
                                 </td>
                             </tr>
                         @endforeach
