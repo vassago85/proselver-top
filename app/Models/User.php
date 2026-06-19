@@ -118,6 +118,24 @@ class User extends Authenticatable
     }
 
     /**
+     * Canonical "company IDs this user can read across" — the single
+     * source of truth for customer-facing read queries (dashboard,
+     * orders, locations, stock).  A franchise CEO is modelled as a user
+     * directly attached to every dealership in their group via
+     * company_users, so today this is identical to
+     * operatingCompanyIds().  Wrapped in its own method so views and
+     * services have a stable, intention-revealing API and so the rule
+     * can be extended later (e.g. with an explicit group_principal
+     * flag) without touching every call site.
+     *
+     * @return array<int, int>
+     */
+    public function visibleCompanyIds(): array
+    {
+        return $this->operatingCompanyIds();
+    }
+
+    /**
      * IDs of every sibling company in the same dealer group(s) as the
      * companies this user is a direct member of. Excludes the user's
      * own companies (operatingCompanyIds() already covers those) — the

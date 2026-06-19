@@ -110,7 +110,15 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     public function with(): array
     {
-        $query = Location::where('company_id', $this->company->id)
+        $user = auth()->user();
+        $visibleCompanyIds = $user->visibleCompanyIds();
+
+        // Read-side scope spans every dealership this user can see (a
+        // franchise CEO browses the combined address book of all their
+        // dealerships).  Single-dealership users get the same result
+        // as the previous where('company_id', ...) call.
+        $query = Location::whereIn('company_id', $visibleCompanyIds)
+            ->with('company:id,name')
             ->orderBy('company_name');
 
         if ($this->search) {
@@ -122,9 +130,15 @@ new #[Layout('components.layouts.app')] class extends Component {
             });
         }
 
+        $visibleCompanies = count($visibleCompanyIds) > 1
+            ? Company::whereIn('id', $visibleCompanyIds)->orderBy('name')->get(['id', 'name'])
+            : collect();
+
         return [
             'locations' => $query->paginate(15),
-            'canManage' => auth()->user()->hasAnyRole(['customer_owner', 'customer_admin']),
+            'canManage' => $user->hasAnyRole(['customer_owner', 'customer_admin']),
+            'visibleCompanies' => $visibleCompanies,
+            'isMultiCompany' => $visibleCompanies->isNotEmpty(),
         ];
     }
 };
@@ -136,6 +150,15 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     @if(session('success'))
         <div class="mb-4 rounded-lg bg-green-50 border border-green-200 px-4 py-3 text-sm text-green-800">{{ session('success') }}</div>
+    @endif
+
+    {{-- Dealership chip strip (group principals only). The save form
+         and toggleActive() still write against $this->company (the
+         user's primary dealership), so this filter only narrows what
+         a CEO sees in the table -- it doesn't change who owns new
+         locations. --}}
+    @if($isMultiCompany)
+        <p class="mb-3 text-xs text-slate-500">Showing locations across {{ $visibleCompanies->count() }} dealerships. New locations are saved against your primary dealership ({{ $company->name }}).</p>
     @endif
 
     {{-- Search & Add --}}
@@ -229,6 +252,9 @@ new #[Layout('components.layouts.app')] class extends Component {
             <thead class="bg-gray-50">
                 <tr>
                     <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Name</th>
+                    @if($isMultiCompany)
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Dealership</th>
+                    @endif
                     <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Address</th>
                     <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">City</th>
                     <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Contact</th>
@@ -241,6 +267,9 @@ new #[Layout('components.layouts.app')] class extends Component {
                 @forelse($locations as $location)
                 <tr class="hover:bg-gray-50">
                     <td class="px-4 py-3 text-sm font-medium text-gray-900">{{ $location->company_name }}</td>
+                    @if($isMultiCompany)
+                        <td class="px-4 py-3 text-sm text-gray-700">{{ $location->company?->name ?? '—' }}</td>
+                    @endif
                     <td class="px-4 py-3 text-sm text-gray-600 max-w-xs truncate">{{ $location->address ?? '—' }}</td>
                     <td class="px-4 py-3 text-sm text-gray-600">{{ $location->city ?? '—' }}</td>
                     <td class="px-4 py-3 text-sm text-gray-600">{{ $location->customer_name ?? '—' }}</td>

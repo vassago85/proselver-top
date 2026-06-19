@@ -524,6 +524,13 @@
                             Team
                         </x-sidebar-link>
 
+                        {{-- Delivery-note branding (Phase 1B) — logo +
+                             letterhead printed on the dealer's own notes. --}}
+                        <x-sidebar-link :href="route('customer.settings.branding')" :active="request()->routeIs('customer.settings.branding')">
+                            <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></x-slot:icon>
+                            Branding
+                        </x-sidebar-link>
+
                         {{-- Internal driver pool — dealer-only feature.
                              OEM tenants don't run their own drivers; everything
                              goes through ProSelver. --}}

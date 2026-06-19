@@ -12,6 +12,11 @@
     $carrierName  = $carrierName  ?? 'Proselver Technologies';
     $docTitle     = $docTitle     ?? 'Collection Note';
     $footerLine   = $footerLine   ?? 'Proselver Technologies (Pty) Ltd — dispatched via TRIDENT Control & Dispatch Center';
+    // IssuerProfile DTO (Phase 1B) carries the optional dealer
+    // letterhead — address / VAT / registration / phone / email.
+    // May be absent on legacy render paths; the masthead block
+    // below is guarded so it degrades to name-only cleanly.
+    $issuer = $issuer ?? null;
 @endphp
 <!DOCTYPE html>
 <html>
@@ -32,6 +37,8 @@
         .doc-title { font-size: 18px; font-weight: bold; color: #1e40af; text-transform: uppercase; text-align: right; line-height: 1; }
         .doc-number { font-size: 11px; color: #6b7280; text-align: right; margin-top: 3px; }
         .doc-copy { font-size: 9.5px; color: #6b7280; text-align: right; margin-top: 1px; text-transform: uppercase; letter-spacing: 0.2px; }
+        .issuer-block { font-size: 8.5px; color: #6b7280; text-align: right; margin-top: 4px; line-height: 1.35; }
+        .issuer-block .issuer-name { font-weight: bold; color: #374151; font-size: 9.5px; }
 
         .brand-band { border-top: 2px solid #1e40af; border-bottom: 1px solid #e5e7eb; padding: 6px 0; margin-bottom: 12px; }
         .brand-band .name { font-size: 13px; font-weight: bold; color: #1e40af; }
@@ -245,6 +252,18 @@
             <td style="width: 40%;">
                 <div class="doc-title">{{ $docTitle }}</div>
                 <div class="doc-number">{{ $job->job_number }}</div>
+                @if($issuer && $issuer->hasLetterhead())
+                    <div class="issuer-block">
+                        <span class="issuer-name">{{ $carrierName }}</span>
+                        @if($issuer->address)<br>{!! nl2br(e($issuer->address)) !!}@endif
+                        @if($issuer->phone || $issuer->email)
+                            <br>@if($issuer->phone)Tel {{ $issuer->phone }}@endif@if($issuer->phone && $issuer->email) · @endif@if($issuer->email){{ $issuer->email }}@endif
+                        @endif
+                        @if($issuer->vatNumber || $issuer->registrationNumber)
+                            <br>@if($issuer->vatNumber)VAT {{ $issuer->vatNumber }}@endif@if($issuer->vatNumber && $issuer->registrationNumber) · @endif@if($issuer->registrationNumber)Reg {{ $issuer->registrationNumber }}@endif
+                        @endif
+                    </div>
+                @endif
             </td>
         </tr>
     </table>

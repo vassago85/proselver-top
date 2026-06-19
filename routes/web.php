@@ -103,6 +103,21 @@ Route::get('/collection-note/{job}/download', function (\App\Models\Job $job) {
     ]);
 })->middleware('auth')->name('collection-note.download');
 
+// Sale Delivery Note PDF download (Phase 1B). Printed straight off a
+// dealer_stock row when a vehicle is sold off the floor with no
+// transport job. Gated by DealerStockPolicy::printSaleNote to block
+// cross-dealer IDOR — the PDF carries buyer phone/email + VIN.
+Route::get('/dealer-stock/{dealerStock}/sale-delivery-note/download', function (\App\Models\DealerStock $dealerStock) {
+    \Illuminate\Support\Facades\Gate::authorize('printSaleNote', $dealerStock);
+
+    $service = app(\App\Services\SaleDeliveryNoteService::class);
+    $pdf = $service->generate($dealerStock);
+    return response($pdf, 200, [
+        'Content-Type' => 'application/pdf',
+        'Content-Disposition' => 'inline; filename="delivery-note-' . $dealerStock->vin . '.pdf"',
+    ]);
+})->middleware('auth')->name('dealer-stock.sale-delivery-note.download');
+
 // Damage Report PDF download. Uses JobPolicy::generateDamageReport which
 // reuses the job-view gate — anyone allowed to see the job can download
 // its damage report. No status restriction (reports may be pulled long

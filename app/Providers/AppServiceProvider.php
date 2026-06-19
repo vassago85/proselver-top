@@ -7,6 +7,7 @@ use App\Models\Job;
 use App\Models\JobDocument;
 use App\Models\MovementRequest;
 use App\Models\SystemSetting;
+use App\Observers\DealerStockMovementLinker;
 use App\Observers\JobObserver;
 use App\Policies\CompanyPolicy;
 use App\Policies\JobDocumentPolicy;
@@ -41,6 +42,7 @@ class AppServiceProvider extends ServiceProvider
         Gate::policy(JobDocument::class, JobDocumentPolicy::class);
         Gate::policy(\App\Models\PettyCashEntry::class, PettyCashEntryPolicy::class);
         Gate::policy(MovementRequest::class, MovementRequestPolicy::class);
+        Gate::policy(\App\Models\DealerStock::class, \App\Policies\DealerStockPolicy::class);
 
         // Inventory auto-link is opt-in per environment. While this flag is
         // off (the default) no observer is attached and Job writes don't
@@ -48,6 +50,12 @@ class AppServiceProvider extends ServiceProvider
         if (config('features.inventory_link')) {
             Job::observe(JobObserver::class);
         }
+
+        // Dealer stock ledger linker -- always attached.  It only
+        // ever writes to dealer_stock (never back to the job) and is
+        // a no-op when no matching dealer_stock row exists, so
+        // proselver-side movements stay unaffected.
+        Job::observe(DealerStockMovementLinker::class);
 
         static::hydrateStorageConfigFromDatabase();
         static::hydrateMailConfigFromDatabase();

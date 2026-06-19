@@ -9,6 +9,7 @@ use App\Models\Role;
 use App\Models\User;
 use Livewire\Volt\Component;
 use Livewire\Attributes\Layout;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Str;
 
@@ -297,6 +298,87 @@ new #[Layout('components.layouts.app')] class extends Component {
         session()->flash('success', "Unlinked {$target->name} from {$this->company->name}.");
     }
 
+    // ----- Group-principal actions --------------------------------------
+    // A "group principal" (the franchise CEO / holding-company manager)
+    // is implemented as a User attached to every Company in a group via
+    // company_users -- no new role, no new column.  The action just
+    // syncWithoutDetaching the user into every sibling dealership in
+    // the same company_group_id as the company being viewed.  Reversed
+    // by detaching them from every sibling (excluding this one) on the
+    // "Remove from group" action.
+
+    /**
+     * Pivot-attach the user to every other Company in this company's
+     * dealer group, so they see stock/orders across the whole umbrella.
+     */
+    public function makeGroupPrincipal(int $userId): void
+    {
+        $actor = auth()->user();
+        abort_unless($actor?->canManageInternalUsers(), 403, 'You may not grant group access.');
+
+        $target = User::findOrFail($userId);
+
+        if (!$actor->isDeveloper() && $target->highestRoleLevel() >= $actor->highestRoleLevel()) {
+            abort(403, 'You may not modify a user at or above your own role level.');
+        }
+
+        if (!$this->company->company_group_id) {
+            session()->flash('error', "{$this->company->name} is not in a dealer group. Assign it to a group first, then try again.");
+            return;
+        }
+
+        $siblingIds = Company::where('company_group_id', $this->company->company_group_id)
+            ->where('id', '!=', $this->company->id)
+            ->pluck('id')
+            ->all();
+
+        if (empty($siblingIds)) {
+            session()->flash('error', 'This group has no other dealerships yet. Add more dealerships to the group first.');
+            return;
+        }
+
+        $target->companies()->syncWithoutDetaching($siblingIds);
+
+        $groupName = $this->company->group?->name ?? 'group';
+        session()->flash(
+            'success',
+            "{$target->name} now has access to every dealership in {$groupName} (" . (count($siblingIds) + 1) . " companies in total)."
+        );
+    }
+
+    /**
+     * Reverse of makeGroupPrincipal(): detach the user from every
+     * sibling company in this group, leaving only their direct link to
+     * the current company intact.  Safe even if the user was never
+     * promoted -- detach() of a non-pivot is a no-op.
+     */
+    public function removeGroupPrincipal(int $userId): void
+    {
+        $actor = auth()->user();
+        abort_unless($actor?->canManageInternalUsers(), 403, 'You may not revoke group access.');
+
+        $target = User::findOrFail($userId);
+
+        if (!$actor->isDeveloper() && $target->highestRoleLevel() >= $actor->highestRoleLevel()) {
+            abort(403, 'You may not modify a user at or above your own role level.');
+        }
+
+        if (!$this->company->company_group_id) {
+            return;
+        }
+
+        $siblingIds = Company::where('company_group_id', $this->company->company_group_id)
+            ->where('id', '!=', $this->company->id)
+            ->pluck('id')
+            ->all();
+
+        if (!empty($siblingIds)) {
+            $target->companies()->detach($siblingIds);
+        }
+
+        session()->flash('success', "Removed {$target->name}'s access to sibling dealerships.");
+    }
+
     // ----- Inline add-location actions ----------------------------------
 
     public function toggleAddLocation(): void
@@ -428,18 +510,50 @@ new #[Layout('components.layouts.app')] class extends Component {
             ->orderBy('name')
             ->get(['id', 'name', 'email']);
 
+        // Group principal lookup -- a user is treated as the franchise
+        // CEO for this group iff they are linked to every other
+        // dealership in the same company_group_id.  Returns user id =>
+        // bool; consumed by the "Make/Remove group principal" buttons
+        // on each row.  Cheap because we already have the users list
+        // and their companies in memory via the eager load.
+        $isGroupPrincipal = [];
+        $siblingIdsForCheck = [];
+        $siblingCountForCheck = 0;
+        if ($this->company->company_group_id) {
+            $siblingIdsForCheck = Company::where('company_group_id', $this->company->company_group_id)
+                ->where('id', '!=', $this->company->id)
+                ->pluck('id')
+                ->all();
+            $siblingCountForCheck = count($siblingIdsForCheck);
+
+            if ($siblingCountForCheck > 0) {
+                $linkCounts = DB::table('company_users')
+                    ->whereIn('user_id', $existingMemberIds)
+                    ->whereIn('company_id', $siblingIdsForCheck)
+                    ->selectRaw('user_id, COUNT(*) AS linked_count')
+                    ->groupBy('user_id')
+                    ->pluck('linked_count', 'user_id');
+
+                foreach ($existingMemberIds as $uid) {
+                    $isGroupPrincipal[$uid] = (int) ($linkCounts[$uid] ?? 0) === $siblingCountForCheck;
+                }
+            }
+        }
+
         return [
-            'users'            => $users,
-            'orderStats'       => $orderStats,
-            'locations'        => $locations,
-            'allBrands'        => $allBrands,
-            'companyBrands'    => $companyBrands,
-            'typeLabels'       => $typeLabels,
-            'assignableRoles'  => $assignableRoles,
-            'groups'           => $groups,
-            'attachableUsers'  => $attachableUsers,
-            'canCreateUsers'   => (bool) $actor?->canManageInternalUsers(),
-            'canManageCompany' => Gate::allows('update', $this->company),
+            'users'                => $users,
+            'orderStats'           => $orderStats,
+            'locations'            => $locations,
+            'allBrands'            => $allBrands,
+            'companyBrands'        => $companyBrands,
+            'typeLabels'           => $typeLabels,
+            'assignableRoles'      => $assignableRoles,
+            'groups'               => $groups,
+            'attachableUsers'      => $attachableUsers,
+            'canCreateUsers'       => (bool) $actor?->canManageInternalUsers(),
+            'canManageCompany'     => Gate::allows('update', $this->company),
+            'isGroupPrincipal'     => $isGroupPrincipal,
+            'groupSiblingCount'    => $siblingCountForCheck,
         ];
     }
 };
@@ -459,6 +573,9 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         @if(session('success'))
             <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{{ session('success') }}</div>
+        @endif
+        @if(session('error'))
+            <div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">{{ session('error') }}</div>
         @endif
 
         {{-- Order Stats --}}
@@ -809,6 +926,25 @@ new #[Layout('components.layouts.app')] class extends Component {
                                         @csrf
                                         <button type="submit" class="text-amber-600 hover:text-amber-800 font-medium">Impersonate</button>
                                     </form>
+                                @endif
+                                @if($canCreateUsers && $company->company_group_id && $groupSiblingCount > 0)
+                                    @if(($isGroupPrincipal[$user->id] ?? false))
+                                        <button type="button"
+                                                wire:click="removeGroupPrincipal({{ $user->id }})"
+                                                wire:confirm="Remove {{ $user->name }}'s access to the other {{ $groupSiblingCount }} dealership(s) in {{ $company->group?->name ?? 'this group' }}? Their link to {{ $company->name }} stays intact."
+                                                class="text-amber-700 hover:text-amber-900 font-medium"
+                                                title="Currently a group principal — sees stock across the whole group">
+                                            Remove group access
+                                        </button>
+                                    @else
+                                        <button type="button"
+                                                wire:click="makeGroupPrincipal({{ $user->id }})"
+                                                wire:confirm="Grant {{ $user->name }} access to every other dealership in {{ $company->group?->name ?? 'this group' }} ({{ $groupSiblingCount }} sibling(s))? They will see stock and orders across the whole umbrella."
+                                                class="text-emerald-700 hover:text-emerald-900 font-medium"
+                                                title="Promote to franchise CEO / group principal — adds them to every sibling dealership">
+                                            Make group principal
+                                        </button>
+                                    @endif
                                 @endif
                                 @if($canCreateUsers)
                                     <button type="button"

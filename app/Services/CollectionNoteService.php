@@ -3,6 +3,8 @@
 namespace App\Services;
 
 use App\Models\Job;
+use App\Support\Documents\DocumentImage;
+use App\Support\Documents\IssuerProfile;
 use Dompdf\Dompdf;
 use Dompdf\Options;
 use Endroid\QrCode\Encoding\Encoding;
@@ -20,16 +22,17 @@ class CollectionNoteService
         $profile = $driver?->driverProfile;
         $verificationUrl = $this->buildVerificationUrl($job);
         $qrDataUri = $this->buildQrDataUri($verificationUrl);
-        $inspectionDiagramUri = $this->buildImageDataUri(public_path('inspection-diagram.png'));
+        $inspectionDiagramUri = DocumentImage::fromLocalPath(public_path('inspection-diagram.png'));
 
         // Resolve which company / firm is actually moving the vehicle
         // so the masthead, "Carrier" rows and signature blocks reflect
         // that. ProSelver-executed jobs keep the existing branded PDF;
         // dealer-internal / 3rd-party-courier / self-collect jobs swap
-        // the carrier name, doc title, and footer to match the actual
-        // executor — the dealer is the one issuing the paperwork to
-        // their own driver, not us.
-        $carrier = $this->resolveCarrier($job);
+        // the carrier name, doc title, footer AND now the full
+        // letterhead (logo + address + VAT + registration) to match
+        // the actual executor — the dealer is the one issuing the
+        // paperwork to their own driver, not us.
+        $issuer = $this->resolveCarrier($job);
 
         $html = view('documents.collection-note', [
             'job' => $job,
@@ -37,11 +40,15 @@ class CollectionNoteService
             'profile' => $profile,
             'qrUrl' => $qrDataUri,
             'verificationUrl' => $verificationUrl,
-            'carrierLogoUri' => $carrier['logo_uri'],
+            'issuer' => $issuer,
+            // Backwards-compatible scalar aliases derived from the
+            // IssuerProfile DTO so the rest of the template (and any
+            // other includer) keeps working unchanged.
+            'carrierLogoUri' => $issuer->logoUri,
             'inspectionDiagramUri' => $inspectionDiagramUri,
-            'carrierName' => $carrier['name'],
-            'docTitle' => $carrier['doc_title'],
-            'footerLine' => $carrier['footer'],
+            'carrierName' => $issuer->name,
+            'docTitle' => $issuer->docTitle,
+            'footerLine' => $issuer->footer,
         ])->render();
 
         $options = new Options();
@@ -89,75 +96,34 @@ class CollectionNoteService
     }
 
     /**
-     * Decide the carrier identity for the PDF based on executor_type.
+     * Decide the issuer identity for the PDF based on executor_type.
      * Keeps the template generic so the same document can serve
      * ProSelver-executed jobs, dealer-internal jobs, 3rd-party
      * courier jobs and self-collect releases.
      *
-     * @return array{name:string, doc_title:string, footer:string, logo_uri:?string}
+     * Dealer-internal and self-collect notes now resolve to the
+     * dealer company's full letterhead (logo + address + VAT + reg)
+     * via IssuerProfile::forCompany(); ProSelver and 3rd-party
+     * couriers keep their existing identity.
      */
-    protected function resolveCarrier(Job $job): array
+    protected function resolveCarrier(Job $job): IssuerProfile
     {
-        $proselverLogo = $this->buildImageDataUri(public_path('proselverlogo-2.png'));
-
         return match ($job->executor_type) {
-            Job::EXECUTOR_INTERNAL => [
-                'name'      => $job->company?->name ?: 'Dealer-managed movement',
-                'doc_title' => 'Delivery Note',
-                'footer'    => ($job->company?->name ?: 'Dealer') . ' — issued via TRIDENT Control & Dispatch Center',
-                // We deliberately drop the ProSelver logo for dealer-
-                // managed paperwork — no carrier logo for internal
-                // moves until we wire a per-company logo field on
-                // Company. The text masthead falls back cleanly.
-                'logo_uri'  => null,
-            ],
-            Job::EXECUTOR_THIRD_PARTY => [
-                'name'      => $job->third_party_courier_name ?: '3rd-Party Courier',
-                'doc_title' => 'Delivery Note',
-                'footer'    => 'Movement by ' . ($job->third_party_courier_name ?: '3rd-party courier') . ' — issued via TRIDENT Control & Dispatch Center',
-                'logo_uri'  => null,
-            ],
-            Job::EXECUTOR_SELF_COLLECT => [
-                'name'      => $job->company?->name ?: 'Self-collect release',
-                'doc_title' => 'Vehicle Release Note',
-                'footer'    => ($job->company?->name ?: 'Dealer') . ' — issued via TRIDENT Control & Dispatch Center',
-                'logo_uri'  => null,
-            ],
+            Job::EXECUTOR_INTERNAL => $job->company
+                ? IssuerProfile::forCompany($job->company, 'Delivery Note')
+                : IssuerProfile::forCourier('Dealer-managed movement', 'Delivery Note'),
+
+            Job::EXECUTOR_THIRD_PARTY => IssuerProfile::forCourier(
+                $job->third_party_courier_name ?: '3rd-Party Courier',
+                'Delivery Note'
+            ),
+
+            Job::EXECUTOR_SELF_COLLECT => $job->company
+                ? IssuerProfile::forCompany($job->company, 'Vehicle Release Note')
+                : IssuerProfile::forCourier('Self-collect release', 'Vehicle Release Note'),
+
             // ProSelver (default) — preserves the original branded PDF.
-            default => [
-                'name'      => 'Proselver Technologies',
-                'doc_title' => 'Collection Note',
-                'footer'    => 'Proselver Technologies (Pty) Ltd — dispatched via TRIDENT Control & Dispatch Center',
-                'logo_uri'  => $proselverLogo,
-            ],
+            default => IssuerProfile::forProselver('Collection Note'),
         };
-    }
-
-    /**
-     * Read any local PNG/JPEG as a base64 data URI for inline embedding in
-     * the PDF. Dompdf's SVG renderer is patchy, so we prefer raster assets
-     * embedded this way for anything beyond the simplest shapes. Returns
-     * null if the file is missing or can't be read, so the view can fall
-     * back cleanly.
-     */
-    protected function buildImageDataUri(string $path): ?string
-    {
-        if (!is_file($path)) {
-            return null;
-        }
-
-        $contents = @file_get_contents($path);
-        if ($contents === false) {
-            return null;
-        }
-
-        $mime = match (strtolower(pathinfo($path, PATHINFO_EXTENSION))) {
-            'jpg', 'jpeg' => 'image/jpeg',
-            'png'         => 'image/png',
-            'gif'         => 'image/gif',
-            default       => 'image/png',
-        };
-
-        return 'data:' . $mime . ';base64,' . base64_encode($contents);
     }
 }

@@ -39,6 +39,10 @@ class extends Component
     public ?int $locationId = null;
     public string $bucket = 'all'; // all | body_builder | other_storage | in_transit
 
+    // Dealership filter for franchise CEOs whose visibleCompanyIds
+    // spans multiple sibling dealerships.  '' = "all my dealerships".
+    public string $dealershipFilter = '';
+
     public function mount(): void
     {
         $this->company = auth()->user()->companies()->first();
@@ -55,6 +59,16 @@ class extends Component
 
     public function with(): array
     {
+        $user = auth()->user();
+        $visibleCompanyIds = $user->visibleCompanyIds();
+
+        // Group-aware scope: a CEO sees stock across every dealership
+        // they're pivoted into via company_users.  When dealershipFilter
+        // is set, narrow back down to that single dealership.
+        $effectiveCompanyIds = $this->dealershipFilter !== ''
+            ? array_values(array_intersect($visibleCompanyIds, [(int) $this->dealershipFilter]))
+            : $visibleCompanyIds;
+
         // -----------------------------------------------------------
         // Step 1: delivered-but-parked rows (body builder + other
         // storage facility). DESTINATION_YARD + the legacy
@@ -72,19 +86,19 @@ class extends Component
         ];
 
         $parkedCandidates = Job::query()
-            ->where('company_id', $this->company->id)
+            ->whereIn('company_id', $effectiveCompanyIds)
             ->whereIn('destination_type', $parkedDestinations)
             ->whereIn('status', [Job::STATUS_DELIVERED, Job::STATUS_COMPLETED])
             ->whereNull('archived_at')
             ->whereNotNull('vin')
-            ->with(['deliveryLocation', 'pickupLocation', 'brand:id,name'])
+            ->with(['deliveryLocation', 'pickupLocation', 'brand:id,name', 'company:id,name'])
             ->orderByDesc('delivered_at')
             ->get();
 
         $latestParkedPerVin = $parkedCandidates->unique('vin');
 
         $vinsWithNewerMovement = Job::query()
-            ->where('company_id', $this->company->id)
+            ->whereIn('company_id', $effectiveCompanyIds)
             ->whereIn('vin', $latestParkedPerVin->pluck('vin')->all())
             ->whereNull('archived_at')
             ->whereNotIn('status', [Job::STATUS_CANCELLED, Job::STATUS_DELIVERED, Job::STATUS_COMPLETED])
@@ -119,11 +133,11 @@ class extends Component
         ];
 
         $inTransitCandidates = Job::query()
-            ->where('company_id', $this->company->id)
+            ->whereIn('company_id', $effectiveCompanyIds)
             ->whereIn('status', $activeStatuses)
             ->whereNull('archived_at')
             ->whereNotNull('vin')
-            ->with(['deliveryLocation', 'pickupLocation', 'brand:id,name', 'driver:id,name'])
+            ->with(['deliveryLocation', 'pickupLocation', 'brand:id,name', 'driver:id,name', 'company:id,name'])
             ->orderByDesc('scheduled_date')
             ->orderByDesc('id')
             ->get()
@@ -187,10 +201,16 @@ class extends Component
             ->values()
             ->all();
 
+        $visibleCompanies = count($visibleCompanyIds) > 1
+            ? Company::whereIn('id', $visibleCompanyIds)->orderBy('name')->get(['id', 'name'])
+            : collect();
+
         return [
             'rows' => $rows,
             'bucketCounts' => $bucketCounts,
             'locationOptions' => $locationOptions,
+            'visibleCompanies' => $visibleCompanies,
+            'isMultiCompany' => $visibleCompanies->isNotEmpty(),
         ];
     }
 };
@@ -204,6 +224,9 @@ class extends Component
         Vehicles you still own but aren't sitting at your dealership right now &mdash; at a body builder, parked in a yard, or actively on the road.
         Anything delivered to a final dealer destination drops out of this view automatically.
     </div>
+
+    {{-- Dealership chip strip (group principals only) --}}
+    <x-dealership-chip-strip :companies="$visibleCompanies" :selected="$dealershipFilter" wire-model="dealershipFilter" />
 
     {{-- Bucket tabs --}}
     <div class="mb-4 flex flex-wrap gap-2">
@@ -260,6 +283,9 @@ class extends Component
             <thead class="bg-gray-50">
                 <tr>
                     <th class="px-4 py-3 text-left text-xs font-medium uppercase text-gray-500">Vehicle</th>
+                    @if($isMultiCompany)
+                        <th class="px-4 py-3 text-left text-xs font-medium uppercase text-gray-500">Dealership</th>
+                    @endif
                     <th class="px-4 py-3 text-left text-xs font-medium uppercase text-gray-500">VIN</th>
                     <th class="px-4 py-3 text-left text-xs font-medium uppercase text-gray-500">Status</th>
                     <th class="px-4 py-3 text-left text-xs font-medium uppercase text-gray-500">Where</th>
@@ -284,6 +310,9 @@ class extends Component
                                 <div class="text-xs text-gray-500">{{ $row->registration }}</div>
                             @endif
                         </td>
+                        @if($isMultiCompany)
+                            <td class="px-4 py-3 text-sm text-gray-700">{{ $row->company?->name ?? '—' }}</td>
+                        @endif
                         <td class="px-4 py-3 text-sm font-mono text-gray-700">{{ $row->vin }}</td>
                         <td class="px-4 py-3 text-sm">
                             <span class="inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold {{ $badgeCls }}">
@@ -326,7 +355,7 @@ class extends Component
                     </tr>
                 @empty
                     <tr>
-                        <td colspan="6" class="px-4 py-12 text-center text-sm text-gray-500">
+                        <td colspan="{{ $isMultiCompany ? 7 : 6 }}" class="px-4 py-12 text-center text-sm text-gray-500">
                             Nothing in this view right now &mdash; all your vehicles are either at home or already delivered to their final destination.
                         </td>
                     </tr>

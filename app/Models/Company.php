@@ -44,6 +44,7 @@ class Company extends Model
     protected $fillable = [
         'uuid',
         'name',
+        'logo_path',
         'normalized_name',
         'type',
         'workflow_type',
@@ -52,6 +53,8 @@ class Company extends Model
         'collection_sla_days',
         'address',
         'vat_number',
+        'registration_number',
+        'branding_footer',
         'billing_email',
         'phone',
         'is_active',

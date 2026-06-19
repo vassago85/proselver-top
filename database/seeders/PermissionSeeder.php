@@ -50,6 +50,10 @@ class PermissionSeeder extends Seeder
             ['name' => 'Raise BB Movement Request', 'slug' => 'bb_request_movement', 'group' => 'Body Builder', 'description' => 'Raise a next-fitment or collection request back to the dealer'],
             ['name' => 'Approve BB Movement Requests', 'slug' => 'dealer_approve_bb_requests', 'group' => 'Body Builder', 'description' => 'Approve or reject body-builder movement requests against your inventory'],
             ['name' => 'Manage BB Links', 'slug' => 'manage_bb_links', 'group' => 'Body Builder', 'description' => 'Link / pause / unlink authorised body builders for your dealership'],
+
+            // Phase 1 dealer stock ledger.
+            ['name' => 'View Dealer Stock', 'slug' => 'view_dealer_stock', 'group' => 'Dealer Stock', 'description' => 'View the dealer stock ledger'],
+            ['name' => 'Manage Dealer Stock', 'slug' => 'manage_dealer_stock', 'group' => 'Dealer Stock', 'description' => 'Import, mark-sold, send-on-demo, archive dealer stock'],
         ];
 
         foreach ($permissions as $perm) {
@@ -68,12 +72,12 @@ class PermissionSeeder extends Seeder
         ];
 
         $rolePermissions = [
-            'dealer_principal' => $fullAccess,
-            'sales_manager_new' => ['view_all_bookings', 'view_own_bookings', 'edit_all_bookings', 'edit_own_bookings', 'submit_booking', 'approve_booking', 'cancel_booking', 'upload_documents', 'view_stock', 'generate_po', 'view_po', 'view_invoices', 'view_performance', 'manage_dealer_users'],
-            'sales_manager_used' => ['view_all_bookings', 'view_own_bookings', 'edit_all_bookings', 'edit_own_bookings', 'submit_booking', 'approve_booking', 'cancel_booking', 'upload_documents', 'view_stock', 'generate_po', 'view_po', 'view_invoices', 'view_performance', 'manage_dealer_users'],
-            'sales_person_new' => ['view_own_bookings', 'edit_own_bookings', 'submit_booking', 'upload_documents', 'view_stock'],
-            'sales_person_used' => ['view_own_bookings', 'edit_own_bookings', 'submit_booking', 'upload_documents', 'view_stock'],
-            'stock_controller' => ['view_all_bookings', 'view_own_bookings', 'view_stock', 'manage_movements', 'view_movement_overview', 'generate_po', 'upload_po', 'upload_documents', 'view_po'],
+            'dealer_principal' => array_merge($fullAccess, ['view_dealer_stock', 'manage_dealer_stock']),
+            'sales_manager_new' => ['view_all_bookings', 'view_own_bookings', 'edit_all_bookings', 'edit_own_bookings', 'submit_booking', 'approve_booking', 'cancel_booking', 'upload_documents', 'view_stock', 'generate_po', 'view_po', 'view_invoices', 'view_performance', 'manage_dealer_users', 'view_dealer_stock', 'manage_dealer_stock'],
+            'sales_manager_used' => ['view_all_bookings', 'view_own_bookings', 'edit_all_bookings', 'edit_own_bookings', 'submit_booking', 'approve_booking', 'cancel_booking', 'upload_documents', 'view_stock', 'generate_po', 'view_po', 'view_invoices', 'view_performance', 'manage_dealer_users', 'view_dealer_stock', 'manage_dealer_stock'],
+            'sales_person_new' => ['view_own_bookings', 'edit_own_bookings', 'submit_booking', 'upload_documents', 'view_stock', 'view_dealer_stock'],
+            'sales_person_used' => ['view_own_bookings', 'edit_own_bookings', 'submit_booking', 'upload_documents', 'view_stock', 'view_dealer_stock'],
+            'stock_controller' => ['view_all_bookings', 'view_own_bookings', 'view_stock', 'manage_movements', 'view_movement_overview', 'generate_po', 'upload_po', 'upload_documents', 'view_po', 'view_dealer_stock', 'manage_dealer_stock'],
             'oem_admin' => $fullAccess,
             'oem_planner' => ['view_all_bookings', 'view_own_bookings', 'edit_all_bookings', 'edit_own_bookings', 'submit_booking', 'approve_booking', 'cancel_booking', 'upload_documents', 'view_stock', 'manage_movements', 'view_movement_overview', 'generate_po', 'upload_po', 'view_po', 'view_invoices'],
         ];
@@ -86,15 +90,17 @@ class PermissionSeeder extends Seeder
         $rolePermissions['customer_owner'] = array_merge($fullAccess, [
             'confirm_customer_order', 'manage_locations', 'view_locations',
             'dealer_approve_bb_requests', 'manage_bb_links',
+            'view_dealer_stock', 'manage_dealer_stock',
         ]);
         $rolePermissions['customer_admin'] = [
             'view_all_bookings', 'view_own_bookings', 'edit_all_bookings', 'submit_booking', 'cancel_booking',
             'upload_documents', 'view_po', 'generate_po', 'upload_po', 'view_invoices',
             'manage_dealer_users', 'manage_locations', 'view_locations',
             'dealer_approve_bb_requests', 'manage_bb_links',
+            'view_dealer_stock', 'manage_dealer_stock',
         ];
         $rolePermissions['customer_user'] = ['view_own_bookings', 'submit_booking', 'upload_documents', 'view_locations'];
-        $rolePermissions['customer_dispatcher'] = ['view_all_bookings', 'view_own_bookings', 'confirm_customer_order', 'upload_documents', 'view_locations', 'dealer_approve_bb_requests'];
+        $rolePermissions['customer_dispatcher'] = ['view_all_bookings', 'view_own_bookings', 'confirm_customer_order', 'upload_documents', 'view_locations', 'dealer_approve_bb_requests', 'view_dealer_stock'];
 
         // Body-builder-tier roles.  Owner can do everything inside the
         // BB tenant (manage users + locations + raise requests); user
@@ -140,6 +146,7 @@ class PermissionSeeder extends Seeder
             'confirm_customer_order', 'view_planning_queue', 'plan_orders', 'assign_drivers',
             'generate_collection_note', 'manage_locations', 'view_locations',
             'dealer_approve_bb_requests', 'manage_bb_links',
+            'view_dealer_stock', 'manage_dealer_stock',
         ]);
         $rolePermissions['developer'] = $rolePermissions['super_admin'];
         $rolePermissions['operations_controller'] = $opsControllerPerms;
