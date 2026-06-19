@@ -51,8 +51,8 @@ class AddressesAudit extends Command
         ['table' => 'movement_requests',      'col' => 'delivery_location_id'],
         ['table' => 'route_toll_plaza_hints', 'col' => 'pickup_location_id'],
         ['table' => 'route_toll_plaza_hints', 'col' => 'delivery_location_id'],
-        ['table' => 'route_cache',            'col' => 'pickup_location_id'],
-        ['table' => 'route_cache',            'col' => 'delivery_location_id'],
+        ['table' => 'route_estimates',        'col' => 'pickup_location_id'],
+        ['table' => 'route_estimates',        'col' => 'delivery_location_id'],
         ['table' => 'company_users',          'col' => 'location_id'],
     ];
 
