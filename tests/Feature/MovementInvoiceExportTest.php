@@ -179,7 +179,7 @@ test('Customer invoicing page hydrates rows from existing finance fields', funct
 
     $this->actingAs(makeAccountant());
 
-    \Livewire\Volt\Volt::test('admin.reports.invoicing')
+    \Livewire\Volt\Volt::test('admin.invoices.index')
         ->set('companyId', $oem->id)
         ->set('dateFrom', now()->subDays(30)->toDateString())
         ->set('dateTo', now()->toDateString())
@@ -192,7 +192,7 @@ test('save() persists edited finance fields', function () {
 
     $this->actingAs(makeAccountant());
 
-    \Livewire\Volt\Volt::test('admin.reports.invoicing')
+    \Livewire\Volt\Volt::test('admin.invoices.index')
         ->set('companyId', $oem->id)
         ->set('dateFrom', now()->subDays(30)->toDateString())
         ->set('dateTo', now()->toDateString())
@@ -224,7 +224,7 @@ test('non-ProSelver and out-of-window jobs are excluded from the scope', functio
 
     $this->actingAs(makeAccountant());
 
-    $component = \Livewire\Volt\Volt::test('admin.reports.invoicing')
+    $component = \Livewire\Volt\Volt::test('admin.invoices.index')
         ->set('companyId', $oem->id)
         ->set('dateFrom', now()->subDays(30)->toDateString())
         ->set('dateTo', now()->toDateString());
@@ -243,7 +243,7 @@ test('Last month preset sets the window from the 2nd of last month to the 1st of
     $expectedFrom = now()->copy()->subMonthNoOverflow()->startOfMonth()->addDay()->toDateString();
     $expectedTo   = now()->copy()->startOfMonth()->toDateString();
 
-    \Livewire\Volt\Volt::test('admin.reports.invoicing')
+    \Livewire\Volt\Volt::test('admin.invoices.index')
         ->call('applyRange', 'last_month')
         ->assertSet('dateFrom', $expectedFrom)
         ->assertSet('dateTo', $expectedTo);
@@ -254,7 +254,7 @@ test('non-accounts/owner/developer users get 403 on the invoicing page', functio
     $u->assignRole('super_admin'); // internal but not accounts/owner/developer
     $this->actingAs($u);
 
-    \Livewire\Volt\Volt::test('admin.reports.invoicing')->assertStatus(403);
+    \Livewire\Volt\Volt::test('admin.invoices.index')->assertStatus(403);
 });
 
 test('toggleComplete flips invoicing_completed_at and stamps the user', function () {
@@ -263,14 +263,14 @@ test('toggleComplete flips invoicing_completed_at and stamps the user', function
     $u = makeAccountant();
     $this->actingAs($u);
 
-    \Livewire\Volt\Volt::test('admin.reports.invoicing')
+    \Livewire\Volt\Volt::test('admin.invoices.index')
         ->call('toggleComplete', $job->id);
 
     $job->refresh();
     expect($job->invoicing_completed_at)->not->toBeNull();
     expect($job->invoicing_completed_by_user_id)->toBe($u->id);
 
-    \Livewire\Volt\Volt::test('admin.reports.invoicing')
+    \Livewire\Volt\Volt::test('admin.invoices.index')
         ->call('toggleComplete', $job->id);
 
     $job->refresh();
@@ -286,7 +286,7 @@ test('completion filter hides rows marked complete by default (incomplete view)'
     $this->actingAs(makeAccountant());
 
     // Default ($completion === 'incomplete') -- only the unfinished row.
-    \Livewire\Volt\Volt::test('admin.reports.invoicing')
+    \Livewire\Volt\Volt::test('admin.invoices.index')
         ->set('companyId', $oem->id)
         ->set('dateFrom', now()->subDays(30)->toDateString())
         ->set('dateTo',   now()->toDateString())
@@ -294,7 +294,7 @@ test('completion filter hides rows marked complete by default (incomplete view)'
         ->assertDontSee($complete->job_number);
 
     // Flip to 'all' -- both visible.
-    \Livewire\Volt\Volt::test('admin.reports.invoicing')
+    \Livewire\Volt\Volt::test('admin.invoices.index')
         ->set('companyId', $oem->id)
         ->set('dateFrom', now()->subDays(30)->toDateString())
         ->set('dateTo',   now()->toDateString())
@@ -303,7 +303,7 @@ test('completion filter hides rows marked complete by default (incomplete view)'
         ->assertSee($complete->job_number);
 
     // Flip to 'complete' -- only the done row.
-    \Livewire\Volt\Volt::test('admin.reports.invoicing')
+    \Livewire\Volt\Volt::test('admin.invoices.index')
         ->set('companyId', $oem->id)
         ->set('dateFrom', now()->subDays(30)->toDateString())
         ->set('dateTo',   now()->toDateString())
@@ -318,7 +318,7 @@ test('accounts cannot mark a row as not-required', function () {
 
     $this->actingAs(makeAccountant());
 
-    \Livewire\Volt\Volt::test('admin.reports.invoicing')
+    \Livewire\Volt\Volt::test('admin.invoices.index')
         ->call('toggleExclude', $job->id)
         ->assertStatus(403);
 
@@ -332,7 +332,7 @@ test('owner can mark a row as not-required and it drops out of the default worki
     $owner = makeOwner();
     $this->actingAs($owner);
 
-    \Livewire\Volt\Volt::test('admin.reports.invoicing')
+    \Livewire\Volt\Volt::test('admin.invoices.index')
         ->call('toggleExclude', $job->id, 'internal shuffle');
 
     $job->refresh();
@@ -341,14 +341,14 @@ test('owner can mark a row as not-required and it drops out of the default worki
     expect($job->invoicing_excluded_reason)->toBe('internal shuffle');
 
     // Default 'incomplete' view should no longer show this job.
-    \Livewire\Volt\Volt::test('admin.reports.invoicing')
+    \Livewire\Volt\Volt::test('admin.invoices.index')
         ->set('companyId', $oem->id)
         ->set('dateFrom', now()->subDays(30)->toDateString())
         ->set('dateTo',   now()->toDateString())
         ->assertDontSee($job->job_number);
 
     // The 'excluded' filter surfaces it again.
-    \Livewire\Volt\Volt::test('admin.reports.invoicing')
+    \Livewire\Volt\Volt::test('admin.invoices.index')
         ->set('companyId', $oem->id)
         ->set('dateFrom', now()->subDays(30)->toDateString())
         ->set('dateTo',   now()->toDateString())
@@ -364,7 +364,7 @@ test('excluding a row clears any pre-existing completion stamp', function () {
     ]);
 
     $this->actingAs(makeOwner());
-    \Livewire\Volt\Volt::test('admin.reports.invoicing')
+    \Livewire\Volt\Volt::test('admin.invoices.index')
         ->call('toggleExclude', $job->id);
 
     $job->refresh();
@@ -388,7 +388,7 @@ test('Excel export never includes excluded rows even when the view says All', fu
     // assert (a) the export call succeeds and (b) the underlying query
     // the page uses returns only the billable VIN.  This is the same
     // query exportExcel() runs internally.
-    \Livewire\Volt\Volt::test('admin.reports.invoicing')
+    \Livewire\Volt\Volt::test('admin.invoices.index')
         ->set('companyId', $oem->id)
         ->set('dateFrom', now()->subDays(30)->toDateString())
         ->set('dateTo',   now()->toDateString())
@@ -418,7 +418,7 @@ test('saving finance fields skips excluded rows', function () {
 
     $this->actingAs(makeAccountant());
 
-    \Livewire\Volt\Volt::test('admin.reports.invoicing')
+    \Livewire\Volt\Volt::test('admin.invoices.index')
         ->set('companyId', $oem->id)
         ->set('dateFrom', now()->subDays(30)->toDateString())
         ->set('dateTo',   now()->toDateString())
@@ -438,7 +438,7 @@ test('exportExcel returns an xlsx download response when a customer is picked', 
 
     $this->actingAs(makeAccountant());
 
-    $response = \Livewire\Volt\Volt::test('admin.reports.invoicing')
+    $response = \Livewire\Volt\Volt::test('admin.invoices.index')
         ->set('companyId', $oem->id)
         ->set('dateFrom', now()->subDays(30)->toDateString())
         ->set('dateTo', now()->toDateString())

@@ -125,7 +125,11 @@ Volt::route('drivers/operations', 'admin.drivers.operations')->name('drivers.ope
 Volt::route('drivers/create', 'admin.drivers.create')->name('drivers.create');
 Volt::route('drivers/{user}/edit', 'admin.drivers.edit')->name('drivers.edit');
 
-// Invoices
+// Customer invoicing -- replaces the legacy "ready for invoicing" stub.
+// Accounts picks a customer + window and captures invoice number /
+// amounts / fuel per ProSelver-executed movement, then exports the
+// OEM-shaped Excel.  Owner/dev can also mark rows "not required" to
+// keep test runs and write-offs out of the FAW spreadsheet.
 Volt::route('invoices', 'admin.invoices.index')->name('invoices.index');
 
 // Users
@@ -142,7 +146,9 @@ Volt::route('reports', 'admin.reports.index')->name('reports.index');
 Volt::route('reports/performance', 'admin.reports.performance')->name('reports.performance');
 Volt::route('reports/financials', 'admin.reports.financials')->name('reports.financials');
 Volt::route('reports/routes', 'admin.reports.routes')->name('reports.routes');
-Volt::route('reports/invoicing', 'admin.reports.invoicing')->name('reports.invoicing');
+// Back-compat alias: /admin/reports/invoicing now redirects to the
+// canonical /admin/invoices page (which is the customer-invoicing UI).
+Route::get('reports/invoicing', fn () => redirect()->route('admin.invoices.index'))->name('reports.invoicing');
 
 // Audit Log
 Volt::route('audit-log', 'admin.audit-log')->name('audit-log');
