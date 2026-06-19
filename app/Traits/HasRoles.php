@@ -109,6 +109,16 @@ trait HasRoles
         return $this->effectiveRoles()->where('tier', 'customer')->isNotEmpty();
     }
 
+    /**
+     * COARSE ACCESS GATE — not a tenant discriminator.
+     *
+     * Returns true for any tenant-tier user (legacy dealer-tier OR the
+     * modern customer-tier that dealers/OEMs/customers now share), so it
+     * cannot tell you "is this specifically a dealer". To branch on what
+     * KIND of tenant a user is, use the company type instead:
+     * `$user->company()?->isDealer()`. This method only answers "may this
+     * user reach the customer/dealer portal at all".
+     */
     public function isDealer(): bool
     {
         $roles = $this->effectiveRoles();
@@ -116,6 +126,11 @@ trait HasRoles
             || $roles->where('tier', 'customer')->isNotEmpty();
     }
 
+    /**
+     * COARSE ACCESS GATE — not a tenant discriminator. See isDealer().
+     * For "is this an OEM tenant" use `$user->company()?->isOem()`
+     * (a.k.a. $user->companyIsOem()).
+     */
     public function isOem(): bool
     {
         $roles = $this->effectiveRoles();

@@ -59,7 +59,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         $this->authorize('viewAny', PettyCashEntry::class);
 
         $u = auth()->user();
-        $this->company = $u->companies()->first();
+        $this->company = $u->company();
         abort_unless($this->company, 403, 'No company on file.');
 
         $this->scopeCompanyIds = array_values(array_unique(array_merge(

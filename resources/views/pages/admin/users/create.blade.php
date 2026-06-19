@@ -50,15 +50,21 @@ new #[Layout('components.layouts.app')] class extends Component {
             'selectedRoles' => 'required|array|min:1',
         ];
 
-        $hasDealerRole = Role::whereIn('id', $this->selectedRoles)->where('tier', 'dealer')->exists();
-        $hasOemRole = Role::whereIn('id', $this->selectedRoles)->where('tier', 'oem')->exists();
+        // Any tenant-tier role (customer / dealer / oem — dealers & OEMs
+        // now live on customer-tier roles) needs a company: a customer_owner
+        // with no organisation is a broken account. Legacy dealer/oem tiers
+        // are kept in the check for defence even though the picker no longer
+        // offers them.
+        $hasTenantRole = Role::whereIn('id', $this->selectedRoles)
+            ->whereIn('tier', ['customer', 'dealer', 'oem'])
+            ->exists();
         // Driver role attached on a dealer's behalf: ops uses this form
         // to onboard an internal driver for a dealer who's just signing
         // up. The dealer link is the whole point of the operation, so
         // make companyId mandatory in that path too.
         $hasDriverRole = Role::whereIn('id', $this->selectedRoles)->where('slug', 'driver')->exists();
 
-        if ($hasDealerRole || $hasOemRole || $hasDriverRole) {
+        if ($hasTenantRole || $hasDriverRole) {
             $rules['companyIds']   = 'required|array|min:1';
             $rules['companyIds.*'] = 'integer|exists:companies,id';
         } else {
@@ -128,10 +134,17 @@ new #[Layout('components.layouts.app')] class extends Component {
         ])->values()->all();
 
         return [
-            // Filter to only roles the actor is permitted to grant. Prevents
-            // a lower-tier internal user from seeing (let alone assigning)
-            // super_admin or developer.
-            'roles' => $allRoles->filter(fn ($r) => $actor->canAssignRole($r->slug))->values(),
+            // Filter to only roles the actor is permitted to grant (prevents
+            // a lower-tier internal user from seeing super_admin / developer),
+            // and drop the LEGACY dealer-tier / oem-tier roles: every modern
+            // tenant sits on a customer-tier role and Company::$type drives
+            // the dealer/OEM re-skinning. Existing legacy-role users keep
+            // their roles (edited via /admin/users/{id}/edit); we just don't
+            // hand out new ones.
+            'roles' => $allRoles
+                ->filter(fn ($r) => $actor->canAssignRole($r->slug))
+                ->reject(fn ($r) => in_array($r->tier, ['dealer', 'oem'], true))
+                ->values(),
             'companies' => $companies,
             'companyOptions' => $companyOptions,
         ];
@@ -200,10 +213,9 @@ new #[Layout('components.layouts.app')] class extends Component {
         </div>
 
         @php
-            $hasDealerRole = \App\Models\Role::whereIn('id', $selectedRoles)->where('tier', 'dealer')->exists();
-            $hasOemRole = \App\Models\Role::whereIn('id', $selectedRoles)->where('tier', 'oem')->exists();
+            $hasTenantRole = \App\Models\Role::whereIn('id', $selectedRoles)->whereIn('tier', ['customer', 'dealer', 'oem'])->exists();
             $hasDriverRole = \App\Models\Role::whereIn('id', $selectedRoles)->where('slug', 'driver')->exists();
-            $companyRequired = $hasDealerRole || $hasOemRole || $hasDriverRole;
+            $companyRequired = $hasTenantRole || $hasDriverRole;
         @endphp
 
         @if($hasDriverRole)

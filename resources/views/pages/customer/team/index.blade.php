@@ -25,7 +25,7 @@ class extends Component
 
     public function mount(): void
     {
-        $this->company = auth()->user()->companies()->first();
+        $this->company = auth()->user()->company();
         abort_unless($this->company, 403);
 
         // Body-builder tenants share this team page but pick from

@@ -36,7 +36,7 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     public function mount(): void
     {
-        $this->company = auth()->user()->companies()->first();
+        $this->company = auth()->user()->company();
         abort_unless($this->company, 403);
 
         if (!$this->dateFrom) { $this->dateFrom = now()->startOfMonth()->toDateString(); }

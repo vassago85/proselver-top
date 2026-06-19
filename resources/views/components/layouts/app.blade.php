@@ -167,7 +167,7 @@
                                 // the profile + team pages relabel identically.
                                 $primaryRoleName = tenantRoleDisplayName(
                                     auth()->user()->roles->first()?->name ?? 'Member',
-                                    optional(auth()->user()->companies()->first())->type,
+                                    optional(auth()->user()->company())->type,
                                 );
                             @endphp
                             <span class="hidden md:flex flex-col items-start leading-tight text-left">

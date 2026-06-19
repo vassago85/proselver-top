@@ -22,7 +22,7 @@
     // body-builder tenants — their roles are tier=customer so they also
     // pass $isCustomer, but the portal label / sidebar branch they get
     // is BB-specific.
-    $userCompanyType = $isCustomer ? optional($user->companies()->first())->type : null;
+    $userCompanyType = $isCustomer ? optional($user->company())->type : null;
     $isOemCustomer = $isCustomer && $userCompanyType === \App\Models\Company::TYPE_OEM;
     $isDealerCustomer = $isCustomer && $userCompanyType === \App\Models\Company::TYPE_DEALER;
     $isBodyBuilderTenant = $userCompanyType === \App\Models\Company::TYPE_BODY_BUILDER;

@@ -71,14 +71,16 @@ new #[Layout('components.layouts.app')] class extends Component {
             $rules['newPassword'] = 'required|string|min:8';
         }
 
-        $hasDealerRole = Role::whereIn('id', $this->selectedRoles)->where('tier', 'dealer')->exists();
-        $hasOemRole = Role::whereIn('id', $this->selectedRoles)->where('tier', 'oem')->exists();
+        // Any tenant-tier role (customer / dealer / oem) needs a company.
+        $hasTenantRole = Role::whereIn('id', $this->selectedRoles)
+            ->whereIn('tier', ['customer', 'dealer', 'oem'])
+            ->exists();
         // Driver attached on a dealer's behalf — ops needs to pin the
         // driver to the dealer's company so executor_type=internal jobs
         // can find them.
         $hasDriverRole = Role::whereIn('id', $this->selectedRoles)->where('slug', 'driver')->exists();
 
-        if ($hasDealerRole || $hasOemRole || $hasDriverRole) {
+        if ($hasTenantRole || $hasDriverRole) {
             $rules['companyIds']   = 'required|array|min:1';
             $rules['companyIds.*'] = 'integer|exists:companies,id';
         } else {
@@ -148,9 +150,13 @@ new #[Layout('components.layouts.app')] class extends Component {
         // silently stripped when a lower-rank manager saves the form. Those
         // existing roles are excluded from the new-grant check in save().
         $existingIds = $this->user->roles->pluck('id')->all();
-        $assignable = $allRoles->filter(
-            fn ($r) => $actor->canAssignRole($r->slug) || in_array($r->id, $existingIds, true)
-        )->values();
+        $assignable = $allRoles
+            ->filter(fn ($r) => $actor->canAssignRole($r->slug) || in_array($r->id, $existingIds, true))
+            // Drop LEGACY dealer/oem-tier roles from NEW assignment, but keep
+            // any the edited user already holds so saving the form doesn't
+            // silently strip them (mirrors the high-rank-role rule above).
+            ->reject(fn ($r) => in_array($r->tier, ['dealer', 'oem'], true) && ! in_array($r->id, $existingIds, true))
+            ->values();
 
         $companies = Company::where('is_active', true)->orderBy('name')->get();
         $companyOptions = $companies->map(fn ($c) => [
@@ -231,10 +237,9 @@ new #[Layout('components.layouts.app')] class extends Component {
         </div>
 
         @php
-            $hasDealerRole = \App\Models\Role::whereIn('id', $selectedRoles)->where('tier', 'dealer')->exists();
-            $hasOemRole = \App\Models\Role::whereIn('id', $selectedRoles)->where('tier', 'oem')->exists();
+            $hasTenantRole = \App\Models\Role::whereIn('id', $selectedRoles)->whereIn('tier', ['customer', 'dealer', 'oem'])->exists();
             $hasDriverRole = \App\Models\Role::whereIn('id', $selectedRoles)->where('slug', 'driver')->exists();
-            $companyRequired = $hasDealerRole || $hasOemRole || $hasDriverRole;
+            $companyRequired = $hasTenantRole || $hasDriverRole;
         @endphp
 
         @if($hasDriverRole)

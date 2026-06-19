@@ -55,13 +55,24 @@ class User extends Authenticatable
     public function companies(): BelongsToMany
     {
         return $this->belongsToMany(Company::class, 'company_users')
-            ->withPivot('location_id')
+            ->withPivot(['location_id', 'is_primary'])
             ->withTimestamps();
     }
 
+    /**
+     * The user's canonical "home" company — the single source of truth for
+     * portal branding, the dealer/OEM/customer label, and tenant-scoped
+     * pages. Deterministic: the pivot flagged is_primary wins, otherwise
+     * the lowest company id. Without this a multi-company user (a
+     * group-principal franchise CEO) would get a non-deterministic
+     * companies()->first(), flipping their portal label between requests.
+     */
     public function company(): ?Company
     {
-        return $this->companies()->first();
+        return $this->companies()
+            ->orderByDesc('company_users.is_primary')
+            ->orderBy('companies.id')
+            ->first();
     }
 
     /**
@@ -170,7 +181,7 @@ class User extends Authenticatable
 
     public function assignedLocation(): ?Location
     {
-        $company = $this->companies()->first();
+        $company = $this->company();
         if (!$company) {
             return null;
         }
@@ -182,9 +193,7 @@ class User extends Authenticatable
 
     public function assignedLocationId(): ?int
     {
-        $company = $this->companies()->first();
-
-        return $company?->pivot?->location_id;
+        return $this->company()?->pivot?->location_id;
     }
 
     /**

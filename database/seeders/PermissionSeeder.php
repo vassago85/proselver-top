@@ -71,15 +71,35 @@ class PermissionSeeder extends Seeder
             'view_invoices', 'view_performance', 'manage_dealer_users',
         ];
 
+        // Extras that the modern customer-tier owner / admin / dispatcher
+        // roles carry on top of $fullAccess. Re-used below so the LEGACY
+        // dealer-tier / oem-tier roles converge to the SAME capability as
+        // their customer-tier equivalent — a dealer_principal must be able
+        // to do exactly what a re-skinned customer_owner can, otherwise the
+        // two ways of creating "a dealer owner" behave differently. (Seeder
+        // uses syncWithoutDetaching: this only ADDS, never strips.)
+        $tenantOwnerExtras = [
+            'confirm_customer_order', 'manage_locations', 'view_locations',
+            'dealer_approve_bb_requests', 'manage_bb_links',
+            'view_dealer_stock', 'manage_dealer_stock',
+        ];
+        $tenantAdminExtras = [
+            'manage_locations', 'view_locations',
+            'dealer_approve_bb_requests', 'manage_bb_links',
+            'view_dealer_stock', 'manage_dealer_stock',
+        ];
+
         $rolePermissions = [
-            'dealer_principal' => array_merge($fullAccess, ['view_dealer_stock', 'manage_dealer_stock']),
-            'sales_manager_new' => ['view_all_bookings', 'view_own_bookings', 'edit_all_bookings', 'edit_own_bookings', 'submit_booking', 'approve_booking', 'cancel_booking', 'upload_documents', 'view_stock', 'generate_po', 'view_po', 'view_invoices', 'view_performance', 'manage_dealer_users', 'view_dealer_stock', 'manage_dealer_stock'],
-            'sales_manager_used' => ['view_all_bookings', 'view_own_bookings', 'edit_all_bookings', 'edit_own_bookings', 'submit_booking', 'approve_booking', 'cancel_booking', 'upload_documents', 'view_stock', 'generate_po', 'view_po', 'view_invoices', 'view_performance', 'manage_dealer_users', 'view_dealer_stock', 'manage_dealer_stock'],
-            'sales_person_new' => ['view_own_bookings', 'edit_own_bookings', 'submit_booking', 'upload_documents', 'view_stock', 'view_dealer_stock'],
-            'sales_person_used' => ['view_own_bookings', 'edit_own_bookings', 'submit_booking', 'upload_documents', 'view_stock', 'view_dealer_stock'],
-            'stock_controller' => ['view_all_bookings', 'view_own_bookings', 'view_stock', 'manage_movements', 'view_movement_overview', 'generate_po', 'upload_po', 'upload_documents', 'view_po', 'view_dealer_stock', 'manage_dealer_stock'],
-            'oem_admin' => $fullAccess,
-            'oem_planner' => ['view_all_bookings', 'view_own_bookings', 'edit_all_bookings', 'edit_own_bookings', 'submit_booking', 'approve_booking', 'cancel_booking', 'upload_documents', 'view_stock', 'manage_movements', 'view_movement_overview', 'generate_po', 'upload_po', 'view_po', 'view_invoices'],
+            // dealer_principal == customer_owner (legacy → modern parity)
+            'dealer_principal' => array_merge($fullAccess, $tenantOwnerExtras),
+            'sales_manager_new' => array_merge(['view_all_bookings', 'view_own_bookings', 'edit_all_bookings', 'edit_own_bookings', 'submit_booking', 'approve_booking', 'cancel_booking', 'upload_documents', 'view_stock', 'generate_po', 'view_po', 'view_invoices', 'view_performance', 'manage_dealer_users'], $tenantAdminExtras),
+            'sales_manager_used' => array_merge(['view_all_bookings', 'view_own_bookings', 'edit_all_bookings', 'edit_own_bookings', 'submit_booking', 'approve_booking', 'cancel_booking', 'upload_documents', 'view_stock', 'generate_po', 'view_po', 'view_invoices', 'view_performance', 'manage_dealer_users'], $tenantAdminExtras),
+            'sales_person_new' => ['view_own_bookings', 'edit_own_bookings', 'submit_booking', 'upload_documents', 'view_stock', 'view_locations', 'view_dealer_stock'],
+            'sales_person_used' => ['view_own_bookings', 'edit_own_bookings', 'submit_booking', 'upload_documents', 'view_stock', 'view_locations', 'view_dealer_stock'],
+            'stock_controller' => ['view_all_bookings', 'view_own_bookings', 'view_stock', 'manage_movements', 'view_movement_overview', 'generate_po', 'upload_po', 'upload_documents', 'view_po', 'view_locations', 'view_dealer_stock', 'manage_dealer_stock'],
+            // oem_admin == customer_owner (legacy → modern parity)
+            'oem_admin' => array_merge($fullAccess, $tenantOwnerExtras),
+            'oem_planner' => array_merge(['view_all_bookings', 'view_own_bookings', 'edit_all_bookings', 'edit_own_bookings', 'submit_booking', 'approve_booking', 'cancel_booking', 'upload_documents', 'view_stock', 'manage_movements', 'view_movement_overview', 'generate_po', 'upload_po', 'view_po', 'view_invoices'], ['confirm_customer_order', 'view_locations', 'dealer_approve_bb_requests']),
         ];
 
         // Phase 1 role-permission mappings (customer tier)

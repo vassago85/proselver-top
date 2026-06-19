@@ -149,7 +149,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                         // everywhere in the portal.
                         $profileRoleName = tenantRoleDisplayName(
                             auth()->user()->roles->first()?->name ?? 'Member',
-                            optional(auth()->user()->companies()->first())->type,
+                            optional(auth()->user()->company())->type,
                         );
                     @endphp
                     <p class="text-xs text-slate-500 truncate">

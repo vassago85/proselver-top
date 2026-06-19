@@ -487,10 +487,18 @@ new #[Layout('components.layouts.app')] class extends Component {
         // standalone /admin/users/create page uses.  Tier ordering
         // is done PHP-side (not SQL ORDER BY FIELD()) because the
         // production DB is PostgreSQL and FIELD() is MySQL-only.
-        $tierOrder = ['customer' => 0, 'dealer' => 1, 'oem' => 2, 'driver' => 3, 'internal' => 4];
+        // Legacy dealer-tier and oem-tier roles are no longer offered for
+        // NEW assignments: every modern tenant (dealer / OEM / customer)
+        // sits on a customer-tier role and Company::$type drives the
+        // dealer/OEM re-skinning. The customer-tier options below are
+        // relabelled by this company's type in the blade, so a dealer
+        // admin picks "Dealer Owner", an OEM admin picks "OEM Owner", etc.
+        $legacyTenantTiers = ['dealer', 'oem'];
+        $tierOrder = ['customer' => 0, 'driver' => 3, 'internal' => 4];
         $assignableRoles = Role::orderBy('name')
             ->get()
             ->filter(fn ($r) => $actor?->canAssignRole($r->slug))
+            ->reject(fn ($r) => in_array($r->tier, $legacyTenantTiers, true))
             ->sortBy(fn ($r) => ($tierOrder[$r->tier] ?? 99) . '|' . $r->name)
             ->values();
 
@@ -719,6 +727,25 @@ new #[Layout('components.layouts.app')] class extends Component {
                                 'bg-green-100 text-green-700'     => $company->type === Company::TYPE_CUSTOMER,
                                 'bg-gray-100 text-gray-600'       => ! in_array($company->type, Company::TYPES, true),
                             ])>{{ $typeLabels[$company->type] ?? ucfirst($company->type ?? 'unknown') }}</span>
+                            @php
+                                // The type — not the role slug — drives what tenants
+                                // of this company see. Surface it here so a dealer
+                                // accidentally typed as "Customer" is obvious at a
+                                // glance (the exact mix-up that makes a dealer login
+                                // read "Customer Portal").
+                                $portalForType = match($company->type) {
+                                    Company::TYPE_DEALER       => 'Dealer Portal',
+                                    Company::TYPE_OEM          => 'OEM Portal',
+                                    Company::TYPE_BODY_BUILDER => 'Body Builder portal',
+                                    Company::TYPE_CUSTOMER     => 'Customer Portal',
+                                    default                    => null,
+                                };
+                            @endphp
+                            @if($portalForType)
+                                <p class="mt-1 text-xs text-gray-500">Tenants see: <span class="font-medium text-gray-700">{{ $portalForType }}</span> &amp; "{{ str_replace('Customer ', $company->type === Company::TYPE_DEALER ? 'Dealer ' : ($company->type === Company::TYPE_OEM ? 'OEM ' : 'Customer '), 'Customer Owner') }}" style labels.</p>
+                            @elseif(! in_array($company->type, Company::TYPES, true) || ! $company->type)
+                                <p class="mt-1 text-xs text-amber-700">Type not set — tenants will fall back to a generic "Customer Portal". Set the correct type so dealer/OEM branding shows.</p>
+                            @endif
                         </dd>
                     </div>
                     <div>
@@ -857,7 +884,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                             <select wire:model="newUserRoleSlug" class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
                                 <option value="">— select —</option>
                                 @foreach($assignableRoles as $role)
-                                    <option value="{{ $role->slug }}">{{ $role->name }} ({{ $role->tier }})</option>
+                                    <option value="{{ $role->slug }}">{{ tenantRoleDisplayName($role->name, $company->type) }}</option>
                                 @endforeach
                             </select>
                             @error('newUserRoleSlug') <p class="mt-0.5 text-xs text-red-600">{{ $message }}</p> @enderror
