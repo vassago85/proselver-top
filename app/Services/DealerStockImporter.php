@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\Brand;
 use App\Models\Company;
 use App\Models\DealerStock;
+use App\Models\VehicleModel;
 use Illuminate\Support\Collection;
 use PhpOffice\PhpSpreadsheet\IOFactory;
 
@@ -27,12 +28,10 @@ class DealerStockImporter
 {
     /**
      * Logical fields the importer understands.  The UI mapping form
-     * renders columns in this order.  NIV is the dealer's name for
-     * VIN; the platform stores it as VIN.  Single column on the
-     * schema.
+     * renders columns in this order.
      */
     public const FIELDS = [
-        'vin'           => 'VIN / NIV',
+        'vin'           => 'VIN',
         'suffix'        => 'Suffix',
         'variant'       => 'Variant',
         'description'   => 'Description',
@@ -49,11 +48,11 @@ class DealerStockImporter
 
     /**
      * Heuristic header-name → field guesses.  We lower-case + strip
-     * non-alphanumerics before matching so "VIN / NIV", "Engine No."
+     * non-alphanumerics before matching so "VIN", "Engine No."
      * and "Engine#" all resolve identically.  First match wins.
      */
     private const HEADER_HINTS = [
-        'vin'           => ['vin', 'niv', 'chassis', 'chassisnumber'],
+        'vin'           => ['vin', 'chassis', 'chassisnumber'],
         'suffix'        => ['suffix'],
         'variant'       => ['variant'],
         'description'   => ['description', 'desc'],
@@ -156,6 +155,11 @@ class DealerStockImporter
         $preview = [];
         $vinsSeen = [];
 
+        // Loaded once so the make-inference resolver doesn't re-query
+        // the catalogue per row.
+        $catalogue = VehicleModel::catalogue();
+        $brandNames = [];
+
         foreach ($rows as $i => $row) {
             $data = $this->extract($row, $mapping);
             $warnings = [];
@@ -193,6 +197,21 @@ class DealerStockImporter
                 $warnings[] = "Brand will be matched / created on commit.";
             }
 
+            // Make inference -- if the model name is a known make in the
+            // catalogue (e.g. Mokka -> Opel), the make is corrected to it
+            // even when a different/blank brand was selected.  This stops
+            // a whole upload being mis-tagged (e.g. every row set Isuzu).
+            $inferredBrandId = VehicleModel::brandIdForModelName($data['model_name'] ?? null, $catalogue);
+            if ($inferredBrandId !== null) {
+                $inferredName = $brandNames[$inferredBrandId]
+                    ??= (Brand::find($inferredBrandId)?->name ?? null);
+                if ($inferredName && strcasecmp($inferredName, (string) ($data['brand'] ?? '')) !== 0) {
+                    $was = trim((string) ($data['brand'] ?? '')) !== '' ? "'{$data['brand']}'" : '(blank)';
+                    $warnings[] = "Model '{$data['model_name']}' is an {$inferredName} — make will be set to {$inferredName} (was {$was}).";
+                    $data['brand'] = $inferredName;
+                }
+            }
+
             // Model year -- coerce to int, clear if not parseable.
             if (!empty($data['model_year'])) {
                 $year = (int) preg_replace('/[^0-9]/', '', $data['model_year']);
@@ -227,6 +246,8 @@ class DealerStockImporter
         $updated = 0;
         $skipped = 0;
 
+        $catalogue = VehicleModel::catalogue();
+
         foreach ($previewRows as $row) {
             if (!empty($row['errors'])) {
                 $skipped++;
@@ -248,6 +269,14 @@ class DealerStockImporter
                     ['is_active' => true]
                 );
                 $brandId = $brand->id;
+            }
+
+            // A known model overrides a wrong/blank make (Mokka -> Opel).
+            // preview() already rewrites $data['brand'] for previewed
+            // imports; this guards direct commit() callers too.
+            $inferredBrandId = VehicleModel::brandIdForModelName($data['model_name'] ?? null, $catalogue);
+            if ($inferredBrandId !== null && $inferredBrandId !== $brandId) {
+                $brandId = $inferredBrandId;
             }
 
             $attrs = [

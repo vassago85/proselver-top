@@ -168,6 +168,29 @@ class VehicleModelSeeder extends Seeder
                 'Auman',
                 'Tunland',
             ],
+            // Opel SA passenger / LCV range. Used by dealer stock imports
+            // (and the make-inference resolver) so a row whose model is a
+            // known Opel is tagged Opel even if the wrong brand was picked
+            // on upload. Names are the base nameplate; variants (e.g.
+            // "Mokka GS", "Corsa-e") resolve by prefix match.
+            'Opel' => [
+                'Corsa',
+                'Mokka',
+                'Astra',
+                'Grandland',
+                'Crossland',
+                'Combo',
+                'Combo Life',
+                'Zafira',
+                'Zafira Life',
+                'Vivaro',
+                'Movano',
+                'Insignia',
+                'Adam',
+                'Karl',
+                'Meriva',
+                'Antara',
+            ],
         ];
 
         foreach ($catalogue as $brandName => $models) {

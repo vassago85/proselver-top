@@ -1,13 +1,28 @@
 <?php
 
+use App\Models\Brand;
 use App\Models\Company;
 use App\Models\DealerStock;
 use App\Models\Job;
 use App\Models\Role;
 use App\Models\User;
+use App\Models\VehicleModel;
 use App\Services\DealerStockImporter;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Str;
+
+function seedOpelCatalogue(): array
+{
+    $opel = Brand::firstOrCreate(['name' => 'Opel'], ['is_active' => true]);
+    $isuzu = Brand::firstOrCreate(['name' => 'Isuzu'], ['is_active' => true]);
+
+    foreach (['Mokka', 'Corsa', 'Astra', 'Grandland'] as $model) {
+        VehicleModel::firstOrCreate(['brand_id' => $opel->id, 'name' => $model], ['is_active' => true]);
+    }
+    VehicleModel::firstOrCreate(['brand_id' => $isuzu->id, 'name' => 'NPR 400'], ['is_active' => true]);
+
+    return [$opel, $isuzu];
+}
 
 uses(RefreshDatabase::class);
 
@@ -420,4 +435,78 @@ test('scopeVisibleTo limits to the user\'s visible company ids', function () {
     $vins = DealerStock::visibleTo($user)->pluck('vin')->all();
     expect($vins)->toContain('SCOPE00012');
     expect($vins)->not->toContain('SCOPE00013');
+});
+
+// ----- make inference + reassign ------------------------------------
+
+test('VehicleModel resolver maps a known model to its make', function () {
+    [$opel] = seedOpelCatalogue();
+
+    expect(VehicleModel::brandIdForModelName('Mokka'))->toBe($opel->id);
+    expect(VehicleModel::brandIdForModelName('mokka'))->toBe($opel->id);
+    expect(VehicleModel::brandIdForModelName('Mokka GS'))->toBe($opel->id); // prefix
+    expect(VehicleModel::brandIdForModelName('Hilux'))->toBeNull();         // unknown
+    expect(VehicleModel::brandIdForModelName(''))->toBeNull();
+});
+
+test('importer forces the make to Opel when the model is a known Opel even if Isuzu was selected', function () {
+    [$opel, $isuzu] = seedOpelCatalogue();
+    $dealer = makeDealer('Opel Town');
+    $importer = new DealerStockImporter();
+
+    $rows = [
+        ['vin' => 'WMOKKA0001', 'brand' => 'Isuzu', 'model' => 'Mokka'],
+        ['vin' => 'WTRUCK0001', 'brand' => 'Isuzu', 'model' => 'NPR 400'],
+    ];
+    $mapping = ['vin' => 'vin', 'brand' => 'brand', 'model_name' => 'model'];
+
+    $importer->commit($importer->preview($rows, $mapping, $dealer), $dealer);
+
+    expect(DealerStock::where('vin', 'WMOKKA0001')->firstOrFail()->brand_id)->toBe($opel->id);
+    // A genuine Isuzu model is left as Isuzu.
+    expect(DealerStock::where('vin', 'WTRUCK0001')->firstOrFail()->brand_id)->toBe($isuzu->id);
+});
+
+test('reassign-make corrects a whole dealer batch from Isuzu to Opel', function () {
+    [$opel, $isuzu] = seedOpelCatalogue();
+    $dealer = makeDealer('Demo Motors');
+
+    DealerStock::create(['dealer_company_id' => $dealer->id, 'vin' => 'RMOKKA0001', 'brand_id' => $isuzu->id, 'model_name' => 'Mokka', 'current_location_type' => DealerStock::LOCATION_PREMISES]);
+    DealerStock::create(['dealer_company_id' => $dealer->id, 'vin' => 'RCORSA0001', 'brand_id' => $isuzu->id, 'model_name' => 'Corsa', 'current_location_type' => DealerStock::LOCATION_PREMISES]);
+
+    $this->artisan('dealer-stock:reassign-make', [
+        'dealer' => 'Demo Motors',
+        '--from' => 'Isuzu',
+        '--to' => 'Opel',
+    ])->assertExitCode(0);
+
+    expect(DealerStock::where('vin', 'RMOKKA0001')->firstOrFail()->brand_id)->toBe($opel->id);
+    expect(DealerStock::where('vin', 'RCORSA0001')->firstOrFail()->brand_id)->toBe($opel->id);
+});
+
+test('reassign-make --catalogue spares genuine Isuzu trucks', function () {
+    [$opel, $isuzu] = seedOpelCatalogue();
+    $dealer = makeDealer('Mixed Lot Motors');
+
+    DealerStock::create(['dealer_company_id' => $dealer->id, 'vin' => 'CMOKKA0001', 'brand_id' => $isuzu->id, 'model_name' => 'Mokka', 'current_location_type' => DealerStock::LOCATION_PREMISES]);
+    DealerStock::create(['dealer_company_id' => $dealer->id, 'vin' => 'CTRUCK0001', 'brand_id' => $isuzu->id, 'model_name' => 'NPR 400', 'current_location_type' => DealerStock::LOCATION_PREMISES]);
+
+    $this->artisan('dealer-stock:reassign-make', [
+        'dealer' => 'Mixed Lot Motors',
+        '--to' => 'Opel',
+        '--catalogue' => true,
+    ])->assertExitCode(0);
+
+    expect(DealerStock::where('vin', 'CMOKKA0001')->firstOrFail()->brand_id)->toBe($opel->id);
+    expect(DealerStock::where('vin', 'CTRUCK0001')->firstOrFail()->brand_id)->toBe($isuzu->id);
+});
+
+test('reassign-make refuses to run unscoped', function () {
+    seedOpelCatalogue();
+    $dealer = makeDealer('Cautious Motors');
+
+    $this->artisan('dealer-stock:reassign-make', [
+        'dealer' => 'Cautious Motors',
+        '--to' => 'Opel',
+    ])->assertExitCode(1);
 });

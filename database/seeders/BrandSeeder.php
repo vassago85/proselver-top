@@ -19,6 +19,8 @@ class BrandSeeder extends Seeder
             'UD Trucks',
             'Hino',
             'Scania',
+            // Passenger / LCV makes carried by dealer stock imports.
+            'Opel',
         ];
 
         foreach ($brands as $name) {
