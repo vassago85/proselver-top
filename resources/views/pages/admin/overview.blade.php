@@ -365,6 +365,8 @@ new #[Layout('components.layouts.app')] class extends Component {
         </div>
     </x-slot:header>
 
+    @include('pages.admin.petty-cash._partials.section-tabs')
+
     {{-- ──────────────  Range selector  ────────────── --}}
     <div class="mb-4 flex flex-wrap items-center gap-1 text-xs">
         <span class="text-slate-500 mr-1">Range:</span>

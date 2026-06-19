@@ -512,6 +512,8 @@ new #[Layout('components.layouts.app')] class extends Component {
 <div>
     <x-slot:header>Petty Cash</x-slot:header>
 
+    @include('pages.admin.petty-cash._partials.section-tabs')
+
     @if (session('success'))
         <div class="mb-3 rounded-md bg-emerald-50 border border-emerald-200 px-3 py-2 text-sm text-emerald-800">{{ session('success') }}</div>
     @endif
