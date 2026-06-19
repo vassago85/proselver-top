@@ -723,6 +723,22 @@ class JobBulkImporter
             &$errors,
             &$modelHints,
         ) {
+            // In-run address-book cache, keyed by a normalised location
+            // name. Seeded with the company's existing locations and then
+            // populated with every location created during THIS import, so
+            // the same address appearing on many rows reuses one record
+            // instead of spawning a duplicate per row (the cause of the
+            // "55 Main Street …" × N mess in the address book).
+            $locationCache = [];
+            foreach ($company->locations()->get() as $existingLocation) {
+                foreach ([$existingLocation->company_name, $existingLocation->address] as $candidate) {
+                    $key = $this->locationKey($candidate);
+                    if ($key !== '' && !isset($locationCache[$key])) {
+                        $locationCache[$key] = $existingLocation->id;
+                    }
+                }
+            }
+
             foreach ($previewRows as $row) {
                 // 'duplicate' is a soft block — the row only flips out
                 // of this status when the operator ticks the override
@@ -740,12 +756,14 @@ class JobBulkImporter
                         $row['parsed']['pickup_match'],
                         $row['parsed']['pickup_raw'],
                         $autoCreate,
+                        $locationCache,
                     );
                     [$deliveryId, $createdDelivery] = $this->resolveLocation(
                         $company,
                         $row['parsed']['delivery_match'],
                         $row['parsed']['delivery_raw'],
                         $autoCreate,
+                        $locationCache,
                     );
 
                     if (!$pickupId || !$deliveryId) {
@@ -1077,14 +1095,23 @@ class JobBulkImporter
         }
         $needle = Str::lower(trim($name));
 
-        $exact = $locations->first(fn (Location $l) => Str::lower($l->company_name) === $needle);
+        // Exact (case-insensitive) on either the book entry's NAME or its
+        // ADDRESS. Bulk files often carry a full street address in the
+        // pickup/delivery cell while the matching book row stores that
+        // string in `address` (name being e.g. "Demo Motors"); matching on
+        // name alone missed those and created a duplicate every time.
+        $exact = $locations->first(fn (Location $l) =>
+            Str::lower((string) $l->company_name) === $needle
+            || Str::lower((string) $l->address) === $needle
+        );
         if ($exact) {
             return $exact;
         }
 
         $needleSlug = Str::slug($name, '');
-        $slugMatch = $locations->first(
-            fn (Location $l) => Str::slug($l->company_name, '') === $needleSlug
+        $slugMatch = $locations->first(fn (Location $l) =>
+            Str::slug((string) $l->company_name, '') === $needleSlug
+            || Str::slug((string) $l->address, '') === $needleSlug
         );
         if ($slugMatch) {
             return $slugMatch;
@@ -1115,12 +1142,25 @@ class JobBulkImporter
         ?Location $matched,
         ?string $rawName,
         bool $autoCreate,
+        array &$locationCache,
     ): array {
         if ($matched) {
+            // Remember the preview-resolved match so a later row with the
+            // same raw text reuses it instead of creating a near-duplicate.
+            $this->cacheLocation($locationCache, $matched->company_name, $matched->id);
+            $this->cacheLocation($locationCache, $rawName, $matched->id);
             return [$matched->id, false];
         }
         if (!$autoCreate || !$rawName) {
             return [null, false];
+        }
+
+        // Already created (or pre-existing) under this name during this run?
+        // Reuse it — this is what stops the same address spawning a new row
+        // for every line of the spreadsheet.
+        $key = $this->locationKey($rawName);
+        if ($key !== '' && isset($locationCache[$key])) {
+            return [$locationCache[$key], false];
         }
 
         // Default new locations to dealer/body_builder territory rather
@@ -1140,7 +1180,32 @@ class JobBulkImporter
             'is_active' => true,
         ]);
 
+        $this->cacheLocation($locationCache, $rawName, $location->id);
+
         return [$location->id, true];
+    }
+
+    /**
+     * Normalised key for address-book de-duplication. Slug strips
+     * punctuation, spacing and case so "55 Main Street, Bordeaux" and
+     * "55 main street bordeaux" collapse to the same key. Falls back to a
+     * lower/trim of the raw value when the slug is empty (all punctuation).
+     */
+    private function locationKey(?string $name): string
+    {
+        if ($name === null || trim($name) === '') {
+            return '';
+        }
+        $slug = Str::slug($name, '');
+        return $slug !== '' ? $slug : Str::lower(trim($name));
+    }
+
+    private function cacheLocation(array &$locationCache, ?string $name, int $id): void
+    {
+        $key = $this->locationKey($name);
+        if ($key !== '' && !isset($locationCache[$key])) {
+            $locationCache[$key] = $id;
+        }
     }
 
     private function buildNotes(array $parsed): ?string

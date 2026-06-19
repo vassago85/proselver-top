@@ -330,6 +330,66 @@ it('commit() creates transport jobs and auto-creates missing locations', functio
     expect($job->status)->toBe(Job::STATUS_RECEIVED);
 });
 
+it('commit() reuses one address-book entry when the same new address repeats across rows', function () {
+    $brand = Brand::create(['name' => 'FAW']);
+    $vehicleClass = VehicleClass::create(['name' => 'Truck Class 4']);
+    $company = setUpOemCompany('FAW SA', ['PE Plant']);
+    $user = User::factory()->create();
+    $tomorrow = now()->addDay()->format('d-m-Y');
+
+    $importer = app(JobBulkImporter::class);
+    // Three rows all delivering to the SAME new address (the third with a
+    // different case) — previously this created three duplicate locations.
+    $rows = [
+        ['_sheet' => 'X', '_row' => 2, 'Chassis No.' => 'AAA', 'Model' => 'J5N 28.290FL', 'From' => 'PE Plant', 'To' => 'New Bodyshop CC', 'Movement Order Date' => $tomorrow],
+        ['_sheet' => 'X', '_row' => 3, 'Chassis No.' => 'BBB', 'Model' => 'J5N 28.290FL', 'From' => 'PE Plant', 'To' => 'New Bodyshop CC', 'Movement Order Date' => $tomorrow],
+        ['_sheet' => 'X', '_row' => 4, 'Chassis No.' => 'CCC', 'Model' => 'J5N 28.290FL', 'From' => 'PE Plant', 'To' => 'new bodyshop cc', 'Movement Order Date' => $tomorrow],
+    ];
+    $mapping = $importer->detectMapping(['Chassis No.', 'Model', 'From', 'To', 'Movement Order Date']);
+    $preview = $importer->preview($company, $rows, $mapping, ['default_vehicle_class_id' => $vehicleClass->id]);
+
+    $result = $importer->commit($company, $user->id, $preview['rows'], $brand->id, $vehicleClass->id);
+
+    expect($result['created'])->toBe(3);
+    // Exactly ONE new location for the repeated address (not three), and the
+    // existing "PE Plant" was reused, so created_locations is 1.
+    expect(Location::where('company_id', $company->id)->where('company_name', 'New Bodyshop CC')->count())->toBe(1);
+    expect(Location::where('company_id', $company->id)->where('company_name', 'PE Plant')->count())->toBe(1);
+    expect($result['created_locations'])->toBe(1);
+});
+
+it('commit() reuses an existing book entry matched on its address field, not just its name', function () {
+    $brand = Brand::create(['name' => 'FAW']);
+    $vehicleClass = VehicleClass::create(['name' => 'Truck Class 4']);
+    $company = setUpOemCompany('FAW SA', ['PE Plant']);
+    $user = User::factory()->create();
+
+    // A book entry whose NAME differs from the uploaded string but whose
+    // ADDRESS matches it exactly.
+    Location::create([
+        'company_id' => $company->id,
+        'company_name' => 'Demo Motors',
+        'address' => '55 Main Street, Bordeaux, Randburg',
+        'type' => Location::TYPE_DEALER,
+        'is_active' => true,
+    ]);
+
+    $importer = app(JobBulkImporter::class);
+    $rows = [[
+        '_sheet' => 'X', '_row' => 2, 'Chassis No.' => 'AAA', 'Model' => 'J5N 28.290FL',
+        'From' => 'PE Plant', 'To' => '55 Main Street, Bordeaux, Randburg',
+        'Movement Order Date' => now()->addDay()->format('d-m-Y'),
+    ]];
+    $mapping = $importer->detectMapping(['Chassis No.', 'Model', 'From', 'To', 'Movement Order Date']);
+    $preview = $importer->preview($company, $rows, $mapping, ['default_vehicle_class_id' => $vehicleClass->id]);
+    $result = $importer->commit($company, $user->id, $preview['rows'], $brand->id, $vehicleClass->id);
+
+    expect($result['created'])->toBe(1);
+    // No new location created — the address-field match reused "Demo Motors".
+    expect($result['created_locations'])->toBe(0);
+    expect(Location::where('company_id', $company->id)->count())->toBe(2); // PE Plant + Demo Motors
+});
+
 it('preview() rejects rows with past-dated movements', function () {
     $company = setUpOemCompany('FAW SA', ['PE Plant', 'GB Bodies']);
     $vehicleClass = VehicleClass::create(['name' => 'Truck Class 4']);
