@@ -51,7 +51,7 @@
             <div class="flex items-start justify-between gap-2">
                 <div class="min-w-0 flex-1">
                     <div class="flex items-center gap-2 mb-1">
-                        <span class="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Order</span>
+                        <span class="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Job</span>
                         <span class="text-xs font-semibold text-blue-700">{{ $job->job_number ?? '—' }}</span>
                     </div>
                     <p class="text-xs font-medium text-slate-800 truncate">

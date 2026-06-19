@@ -2957,7 +2957,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             <div class="rounded-xl border border-gray-200 bg-gray-50/60 px-5 py-3">
                 <dl class="flex flex-wrap gap-x-6 gap-y-2 text-xs text-gray-600">
                     <div class="flex items-center gap-1.5">
-                        <dt class="text-gray-400">Order</dt>
+                        <dt class="text-gray-400">Job number</dt>
                         <dd class="font-mono font-medium text-gray-700">{{ $job->job_number ?? '—' }}</dd>
                     </div>
                     <div class="flex items-center gap-1.5">

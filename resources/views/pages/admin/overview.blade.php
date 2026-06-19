@@ -510,7 +510,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             <table class="w-full text-sm">
                 <thead class="bg-slate-50 text-[11px] uppercase tracking-wide text-slate-500">
                     <tr>
-                        <th class="text-left px-4 py-2 font-medium">Order</th>
+                        <th class="text-left px-4 py-2 font-medium">Job number</th>
                         <th class="text-left px-4 py-2 font-medium">Customer</th>
                         <th class="text-left px-4 py-2 font-medium">Driver</th>
                         <th class="text-right px-4 py-2 font-medium">Issued</th>
@@ -665,7 +665,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <table class="w-full text-sm">
                     <thead class="bg-slate-50 text-[11px] uppercase tracking-wide text-slate-500">
                         <tr>
-                            <th class="text-left px-4 py-2 font-medium">Order</th>
+                            <th class="text-left px-4 py-2 font-medium">Job number</th>
                             <th class="text-left px-4 py-2 font-medium">Customer / Route</th>
                             <th class="text-left px-4 py-2 font-medium">Driver</th>
                             <th class="text-right px-4 py-2 font-medium">Issued</th>

@@ -229,7 +229,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             <table class="min-w-full">
                 <thead class="bg-slate-50/60 border-b border-slate-100">
                     <tr>
-                        <th class="px-4 py-3 text-left text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-500">Order</th>
+                        <th class="px-4 py-3 text-left text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-500">Job number</th>
                         <th class="px-4 py-3 text-left text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-500">Customer</th>
                         <th class="px-4 py-3 text-left text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-500">Make / Model</th>
                         <th class="px-4 py-3 text-left text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-500">VIN</th>

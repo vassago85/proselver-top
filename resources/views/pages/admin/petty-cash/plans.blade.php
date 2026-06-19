@@ -632,7 +632,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                                         wire:click="$set('selectedJobIds', @js($eligibleJobs->pluck('id')->all()))"
                                         title="Select all">
                                 </th>
-                                <th class="px-3 py-2 text-left">Order</th>
+                                <th class="px-3 py-2 text-left">Job number</th>
                                 <th class="px-3 py-2 text-left">Customer</th>
                                 <th class="px-3 py-2 text-left">Route</th>
                                 <th class="px-3 py-2 text-left">Driver</th>
@@ -755,7 +755,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                                                     title="Select all in this draft">
                                             </th>
                                         @endif
-                                        <th class="px-3 py-1.5 text-left">Order</th>
+                                        <th class="px-3 py-1.5 text-left">Job number</th>
                                         <th class="px-3 py-1.5 text-left">Route</th>
                                         <th class="px-3 py-1.5 text-left">Scheduled</th>
                                         <th class="px-3 py-1.5 text-right">Tolls</th>
