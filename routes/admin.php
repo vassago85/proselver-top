@@ -142,6 +142,7 @@ Volt::route('reports', 'admin.reports.index')->name('reports.index');
 Volt::route('reports/performance', 'admin.reports.performance')->name('reports.performance');
 Volt::route('reports/financials', 'admin.reports.financials')->name('reports.financials');
 Volt::route('reports/routes', 'admin.reports.routes')->name('reports.routes');
+Volt::route('reports/invoicing', 'admin.reports.invoicing')->name('reports.invoicing');
 
 // Audit Log
 Volt::route('audit-log', 'admin.audit-log')->name('audit-log');

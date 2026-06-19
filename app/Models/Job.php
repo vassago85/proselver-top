@@ -374,6 +374,13 @@ class Job extends Model
         'started_at',
         'completed_at',
         'invoiced_at',
+        // Finance-capture fields filled in by accounts after delivery.
+        // None compulsory; surface in the "Customer invoicing" page.
+        'invoice_number',
+        'invoice_amount',     // incl VAT
+        'extras_amount',      // incl VAT
+        'fuel_litres',
+        'fuel_amount',        // excl VAT
         'cancelled_at',
         'cancellation_reason',
         'recalled_at',
@@ -476,6 +483,10 @@ class Job extends Model
             'started_at' => 'datetime',
             'completed_at' => 'datetime',
             'invoiced_at' => 'datetime',
+            'invoice_amount' => 'decimal:2',
+            'extras_amount' => 'decimal:2',
+            'fuel_litres' => 'decimal:2',
+            'fuel_amount' => 'decimal:2',
             'damage_report_released_at' => 'datetime',
             'damage_acknowledged_at' => 'datetime',
             'cancelled_at' => 'datetime',

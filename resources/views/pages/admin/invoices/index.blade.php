@@ -14,6 +14,15 @@ new #[Layout('components.layouts.app')] class extends Component {
 ?>
 <div>
     <x-slot:header>Invoices</x-slot:header>
+    <div class="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
+        <div class="text-sm text-emerald-900">
+            <strong>Customer invoicing sheet</strong> — capture invoice numbers, amounts, extras and fuel per movement and export the OEM-shaped Excel.
+        </div>
+        <a href="{{ route('admin.reports.invoicing') }}"
+           class="inline-flex items-center gap-1.5 rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500">
+            Open customer invoicing
+        </a>
+    </div>
     <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-x-auto">
         <table class="min-w-full divide-y divide-gray-200">
             <thead class="bg-gray-50">
