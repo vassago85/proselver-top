@@ -59,50 +59,61 @@ new #[Layout('components.layouts.app')] class extends Component {
         </div>
     </div>
 
-    <div class="grid grid-cols-1 lg:grid-cols-[240px,1fr] gap-6">
-        {{-- Sticky TOC --}}
-        <aside class="lg:sticky lg:top-4 lg:self-start">
-            <nav class="rounded-xl border border-slate-200 bg-white p-3 text-sm" aria-label="Help table of contents">
-                <p class="px-2 pb-2 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">On this page</p>
-                <ul class="space-y-0.5">
-                    @php
-                        // Section list is gated by tenant type.  Dealer-only
-                        // sections (stock ledger, vehicle card, reserve flow,
-                        // fitment chain, dealer journey) are hidden from
-                        // OEM / BB users so they don't try to follow a
-                        // workflow that doesn't apply to them.
-                        $toc = array_values(array_filter([
-                            $isDealer ? ['journey', 'The dealer journey']
-                                : ($isOem ? ['journey', 'How OEM movements work'] : null),
-                            ['nav', 'Finding your way around'],
-                            ['roles', 'Roles &amp; what they can do'],
-                            $isDealer ? ['dashboard', 'Dashboard'] : null,
-                            $isDealer ? ['stock', 'Stock — three views'] : null,
-                            $isDealer ? ['vehicle', 'Vehicle card &amp; lifecycle'] : null,
-                            $isDealer ? ['reserve', 'Reserve workflow'] : null,
-                            $isDealer ? ['fitment', 'Fitment chain'] : null,
-                            ['orders', 'Movements &amp; bookings'],
-                            $isDealer ? ['bb', 'Body builders — two flows'] : null,
-                            ['trips', 'Trips &amp; drivers'],
-                            ['reports', 'Reports &amp; resources'],
-                            ['account', 'Account settings'],
-                            ['quickref', 'Quick reference'],
-                            ['glossary', 'Glossary'],
-                            ['support', 'Getting help'],
-                        ]));
-                    @endphp
+    @php
+        // Section list is gated by tenant type.  Dealer-only sections
+        // (stock ledger, vehicle card, reserve flow, fitment chain,
+        // dealer journey) are hidden from OEM / BB users so they don't
+        // try to follow a workflow that doesn't apply to them.
+        $toc = array_values(array_filter([
+            $isDealer ? ['journey', 'The dealer journey']
+                : ($isOem ? ['journey', 'How OEM movements work'] : null),
+            ['nav', 'Finding your way around'],
+            ['roles', 'Roles &amp; what they can do'],
+            $isDealer ? ['dashboard', 'Dashboard'] : null,
+            $isDealer ? ['stock', 'Stock — three views'] : null,
+            $isDealer ? ['vehicle', 'Vehicle card &amp; lifecycle'] : null,
+            $isDealer ? ['reserve', 'Reserve workflow'] : null,
+            $isDealer ? ['fitment', 'Fitment chain'] : null,
+            ['orders', 'Movements &amp; bookings'],
+            $isDealer ? ['bb', 'Body builders — two flows'] : null,
+            ['trips', 'Trips &amp; drivers'],
+            ['reports', 'Reports &amp; resources'],
+            ['account', 'Account settings'],
+            ['quickref', 'Quick reference'],
+            ['glossary', 'Glossary'],
+            ['support', 'Getting help'],
+        ]));
+    @endphp
+
+    {{-- Mobile / tablet TOC: a single collapsed <details> so the menu
+         doesn't eat half the screen on small viewports.  Hidden on
+         lg+ where the sticky aside takes over. --}}
+    <details class="group lg:hidden mb-4 rounded-lg border border-slate-200 bg-white">
+        <summary class="cursor-pointer list-none px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 select-none flex items-center justify-between">
+            <span>Jump to section</span>
+            <svg class="h-3.5 w-3.5 text-slate-400 transition-transform group-open:rotate-180" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+        </summary>
+        <ul class="grid grid-cols-2 gap-x-2 gap-y-0.5 border-t border-slate-100 px-2 py-2 text-xs">
+            @foreach($toc as [$id, $label])
+                <li><a href="#{{ $id }}" class="block rounded px-2 py-1 text-slate-700 hover:bg-slate-50 hover:text-slate-900">{!! $label !!}</a></li>
+            @endforeach
+        </ul>
+    </details>
+
+    <div class="grid grid-cols-1 lg:grid-cols-[200px,1fr] gap-6">
+        {{-- Sticky TOC (desktop): compact list, no extra "Stuck?" card
+             -- support copy already lives in section 13 (Getting help). --}}
+        <aside class="hidden lg:block lg:sticky lg:top-4 lg:self-start">
+            <nav class="rounded-lg border border-slate-200 bg-white p-2 text-xs" aria-label="Help table of contents">
+                <p class="px-2 pb-1.5 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">On this page</p>
+                <ul class="space-y-px">
                     @foreach($toc as [$id, $label])
                         <li>
-                            <a href="#{{ $id }}" class="block rounded-md px-2 py-1.5 text-slate-700 hover:bg-slate-50 hover:text-slate-900">{!! $label !!}</a>
+                            <a href="#{{ $id }}" class="block rounded px-2 py-0.5 text-slate-700 hover:bg-slate-50 hover:text-slate-900">{!! $label !!}</a>
                         </li>
                     @endforeach
                 </ul>
             </nav>
-
-            <div class="mt-4 rounded-xl border border-blue-200 bg-blue-50 p-4 text-xs text-blue-900">
-                <p class="font-semibold">Stuck?</p>
-                <p class="mt-1">Ask your <strong>Dealer Owner</strong> for an access change, or contact ProSelver support with your dealership name and a VIN or order number.</p>
-            </div>
         </aside>
 
         {{-- Content --}}
