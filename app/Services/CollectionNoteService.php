@@ -114,7 +114,7 @@ class CollectionNoteService
                 : IssuerProfile::forCourier('Dealer-managed movement', 'Delivery Note'),
 
             Job::EXECUTOR_THIRD_PARTY => IssuerProfile::forCourier(
-                $job->third_party_courier_name ?: '3rd-Party Courier',
+                $job->third_party_courier_name ?: '3rd-Party Transporter',
                 'Delivery Note'
             ),
 

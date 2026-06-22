@@ -241,7 +241,7 @@ class Job extends Model
     const EXECUTOR_LABELS = [
         self::EXECUTOR_PROSELVER => 'ProSelver',
         self::EXECUTOR_INTERNAL => 'Internal Driver',
-        self::EXECUTOR_THIRD_PARTY => '3rd-Party Courier',
+        self::EXECUTOR_THIRD_PARTY => '3rd-Party Transporter',
         self::EXECUTOR_SELF_COLLECT => 'Self-Collect',
     ];
 

@@ -82,7 +82,7 @@ readonly class IssuerProfile
      */
     public static function forCourier(string $courierName, string $docTitle = 'Delivery Note'): self
     {
-        $name = $courierName ?: '3rd-Party Courier';
+        $name = $courierName ?: '3rd-Party Transporter';
 
         return new self(
             name: $name,

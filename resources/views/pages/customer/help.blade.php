@@ -472,7 +472,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <h4 class="mt-3 text-sm font-semibold text-slate-900">Book a delivery</h4>
                 <p class="mt-1">
                     <a href="{{ route('customer.orders.create') }}" class="font-semibold text-blue-600 hover:text-blue-800">Open Book a delivery</a> —
-                    choose pickup, delivery, vehicle, and an <strong>executor</strong>: ProSelver, your own driver, courier, or self-collect. Most dealers use ProSelver for long-distance work.
+                    choose pickup, delivery, vehicle, and an <strong>executor</strong>: ProSelver, your own driver, a 3rd-party transporter, or self-collect. Most dealers use ProSelver for long-distance work.
                 </p>
                 <p class="mt-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-900">
                     <strong>Tip:</strong> The fastest way to book a delivery is from the vehicle itself — open the stock row (or click <em>Book</em> on the row) and the VIN, pickup location, brand and model are pre-filled.

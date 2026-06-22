@@ -801,7 +801,7 @@ new #[Layout('components.layouts.app')] class extends Component
             <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 @foreach([
                     \App\Models\Job::EXECUTOR_INTERNAL    => ['label' => 'Dealer internal drivers', 'color' => 'emerald'],
-                    \App\Models\Job::EXECUTOR_THIRD_PARTY => ['label' => '3rd-party courier',        'color' => 'purple'],
+                    \App\Models\Job::EXECUTOR_THIRD_PARTY => ['label' => '3rd-party transporter',     'color' => 'purple'],
                     \App\Models\Job::EXECUTOR_SELF_COLLECT => ['label' => 'Self-collect',             'color' => 'amber'],
                 ] as $type => $meta)
                     @php

@@ -436,8 +436,8 @@ new #[Layout('components.layouts.app')] class extends Component {
                     'icon' => 'user',
                 ],
                 Job::EXECUTOR_THIRD_PARTY => [
-                    'label' => '3rd-Party Courier',
-                    'description' => 'An outside courier company is moving the vehicle.',
+                    'label' => '3rd-Party Transporter',
+                    'description' => 'A competing transporter or owner-operator is moving the truck for you.',
                     'icon' => 'building',
                 ],
                 Job::EXECUTOR_SELF_COLLECT => [
@@ -526,14 +526,14 @@ new #[Layout('components.layouts.app')] class extends Component {
                     </div>
                 @endif
 
-                {{-- 3rd-party courier --}}
+                {{-- 3rd-party transporter --}}
                 @if($executorType === \App\Models\Job::EXECUTOR_THIRD_PARTY)
                     <div class="mt-4 rounded-lg bg-gray-50 border border-gray-200 p-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
                         <div class="sm:col-span-2">
-                            <label class="block text-sm font-medium text-gray-700 mb-1">Courier Company <span class="text-red-500">*</span></label>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Transporter / Carrier <span class="text-red-500">*</span></label>
                             <input wire:model="thirdPartyCourierName" type="text"
                                 class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:ring-blue-500"
-                                placeholder="e.g. DHL, Aramex, Local Carrier">
+                                placeholder="Name of the company moving the truck">
                             @error('thirdPartyCourierName') <p class="mt-1 text-xs text-red-600">{{ $message }}</p> @enderror
                         </div>
                         <div>
@@ -724,7 +724,7 @@ new #[Layout('components.layouts.app')] class extends Component {
 
             {{-- Scheduling & PO. PO fields only render when there's a
                  third-party we're paying — ProSelver (we invoice the
-                 dealer) or a 3rd-party courier (the dealer pays them).
+                 dealer) or a 3rd-party transporter (the dealer pays them).
                  For My-Driver and Self-Collect there's no third party
                  to raise a PO against, so the entire PO block hides
                  and the section title simplifies to just "Scheduling". --}}

@@ -983,7 +983,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                 @if($job->executor_type === \App\Models\Job::EXECUTOR_THIRD_PARTY)
                     <dl class="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm">
                         <div>
-                            <dt class="text-xs text-gray-500">Courier</dt>
+                            <dt class="text-xs text-gray-500">Transporter / Carrier</dt>
                             <dd class="font-medium text-gray-900">{{ $job->third_party_courier_name ?: '—' }}</dd>
                         </div>
                         <div>
@@ -1100,7 +1100,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                         @elseif($newExecutorType === \App\Models\Job::EXECUTOR_THIRD_PARTY)
                             <div class="mt-2 grid grid-cols-1 sm:grid-cols-3 gap-2">
                                 <div class="sm:col-span-2">
-                                    <label class="block text-xs font-medium text-gray-700 mb-1">Courier</label>
+                                    <label class="block text-xs font-medium text-gray-700 mb-1">Transporter / Carrier</label>
                                     <input wire:model="newThirdPartyCourierName" type="text" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm">
                                     @error('newThirdPartyCourierName') <p class="text-xs text-red-600">{{ $message }}</p> @enderror
                                 </div>

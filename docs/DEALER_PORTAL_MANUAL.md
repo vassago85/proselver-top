@@ -312,7 +312,7 @@ You choose:
 
 - **Pickup and delivery** (from your address book or search).
 - **Vehicle** (VIN / details).
-- **Executor:** ProSelver driver, your own driver, courier, or self-collect.
+- **Executor:** ProSelver driver, your own driver, a 3rd-party transporter (competing carrier or owner-operator), or self-collect.
 
 Most dealers use **ProSelver** for long-distance transport. Your own driver and trip planner are for internal fleet workflows.
 
