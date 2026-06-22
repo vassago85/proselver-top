@@ -104,6 +104,14 @@ new #[Layout('components.layouts.app')] class extends Component
 <div>
     <x-slot:header>Linked Body Builders</x-slot:header>
 
+    <div class="mb-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-800 space-y-2">
+        <p><strong>Two ways body builders move your stock:</strong></p>
+        <ul class="list-disc pl-5 space-y-1 text-slate-700">
+            <li><strong>Movement request</strong> — the BB asks you to book transport (you arrange and pay). Review these under <a href="{{ route('customer.movement-requests.index') }}" class="font-semibold text-blue-600 hover:text-blue-800">Movement Requests</a>.</li>
+            <li><strong>Direct order</strong> — the BB books ProSelver themselves; you only approve the move as vehicle owner. These land in <a href="{{ route('customer.orders.index', ['owner_pending' => 1]) }}" class="font-semibold text-blue-600 hover:text-blue-800">My Orders</a>.</li>
+        </ul>
+    </div>
+
     @if(session('success'))
         <div class="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{{ session('success') }}</div>
     @endif

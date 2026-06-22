@@ -20,6 +20,10 @@ Volt::route('orders/bulk-upload', 'customer.orders.bulk-upload')->name('orders.b
 Volt::route('orders/{job}', 'customer.orders.show')->name('orders.show');
 Volt::route('documents', 'customer.documents')->name('documents');
 Volt::route('locations', 'customer.locations.index')->name('locations.index');
+// In-app dealer help / user guide. Read-only static page (no DB hits),
+// permission-free so any customer-tier user can land on it from a
+// "Help" link in the sidebar.
+Volt::route('help', 'customer.help')->name('help');
 Volt::route('team', 'customer.team.index')->name('team.index');
 // Delivery-note branding (Phase 1B). Logo + address/VAT/registration
 // + footer printed on the dealer's own collection / delivery notes.

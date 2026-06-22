@@ -218,11 +218,13 @@ class extends Component
 ?>
 
 <div>
-    <x-slot:header>Stock In Transit</x-slot:header>
+    <x-slot:header>Off-site &amp; in transit</x-slot:header>
 
     <div class="mb-2 text-sm text-gray-600">
-        Vehicles you still own but aren't sitting at your dealership right now &mdash; at a body builder, parked in a yard, or actively on the road.
-        Anything delivered to a final dealer destination drops out of this view automatically.
+        Job-based view of vehicles you still own but are not at your dealership &mdash; parked at a body builder, in another yard, or actively on the road.
+        For the full stock ledger (including at-premises, sold, and handed-over units), use
+        <a href="{{ route('customer.stock.index') }}" class="font-semibold text-blue-600 hover:text-blue-800">All stock</a>.
+        Units marked <em>handed over</em> to the buyer drop out of this view automatically.
     </div>
 
     {{-- Dealership chip strip (group principals only) --}}

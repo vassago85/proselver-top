@@ -25,7 +25,7 @@ use Livewire\Volt\Component;
  *   3. Scheduled for movement    (joined transport_jobs status, blue)
  *   4. At another storage        (storage indigo)
  *   5. On demo with customer     (on_demo / status=demo teal)
- *   6. Recently delivered        (status=sold + sold_at >= now-30d green)
+ *   6. Recently sold               (status=sold + sold_at >= now-30d green)
  *
  * Counts are #[Computed] properties so tapping a card doesn't
  * re-run unrelated data fetches; only the filtered list re-renders.
@@ -61,6 +61,19 @@ new #[Layout('components.layouts.app')] class extends Component {
         }
 
         $this->selectedBucket = $bucket;
+    }
+
+    /**
+     * Map dashboard card keys to stock-index bucket query params.
+     * recently_delivered on the dashboard is "recently sold" on the
+     * ledger (sold in the last 30 days, not the handed-over bucket).
+     */
+    public function stockIndexBucketParam(string $cardKey): string
+    {
+        return match ($cardKey) {
+            'recently_delivered' => 'recently_sold',
+            default              => $cardKey,
+        };
     }
 
     /**
@@ -313,6 +326,12 @@ new #[Layout('components.layouts.app')] class extends Component {
                        class="inline-flex items-center gap-2 rounded-lg bg-white/10 ring-1 ring-white/20 px-4 py-2.5 text-sm font-semibold text-white hover:bg-white/15 transition">
                         View Orders
                     </a>
+                    <a href="{{ route('customer.help') }}"
+                       class="inline-flex items-center gap-2 rounded-lg bg-white/10 ring-1 ring-white/20 px-4 py-2.5 text-sm font-semibold text-white hover:bg-white/15 transition"
+                       title="In-app user guide for the dealer portal">
+                        <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" x2="12.01" y1="17" y2="17"/></svg>
+                        Help
+                    </a>
                 </div>
             </div>
         </div>
@@ -354,8 +373,8 @@ new #[Layout('components.layouts.app')] class extends Component {
                     ['key' => 'scheduled',          'label' => 'Scheduled for movement',   'count' => $this->countScheduled,          'accent' => 'blue',     'icon' => 'calendar'],
                     ['key' => 'in_transit',         'label' => 'In transit',               'count' => $this->countInTransit,          'accent' => 'sky',      'icon' => 'truck'],
                     ['key' => 'storage',            'label' => 'At another storage',       'count' => $this->countStorage,            'accent' => 'indigo',   'icon' => 'box'],
-                    ['key' => 'on_demo',            'label' => 'On demo with customer',    'count' => $this->countOnDemo,             'accent' => 'teal',     'icon' => 'user'],
-                    ['key' => 'recently_delivered', 'label' => 'Recently delivered',       'count' => $this->countRecentlyDelivered,  'accent' => 'emerald',  'icon' => 'check'],
+                    ['key' => 'on_demo',            'label' => 'On demo with customer',    'count' => $this->countOnDemo,             'accent' => 'teal',     'icon' => 'user', 'tooltip' => 'Vehicles marked on demo'],
+                    ['key' => 'recently_delivered', 'label' => 'Recently sold',            'count' => $this->countRecentlyDelivered,  'accent' => 'emerald',  'icon' => 'check', 'tooltip' => 'Marked sold in the last 30 days'],
                 ];
                 $accentMap = [
                     'slate'   => ['ring' => 'ring-slate-300',   'chip' => 'bg-slate-100   text-slate-700',   'active' => 'border-slate-900   bg-slate-50',   'count' => 'text-slate-900'],
@@ -373,7 +392,16 @@ new #[Layout('components.layouts.app')] class extends Component {
                     'in_transit'         => 'No vehicles on the road right now.',
                     'storage'            => 'No vehicles at another storage location.',
                     'on_demo'            => 'No vehicles out on demo with customers.',
-                    'recently_delivered' => 'No sales in the last 30 days.',
+                    'recently_delivered' => 'No vehicles marked sold in the last 30 days.',
+                ];
+                $cardTooltips = [
+                    'premises'           => 'Physically at your dealership',
+                    'body_builder'       => 'Parked at a body builder or fitment centre',
+                    'scheduled'          => 'Transport booked — collection not started yet',
+                    'in_transit'         => 'On the road with an active transport job',
+                    'storage'            => 'Parked at another storage yard',
+                    'on_demo'            => 'Out on demo with a customer',
+                    'recently_delivered' => 'Marked sold in the last 30 days (may still be in transit)',
                 ];
             @endphp
 
@@ -387,11 +415,10 @@ new #[Layout('components.layouts.app')] class extends Component {
                             ? $accent['active'] . ' shadow-sm'
                             : 'border-slate-200 hover:border-slate-300 hover:shadow-sm';
                     @endphp
-                    <button type="button"
-                            wire:click="selectBucket('{{ $c['key'] }}')"
-                            class="{{ $base }} {{ $stateCls }} {{ $accent['ring'] }}"
-                            style="animation-delay: {{ $i * 40 }}ms"
-                            aria-pressed="{{ $isActive ? 'true' : 'false' }}">
+                    <a href="{{ route('customer.stock.index', ['bucket' => $this->stockIndexBucketParam($c['key'])]) }}"
+                       title="{{ $cardTooltips[$c['key']] ?? $c['label'] }}"
+                       class="{{ $base }} {{ $stateCls }} {{ $accent['ring'] }}"
+                       style="animation-delay: {{ $i * 40 }}ms">
                         <div class="flex items-center justify-between">
                             <span class="flex h-9 w-9 items-center justify-center rounded-xl {{ $accent['chip'] }}">
                                 @switch($c['icon'])
@@ -419,14 +446,14 @@ new #[Layout('components.layouts.app')] class extends Component {
                                 @endswitch
                             </span>
                             @if($isActive)
-                                <span class="text-[10px] font-bold uppercase tracking-wider {{ $accent['count'] }}">Active</span>
+                                <span class="text-[10px] font-bold uppercase tracking-wider {{ $accent['count'] }}">Viewing</span>
                             @endif
                         </div>
                         <div>
                             <p class="text-4xl sm:text-5xl font-bold tabular-nums {{ $accent['count'] }}">{{ $c['count'] }}</p>
                             <p class="mt-1 text-sm font-medium text-slate-700">{{ $c['label'] }}</p>
                         </div>
-                    </button>
+                    </a>
                 @endforeach
             </div>
 
@@ -453,7 +480,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                         @if($selectedBucket)
                             <button wire:click="selectBucket(null)" class="text-xs font-semibold text-slate-600 hover:text-slate-900">Show all</button>
                         @endif
-                        <a href="{{ route('customer.stock.index') }}" class="text-xs font-semibold text-blue-600 hover:text-blue-500">Open full stock →</a>
+                        <a href="{{ route('customer.stock.index', $selectedBucket ? ['bucket' => $this->stockIndexBucketParam($selectedBucket)] : []) }}" class="text-xs font-semibold text-blue-600 hover:text-blue-500">Open full stock →</a>
                     </div>
                 </div>
 

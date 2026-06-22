@@ -114,7 +114,11 @@ new #[Layout('components.layouts.app')] class extends Component {
             ->orderByDesc('updated_at');
 
         if ($this->bucketFilter !== '') {
-            $query->where('current_location_type', $this->bucketFilter);
+            match ($this->bucketFilter) {
+                'scheduled'     => $query->scheduledForMovement(),
+                'recently_sold' => $query->recentlyDelivered(),
+                default         => $query->where('current_location_type', $this->bucketFilter),
+            };
         }
 
         if ($this->statusFilter !== '') {
@@ -161,6 +165,8 @@ new #[Layout('components.layouts.app')] class extends Component {
             DealerStock::LOCATION_IN_TRANSIT   => (clone $baseCounts)->where('current_location_type', DealerStock::LOCATION_IN_TRANSIT)->count(),
             DealerStock::LOCATION_ON_DEMO      => (clone $baseCounts)->where('current_location_type', DealerStock::LOCATION_ON_DEMO)->count(),
             DealerStock::LOCATION_DELIVERED    => (clone $baseCounts)->where('current_location_type', DealerStock::LOCATION_DELIVERED)->count(),
+            'scheduled'     => (clone $baseCounts)->scheduledForMovement()->count(),
+            'recently_sold' => (clone $baseCounts)->recentlyDelivered()->count(),
         ];
 
         $visibleCompanies = count($visibleCompanyIds) > 1
@@ -216,7 +222,19 @@ new #[Layout('components.layouts.app')] class extends Component {
                 DealerStock::LOCATION_STORAGE      => 'Other storage',
                 DealerStock::LOCATION_IN_TRANSIT   => 'In transit',
                 DealerStock::LOCATION_ON_DEMO      => 'On demo',
-                DealerStock::LOCATION_DELIVERED    => 'Delivered',
+                DealerStock::LOCATION_DELIVERED    => 'Handed over',
+                'scheduled'     => 'Scheduled for movement',
+                'recently_sold' => 'Recently sold',
+            ],
+            'bucketTooltips' => [
+                DealerStock::LOCATION_PREMISES     => 'Physically at your dealership',
+                DealerStock::LOCATION_BODY_BUILDER => 'Parked at a body builder or fitment centre',
+                DealerStock::LOCATION_STORAGE      => 'Parked at another storage yard',
+                DealerStock::LOCATION_IN_TRANSIT   => 'On the road with an active transport job',
+                DealerStock::LOCATION_ON_DEMO      => 'Out on demo with a customer',
+                DealerStock::LOCATION_DELIVERED    => 'Marked handed over to the buyer (customer delivery complete)',
+                'scheduled'     => 'A transport job is booked but collection has not started',
+                'recently_sold' => 'Marked sold in the last 30 days (may still be in transit)',
             ],
             'statusLabels' => [
                 DealerStock::STATUS_AVAILABLE => 'Available',
@@ -261,7 +279,18 @@ new #[Layout('components.layouts.app')] class extends Component {
                 'in_transit'   => ['bg-blue-50 text-blue-800 border-blue-200',      'bg-blue-600 text-white border-blue-600'],
                 'on_demo'      => ['bg-teal-50 text-teal-800 border-teal-200',      'bg-teal-600 text-white border-teal-600'],
                 'delivered'    => ['bg-emerald-50 text-emerald-800 border-emerald-200', 'bg-emerald-600 text-white border-emerald-600'],
+                'scheduled'    => ['bg-sky-50 text-sky-800 border-sky-200',         'bg-sky-600 text-white border-sky-600'],
+                'recently_sold'=> ['bg-green-50 text-green-800 border-green-200',   'bg-green-600 text-white border-green-600'],
             ];
+            $locationBucketKeys = [
+                DealerStock::LOCATION_PREMISES,
+                DealerStock::LOCATION_BODY_BUILDER,
+                DealerStock::LOCATION_STORAGE,
+                DealerStock::LOCATION_IN_TRANSIT,
+                DealerStock::LOCATION_ON_DEMO,
+                DealerStock::LOCATION_DELIVERED,
+            ];
+            $locationBucketTotal = collect($locationBucketKeys)->sum(fn ($k) => $bucketCounts[$k] ?? 0);
         @endphp
 
         <button wire:click="$set('bucketFilter', '')" @class([
@@ -269,7 +298,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             'bg-slate-900 text-white border-slate-900' => $bucketFilter === '',
             'bg-white text-slate-700 border-slate-300 hover:bg-slate-50' => $bucketFilter !== '',
         ])>
-            All buckets <span class="rounded-full bg-white/20 px-1.5 text-[10px]">{{ array_sum($bucketCounts) }}</span>
+            All buckets <span class="rounded-full bg-white/20 px-1.5 text-[10px]">{{ $locationBucketTotal }}</span>
         </button>
         @foreach($bucketLabels as $key => $label)
             @php $active = $bucketFilter === $key; @endphp
@@ -277,7 +306,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                 'inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors',
                 $colours[$key][1] => $active,
                 $colours[$key][0] . ' hover:opacity-80' => !$active,
-            ])>
+            ]) title="{{ $bucketTooltips[$key] ?? '' }}">
                 {{ $label }} <span class="rounded-full bg-white/30 px-1.5 text-[10px] tabular-nums">{{ $bucketCounts[$key] }}</span>
             </button>
         @endforeach

@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\MovementRequest;
+use App\Models\Company;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\Url;
 use Livewire\Volt\Component;
@@ -12,6 +13,9 @@ new #[Layout('components.layouts.app')] class extends Component
 
     #[Url(history: true, keep: true)]
     public string $status = 'pending';
+
+    #[Url(as: 'dealership')]
+    public string $dealershipFilter = '';
 
     public function mount(): void
     {
@@ -32,17 +36,22 @@ new #[Layout('components.layouts.app')] class extends Component
 
     public function updating($name): void
     {
-        if ($name === 'status') {
+        if (in_array($name, ['status', 'dealershipFilter'], true)) {
             $this->resetPage();
         }
     }
 
     public function with(): array
     {
-        $companyId = auth()->user()->company()->id;
+        $user = auth()->user();
+        $visibleCompanyIds = $user->visibleCompanyIds();
+
+        $effectiveCompanyIds = $this->dealershipFilter !== ''
+            ? array_values(array_intersect($visibleCompanyIds, [(int) $this->dealershipFilter]))
+            : $visibleCompanyIds;
 
         $base = MovementRequest::query()
-            ->where('target_company_id', $companyId);
+            ->whereIn('target_company_id', $effectiveCompanyIds);
 
         $counts = [
             'pending'   => (clone $base)->where('status', MovementRequest::STATUS_PENDING)->count(),
@@ -65,7 +74,11 @@ new #[Layout('components.layouts.app')] class extends Component
             ->orderByDesc('created_at')
             ->paginate(25);
 
-        return compact('requests', 'counts');
+        $visibleCompanies = count($visibleCompanyIds) > 1
+            ? Company::whereIn('id', $visibleCompanyIds)->orderBy('name')->get(['id', 'name'])
+            : collect();
+
+        return compact('requests', 'counts', 'visibleCompanies');
     }
 };
 ?>
@@ -73,10 +86,18 @@ new #[Layout('components.layouts.app')] class extends Component
 <div>
     <x-slot:header>Movement Requests</x-slot:header>
 
-    <div class="mb-4 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">
-        These are next-fitment and collection requests raised by your <a href="{{ route('customer.body-builders.index') }}" class="font-semibold underline">linked body builders</a>.
-        Approving turns the request into a real transport job in your queue; rejecting sends a reason back to the body builder.
+    <div class="mb-4 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900 space-y-2">
+        <p>
+            <strong>Movement requests</strong> — your linked body builder asks <em>you</em> to arrange the move (you pay ProSelver or use your own driver).
+            Approving turns the request into a transport job in your queue; rejecting sends a reason back to the body builder.
+        </p>
+        <p class="text-blue-800">
+            <strong>Direct orders</strong> are different: the body builder books ProSelver themselves and you only approve that their vehicle may move.
+            Those appear under <a href="{{ route('customer.orders.index', ['owner_pending' => 1]) }}" class="font-semibold underline">My Orders</a>, not here.
+        </p>
     </div>
+
+    <x-dealership-chip-strip :companies="$visibleCompanies" :selected="$dealershipFilter" wire-model="dealershipFilter" />
 
     <div class="mb-4 flex flex-wrap gap-2 border-b border-slate-200">
         @foreach(['pending' => 'Pending', 'approved' => 'Approved', 'rejected' => 'Rejected', 'cancelled' => 'Cancelled', '' => 'All'] as $key => $label)

@@ -30,6 +30,9 @@ new #[Layout('components.layouts.app')] class extends Component {
     #[Url(as: 'archived')]
     public bool $showArchived = false;
 
+    #[Url(as: 'owner_pending')]
+    public bool $ownerPendingOnly = false;
+
     public function mount(): void
     {
         $this->company = auth()->user()->company();
@@ -52,6 +55,11 @@ new #[Layout('components.layouts.app')] class extends Component {
     }
 
     public function updatedShowArchived(): void
+    {
+        $this->resetPage();
+    }
+
+    public function updatedOwnerPendingOnly(): void
     {
         $this->resetPage();
     }
@@ -117,6 +125,12 @@ new #[Layout('components.layouts.app')] class extends Component {
             $query->where('status', $this->statusFilter);
         }
 
+        if ($this->ownerPendingOnly) {
+            $query->whereIn('owner_company_id', $effectiveCompanyIds)
+                ->where('requires_owner_approval', true)
+                ->where('owner_approval_status', Job::OWNER_APPROVAL_PENDING);
+        }
+
         if (! $this->showArchived) {
             $query->whereNull('archived_at');
         }
@@ -166,10 +180,23 @@ new #[Layout('components.layouts.app')] class extends Component {
                     {{ $pendingOwnerApprovalCount }} movement{{ $pendingOwnerApprovalCount === 1 ? '' : 's' }} awaiting your approval
                 </div>
                 <p class="text-xs text-amber-800 mt-0.5">
-                    Body builders (or other tenants) have placed direct orders to move vehicles from your stock
-                    ledger.  Open each one below to approve or reject.
+                    A linked body builder booked ProSelver directly to move a vehicle on your stock ledger.
+                    These are <strong>direct orders</strong> — not movement requests. Open each one below to approve or reject.
                 </p>
             </div>
+            @if(!$ownerPendingOnly)
+                <button type="button" wire:click="$set('ownerPendingOnly', true)"
+                        class="shrink-0 rounded-md bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700 transition">
+                    Show only these
+                </button>
+            @endif
+        </div>
+    @endif
+
+    @if($ownerPendingOnly)
+        <div class="mb-4 flex items-center gap-2 text-sm text-amber-900">
+            <span class="font-semibold">Showing owner approvals only.</span>
+            <button type="button" wire:click="$set('ownerPendingOnly', false)" class="text-xs font-semibold text-blue-600 hover:text-blue-800">Clear filter</button>
         </div>
     @endif
 

@@ -424,14 +424,44 @@
                         <x-sidebar-link :href="route('customer.orders.index')" :active="request()->routeIs('customer.orders.index') || request()->routeIs('customer.orders.show')">
                             <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4"/><path d="M12 16h4"/><path d="M8 11h.01"/><path d="M8 16h.01"/></svg></x-slot:icon>
                             My Orders
+                            @php
+                                $pendingOwnerApprovals = $isDealerCustomer
+                                    ? \App\Models\Job::query()
+                                        ->whereIn('owner_company_id', $user->visibleCompanyIds())
+                                        ->where('requires_owner_approval', true)
+                                        ->where('owner_approval_status', \App\Models\Job::OWNER_APPROVAL_PENDING)
+                                        ->count()
+                                    : 0;
+                            @endphp
+                            @if($pendingOwnerApprovals > 0)
+                                <span class="ml-auto inline-flex items-center justify-center rounded-full bg-amber-500 px-1.5 py-0.5 text-[10px] font-semibold text-white" title="Movements awaiting your approval">{{ $pendingOwnerApprovals }}</span>
+                            @endif
                         </x-sidebar-link>
 
-                        <x-sidebar-link :href="route('customer.stock.at-body-builder')" :active="request()->routeIs('customer.stock.*')">
+                        @if(!$isDealerCustomer || !$user->hasPermission('view_dealer_stock'))
+                        <x-sidebar-link :href="route('customer.stock.at-body-builder')" :active="request()->routeIs('customer.stock.at-body-builder')">
                             <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" x2="12" y1="22.08" y2="12"/></svg></x-slot:icon>
                             Stock In Transit
                         </x-sidebar-link>
+                        @endif
                     </ul>
                 </li>
+
+                @if($isDealerCustomer && $user->hasPermission('view_dealer_stock'))
+                <li>
+                    <p class="mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">Stock</p>
+                    <ul role="list" class="space-y-0.5">
+                        <x-sidebar-link :href="route('customer.stock.index')" :active="request()->routeIs('customer.stock.index') || request()->routeIs('customer.stock.show') || request()->routeIs('customer.stock.import')">
+                            <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" x2="12" y1="22.08" y2="12"/></svg></x-slot:icon>
+                            All stock
+                        </x-sidebar-link>
+                        <x-sidebar-link :href="route('customer.stock.at-body-builder')" :active="request()->routeIs('customer.stock.at-body-builder')">
+                            <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M14 18V6a1 1 0 0 0-1-1H3a1 1 0 0 0-1 1v11a1 1 0 0 0 1 1h1"/><path d="M14 9h4l4 4v4a1 1 0 0 1-1 1h-1"/><circle cx="7" cy="18" r="2"/><circle cx="17" cy="18" r="2"/></svg></x-slot:icon>
+                            Off-site &amp; in transit
+                        </x-sidebar-link>
+                    </ul>
+                </li>
+                @endif
 
                 {{-- Trips planner — gated to dispatch-capable roles. Drivers
                      also get a "My Day" entry below; depot dispatchers and
@@ -506,7 +536,7 @@
                     $pendingBbRequests = $isOemCustomer ? 0 : (
                         $user->canApproveBbRequests()
                             ? \App\Models\MovementRequest::query()
-                                ->whereIn('target_company_id', $user->companies->pluck('id'))
+                                ->whereIn('target_company_id', $user->visibleCompanyIds())
                                 ->where('status', \App\Models\MovementRequest::STATUS_PENDING)
                                 ->count()
                             : 0
@@ -540,6 +570,19 @@
                     </ul>
                 </li>
                 @endif
+
+                {{-- In-app user guide.  Shown to every customer-tier
+                     tenant (dealer, OEM, body builder) so anyone who
+                     lands in the portal can find a how-to. --}}
+                <li>
+                    <p class="mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">Help</p>
+                    <ul role="list" class="space-y-0.5">
+                        <x-sidebar-link :href="route('customer.help')" :active="request()->routeIs('customer.help')">
+                            <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" x2="12.01" y1="17" y2="17"/></svg></x-slot:icon>
+                            User Guide
+                        </x-sidebar-link>
+                    </ul>
+                </li>
 
                 @if($user->canManageCompanyData())
                 <li>
