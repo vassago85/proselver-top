@@ -27,7 +27,7 @@ use Livewire\Volt\Component;
  *   5. In transit                (in_transit blue)
  *   6. At another storage        (storage indigo)
  *   7. On demo with customer     (on_demo / status=demo teal)
- *   8. Sold — awaiting handover  (status=sold + delivered_at IS NULL emerald)
+ *   8. Recently sold             (status=sold + sold_at >= now-30d emerald)
  *
  * Counts are #[Computed] properties so tapping a card doesn't
  * re-run unrelated data fetches; only the filtered list re-renders.
@@ -50,7 +50,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         $allowed = [
             'premises', 'body_builder', 'storage', 'in_transit',
             'on_demo', 'scheduled', 'recently_delivered',
-            'reserved', 'awaiting_handover',
+            'reserved',
         ];
 
         if ($bucket === $this->selectedBucket || $bucket === null) {
@@ -67,9 +67,10 @@ new #[Layout('components.layouts.app')] class extends Component {
     }
 
     /**
-     * Map dashboard card keys to a stock-index URL.  Some cards map
-     * to bucket filters; others (reserved, awaiting_handover) map to
-     * the status filter instead since they aren't physical buckets.
+     * Map dashboard card keys to a stock-index URL.  Most cards map
+     * to a bucket filter; "reserved" maps to the status filter since
+     * it isn't a physical bucket; "recently_delivered" maps to the
+     * "recently_sold" virtual bucket on the ledger.
      *
      * Returns ['bucket' => ...] or ['status' => ...] params, ready
      * to spread into route('customer.stock.index', $params).
@@ -78,7 +79,6 @@ new #[Layout('components.layouts.app')] class extends Component {
     {
         return match ($cardKey) {
             'recently_delivered' => ['bucket' => 'recently_sold'],
-            'awaiting_handover'  => ['status' => DealerStock::STATUS_SOLD, 'awaiting_handover' => 1],
             'reserved'           => ['status' => DealerStock::STATUS_RESERVED],
             default              => ['bucket' => $cardKey],
         };
@@ -101,7 +101,6 @@ new #[Layout('components.layouts.app')] class extends Component {
             'scheduled'          => $query->scheduledForMovement(),
             'recently_delivered' => $query->recentlyDelivered(),
             'reserved'           => $query->reserved(),
-            'awaiting_handover'  => $query->soldAwaitingHandover(),
             default              => $query,
         };
     }
@@ -162,12 +161,6 @@ new #[Layout('components.layouts.app')] class extends Component {
     public function countReserved(): int
     {
         return $this->dealerStockBase()->reserved()->count();
-    }
-
-    #[Computed]
-    public function countAwaitingHandover(): int
-    {
-        return $this->dealerStockBase()->soldAwaitingHandover()->count();
     }
 
     /**
@@ -400,7 +393,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                     ['key' => 'in_transit',         'label' => 'In transit',               'count' => $this->countInTransit,          'accent' => 'blue',     'icon' => 'truck'],
                     ['key' => 'storage',            'label' => 'At another storage',       'count' => $this->countStorage,            'accent' => 'indigo',   'icon' => 'box'],
                     ['key' => 'on_demo',            'label' => 'On demo with customer',    'count' => $this->countOnDemo,             'accent' => 'teal',     'icon' => 'user'],
-                    ['key' => 'awaiting_handover', 'label'  => 'Sold — awaiting handover', 'count' => $this->countAwaitingHandover,   'accent' => 'emerald',  'icon' => 'check'],
+                    ['key' => 'recently_delivered', 'label' => 'Recently sold',            'count' => $this->countRecentlyDelivered,  'accent' => 'emerald',  'icon' => 'check'],
                 ];
                 $accentMap = [
                     'slate'   => ['ring' => 'ring-slate-300',   'chip' => 'bg-slate-100   text-slate-700',   'active' => 'border-slate-900   bg-slate-50',   'count' => 'text-slate-900'],
@@ -420,7 +413,6 @@ new #[Layout('components.layouts.app')] class extends Component {
                     'storage'            => 'No vehicles at another storage location.',
                     'on_demo'            => 'No vehicles out on demo with customers.',
                     'recently_delivered' => 'No vehicles marked sold in the last 30 days.',
-                    'awaiting_handover'  => 'No sold vehicles awaiting customer handover.',
                 ];
                 $cardTooltips = [
                     'premises'           => 'Physically at your dealership',
@@ -430,8 +422,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                     'in_transit'         => 'On the road with an active transport job',
                     'storage'            => 'Parked at another storage yard',
                     'on_demo'            => 'Out on demo with a customer',
-                    'recently_delivered' => 'Marked sold in the last 30 days (may still be in transit)',
-                    'awaiting_handover'  => 'Sold but the customer has not taken delivery yet',
+                    'recently_delivered' => 'Marked sold in the last 30 days — archive when off your books',
                 ];
             @endphp
 

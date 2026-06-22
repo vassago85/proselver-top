@@ -56,7 +56,13 @@ new #[Layout('components.layouts.body-builder')] class extends Component
             ->whereIn('current_location_id', $myLocationIds)
             ->where('current_location_type', DealerStock::LOCATION_BODY_BUILDER)
             ->whereNotIn('status', [DealerStock::STATUS_ARCHIVED])
-            ->with(['dealerCompany:id,name', 'oemCompany:id,name', 'brand:id,name', 'currentLocation:id,company_name'])
+            ->with([
+                'dealerCompany:id,name',
+                'oemCompany:id,name',
+                'brand:id,name',
+                'currentLocation:id,company_name',
+                'fitments' => fn ($q) => $q->where('body_builder_company_id', $company->id),
+            ])
             ->get();
 
         // Merge by VIN, preferring stock-level data (richer -- it has
@@ -83,6 +89,21 @@ new #[Layout('components.layouts.body-builder')] class extends Component
         foreach ($stocks as $s) {
             $vin = strtoupper(trim((string) $s->vin));
             if ($vin === '') continue;
+
+            // The fitment leg for THIS BB on this stock row.  We
+            // already pre-filtered the loaded collection in the query,
+            // so this is just an in-memory lookup -- no extra round
+            // trip per row.
+            $leg = $s->fitments
+                ->sortBy([
+                    fn ($a, $b) => match (true) {
+                        $a->status === 'in_progress' && $b->status !== 'in_progress' => -1,
+                        $a->status !== 'in_progress' && $b->status === 'in_progress' =>  1,
+                        default                                                      =>  0,
+                    },
+                ])
+                ->first();
+
             $merged[$vin] = array_merge($merged[$vin] ?? [
                 'vin'        => $vin,
                 'job_id'     => $s->current_job_id,
@@ -96,12 +117,13 @@ new #[Layout('components.layouts.body-builder')] class extends Component
                 'brand'       => $s->brand?->name ?? '—',
                 'model'       => $s->model_name ?? '',
                 'location'    => $s->currentLocation?->company_name ?? '',
-                'bb_job_no'   => $s->bb_internal_job_number,
+                'bb_job_no'   => $leg?->internal_job_number,
                 'stock_id'    => $s->id,
-                'share'       => $s->bb_share_with_body_builder ? [
-                    'salesperson'  => $s->bb_share_salesperson,
-                    'end_customer' => $s->bb_share_end_customer,
-                    'notes'        => $s->bb_build_notes,
+                'share'       => $leg && $leg->share_with_bb ? [
+                    'salesperson'  => $leg->share_salesperson,
+                    'end_customer' => $leg->share_end_customer,
+                    'notes'        => $leg->notes,
+                    'fitment_type' => $leg->fitment_type,
                 ] : null,
                 'stock'       => $s,
             ]);

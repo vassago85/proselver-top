@@ -1,6 +1,8 @@
 <?php
 
 use App\Models\Company;
+use App\Models\DealerStock;
+use App\Models\Location;
 use App\Services\DealerStockImporter;
 use Livewire\Attributes\Layout;
 use Livewire\Volt\Component;
@@ -32,8 +34,23 @@ new #[Layout('components.layouts.app')] class extends Component {
     public bool $hasMapping = false;
     public string $resultMessage = '';
 
+    /*
+     * Where should NEW rows land?  Mirrors the single-vehicle add
+     * page so the dealer can drop a "factory-direct-to-BB" batch
+     * straight into the right bucket instead of importing them at
+     * premises and then moving them.
+     */
+    public string $default_location_type = DealerStock::LOCATION_PREMISES;
+    public ?int $default_bb_company_id   = null;
+    public ?int $default_bb_location_id  = null;
+    public ?int $default_storage_location_id = null;
+
     public function mount(): void
     {
+        // Dealer-tenant only.  Stock import is a dealer concept --
+        // OEM tenants don't run a stock ledger.  See stock/index for
+        // the same gating + rationale.
+        abort_unless(auth()->user()?->company()?->isDealer(), 404);
         abort_unless(auth()->user()?->hasPermission('manage_dealer_stock'), 403);
         abort_unless(auth()->user()?->company(), 403, 'No company associated with your account.');
     }
@@ -74,6 +91,16 @@ new #[Layout('components.layouts.app')] class extends Component {
         $this->preview = $importer->preview($this->rows, $this->mapping, $dealer);
     }
 
+    /**
+     * Reset the BB-yard picker when the BB itself changes -- stops a
+     * stale yard ID belonging to the previously-picked BB sneaking
+     * through validation.
+     */
+    public function updatedDefaultBbCompanyId(): void
+    {
+        $this->default_bb_location_id = null;
+    }
+
     public function commit(DealerStockImporter $importer): void
     {
         if (empty($this->preview)) {
@@ -81,8 +108,31 @@ new #[Layout('components.layouts.app')] class extends Component {
             return;
         }
 
+        // Resolve which location id to apply to new rows based on the
+        // picked starting bucket.  Premises = no location id; the
+        // other two require a Location.
+        $defaultLocationId = match ($this->default_location_type) {
+            DealerStock::LOCATION_BODY_BUILDER => $this->default_bb_location_id,
+            DealerStock::LOCATION_STORAGE      => $this->default_storage_location_id,
+            default => null,
+        };
+
+        // Guard: if the dealer picked a non-premises starting bucket
+        // we MUST have a location id, otherwise the new rows will be
+        // floating without an address.
+        if (in_array($this->default_location_type, [DealerStock::LOCATION_BODY_BUILDER, DealerStock::LOCATION_STORAGE], true)
+            && $defaultLocationId === null) {
+            $this->resultMessage = 'Pick the body builder yard / storage location before committing.';
+            return;
+        }
+
         $dealer = auth()->user()->company();
-        $summary = $importer->commit($this->preview, $dealer);
+        $summary = $importer->commit(
+            $this->preview,
+            $dealer,
+            $this->default_location_type,
+            $defaultLocationId,
+        );
 
         $this->resultMessage = sprintf(
             'Import complete -- %d new, %d updated, %d skipped.',
@@ -91,7 +141,9 @@ new #[Layout('components.layouts.app')] class extends Component {
             $summary['skipped'],
         );
 
-        // Reset for another file
+        // Reset for another file -- but keep the starting-location
+        // picker so an OEM-to-BB batch followed by a second batch
+        // to the same BB doesn't have to re-pick every time.
         $this->headers = [];
         $this->rows = [];
         $this->mapping = [];
@@ -106,9 +158,37 @@ new #[Layout('components.layouts.app')] class extends Component {
             $this->headers
         );
 
+        $dealer = auth()->user()?->company();
+
+        // BB companies linked to this dealer; same shortlist the
+        // single-vehicle add form uses.  Hidden until the dealer
+        // actually picks "body builder" as the starting location.
+        $bbCompanies = $dealer
+            ? \App\Models\Company::query()
+                ->where('type', \App\Models\Company::TYPE_BODY_BUILDER)
+                ->whereHas('linkedDealers', fn ($l) => $l->where('companies.id', $dealer->id))
+                ->orderBy('name')
+                ->get(['id', 'name'])
+            : collect();
+
+        $bbLocations = $this->default_bb_company_id
+            ? Location::where('company_id', $this->default_bb_company_id)
+                ->orderBy('company_name')
+                ->get(['id', 'company_name', 'city'])
+            : collect();
+
+        $storageLocations = $dealer
+            ? Location::where('company_id', $dealer->id)
+                ->orderBy('company_name')
+                ->get(['id', 'company_name', 'city'])
+            : collect();
+
         return [
             'fields' => DealerStockImporter::FIELDS,
             'normalisedHeaders' => $normalisedHeaders,
+            'bbCompanies' => $bbCompanies,
+            'bbLocations' => $bbLocations,
+            'storageLocations' => $storageLocations,
         ];
     }
 };
@@ -121,9 +201,42 @@ new #[Layout('components.layouts.app')] class extends Component {
         <div class="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{{ $resultMessage }}</div>
     @endif
 
+    <div class="rounded-xl border border-blue-200 bg-blue-50 px-5 py-4 mb-6 text-sm text-blue-900">
+        <p class="font-semibold">How this works</p>
+        <p class="mt-1 text-blue-900/80">
+            Export your stock list out of your DMS (or any spreadsheet you keep it in), drop the file below,
+            confirm the column mapping, and commit. Re-running the same file is safe &mdash;
+            existing vehicles are matched on VIN and only their attributes refresh.
+        </p>
+        <p class="mt-2">
+            <a href="{{ route('customer.stock.import.template') }}"
+               class="font-semibold text-blue-700 underline hover:text-blue-900">
+                Download sample CSV template
+            </a>
+            &nbsp;&middot;&nbsp;
+            <span class="text-blue-900/80">Use it to see exactly which columns we read.</span>
+        </p>
+    </div>
+
     <div class="rounded-xl border border-slate-200 bg-white p-6 mb-6">
         <h2 class="text-base font-semibold text-slate-900">1. Upload spreadsheet</h2>
-        <p class="mt-1 text-sm text-slate-500">Drop an .xlsx, .xls or .csv export from your DMS. We'll match VIN, suffix, variant, engine number, colour and registration.</p>
+        <p class="mt-1 text-sm text-slate-500">
+            Drop an .xlsx, .xls or .csv export from your DMS. We read the following columns automatically &mdash;
+            anything else is ignored, and you can remap any column in step 2:
+        </p>
+        <ul class="mt-2 flex flex-wrap gap-1.5 text-[11px] font-medium">
+            @foreach($fields as $field => $label)
+                <li class="rounded-full bg-slate-100 px-2 py-0.5 text-slate-700">{{ $label }}</li>
+            @endforeach
+        </ul>
+        <p class="mt-2 text-xs text-slate-500">
+            <strong class="text-slate-700">VIN</strong> is the only required column. Common header names like
+            <code class="rounded bg-slate-100 px-1">Chassis</code>,
+            <code class="rounded bg-slate-100 px-1">Reg No</code>,
+            <code class="rounded bg-slate-100 px-1">Make</code>,
+            <code class="rounded bg-slate-100 px-1">Engine No.</code>
+            are recognised automatically.
+        </p>
 
         <form wire:submit="loadFile" class="mt-4 flex flex-col sm:flex-row sm:items-center gap-3">
             <input type="file" wire:model="upload"
@@ -138,8 +251,91 @@ new #[Layout('components.layouts.app')] class extends Component {
     </div>
 
     @if(!empty($headers))
+        {{-- Starting-location picker: only shown once a file has been
+             parsed (no point asking before we know there's anything
+             to import).  Defaults to "premises" so the historical
+             behaviour is preserved when the dealer skips this step. --}}
         <div class="rounded-xl border border-slate-200 bg-white p-6 mb-6">
-            <h2 class="text-base font-semibold text-slate-900">2. Confirm column mapping</h2>
+            <h2 class="text-base font-semibold text-slate-900">2. Where are these vehicles right now?</h2>
+            <p class="mt-1 text-sm text-slate-500">
+                Pick the bucket the rows should land in. Most of the time this is your premises &mdash; pick a body builder
+                if the OEM shipped this batch factory-direct to one of your fitters.
+            </p>
+
+            <div class="mt-4 space-y-3">
+                <label class="flex items-start gap-3 rounded-lg border border-slate-200 p-3 cursor-pointer hover:bg-slate-50">
+                    <input wire:model.live="default_location_type" type="radio" value="{{ \App\Models\DealerStock::LOCATION_PREMISES }}" class="mt-0.5">
+                    <span class="text-sm"><span class="font-medium text-slate-900">At my premises</span></span>
+                </label>
+
+                <label class="flex items-start gap-3 rounded-lg border border-slate-200 p-3 cursor-pointer hover:bg-slate-50">
+                    <input wire:model.live="default_location_type" type="radio" value="{{ \App\Models\DealerStock::LOCATION_BODY_BUILDER }}" class="mt-0.5">
+                    <span class="text-sm flex-1">
+                        <span class="font-medium text-slate-900">At a body builder</span>
+                        <span class="block text-xs text-slate-500">Whole batch landed at the same fitter.</span>
+
+                        @if($default_location_type === \App\Models\DealerStock::LOCATION_BODY_BUILDER)
+                            <div class="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                <div>
+                                    <label class="block text-[11px] font-medium text-slate-600">Body builder</label>
+                                    <select wire:model.live="default_bb_company_id"
+                                            class="mt-1 block w-full rounded border border-slate-300 px-2 py-1.5 text-xs">
+                                        <option value="">&mdash; pick &mdash;</option>
+                                        @foreach($bbCompanies as $bb)
+                                            <option value="{{ $bb->id }}">{{ $bb->name }}</option>
+                                        @endforeach
+                                    </select>
+                                    @if($bbCompanies->isEmpty())
+                                        <p class="mt-1 text-[11px] text-amber-700">No body builders linked yet &mdash; link one under <em>Body Builders</em> first.</p>
+                                    @endif
+                                </div>
+                                <div>
+                                    <label class="block text-[11px] font-medium text-slate-600">BB yard / location</label>
+                                    <select wire:model="default_bb_location_id"
+                                            @if(!$default_bb_company_id) disabled @endif
+                                            class="mt-1 block w-full rounded border border-slate-300 px-2 py-1.5 text-xs disabled:bg-slate-50 disabled:text-slate-400">
+                                        <option value="">&mdash; pick &mdash;</option>
+                                        @foreach($bbLocations as $loc)
+                                            <option value="{{ $loc->id }}">{{ trim(($loc->company_name ?? '') . ($loc->city ? ' — ' . $loc->city : '')) }}</option>
+                                        @endforeach
+                                    </select>
+                                </div>
+                            </div>
+                        @endif
+                    </span>
+                </label>
+
+                <label class="flex items-start gap-3 rounded-lg border border-slate-200 p-3 cursor-pointer hover:bg-slate-50">
+                    <input wire:model.live="default_location_type" type="radio" value="{{ \App\Models\DealerStock::LOCATION_STORAGE }}" class="mt-0.5">
+                    <span class="text-sm flex-1">
+                        <span class="font-medium text-slate-900">At another storage / yard</span>
+                        <span class="block text-xs text-slate-500">One of your own branches or yards (not your main premises).</span>
+
+                        @if($default_location_type === \App\Models\DealerStock::LOCATION_STORAGE)
+                            <div class="mt-3">
+                                <label class="block text-[11px] font-medium text-slate-600">Storage location</label>
+                                <select wire:model="default_storage_location_id"
+                                        class="mt-1 block w-full rounded border border-slate-300 px-2 py-1.5 text-xs">
+                                    <option value="">&mdash; pick &mdash;</option>
+                                    @foreach($storageLocations as $loc)
+                                        <option value="{{ $loc->id }}">{{ trim(($loc->company_name ?? '') . ($loc->city ? ' — ' . $loc->city : '')) }}</option>
+                                    @endforeach
+                                </select>
+                                @if($storageLocations->isEmpty())
+                                    <p class="mt-1 text-[11px] text-amber-700">No storage locations on file. Add one under <em>Resources &rarr; Address Book</em> first.</p>
+                                @endif
+                            </div>
+                        @endif
+                    </span>
+                </label>
+            </div>
+            <p class="mt-3 text-[11px] text-slate-500">
+                Existing rows (matched on VIN) keep their current location &mdash; this only applies to brand-new rows in the upload.
+            </p>
+        </div>
+
+        <div class="rounded-xl border border-slate-200 bg-white p-6 mb-6">
+            <h2 class="text-base font-semibold text-slate-900">3. Confirm column mapping</h2>
             <p class="mt-1 text-sm text-slate-500">We've guessed the columns. Override anything wrong, then preview the result below.</p>
 
             <div class="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -162,7 +358,7 @@ new #[Layout('components.layouts.app')] class extends Component {
     @if(!empty($preview))
         <div class="rounded-xl border border-slate-200 bg-white overflow-hidden mb-6">
             <div class="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
-                <h2 class="text-base font-semibold text-slate-900">3. Preview ({{ count($preview) }} rows)</h2>
+                <h2 class="text-base font-semibold text-slate-900">4. Preview ({{ count($preview) }} rows)</h2>
                 <button wire:click="commit"
                         class="inline-flex items-center rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 transition-colors">
                     Commit import

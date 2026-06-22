@@ -47,6 +47,10 @@ class extends Component
     {
         $this->company = auth()->user()->company();
         abort_unless($this->company, 403);
+        // Dealer-tenant only -- OEMs don't run a body-builder yard
+        // workflow, so the off-site / in-transit stock view is
+        // hidden from them entirely.
+        abort_unless($this->company->isDealer(), 404);
     }
 
     public function setBucket(string $bucket): void

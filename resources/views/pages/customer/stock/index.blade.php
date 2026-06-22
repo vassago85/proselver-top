@@ -50,17 +50,15 @@ new #[Layout('components.layouts.app')] class extends Component {
     #[Url(as: 'sp')]
     public array $salespersonFilter = [];
 
-    /**
-     * Narrows status=sold rows to those with delivered_at NULL.
-     * Set by the dashboard "Sold — awaiting handover" card so the
-     * stock list shows only the funnel sitting between paperwork
-     * and customer handover.
-     */
-    #[Url(as: 'awaiting_handover')]
-    public bool $awaitingHandover = false;
-
     public function mount(): void
     {
+        // Dealer-tenant only.  OEM-customer accounts also carry the
+        // view_dealer_stock perm (via the shared customer_owner role)
+        // but the stock ledger -- and its sold/reserved/archive
+        // lifecycle -- is a dealer concept.  An OEM hitting this URL
+        // gets a 404 rather than a 403 so the page is invisible
+        // entirely from their portal.
+        abort_unless(auth()->user()?->company()?->isDealer(), 404);
         abort_unless(auth()->user()?->hasPermission('view_dealer_stock'), 403);
     }
 
@@ -139,11 +137,6 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         if ($this->statusFilter !== '') {
             $query->where('status', $this->statusFilter);
-        }
-
-        if ($this->awaitingHandover) {
-            $query->where('status', DealerStock::STATUS_SOLD)
-                ->whereNull('delivered_at');
         }
 
         // Body-builder filter: vehicle's current_location must belong
@@ -232,8 +225,17 @@ new #[Layout('components.layouts.app')] class extends Component {
             ->orderBy('name')
             ->get(['id', 'name']);
 
+        // "First-run" detector -- did this dealer ever ledger ANY stock?
+        // Used to swap the empty table for a big "import your stock"
+        // welcome card.  Includes archived rows so re-archiving the
+        // last vehicle doesn't trip the empty state back on.
+        $hasAnyStockEver = DealerStock::query()
+            ->whereIn('dealer_company_id', $effectiveCompanyIds)
+            ->exists();
+
         return [
             'rows' => $query->paginate(25),
+            'hasAnyStockEver' => $hasAnyStockEver,
             'bucketCounts' => $bucketCounts,
             'bbOptions' => $bbOptions,
             'spOptions' => $spOptions,
@@ -243,7 +245,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                 DealerStock::LOCATION_STORAGE      => 'Other storage',
                 DealerStock::LOCATION_IN_TRANSIT   => 'In transit',
                 DealerStock::LOCATION_ON_DEMO      => 'On demo',
-                DealerStock::LOCATION_DELIVERED    => 'Handed over',
+                DealerStock::LOCATION_DELIVERED    => 'Delivered to dealer',
                 'scheduled'     => 'Scheduled for movement',
                 'recently_sold' => 'Recently sold',
             ],
@@ -253,9 +255,9 @@ new #[Layout('components.layouts.app')] class extends Component {
                 DealerStock::LOCATION_STORAGE      => 'Parked at another storage yard',
                 DealerStock::LOCATION_IN_TRANSIT   => 'On the road with an active transport job',
                 DealerStock::LOCATION_ON_DEMO      => 'Out on demo with a customer',
-                DealerStock::LOCATION_DELIVERED    => 'Marked handed over to the buyer (customer delivery complete)',
+                DealerStock::LOCATION_DELIVERED    => 'A transport job ended at a dealer destination (vehicle arrived at the dealership)',
                 'scheduled'     => 'A transport job is booked but collection has not started',
-                'recently_sold' => 'Marked sold in the last 30 days (may still be in transit)',
+                'recently_sold' => 'Marked sold in the last 30 days — archive when off your books',
             ],
             'statusLabels' => [
                 DealerStock::STATUS_AVAILABLE => 'Available',
@@ -281,8 +283,12 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     <div class="mb-4 flex flex-wrap items-center gap-2">
         @if($canManageStock)
-            <a href="{{ route('customer.stock.import') }}"
+            <a href="{{ route('customer.stock.create') }}"
                class="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3.5 py-2 text-sm font-semibold text-white hover:bg-blue-500 transition-colors">
+                + Add vehicle
+            </a>
+            <a href="{{ route('customer.stock.import') }}"
+               class="inline-flex items-center gap-2 rounded-lg border border-blue-600 bg-white px-3.5 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-50 transition-colors">
                 Import stock
             </a>
         @endif
@@ -490,9 +496,6 @@ new #[Layout('components.layouts.app')] class extends Component {
                             <span class="inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold {{ $statusClass }}">
                                 {{ $statusLabels[$row->status] ?? $row->status }}
                             </span>
-                            @if($row->status === \App\Models\DealerStock::STATUS_SOLD && !$row->delivered_at)
-                                <div class="mt-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700">Awaiting handover</div>
-                            @endif
                         </td>
                         <td class="px-3 py-2 text-slate-700">{{ $row->salesperson?->name ?: '—' }}</td>
                         <td class="px-3 py-2 text-slate-700">
@@ -551,7 +554,31 @@ new #[Layout('components.layouts.app')] class extends Component {
                 @empty
                     <tr>
                         <td colspan="{{ $isMultiCompany ? 11 : 10 }}" class="px-3 py-12 text-center text-sm text-slate-500">
-                            No stock matches these filters.
+                            @if(!$hasAnyStockEver)
+                                <div class="mx-auto max-w-md space-y-3">
+                                    <p class="text-base font-semibold text-slate-900">You haven't loaded any stock yet.</p>
+                                    <p>
+                                        Add vehicles one at a time, or drop your DMS export to load them all in a single pass &mdash;
+                                        VIN, registration, engine number, model and colour map automatically.
+                                    </p>
+                                    @if($canManageStock)
+                                        <p class="flex flex-wrap items-center justify-center gap-2">
+                                            <a href="{{ route('customer.stock.create') }}"
+                                               class="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-500 transition-colors">
+                                                + Add a vehicle
+                                            </a>
+                                            <a href="{{ route('customer.stock.import') }}"
+                                               class="inline-flex items-center gap-2 rounded-lg border border-blue-600 bg-white px-4 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-50 transition-colors">
+                                                Import from spreadsheet
+                                            </a>
+                                        </p>
+                                    @else
+                                        <p class="text-xs text-slate-400">Ask a manager with <em>Manage dealer stock</em> permission to import.</p>
+                                    @endif
+                                </div>
+                            @else
+                                No stock matches these filters.
+                            @endif
                         </td>
                     </tr>
                 @endforelse

@@ -37,10 +37,24 @@ new #[Layout('components.layouts.app')] class extends Component {
     <div class="mb-6 rounded-2xl bg-gradient-to-br from-slate-900 via-slate-800 to-blue-900 text-white shadow-lg overflow-hidden">
         <div class="px-6 py-6 sm:px-8 sm:py-7">
             <p class="text-[11px] font-semibold uppercase tracking-[0.2em] text-blue-200/80">User Guide</p>
-            <h2 class="mt-1 text-xl sm:text-2xl font-semibold">Dealer Portal — how it works</h2>
+            <h2 class="mt-1 text-xl sm:text-2xl font-semibold">
+                @if($isDealer) Dealer Portal — how it works
+                @elseif($isOem) OEM Portal — how it works
+                @elseif($isBb)  Body Builder Portal — how it works
+                @else           ProSelver Portal — how it works
+                @endif
+            </h2>
             <p class="mt-2 max-w-3xl text-sm text-slate-200">
-                A quick reference to the screens you use every day: tracking stock, booking transport,
-                working with body builders, and managing your team. Use the menu on the left to jump to a section.
+                @if($isDealer)
+                    A quick reference to the screens you use every day: tracking stock, booking transport,
+                    working with body builders, and managing your team.
+                @elseif($isOem)
+                    A quick reference to booking ProSelver movements, tracking jobs, and managing your team.
+                    Stock and dealer-side commercial states (Reserve, Mark sold, Archive) don't apply here &mdash;
+                    OEM movements are pure logistics from factory or port to dealer.
+                @else
+                    A quick reference to the screens you use every day. Use the menu on the left to jump to a section.
+                @endif
             </p>
         </div>
     </div>
@@ -52,23 +66,30 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <p class="px-2 pb-2 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">On this page</p>
                 <ul class="space-y-0.5">
                     @php
-                        $toc = [
-                            ['journey', 'The dealer journey'],
+                        // Section list is gated by tenant type.  Dealer-only
+                        // sections (stock ledger, vehicle card, reserve flow,
+                        // fitment chain, dealer journey) are hidden from
+                        // OEM / BB users so they don't try to follow a
+                        // workflow that doesn't apply to them.
+                        $toc = array_values(array_filter([
+                            $isDealer ? ['journey', 'The dealer journey']
+                                : ($isOem ? ['journey', 'How OEM movements work'] : null),
                             ['nav', 'Finding your way around'],
                             ['roles', 'Roles &amp; what they can do'],
-                            ['dashboard', 'Dashboard'],
-                            ['stock', 'Stock — three views'],
-                            ['vehicle', 'Vehicle card &amp; lifecycle'],
-                            ['reserve', 'Reserve workflow'],
+                            $isDealer ? ['dashboard', 'Dashboard'] : null,
+                            $isDealer ? ['stock', 'Stock — three views'] : null,
+                            $isDealer ? ['vehicle', 'Vehicle card &amp; lifecycle'] : null,
+                            $isDealer ? ['reserve', 'Reserve workflow'] : null,
+                            $isDealer ? ['fitment', 'Fitment chain'] : null,
                             ['orders', 'Movements &amp; bookings'],
-                            ['bb', 'Body builders — two flows'],
+                            $isDealer ? ['bb', 'Body builders — two flows'] : null,
                             ['trips', 'Trips &amp; drivers'],
                             ['reports', 'Reports &amp; resources'],
                             ['account', 'Account settings'],
                             ['quickref', 'Quick reference'],
                             ['glossary', 'Glossary'],
                             ['support', 'Getting help'],
-                        ];
+                        ]));
                     @endphp
                     @foreach($toc as [$id, $label])
                         <li>
@@ -88,6 +109,11 @@ new #[Layout('components.layouts.app')] class extends Component {
         <article class="space-y-10 text-sm leading-6 text-slate-800">
 
             {{-- 0. Journey overview --------------------------------------------- --}}
+            {{-- Dealer-only.  The "Track → Reserve → Book → Sold → Archive"
+                 sequence is the dealer commercial funnel; OEM moves are
+                 pure logistics with no sold/reserved state, so this
+                 section is hidden from OEM and BB tenants. --}}
+            @if($isDealer)
             <section id="journey" class="scroll-mt-6">
                 <h3 class="text-lg font-semibold text-slate-900">The dealer journey</h3>
                 <p class="mt-2">The portal is organised around one job, in this order:</p>
@@ -96,12 +122,28 @@ new #[Layout('components.layouts.app')] class extends Component {
                     <li><strong>Reserve</strong> the vehicle when a customer commits — capture salesperson + buyer.</li>
                     <li><strong>Book a delivery</strong> with ProSelver (or your own driver) to move the chassis where it needs to go.</li>
                     <li><strong>Mark sold</strong> when the paperwork is done — the reserve carries forward automatically.</li>
-                    <li><strong>Mark handed over</strong> when the buyer collects — that finalises the sale.</li>
+                    <li><strong>Archive</strong> once the vehicle has left your books — the row drops off the active ledger.</li>
                 </ol>
                 <p class="mt-3 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-900">
                     Every step is visible on the <strong>vehicle card</strong> as a single lifecycle timeline, plus a separate panel for the active transport job. Open any row in <em>All stock</em> to see both at once.
                 </p>
             </section>
+            @elseif($isOem)
+            {{-- OEM equivalent: pure logistics, no commercial state. --}}
+            <section id="journey" class="scroll-mt-6">
+                <h3 class="text-lg font-semibold text-slate-900">How OEM movements work</h3>
+                <p class="mt-2">The portal is built around moving stock from factory or port to a dealer:</p>
+                <ol class="mt-3 space-y-2 list-decimal pl-5">
+                    <li><strong>Book a movement</strong> — one VIN or many via bulk upload.</li>
+                    <li><strong>Confirm</strong> a job we send back to you for verification (if your tenant requires confirmation).</li>
+                    <li><strong>Track</strong> the movement from pickup to delivery.</li>
+                    <li><strong>Reconcile</strong> deliveries via the deliveries report.</li>
+                </ol>
+                <p class="mt-3 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-900">
+                    There is no &ldquo;mark sold&rdquo; or &ldquo;reserve&rdquo; step on the OEM side. Once a vehicle is delivered to a dealer it becomes their stock and their sales process; ProSelver's job is purely the move.
+                </p>
+            </section>
+            @endif
 
             {{-- 1. Navigation ---------------------------------------------------- --}}
             <section id="nav" class="scroll-mt-6">
@@ -173,6 +215,11 @@ new #[Layout('components.layouts.app')] class extends Component {
             </section>
 
             {{-- 3. Dashboard ----------------------------------------------------- --}}
+            {{-- Sections 3-7 below (Dashboard, Stock, Vehicle card, Reserve,
+                 Fitment chain) document dealer-only screens.  OEM and BB
+                 tenants get a different dashboard and no stock ledger,
+                 so this whole block is dealer-gated. --}}
+            @if($isDealer)
             <section id="dashboard" class="scroll-mt-6">
                 <h3 class="text-lg font-semibold text-slate-900">Dashboard</h3>
                 <p class="mt-2">
@@ -182,7 +229,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                 </p>
                 <p class="mt-2 text-xs text-slate-600">
                     The top row mirrors the commercial funnel (Available → Reserved → Body builder → Scheduled).
-                    The bottom row tracks the physical journey (In transit → Storage → On demo → Awaiting handover).
+                    The bottom row tracks the physical journey (In transit → Storage → On demo → Recently sold).
                 </p>
                 <div class="mt-3 overflow-x-auto">
                     <table class="min-w-full divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white">
@@ -200,7 +247,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                             <tr><td class="px-3 py-2 font-medium">In transit</td><td class="px-3 py-2">On the road with an active job</td></tr>
                             <tr><td class="px-3 py-2 font-medium">At another storage</td><td class="px-3 py-2">Parked at another yard</td></tr>
                             <tr><td class="px-3 py-2 font-medium">On demo with customer</td><td class="px-3 py-2">Out on demo</td></tr>
-                            <tr><td class="px-3 py-2 font-medium">Sold — awaiting handover</td><td class="px-3 py-2">Marked sold; customer has not taken delivery yet</td></tr>
+                            <tr><td class="px-3 py-2 font-medium">Recently sold</td><td class="px-3 py-2">Sold in the last 30 days — archive when off your books</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -236,17 +283,32 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <ul class="mt-2 list-disc pl-5 space-y-1">
                     <li><strong>At premises / Body builder / Other storage / In transit / On demo</strong> — physical location.</li>
                     <li><strong>Scheduled for movement</strong> — a job is booked but collection has not started yet.</li>
-                    <li><strong>Recently sold</strong> — sold in the last 30 days (may still be in transit).</li>
-                    <li><strong>Handed over</strong> — the customer-delivery step has been recorded on the ledger.</li>
+                    <li><strong>Recently sold</strong> — sold in the last 30 days. Archive the row once the vehicle is off your books.</li>
                 </ul>
-                <p class="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                    <strong>Watch:</strong> &ldquo;Recently sold&rdquo; and &ldquo;Handed over&rdquo; are not the same. A unit can be sold but still in transit.
+                <p class="mt-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-900">
+                    <strong>Sold is sold.</strong> When a deal closes, mark the row sold; once the vehicle has left your floor, archive it. There is no separate &ldquo;customer handover&rdquo; step.
                 </p>
 
                 @if($isDealer)
-                <h4 class="mt-5 text-sm font-semibold text-slate-900">Importing stock</h4>
+                <h4 class="mt-5 text-sm font-semibold text-slate-900">Adding stock</h4>
                 <p class="mt-1 text-xs text-slate-600">
-                    If you have <em>Manage Dealer Stock</em>, use <a href="{{ route('customer.stock.import') }}" class="font-semibold text-blue-600 hover:text-blue-800">Import stock</a> to upload a CSV of vehicles onto the ledger.
+                    Two paths, both gated by <em>Manage Dealer Stock</em>:
+                </p>
+                <ul class="mt-2 ml-4 list-disc text-xs text-slate-600 space-y-1">
+                    <li>
+                        <strong><a href="{{ route('customer.stock.create') }}" class="text-blue-600 hover:text-blue-800">+ Add vehicle</a></strong>
+                        &mdash; one vehicle at a time, with a starting-location picker. Use this when a unit was shipped factory-direct to one of your body builders, or arrived at a different yard than your main premises.
+                    </li>
+                    <li>
+                        <strong><a href="{{ route('customer.stock.import') }}" class="text-blue-600 hover:text-blue-800">Import stock</a></strong>
+                        &mdash; bulk upload (.xlsx / .xls / .csv) from your DMS (Kerridge, Pinnacle, Autoline, Automate, ...). Auto-detects VIN / Chassis Number, Suffix, Variant, Description, Engine number, Colour, Registration, Make / Brand, Model, Model year. You can override any mapping before commit. Re-uploads are safe &mdash; existing rows match on VIN, attributes refresh, location and sale state stay put.
+                    </li>
+                </ul>
+                <p class="mt-2 text-xs text-slate-600">
+                    Both paths let you pick the <strong>starting location</strong>: your premises, a linked body builder yard, or one of your own non-primary yards. Got a whole batch the OEM dropped at a fitter? Use Import stock and set the default location to that BB &mdash; the entire upload lands there in one pass.
+                </p>
+                <p class="mt-2 text-xs text-slate-600">
+                    The import page also has a <em>Download sample CSV template</em> link if you need a starting layout.
                 </p>
                 @endif
             </section>
@@ -254,15 +316,16 @@ new #[Layout('components.layouts.app')] class extends Component {
             {{-- 5. Vehicle card ------------------------------------------------- --}}
             <section id="vehicle" class="scroll-mt-6">
                 <h3 class="text-lg font-semibold text-slate-900">Vehicle card &amp; lifecycle</h3>
-                <p class="mt-2">From <em>All stock</em>, click any row to open the vehicle card. The card has four parts:</p>
+                <p class="mt-2">From <em>All stock</em>, click any row to open the vehicle card. The card has five parts:</p>
                 <ol class="mt-3 space-y-1.5 list-decimal pl-5 text-sm">
                     <li><strong>Vehicle details</strong> — VIN, make, model, registration, colour, dealership.</li>
                     <li><strong>Where</strong> — the bucket and (if known) the specific location name.</li>
-                    <li><strong>Lifecycle timeline</strong> — Available → Reserved → Sold → Customer handover, with the date and person at each step.</li>
+                    <li><strong>Lifecycle timeline</strong> — Available → Reserved → Sold, with the date and person at each step.</li>
                     <li><strong>Transport movement</strong> — the active ProSelver job (number, status, pickup → delivery) or "No active transport job".</li>
+                    <li><strong>Fitment chain</strong> — the ordered list of body builders / fitment stops (dropside, crane, fridge body, fridge unit, paint, ...). Each step has its own notes and per-step sharing toggle.</li>
                 </ol>
                 <p class="mt-3 text-xs text-slate-600">
-                    The lifecycle (commercial) and the transport movement (physical) run independently — a vehicle can be sold while still in transit, or transit before it's reserved. The card shows both at once.
+                    The lifecycle (commercial), transport movement (physical) and fitment chain (build) run independently — a vehicle can be sold while still in transit, or have legs planned at three BBs before transport is even booked. The card shows them all at once. Once a sale is final and the vehicle has left your books, <em>Archive</em> closes the row.
                 </p>
 
                 <h4 class="mt-5 text-sm font-semibold text-slate-900">Actions available</h4>
@@ -283,11 +346,11 @@ new #[Layout('components.layouts.app')] class extends Component {
                             <tr><td class="px-3 py-2 font-medium">Mark as sold</td><td class="px-3 py-2">If not previously reserved — capture salesperson + customer</td></tr>
                             <tr><td class="px-3 py-2 font-medium">Send out on demo</td><td class="px-3 py-2">Captures customer + due-back date, swings to <em>On demo</em></td></tr>
                             <tr><td class="px-3 py-2 font-medium">Return from demo</td><td class="px-3 py-2">Brings the unit back from demo</td></tr>
-                            <tr><td class="px-3 py-2 font-medium">Mark as delivered</td><td class="px-3 py-2">Customer handover complete — stamps <em>delivered_at</em>, sale is final</td></tr>
-                            <tr><td class="px-3 py-2 font-medium">Reverse sale</td><td class="px-3 py-2">Undoes a sale while still allowed (before handover)</td></tr>
-                            <tr><td class="px-3 py-2 font-medium">Archive</td><td class="px-3 py-2">Removes from active dashboards (soft archive)</td></tr>
-                            <tr><td class="px-3 py-2 font-medium">Body builder details</td><td class="px-3 py-2">Optional fields the BB sees when the vehicle is on their premises</td></tr>
-                            <tr><td class="px-3 py-2 font-medium">Print delivery note</td><td class="px-3 py-2">PDF for the customer handover (available on any live unit)</td></tr>
+                            <tr><td class="px-3 py-2 font-medium">Reverse sale</td><td class="px-3 py-2">Undo a sale while the row is still on the active ledger</td></tr>
+                            <tr><td class="px-3 py-2 font-medium">Archive</td><td class="px-3 py-2">Closes the row once the vehicle has left your books (soft archive)</td></tr>
+                            <tr><td class="px-3 py-2 font-medium">Fitment chain — add step</td><td class="px-3 py-2">Plan one or more body-builder stops for this VIN (dropside, crane, fridge, paint, ...). Each step has its own notes and sharing.</td></tr>
+                            <tr><td class="px-3 py-2 font-medium">Fitment chain — share with BB (per step)</td><td class="px-3 py-2">Choose <em>per step</em> whether the BB sees the salesperson + end customer. Useful when one fitter needs the context and another doesn't.</td></tr>
+                            <tr><td class="px-3 py-2 font-medium">Print delivery note</td><td class="px-3 py-2">PDF for the buyer (available on any live unit)</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -337,6 +400,60 @@ new #[Layout('components.layouts.app')] class extends Component {
                 </ul>
             </section>
 
+            {{-- 5c. Fitment chain ------------------------------------------------ --}}
+            <section id="fitment" class="scroll-mt-6">
+                <h3 class="text-lg font-semibold text-slate-900">Fitment chain</h3>
+                <p class="mt-2">
+                    A single chassis often passes through <strong>several body builders</strong> in sequence — e.g. <em>dropside body</em> → <em>crane mount</em>, or <em>fridge body</em> → <em>fridge unit</em>. The fitment chain panel on the vehicle card tracks each stop separately, so each fitter has their own notes, their own internal job number, and their own sharing toggle.
+                </p>
+
+                <div class="mt-3 grid gap-3 md:grid-cols-2">
+                    <div class="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                        <p class="text-sm font-semibold text-slate-900">Per-step fields</p>
+                        <ul class="mt-2 list-disc pl-5 space-y-1 text-xs text-slate-700">
+                            <li><strong>Body builder</strong> — the fitter for this step (must be linked to your dealership)</li>
+                            <li><strong>Fitment type</strong> — short label (Dropside body, Crane mount, Fridge unit, ...)</li>
+                            <li><strong>Notes</strong> — full spec for this leg (size, colour, accessories, dates, ...)</li>
+                            <li><strong>Share with BB</strong> — independent toggle: ON means this fitter sees the shared details below</li>
+                            <li><strong>Shared salesperson + end customer</strong> — only sent through if the toggle is ON</li>
+                            <li><strong>Internal job number</strong> — written by the BB on their yard tablet, kept per leg</li>
+                        </ul>
+                    </div>
+                    <div class="rounded-lg border border-emerald-200 bg-emerald-50 p-4">
+                        <p class="text-sm font-semibold text-emerald-900">Step states</p>
+                        <ul class="mt-2 list-disc pl-5 space-y-1 text-xs text-emerald-900">
+                            <li><strong>Planned</strong> — queued; nothing has happened yet. Editable + deletable.</li>
+                            <li><strong>In progress</strong> — vehicle is currently with this fitter (stamps <em>started_at</em>).</li>
+                            <li><strong>Completed</strong> — fitter is done (stamps <em>completed_at</em>). Visible but not editable.</li>
+                            <li><strong>Cancelled</strong> — the step won't happen; stays on the timeline for the audit trail.</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <h4 class="mt-5 text-sm font-semibold text-slate-900">Adding a chain</h4>
+                <ol class="mt-2 list-decimal pl-5 space-y-1.5">
+                    <li>Open the vehicle card → <strong>+ Add fitment step</strong>.</li>
+                    <li>Pick the body builder, type a fitment label, fill in the build notes.</li>
+                    <li>Decide whether to <strong>Share these details with this body builder</strong>. If ON, also fill in the salesperson + end customer you want them to see.</li>
+                    <li>Save — the step lands as <strong>Planned</strong> at the end of the chain.</li>
+                    <li>Repeat for the next fitter (a second BB, etc.). Each leg is independent.</li>
+                </ol>
+
+                <h4 class="mt-5 text-sm font-semibold text-slate-900">Working the chain</h4>
+                <ul class="mt-2 list-disc pl-5 space-y-1">
+                    <li><strong>Start</strong> a step when the vehicle physically arrives at that BB. If another leg is still active, it auto-completes — only one leg is ever &ldquo;in progress&rdquo;.</li>
+                    <li><strong>Complete</strong> a step when the BB is done. The next planned step becomes the obvious next click.</li>
+                    <li><strong>Edit</strong> notes / sharing on a planned or in-progress step. Completed and cancelled steps are read-only.</li>
+                    <li><strong>Delete</strong> only works on planned steps; completed legs are preserved for the audit trail (use Cancel instead).</li>
+                </ul>
+
+                <h4 class="mt-5 text-sm font-semibold text-slate-900">What the BB sees</h4>
+                <p class="mt-1">
+                    The BB's yard portal reads <em>only their own active leg</em>. If sharing is OFF for that leg, they see the chassis + their internal job number but nothing else. If sharing is ON, they see the fitment type, salesperson and end customer you chose. Other BBs on the chain never see another BB's notes.
+                </p>
+            </section>
+            @endif {{-- $isDealer (sections 3-7: Dashboard / Stock / Vehicle / Reserve / Fitment) --}}
+
             {{-- 6. Movements ---------------------------------------------------- --}}
             <section id="orders" class="scroll-mt-6">
                 <h3 class="text-lg font-semibold text-slate-900">Movements &amp; bookings</h3>
@@ -353,23 +470,34 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <h4 class="mt-4 text-sm font-semibold text-slate-900">My movements list</h4>
                 <p class="mt-1">
                     <a href="{{ route('customer.orders.index') }}" class="font-semibold text-blue-600 hover:text-blue-800">Open My movements</a> —
-                    lists movements where your dealership is the booking customer <em>and</em> movements where you are only the <strong>vehicle owner</strong> (body-builder direct orders).
+                    lists every movement booked by your company.
+                    @if($isDealer) It also includes movements where you are only the <strong>vehicle owner</strong> (body-builder direct orders) and need to approve, not pay. @endif
                 </p>
+
+                @if($isDealer)
                 <p class="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
                     An amber banner means there are direct orders from a body builder waiting for your owner approval. Use <a href="{{ route('customer.orders.index', ['owner_pending' => 1]) }}" class="font-semibold underline">Show only these</a> to focus.
                 </p>
-
                 <p class="mt-3 text-xs text-slate-600">When you are only the vehicle owner, <strong>pricing is hidden</strong> — you are approving the move, not paying for it.</p>
+                @endif
 
-                @if($isDealer)
                 <h4 class="mt-4 text-sm font-semibold text-slate-900">Bulk upload</h4>
                 <p class="mt-1 text-xs text-slate-600">
                     Principals and similar roles can use <a href="{{ route('customer.orders.bulk-upload') }}" class="font-semibold text-blue-600 hover:text-blue-800">Bulk Upload</a> to submit many movements from a spreadsheet.
+                </p>
+
+                @if($isOem)
+                <p class="mt-3 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-900">
+                    OEM movements are pure logistics. There is no &ldquo;mark sold&rdquo;, &ldquo;reserve&rdquo; or commercial state on a movement &mdash; you book the move and we deliver. Once delivered, the vehicle is the dealer's stock and the dealer runs the sales lifecycle.
                 </p>
                 @endif
             </section>
 
             {{-- 7. Body builders ------------------------------------------------ --}}
+            {{-- Dealer-only.  OEMs ship factory → dealer; they don't run a
+                 body-builder relationship.  BBs themselves see this on
+                 their own portal, not in the customer help guide. --}}
+            @if($isDealer)
             <section id="bb" class="scroll-mt-6">
                 <h3 class="text-lg font-semibold text-slate-900">Body builders — two flows</h3>
                 <p class="mt-2">This is the most common source of confusion. There are <strong>two</strong> different ways a body builder can move your stock.</p>
@@ -400,6 +528,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                     <li><a href="{{ route('customer.body-builders.requests.index') }}" class="font-semibold text-blue-600 hover:text-blue-800">Request a BB</a> — ask ProSelver to onboard a builder that isn't on the platform yet.</li>
                 </ul>
             </section>
+            @endif {{-- $isDealer (section 7: Body builders) --}}
 
             {{-- 8. Trips -------------------------------------------------------- --}}
             <section id="trips" class="scroll-mt-6">
@@ -438,7 +567,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                     @else
                         <li class="text-xs text-slate-600">Account settings (Team, Branding, Drivers, Petty Cash) are available to dealer owners and similar roles.</li>
                     @endif
-                    <li><a href="{{ route('profile.edit') }}" class="font-semibold text-blue-600 hover:text-blue-800">Your profile</a> — name, password, personal settings.</li>
+                    <li><a href="{{ route('profile.index') }}" class="font-semibold text-blue-600 hover:text-blue-800">Your profile</a> — name, password, personal settings.</li>
                 </ul>
             </section>
 
@@ -454,20 +583,25 @@ new #[Layout('components.layouts.app')] class extends Component {
                             </tr>
                         </thead>
                         <tbody class="divide-y divide-slate-100">
-                            <tr><td class="px-3 py-2">See everything on my books</td><td class="px-3 py-2"><a href="{{ route('customer.stock.index') }}" class="font-semibold text-blue-600 hover:text-blue-800">Stock → All stock</a></td></tr>
-                            <tr><td class="px-3 py-2">Reserve a vehicle for a customer</td><td class="px-3 py-2">Open the vehicle card → <em>Reserve</em></td></tr>
-                            <tr><td class="px-3 py-2">See only reserved units</td><td class="px-3 py-2"><a href="{{ route('customer.stock.index', ['status' => \App\Models\DealerStock::STATUS_RESERVED]) }}" class="font-semibold text-blue-600 hover:text-blue-800">All stock → Reserved only</a></td></tr>
-                            <tr><td class="px-3 py-2">See sold vehicles awaiting handover</td><td class="px-3 py-2"><a href="{{ route('customer.stock.index', ['awaiting_handover' => 1]) }}" class="font-semibold text-blue-600 hover:text-blue-800">All stock → Awaiting handover</a></td></tr>
-                            <tr><td class="px-3 py-2">See only vehicles at a body builder</td><td class="px-3 py-2"><a href="{{ route('customer.stock.index', ['bucket' => 'body_builder']) }}" class="font-semibold text-blue-600 hover:text-blue-800">All stock → Body builder</a></td></tr>
-                            <tr><td class="px-3 py-2">See what is on the road right now</td><td class="px-3 py-2"><a href="{{ route('customer.stock.index', ['bucket' => 'in_transit']) }}" class="font-semibold text-blue-600 hover:text-blue-800">In transit bucket</a></td></tr>
-                            <tr><td class="px-3 py-2">Book a delivery for a specific VIN</td><td class="px-3 py-2">All stock row → <em>Book</em>, or vehicle card → <em>Book delivery</em></td></tr>
-                            <tr><td class="px-3 py-2">Book ProSelver to move a vehicle</td><td class="px-3 py-2"><a href="{{ route('customer.orders.create') }}" class="font-semibold text-blue-600 hover:text-blue-800">Movements → Book a delivery</a></td></tr>
-                            <tr><td class="px-3 py-2">Approve a BB's &ldquo;please move this&rdquo; request</td><td class="px-3 py-2"><a href="{{ route('customer.movement-requests.index') }}" class="font-semibold text-blue-600 hover:text-blue-800">Movement Requests</a></td></tr>
-                            <tr><td class="px-3 py-2">Approve a BB's ProSelver booking on my VIN</td><td class="px-3 py-2"><a href="{{ route('customer.orders.index', ['owner_pending' => 1]) }}" class="font-semibold text-blue-600 hover:text-blue-800">My Orders → owner approvals</a></td></tr>
-                            <tr><td class="px-3 py-2">Mark a vehicle sold</td><td class="px-3 py-2">All stock → open the row → <em>Mark as sold</em></td></tr>
-                            <tr><td class="px-3 py-2">Record customer handover</td><td class="px-3 py-2">Vehicle card → <em>Mark handed over</em></td></tr>
                             @if($isDealer)
-                                <tr><td class="px-3 py-2">Import new stock</td><td class="px-3 py-2"><a href="{{ route('customer.stock.import') }}" class="font-semibold text-blue-600 hover:text-blue-800">All stock → Import stock</a></td></tr>
+                                <tr><td class="px-3 py-2">See everything on my books</td><td class="px-3 py-2"><a href="{{ route('customer.stock.index') }}" class="font-semibold text-blue-600 hover:text-blue-800">Stock → All stock</a></td></tr>
+                                <tr><td class="px-3 py-2">Reserve a vehicle for a customer</td><td class="px-3 py-2">Open the vehicle card → <em>Reserve</em></td></tr>
+                                <tr><td class="px-3 py-2">See only reserved units</td><td class="px-3 py-2"><a href="{{ route('customer.stock.index', ['status' => \App\Models\DealerStock::STATUS_RESERVED]) }}" class="font-semibold text-blue-600 hover:text-blue-800">All stock → Reserved only</a></td></tr>
+                                <tr><td class="px-3 py-2">See vehicles sold in the last 30 days</td><td class="px-3 py-2"><a href="{{ route('customer.stock.index', ['bucket' => 'recently_sold']) }}" class="font-semibold text-blue-600 hover:text-blue-800">All stock → Recently sold</a></td></tr>
+                                <tr><td class="px-3 py-2">See only vehicles at a body builder</td><td class="px-3 py-2"><a href="{{ route('customer.stock.index', ['bucket' => 'body_builder']) }}" class="font-semibold text-blue-600 hover:text-blue-800">All stock → Body builder</a></td></tr>
+                                <tr><td class="px-3 py-2">See what is on the road right now</td><td class="px-3 py-2"><a href="{{ route('customer.stock.index', ['bucket' => 'in_transit']) }}" class="font-semibold text-blue-600 hover:text-blue-800">In transit bucket</a></td></tr>
+                                <tr><td class="px-3 py-2">Book a delivery for a specific VIN</td><td class="px-3 py-2">All stock row → <em>Book</em>, or vehicle card → <em>Book delivery</em></td></tr>
+                            @endif
+                            <tr><td class="px-3 py-2">Book ProSelver to move a vehicle</td><td class="px-3 py-2"><a href="{{ route('customer.orders.create') }}" class="font-semibold text-blue-600 hover:text-blue-800">Movements → Book a delivery</a></td></tr>
+                            <tr><td class="px-3 py-2">Submit many movements from a spreadsheet</td><td class="px-3 py-2"><a href="{{ route('customer.orders.bulk-upload') }}" class="font-semibold text-blue-600 hover:text-blue-800">Movements → Bulk upload movements</a></td></tr>
+                            <tr><td class="px-3 py-2">See my open and recent movements</td><td class="px-3 py-2"><a href="{{ route('customer.orders.index') }}" class="font-semibold text-blue-600 hover:text-blue-800">Movements → My movements</a></td></tr>
+                            @if($isDealer)
+                                <tr><td class="px-3 py-2">Approve a BB's &ldquo;please move this&rdquo; request</td><td class="px-3 py-2"><a href="{{ route('customer.movement-requests.index') }}" class="font-semibold text-blue-600 hover:text-blue-800">Movement Requests</a></td></tr>
+                                <tr><td class="px-3 py-2">Approve a BB's ProSelver booking on my VIN</td><td class="px-3 py-2"><a href="{{ route('customer.orders.index', ['owner_pending' => 1]) }}" class="font-semibold text-blue-600 hover:text-blue-800">My Orders → owner approvals</a></td></tr>
+                                <tr><td class="px-3 py-2">Mark a vehicle sold</td><td class="px-3 py-2">All stock → open the row → <em>Mark as sold</em></td></tr>
+                                <tr><td class="px-3 py-2">Close a row off the active ledger</td><td class="px-3 py-2">Vehicle card → <em>Archive</em></td></tr>
+                                <tr><td class="px-3 py-2">Add one vehicle to stock (e.g. factory-direct to BB)</td><td class="px-3 py-2"><a href="{{ route('customer.stock.create') }}" class="font-semibold text-blue-600 hover:text-blue-800">Stock → + Add vehicle</a></td></tr>
+                                <tr><td class="px-3 py-2">Import new stock in bulk</td><td class="px-3 py-2"><a href="{{ route('customer.stock.import') }}" class="font-semibold text-blue-600 hover:text-blue-800">Stock → Import stock</a></td></tr>
                             @endif
                             <tr><td class="px-3 py-2">Add a delivery address</td><td class="px-3 py-2"><a href="{{ route('customer.locations.index') }}" class="font-semibold text-blue-600 hover:text-blue-800">Resources → Address Book</a></td></tr>
                             <tr><td class="px-3 py-2">Upload a PO</td><td class="px-3 py-2">Open the order → documents section</td></tr>
@@ -485,9 +619,8 @@ new #[Layout('components.layouts.app')] class extends Component {
                     <div><dt class="text-sm font-semibold text-slate-900">Status</dt><dd class="text-xs text-slate-700">Commercial state: available, reserved, sold, demo, archived.</dd></div>
                     <div><dt class="text-sm font-semibold text-slate-900">Reserve</dt><dd class="text-xs text-slate-700">Hold for a customer — assigns salesperson + buyer before sale.</dd></div>
                     <div><dt class="text-sm font-semibold text-slate-900">Movement / order / job</dt><dd class="text-xs text-slate-700">A transport booking in ProSelver.</dd></div>
-                    <div><dt class="text-sm font-semibold text-slate-900">Awaiting handover</dt><dd class="text-xs text-slate-700">Sold on paper but the buyer hasn't taken delivery yet.</dd></div>
-                    <div><dt class="text-sm font-semibold text-slate-900">Handed over</dt><dd class="text-xs text-slate-700">Customer-delivery step recorded; the sale is final.</dd></div>
-                    <div><dt class="text-sm font-semibold text-slate-900">Recently sold</dt><dd class="text-xs text-slate-700">Sold in the last 30 days (may still be in transit).</dd></div>
+                    <div><dt class="text-sm font-semibold text-slate-900">Recently sold</dt><dd class="text-xs text-slate-700">Sold in the last 30 days. Archive when the vehicle is off your books.</dd></div>
+                    <div><dt class="text-sm font-semibold text-slate-900">Archive</dt><dd class="text-xs text-slate-700">Soft-removes a row from the active ledger and dashboards.</dd></div>
                     <div><dt class="text-sm font-semibold text-slate-900">Movement request</dt><dd class="text-xs text-slate-700">BB asks the dealer to arrange transport.</dd></div>
                     <div><dt class="text-sm font-semibold text-slate-900">Direct order</dt><dd class="text-xs text-slate-700">BB books ProSelver; dealer approves as owner.</dd></div>
                     <div><dt class="text-sm font-semibold text-slate-900">Owner approval</dt><dd class="text-xs text-slate-700">Dealer OK for someone else's booking against their VIN.</dd></div>

@@ -409,15 +409,16 @@
                         </x-sidebar-link>
                         @endif
 
-                        {{-- Bulk Upload — gated to account-wide roles. Depot
-                             dispatchers can't upload because the file may
-                             span multiple branches and dispatchers are
-                             pinned to a single branch. Same gate enforced
-                             server-side in the Volt component. --}}
+                        {{-- Bulk Upload (movements) -- gated to account-wide roles.
+                             This is the JOB/MOVEMENT bulk importer; the STOCK
+                             bulk importer lives in the Stock section below.
+                             Depot dispatchers can't upload because the file may
+                             span multiple branches and they're pinned to a
+                             single branch.  Same gate enforced server-side. --}}
                         @if($user->canManageCompanyData())
                         <x-sidebar-link :href="route('customer.orders.bulk-upload')" :active="request()->routeIs('customer.orders.bulk-upload')">
                             <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></svg></x-slot:icon>
-                            Bulk Upload
+                            {{ $isDealerCustomer ? 'Bulk upload movements' : 'Bulk Upload' }}
                         </x-sidebar-link>
                         @endif
 
@@ -451,7 +452,7 @@
                 <li>
                     <p class="mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">Stock</p>
                     <ul role="list" class="space-y-0.5">
-                        <x-sidebar-link :href="route('customer.stock.index')" :active="request()->routeIs('customer.stock.index') || request()->routeIs('customer.stock.show') || request()->routeIs('customer.stock.import')">
+                        <x-sidebar-link :href="route('customer.stock.index')" :active="(request()->routeIs('customer.stock.index') || request()->routeIs('customer.stock.show')) && !request()->routeIs('customer.stock.import')">
                             <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" x2="12" y1="22.08" y2="12"/></svg></x-slot:icon>
                             All stock
                         </x-sidebar-link>
@@ -459,6 +460,16 @@
                             <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M14 18V6a1 1 0 0 0-1-1H3a1 1 0 0 0-1 1v11a1 1 0 0 0 1 1h1"/><path d="M14 9h4l4 4v4a1 1 0 0 1-1 1h-1"/><circle cx="7" cy="18" r="2"/><circle cx="17" cy="18" r="2"/></svg></x-slot:icon>
                             Off-site &amp; in transit
                         </x-sidebar-link>
+                        {{-- Import stock is the bulk equivalent of adding rows
+                             to dealer_stock one-by-one.  Gated to dealers with
+                             manage_dealer_stock; if you can only view stock you
+                             can't push new rows. --}}
+                        @if($user->hasPermission('manage_dealer_stock'))
+                            <x-sidebar-link :href="route('customer.stock.import')" :active="request()->routeIs('customer.stock.import')">
+                                <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></x-slot:icon>
+                                Import stock
+                            </x-sidebar-link>
+                        @endif
                     </ul>
                 </li>
                 @endif

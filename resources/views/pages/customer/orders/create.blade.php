@@ -169,7 +169,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         DealerStock::LOCATION_STORAGE      => 'At another storage location',
         DealerStock::LOCATION_IN_TRANSIT   => 'In transit',
         DealerStock::LOCATION_ON_DEMO      => 'On demo with customer',
-        DealerStock::LOCATION_DELIVERED    => 'Handed over',
+        DealerStock::LOCATION_DELIVERED    => 'Delivered to dealer',
     ];
 
     public function submit(): void

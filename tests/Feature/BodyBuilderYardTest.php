@@ -117,7 +117,7 @@ test('yard index lists vehicles delivered to the BB and skips other workshops', 
         ->assertDontSee('YARDLEAK00001');
 });
 
-test('yard show renders dealer-shared metadata only when the toggle is on', function () {
+test('yard show renders the active fitment leg metadata only when share_with_bb is on', function () {
     $bb     = makeBbCompany();
     $user   = makeBbUser($bb);
     $loc    = makeBbLocation($bb);
@@ -127,30 +127,37 @@ test('yard show renders dealer-shared metadata only when the toggle is on', func
 
     $job = makeDeliveredJob($dealer, $loc, 'YARDSHARE0001');
 
-    // Stock with sharing OFF -- the meta should not appear.
-    DealerStock::create([
-        'dealer_company_id'         => $dealer->id,
-        'vin'                       => 'YARDSHARE0001',
-        'current_location_type'     => DealerStock::LOCATION_BODY_BUILDER,
-        'current_location_id'       => $loc->id,
-        'status'                    => DealerStock::STATUS_AVAILABLE,
-        'bb_share_with_body_builder' => false,
-        'bb_share_end_customer'     => 'Hidden Customer (Pty) Ltd',
+    // Stock with sharing OFF on the fitment leg -- the meta should
+    // not appear in the BB's yard view.
+    $stock = DealerStock::create([
+        'dealer_company_id'     => $dealer->id,
+        'vin'                   => 'YARDSHARE0001',
+        'current_location_type' => DealerStock::LOCATION_BODY_BUILDER,
+        'current_location_id'   => $loc->id,
+        'status'                => DealerStock::STATUS_AVAILABLE,
+    ]);
+    $leg = $stock->fitments()->create([
+        'body_builder_company_id' => $bb->id,
+        'sequence'                => 1,
+        'status'                  => \App\Models\DealerStockFitment::STATUS_IN_PROGRESS,
+        'started_at'              => now(),
+        'share_with_bb'           => false,
+        'share_end_customer'      => 'Hidden Customer (Pty) Ltd',
     ]);
 
     Volt::test('body-builder.yard.show', ['job' => $job])
         ->assertDontSee('Hidden Customer');
 
-    DealerStock::where('vin', 'YARDSHARE0001')->update([
-        'bb_share_with_body_builder' => true,
-        'bb_share_end_customer'      => 'Visible Customer (Pty) Ltd',
+    $leg->update([
+        'share_with_bb'      => true,
+        'share_end_customer' => 'Visible Customer (Pty) Ltd',
     ]);
 
     Volt::test('body-builder.yard.show', ['job' => $job])
         ->assertSee('Visible Customer (Pty) Ltd');
 });
 
-test('BB user can set the internal job number on a stock row', function () {
+test('BB user can set the internal job number on the active fitment leg', function () {
     $bb     = makeBbCompany();
     $user   = makeBbUser($bb);
     $loc    = makeBbLocation($bb);
@@ -173,7 +180,10 @@ test('BB user can set the internal job number on a stock row', function () {
         ->call('saveBbJobNumber')
         ->assertHasNoErrors();
 
-    expect($stock->fresh()->bb_internal_job_number)->toBe('BB-2026-0042');
+    // Refresh: the BB lazily got a fitment leg created on first save.
+    $leg = $stock->fresh()->fitments()->where('body_builder_company_id', $bb->id)->first();
+    expect($leg)->not->toBeNull();
+    expect($leg->internal_job_number)->toBe('BB-2026-0042');
 });
 
 test('hitting the yard route as a non-BB user is blocked by middleware', function () {

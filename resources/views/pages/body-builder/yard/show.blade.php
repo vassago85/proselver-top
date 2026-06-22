@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\DealerStock;
+use App\Models\DealerStockFitment;
 use App\Models\Job;
 use App\Models\Location;
 use App\Models\MovementRequest;
@@ -14,9 +15,13 @@ use Illuminate\Support\Facades\Gate;
  * /body-builder/jobs/{job} page uses, but rendered for the touch
  * tablet: bigger buttons, less chrome, and surfaces:
  *
- *   - the BB internal job number (editable in place by BB staff)
- *   - the dealer-shared salesperson / end customer / build notes
- *     (only if the dealer flipped the share toggle on the stock card)
+ *   - the BB internal job number for the *active fitment leg*
+ *     (editable in place by BB staff -- writes to the per-leg row,
+ *     not the global stock row, so siblings on a multi-BB chain keep
+ *     their own numbers)
+ *   - the dealer-shared salesperson / end customer / build notes for
+ *     THIS leg (only if the dealer flipped the share toggle on the
+ *     leg in question)
  *   - a single Check out action that opens the standard collection
  *     MovementRequest -- reused from the existing portal so we never
  *     re-implement the dealer-approval handshake.
@@ -25,6 +30,7 @@ new #[Layout('components.layouts.body-builder')] class extends Component
 {
     public Job $job;
     public ?DealerStock $stock = null;
+    public ?DealerStockFitment $fitment = null;
 
     public string $bb_internal_job_number = '';
 
@@ -59,9 +65,43 @@ new #[Layout('components.layouts.body-builder')] class extends Component
         if ($job->vin) {
             $this->stock = DealerStock::where('vin', strtoupper(trim($job->vin)))->first();
             if ($this->stock) {
-                $this->bb_internal_job_number = (string) ($this->stock->bb_internal_job_number ?? '');
+                $this->fitment = $this->resolveFitmentFor($company->id);
+                $this->bb_internal_job_number = (string) ($this->fitment->internal_job_number ?? '');
             }
         }
+    }
+
+    /**
+     * Find (or lazily create) the fitment leg for THIS BB on the
+     * current stock row.  Priority: in-progress for me > planned for
+     * me > most-recent for me.  If nothing exists at all, mint a new
+     * in-progress leg so the BB can immediately write their internal
+     * job number without the dealer having to seed the chain first.
+     */
+    protected function resolveFitmentFor(int $bbCompanyId): DealerStockFitment
+    {
+        $existing = $this->stock->fitments()
+            ->where('body_builder_company_id', $bbCompanyId)
+            ->orderByRaw("CASE status
+                WHEN 'in_progress' THEN 1
+                WHEN 'planned'     THEN 2
+                WHEN 'completed'   THEN 3
+                ELSE 4 END")
+            ->orderByDesc('updated_at')
+            ->first();
+
+        if ($existing) {
+            return $existing;
+        }
+
+        $nextSequence = ((int) $this->stock->fitments()->max('sequence')) + 1;
+
+        return $this->stock->fitments()->create([
+            'body_builder_company_id' => $bbCompanyId,
+            'sequence'                => $nextSequence,
+            'status'                  => DealerStockFitment::STATUS_IN_PROGRESS,
+            'started_at'              => now(),
+        ]);
     }
 
     public function saveBbJobNumber(): void
@@ -75,8 +115,13 @@ new #[Layout('components.layouts.body-builder')] class extends Component
             'bb_internal_job_number' => 'nullable|string|max:80',
         ]);
 
-        $this->stock->update([
-            'bb_internal_job_number' => trim($this->bb_internal_job_number) ?: null,
+        if (!$this->fitment) {
+            $company = auth()->user()?->company();
+            $this->fitment = $this->resolveFitmentFor((int) $company?->id);
+        }
+
+        $this->fitment->update([
+            'internal_job_number' => trim($this->bb_internal_job_number) ?: null,
         ]);
 
         session()->flash('success', 'Internal job number saved.');
@@ -157,19 +202,29 @@ new #[Layout('components.layouts.body-builder')] class extends Component
         </div>
     </div>
 
-    {{-- Dealer-shared metadata, only when the dealer flipped the toggle. --}}
-    @if($stock && $stock->bb_share_with_body_builder)
+    {{-- Dealer-shared metadata for THIS leg.  Only renders when the
+         dealer flipped Share with BB on the leg attached to us, so
+         siblings on the chain (e.g. a crane supplier) never see
+         another BB's customer details. --}}
+    @if($fitment && $fitment->share_with_bb)
         <div class="rounded-xl border border-emerald-300 bg-emerald-50 p-4 space-y-1.5">
             <h3 class="text-xs font-semibold uppercase tracking-wide text-emerald-900">Shared by dealer</h3>
-            @if($stock->bb_share_salesperson)
-                <p class="text-sm"><span class="text-slate-500">Salesperson:</span> <strong>{{ $stock->bb_share_salesperson }}</strong></p>
+            @if($fitment->fitment_type)
+                <p class="text-sm"><span class="text-slate-500">Fitment:</span> <strong>{{ $fitment->fitment_type }}</strong></p>
             @endif
-            @if($stock->bb_share_end_customer)
-                <p class="text-sm"><span class="text-slate-500">End customer:</span> <strong>{{ $stock->bb_share_end_customer }}</strong></p>
+            @if($fitment->share_salesperson)
+                <p class="text-sm"><span class="text-slate-500">Salesperson:</span> <strong>{{ $fitment->share_salesperson }}</strong></p>
             @endif
-            @if($stock->bb_build_notes)
-                <div class="mt-2 text-sm whitespace-pre-line">{{ $stock->bb_build_notes }}</div>
+            @if($fitment->share_end_customer)
+                <p class="text-sm"><span class="text-slate-500">End customer:</span> <strong>{{ $fitment->share_end_customer }}</strong></p>
             @endif
+            @if($fitment->notes)
+                <div class="mt-2 text-sm whitespace-pre-line">{{ $fitment->notes }}</div>
+            @endif
+        </div>
+    @elseif($fitment && $fitment->fitment_type)
+        <div class="rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-700">
+            <span class="text-slate-500">Fitment:</span> <strong>{{ $fitment->fitment_type }}</strong>
         </div>
     @endif
 

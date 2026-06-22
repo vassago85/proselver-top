@@ -194,6 +194,27 @@ class DealerStock extends Model
         return $this->belongsTo(User::class, 'salesperson_user_id');
     }
 
+    /**
+     * Ordered build chain.  Each row is one BB / fitment stop with
+     * its own notes, type, share toggles, etc.  See DealerStockFitment.
+     */
+    public function fitments(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(DealerStockFitment::class)->orderBy('sequence');
+    }
+
+    /**
+     * The single in-progress fitment, if any.  Drives BB-portal reads
+     * (notes / share fields / internal job number) so each BB only
+     * ever sees the leg they are working on -- never another BB's
+     * notes.
+     */
+    public function activeFitment(): \Illuminate\Database\Eloquent\Relations\HasOne
+    {
+        return $this->hasOne(DealerStockFitment::class)
+            ->where('status', DealerStockFitment::STATUS_IN_PROGRESS);
+    }
+
     // ----- Scopes ---------------------------------------------------
 
     /**
@@ -251,33 +272,6 @@ class DealerStock extends Model
         return $query
             ->where('status', self::STATUS_SOLD)
             ->where('sold_at', '>=', now()->subDays($days));
-    }
-
-    /**
-     * Sold but the customer hasn't taken delivery yet -- the gap
-     * where chassis swaps and spec changes happen.  Dashboard surfaces
-     * this so the dealer can see what's "in the funnel" between
-     * paperwork and physical handover.
-     */
-    public function scopeSoldAwaitingHandover(Builder $query): Builder
-    {
-        return $query
-            ->where('status', self::STATUS_SOLD)
-            ->whereNull('delivered_at');
-    }
-
-    /**
-     * Handed over to the customer in the recent window.  Driven by
-     * delivered_at (set when the dealer marks delivered or the
-     * movement linker sees the final delivery job).  Separate from
-     * recentlyDelivered() above, which counts paperwork-sold within
-     * the window regardless of physical handover.
-     */
-    public function scopeHandedOverRecently(Builder $query, int $days = self::RECENT_DELIVERED_DAYS): Builder
-    {
-        return $query
-            ->where('current_location_type', self::LOCATION_DELIVERED)
-            ->where('delivered_at', '>=', now()->subDays($days));
     }
 
     public function scopeReserved(Builder $query): Builder

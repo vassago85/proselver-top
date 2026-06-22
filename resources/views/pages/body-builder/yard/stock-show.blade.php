@@ -2,6 +2,7 @@
 
 use App\Models\Company;
 use App\Models\DealerStock;
+use App\Models\DealerStockFitment;
 use App\Models\Location;
 use App\Services\DealerStockAssignmentService;
 use Livewire\Attributes\Layout;
@@ -22,6 +23,7 @@ use Livewire\Volt\Component;
 new #[Layout('components.layouts.body-builder')] class extends Component
 {
     public DealerStock $stock;
+    public ?DealerStockFitment $fitment = null;
 
     public string $bb_internal_job_number = '';
     public ?int $assignDealerId = null;
@@ -37,14 +39,53 @@ new #[Layout('components.layouts.body-builder')] class extends Component
         abort_unless($myLocationIds->contains($stock->current_location_id), 404);
 
         $this->stock = $stock->load(['dealerCompany', 'oemCompany', 'currentLocation', 'brand']);
-        $this->bb_internal_job_number = (string) ($stock->bb_internal_job_number ?? '');
+        $this->fitment = $this->resolveFitmentFor((int) $company->id);
+        $this->bb_internal_job_number = (string) ($this->fitment->internal_job_number ?? '');
+    }
+
+    /**
+     * The fitment leg for THIS BB on this stock row, lazily created
+     * if it doesn't exist yet so OEM-direct arrivals (where the dealer
+     * hasn't planned a chain) still let the BB write their internal
+     * job number immediately.
+     */
+    protected function resolveFitmentFor(int $bbCompanyId): DealerStockFitment
+    {
+        $existing = $this->stock->fitments()
+            ->where('body_builder_company_id', $bbCompanyId)
+            ->orderByRaw("CASE status
+                WHEN 'in_progress' THEN 1
+                WHEN 'planned'     THEN 2
+                WHEN 'completed'   THEN 3
+                ELSE 4 END")
+            ->orderByDesc('updated_at')
+            ->first();
+
+        if ($existing) {
+            return $existing;
+        }
+
+        $nextSequence = ((int) $this->stock->fitments()->max('sequence')) + 1;
+
+        return $this->stock->fitments()->create([
+            'body_builder_company_id' => $bbCompanyId,
+            'sequence'                => $nextSequence,
+            'status'                  => DealerStockFitment::STATUS_IN_PROGRESS,
+            'started_at'              => now(),
+        ]);
     }
 
     public function saveBbJobNumber(): void
     {
         $this->validate(['bb_internal_job_number' => 'nullable|string|max:80']);
-        $this->stock->update([
-            'bb_internal_job_number' => trim($this->bb_internal_job_number) ?: null,
+
+        if (!$this->fitment) {
+            $company = auth()->user()?->company();
+            $this->fitment = $this->resolveFitmentFor((int) $company?->id);
+        }
+
+        $this->fitment->update([
+            'internal_job_number' => trim($this->bb_internal_job_number) ?: null,
         ]);
         session()->flash('success', 'Internal job number saved.');
     }

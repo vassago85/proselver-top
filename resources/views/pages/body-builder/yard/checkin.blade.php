@@ -92,13 +92,21 @@ new #[Layout('components.layouts.body-builder')] class extends Component
     {
         $this->selectedJobId = $jobId;
 
-        // Pre-fill the BB job number from the matching stock row so the
-        // foreman sees whatever was already captured.
+        // Pre-fill the BB job number from this BB's existing fitment
+        // leg on the matching stock row, if any.  Fall back to the
+        // legacy bb_internal_job_number column for backward compat
+        // while the table is being rolled out.
         $job = Job::find($jobId);
         if ($job && $job->vin) {
             $stock = DealerStock::where('vin', strtoupper(trim($job->vin)))->first();
             if ($stock) {
-                $this->bb_internal_job_number = (string) ($stock->bb_internal_job_number ?? '');
+                $company = auth()->user()?->company();
+                $leg = $stock->fitments()
+                    ->where('body_builder_company_id', $company?->id)
+                    ->orderByRaw("CASE status WHEN 'in_progress' THEN 1 WHEN 'planned' THEN 2 ELSE 3 END")
+                    ->orderByDesc('updated_at')
+                    ->first();
+                $this->bb_internal_job_number = (string) ($leg->internal_job_number ?? $stock->bb_internal_job_number ?? '');
             }
         }
     }
@@ -127,11 +135,28 @@ new #[Layout('components.layouts.body-builder')] class extends Component
             $job->confirmReceiptAtBodyBuilder($user);
         }
 
-        // BB internal job number on the stock row (one per VIN).
+        // BB internal job number now lives per-fitment-leg so a chain
+        // with multiple BBs keeps each BB's number distinct.  Resolve
+        // (or lazily create) this BB's leg on the stock row.
         if ($job->vin && trim($this->bb_internal_job_number) !== '') {
             $stock = DealerStock::where('vin', strtoupper(trim($job->vin)))->first();
             if ($stock) {
-                $stock->update(['bb_internal_job_number' => trim($this->bb_internal_job_number)]);
+                $leg = $stock->fitments()
+                    ->where('body_builder_company_id', $company->id)
+                    ->orderByRaw("CASE status WHEN 'in_progress' THEN 1 WHEN 'planned' THEN 2 ELSE 3 END")
+                    ->orderByDesc('updated_at')
+                    ->first();
+
+                if (!$leg) {
+                    $leg = $stock->fitments()->create([
+                        'body_builder_company_id' => $company->id,
+                        'sequence'                => ((int) $stock->fitments()->max('sequence')) + 1,
+                        'status'                  => \App\Models\DealerStockFitment::STATUS_IN_PROGRESS,
+                        'started_at'              => now(),
+                    ]);
+                }
+
+                $leg->update(['internal_job_number' => trim($this->bb_internal_job_number)]);
             }
         }
 

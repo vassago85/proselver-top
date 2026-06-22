@@ -11,14 +11,14 @@ The Dealer Portal is built around one job, in this order:
 1. **Track your own vehicles** — see where every VIN is (premises, BB, storage, transit, on demo).
 2. **Reserve** when a customer commits — capture salesperson + buyer.
 3. **Book a delivery** with ProSelver (or your own driver) to move the chassis where it needs to go.
-4. **Mark sold** when the paperwork is done — the reserved customer carries forward automatically.
-5. **Mark handed over** when the buyer collects — that finalises the sale.
+4. **Mark sold** when the paperwork is done — the reserved customer carries forward automatically. Sold is sold.
+5. **Archive** once the vehicle has left your books — the row drops off the active ledger.
 
 Supporting features (body-builder admin, bulk upload, trips, petty cash) are there but aren't the day-to-day path.
 
 You sign in with the same ProSelver account your administrator created for you. What you see in the sidebar depends on your **role** and **permissions**.
 
-> **Two parallel tracks**: every vehicle has a **commercial lifecycle** (available → reserved → sold → handed over) and an independent **transport movement** (booked → in transit → at destination). The vehicle card shows both side by side.
+> **Two parallel tracks**: every vehicle has a **commercial lifecycle** (available → reserved → sold → archived) and an independent **transport movement** (booked → in transit → at destination). The vehicle card shows both side by side.
 
 ---
 
@@ -85,7 +85,7 @@ The dashboard is a tablet-friendly **stock console**: eight cards in a 4×2 grid
 | **In transit** | On the road with an active ProSelver job |
 | **At another storage** | Parked at another yard or storage site |
 | **On demo with customer** | Out on demo |
-| **Sold — awaiting handover** | Marked **sold** but customer has not taken delivery yet |
+| **Recently sold** | Marked **sold** in the last 30 days — archive each row when the vehicle is off your books |
 
 **Tap any card** to open the **full stock ledger** filtered to that bucket. Tap the same card again to clear the filter.
 
@@ -111,7 +111,7 @@ This is the main **“where is my stock?”** table. Each row shows:
 
 - **VIN, Vehicle, Colour, Reg** — identity columns.
 - **Where** — the bucket pill plus the concrete location name underneath (which yard, which BB).
-- **Status** — Available / Reserved / Sold / Demo. Sold-without-handover shows an *Awaiting handover* sub-label.
+- **Status** — Available / Reserved / Sold / Demo.
 - **Salesperson** — assigned via reserve or sale.
 - **Customer** — the buyer (also showing during reserve, before sale closes).
 - **Last movement** — active job number + status, or "No active movement".
@@ -137,13 +137,48 @@ Click any row to open the **vehicle card**.
 | Other storage | Another storage yard |
 | In transit | Active transport job |
 | On demo | With a customer on demo |
-| **Handed over** | Customer delivery complete — marked handed over to the buyer |
+| Delivered to dealer | A transport job ended at a dealer destination (the vehicle arrived at your premises) |
 | Scheduled for movement | Job booked, not yet collected |
-| **Recently sold** | Sold in the last 30 days (not the same as handed over) |
+| **Recently sold** | Sold in the last 30 days. Archive when the vehicle has left your books |
 
-**Important:** **Recently sold** and **Handed over** are different. A vehicle can be sold but still in transit; **handed over** means the customer handover step is done on the ledger.
+> **Sold is sold.** When a deal closes, mark the row sold; once the vehicle has left your floor, archive it. There is no separate "customer handover" step in the dealer flow.
 
-**Import stock:** If you have **Manage Dealer Stock**, use **Import stock** to upload a CSV of vehicles onto the ledger.
+### 5.1.1 Adding stock
+
+There are two ways to put vehicles onto the ledger. Both are gated to users with **Manage Dealer Stock**.
+
+#### A. Add a single vehicle (`+ Add vehicle`)
+
+**Path:** Stock → All stock → **+ Add vehicle** (`/customer/stock/create`)
+
+Use this when a single unit needs to land on the books outside the normal DMS-export flow &mdash; most commonly when the OEM shipped a chassis **factory-direct to one of your body builders**, or when a vehicle arrived at a branch / yard rather than your main premises.
+
+Fill in VIN (required), the rest of the identity columns (suffix, variant, description, engine number, colour, registration, brand, model, year), pick a starting location, and save:
+
+- **At my premises** &mdash; the default. Lands on the dealership floor.
+- **At a body builder** &mdash; pick the linked BB and its yard. Stock lands in the *body builder* bucket immediately.
+- **At another storage / yard** &mdash; pick one of your own non-primary locations.
+
+You can optionally assign a salesperson at the time of creation. Status starts at **Available**.
+
+#### B. Bulk import from your DMS
+
+**Path:** Stock → **Import stock** (`/customer/stock/import`)
+
+Export your inventory out of your dealership management system (Kerridge, Pinnacle, Autoline, Automate &mdash; anything that produces an `.xlsx`, `.xls` or `.csv` file) and drop it in. Four steps, all on one page:
+
+1. **Upload** &mdash; pick the file (5 MB max).
+2. **Starting location** &mdash; pick the bucket new rows should land in (Premises / a specific BB / your own yard). Defaults to *Premises*. Existing rows (matched on VIN) keep their current location regardless.
+3. **Confirm mapping** &mdash; we auto-detect VIN, Suffix, Variant, Description, Engine number, Colour, Registration, Make/Brand, Model and Model year. You can override any column.
+4. **Commit** &mdash; preview the rows (errors in red, warnings in amber, ready rows in green) and click **Commit import**.
+
+**Re-uploading is safe.** Vehicles are matched on (your company, VIN). Existing rows have their attributes refreshed; their location and sale state are untouched.
+
+**Header aliases we recognise** &mdash; column names like Chassis No, Reg No, License Plate, Engine No, Make, Manufacturer, Year Model and similar are all picked up automatically. Need a starting template? The import page has a **Download sample CSV template** link.
+
+> Whole batch shipped factory-direct to a fitter? Set the import's starting location to that body builder and the entire upload lands in the BB bucket in one pass.
+
+> Don't confuse this with **Bulk upload movements** (under Movements) &mdash; that one generates transport jobs, not stock rows.
 
 ### 5.2 Off-site & in transit (job-based view)
 
@@ -155,7 +190,7 @@ This view is built from **transport jobs**, not only the ledger. It shows vehicl
 - at other storage, or
 - actively on the road.
 
-Vehicles **handed over** to the buyer drop off this list. Use **Book return** (where shown) to start an order with pickup/delivery pre-filled.
+**Archived** vehicles drop off this list. Use **Book return** (where shown) to start an order with pickup/delivery pre-filled.
 
 For counts that match the ledger (e.g. “how many at BB?”), prefer **All stock** → **Body builder** bucket.
 
@@ -173,12 +208,12 @@ The card has four parts:
 
 1. **Vehicle details** — VIN, make, model, registration, colour, dealership.
 2. **Where** — the bucket and (if known) the specific location name.
-3. **Lifecycle timeline** — Available → Reserved → Sold → Customer handover, each step showing the date and person.
+3. **Lifecycle timeline** — Available → Reserved → Sold, each step showing the date and person.
 4. **Transport movement** — the active ProSelver job (number, status, pickup → delivery, scheduled date) or "No active transport job".
 
-The lifecycle and the transport movement run **independently** — a vehicle can be sold while still in transit, or in transit before it's reserved. Both are visible at a glance.
+The lifecycle and the transport movement run **independently** — a vehicle can be sold while still in transit, or in transit before it's reserved. Both are visible at a glance. Once a sale is final and the vehicle has left your books, **Archive** closes the row.
 
-If the vehicle is at a body builder (or has been shared with one), an optional **Body builder details** panel lets you toggle sharing on, set the salesperson/end-customer to show the BB, and write build notes.
+A **Fitment chain** panel below the timeline tracks one or more body-builder stops as ordered steps (dropside → crane, fridge body → fridge unit, etc.). Each step has its own fitment type, notes, internal job number and independent **Share with BB** toggle so you can disclose end-customer details to one fitter and keep them confidential from the next. See *Fitment chain* below for the full workflow.
 
 ### Actions available
 
@@ -191,12 +226,47 @@ If the vehicle is at a body builder (or has been shared with one), an optional *
 | **Mark as sold** | If not previously reserved — captures salesperson + customer fresh |
 | **Send out on demo** | Customer details and due-back date; location becomes *On demo* |
 | **Return from demo** | Brings the unit back from demo |
-| **Mark as delivered** | Customer handover complete; stamps `delivered_at`; ledger bucket *Handed over*. **Final** |
-| **Reverse sale** | Undoes a sale while still allowed (before handover) |
-| **Archive** | Removes from active dashboards/lists (soft archive) |
-| **Print delivery note** | PDF for the customer handover (available on any live unit) |
+| **Reverse sale** | Undo a sale while the row is still on the active ledger (chassis swaps, spec changes, finance fall-through) |
+| **Archive** | Closes the row once the vehicle has left your books (soft archive) |
+| **Print delivery note** | PDF for the buyer (available on any live unit) |
 
-Share salesperson and end-customer details with the body builder only when you intend them to see that information on their yard app.
+Share salesperson and end-customer details with each body builder only when you intend them to see that information on their yard app. Sharing is per-leg in the fitment chain — see below.
+
+## 5b. Fitment chain (multi-BB build process)
+
+A single chassis often passes through **several body builders** in sequence — a fridge body supplier then a fridge unit supplier, or a dropside builder then a crane installer. The **Fitment chain** panel on the vehicle card lets you track each stop independently, so notes, internal job numbers, and sharing decisions don't leak between fitters.
+
+### Per-step fields
+
+| Field | Meaning |
+|-------|---------|
+| Body builder | The fitter for this step (must be linked to your dealership) |
+| Fitment type | Short label (Dropside body, Crane mount, Fridge unit, ...) |
+| Notes | Full spec for this leg — size, colour, accessories, dates |
+| Share with BB | Independent toggle — ON means this fitter sees the shared details |
+| Shared salesperson | Sent through only when Share is ON |
+| Shared end customer | Sent through only when Share is ON |
+| Internal job number | Written by the BB on their yard tablet, kept per leg |
+
+### Step states
+
+- **Planned** — queued; nothing has happened yet. Editable + deletable.
+- **In progress** — vehicle is currently with this fitter (stamps `started_at`). Only one leg is ever in progress at a time.
+- **Completed** — fitter is done (stamps `completed_at`). Visible, not editable.
+- **Cancelled** — the step won't happen; stays on the timeline for the audit trail.
+
+### Workflow
+
+1. Vehicle card → **+ Add fitment step**. Pick the BB, label the fitment type, fill in the build notes.
+2. Decide whether to **Share these details with this body builder**. If ON, also fill the salesperson + end customer you want them to see.
+3. Save — the step lands as **Planned** at the end of the chain.
+4. Repeat for the next fitter (a second BB, etc.). Each leg is independent.
+5. **Start** a step when the vehicle physically arrives at that BB. If another leg is still active, it auto-completes — only one leg can be in progress at a time.
+6. **Complete** a step when the BB is done; the next planned step becomes the obvious next click.
+
+### What the BB sees
+
+The BB's yard portal reads **only their own active leg**. If sharing is OFF, they see the chassis + their internal job number but nothing else. If sharing is ON, they see the fitment type, salesperson and end customer you chose. Other BBs on the chain never see another BB's notes.
 
 ---
 
@@ -353,7 +423,7 @@ Jobs still waiting for **owner approval** cannot be attached to a trip until app
 | See everything on my books | Stock → **All stock** |
 | Reserve a vehicle for a customer | Vehicle card → **Reserve** |
 | See only reserved units | Dashboard **Reserved** card or All stock → **Reserved only** |
-| See sold vehicles awaiting handover | Dashboard **Sold — awaiting handover** card |
+| See vehicles sold in the last 30 days | Dashboard **Recently sold** card |
 | See only vehicles at a body builder | Dashboard card or All stock → **Body builder** |
 | See what is on the road right now | **In transit** bucket or Off-site & in transit |
 | Book a delivery for a specific VIN | All stock row → **Book**, or vehicle card → **Book delivery** |
@@ -362,9 +432,9 @@ Jobs still waiting for **owner approval** cannot be attached to a trip until app
 | Approve a BB's ProSelver booking on my VIN | Movements → **My movements** (owner pending) |
 | Mark a vehicle sold (from reserve) | Vehicle card → **Mark sold (from reserve)** |
 | Mark a vehicle sold (no reserve) | Vehicle card → **Mark as sold** |
-| Record customer handover | Vehicle card → **Mark as delivered** |
-| Reverse a sale before handover | Vehicle card → **Reverse sale** |
-| Import new stock | All stock → **Import stock** |
+| Close a row off the active ledger | Vehicle card → **Archive** |
+| Undo a sale | Vehicle card → **Reverse sale** (while the row is still on the active ledger) |
+| Import new stock | Stock → **Import stock** |
 | Add a delivery address | Resources → **Address Book** |
 | Upload a PO | Open the movement → documents section |
 
@@ -379,9 +449,8 @@ Jobs still waiting for **owner approval** cannot be attached to a trip until app
 | **Status** | Commercial state: Available, Reserved, Sold, Demo, Archived |
 | **Reserve** | Hold for a customer — assigns salesperson + buyer before sale |
 | **Movement / order / job** | A transport booking in ProSelver |
-| **Awaiting handover** | Sold on paper but the buyer hasn't taken delivery yet |
-| **Handed over** | Customer-delivery step recorded; sale is final |
-| **Recently sold** | Sold in the last 30 days (may still be in transit) |
+| **Recently sold** | Sold in the last 30 days — archive when off your books |
+| **Archive** | Soft-removes a row from the active ledger and dashboards |
 | **Movement request** | BB asks dealer to arrange transport |
 | **Direct order** | BB books ProSelver; dealer approves as owner |
 | **Owner approval** | Dealer OK for someone else's booking against their VIN |

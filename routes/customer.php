@@ -45,7 +45,23 @@ Volt::route('stock/at-body-builder', 'customer.stock.at-body-builder')->name('st
 // import is on its own page so the action buttons on the index
 // stay focussed on sale/demo/archive.
 Volt::route('stock', 'customer.stock.index')->name('stock.index');
+Volt::route('stock/create', 'customer.stock.create')->name('stock.create');
 Volt::route('stock/import', 'customer.stock.import')->name('stock.import');
+// Sample CSV the dealer can download from the import page, paste their
+// DMS export columns into, and re-upload.  Static -- no DB access -- so
+// it stays a plain closure rather than a Volt component.
+Route::get('stock/import/template.csv', function () {
+    abort_unless(auth()->user()?->company()?->isDealer(), 404);
+    abort_unless(auth()->user()?->hasPermission('manage_dealer_stock'), 403);
+    $headers = ['VIN', 'Suffix', 'Variant', 'Description', 'Engine number', 'Colour', 'Registration', 'Brand', 'Model', 'Model year'];
+    $sample  = ['JN1TBNT32U0000001', 'X62', 'LE', '4x4 D/Cab 3.0 DDi', 'YD25-000123', 'Galaxy Black', '', 'Nissan', 'Navara', (string) date('Y')];
+    $csv  = implode(',', array_map(fn ($h) => '"' . str_replace('"', '""', $h) . '"', $headers)) . "\r\n";
+    $csv .= implode(',', array_map(fn ($h) => '"' . str_replace('"', '""', $h) . '"', $sample)) . "\r\n";
+    return response($csv, 200, [
+        'Content-Type'        => 'text/csv; charset=UTF-8',
+        'Content-Disposition' => 'attachment; filename="proselver-stock-template.csv"',
+    ]);
+})->name('stock.import.template');
 Volt::route('stock/{dealerStock}', 'customer.stock.show')->name('stock.show');
 // Deliveries report (dealer-scoped mirror of admin/reports).
 Volt::route('reports/deliveries', 'customer.reports.deliveries')->name('reports.deliveries');

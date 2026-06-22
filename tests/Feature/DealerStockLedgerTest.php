@@ -3,6 +3,7 @@
 use App\Models\Brand;
 use App\Models\Company;
 use App\Models\DealerStock;
+use App\Models\DealerStockFitment;
 use App\Models\Job;
 use App\Models\Role;
 use App\Models\User;
@@ -209,6 +210,55 @@ test('importer creates new rows and is idempotent on re-run', function () {
     expect($result['skipped'])->toBeGreaterThanOrEqual(1);
 });
 
+test('importer lands NEW rows in the requested starting bucket and preserves existing rows', function () {
+    $dealer = makeDealer();
+    $importer = new DealerStockImporter();
+
+    // Pre-existing row at premises -- the second import must NOT
+    // relocate it to the BB.
+    $existing = DealerStock::create([
+        'dealer_company_id'     => $dealer->id,
+        'vin'                   => 'EXIST0001',
+        'current_location_type' => DealerStock::LOCATION_PREMISES,
+        'status'                => DealerStock::STATUS_AVAILABLE,
+    ]);
+
+    // Build a BB + a yard location to point new rows at.
+    $bb = App\Models\Company::create(['name' => 'Direct BB', 'type' => App\Models\Company::TYPE_BODY_BUILDER]);
+    $yard = App\Models\Location::create([
+        'company_id'   => $bb->id,
+        'type'         => App\Models\Location::TYPE_BODY_BUILDER,
+        'company_name' => 'Direct BB',
+        'address'      => '1 Workshop St',
+        'is_active'    => true,
+    ]);
+
+    $rows = [
+        ['vin' => 'EXIST0001', 'colour' => 'Red'],      // existing, must stay at premises
+        ['vin' => 'BBDIRECT001', 'colour' => 'White'],  // new, must land at the BB yard
+    ];
+    $mapping = ['vin' => 'vin', 'colour' => 'colour'];
+
+    $preview = $importer->preview($rows, $mapping, $dealer);
+    $result = $importer->commit(
+        $preview,
+        $dealer,
+        DealerStock::LOCATION_BODY_BUILDER,
+        $yard->id,
+    );
+
+    expect($result['created'])->toBe(1);
+
+    $new = DealerStock::where('vin', 'BBDIRECT001')->firstOrFail();
+    expect($new->current_location_type)->toBe(DealerStock::LOCATION_BODY_BUILDER);
+    expect((int) $new->current_location_id)->toBe((int) $yard->id);
+    expect($new->status)->toBe(DealerStock::STATUS_AVAILABLE);
+
+    $existing->refresh();
+    expect($existing->current_location_type)->toBe(DealerStock::LOCATION_PREMISES);
+    expect($existing->current_location_id)->toBeNull();
+});
+
 test('importer refreshes attributes on re-run but preserves sale state', function () {
     $dealer = makeDealer();
     $importer = new DealerStockImporter();
@@ -341,7 +391,90 @@ function makeStockManager(Company $dealer): User
     return $user;
 }
 
-test('a sold-but-undelivered unit can be reversed back to available', function () {
+test('manual add creates a row at premises when no location is picked', function () {
+    $dealer = makeDealer();
+    $manager = makeStockManager($dealer);
+    $this->actingAs($manager);
+
+    \Livewire\Volt\Volt::test('customer.stock.create')
+        ->set('vin', 'MANUAL00001')
+        ->set('colour', 'White')
+        ->set('location_type', DealerStock::LOCATION_PREMISES)
+        ->call('save')
+        ->assertHasNoErrors();
+
+    $stock = DealerStock::where('vin', 'MANUAL00001')->firstOrFail();
+    expect($stock->current_location_type)->toBe(DealerStock::LOCATION_PREMISES);
+    expect($stock->current_location_id)->toBeNull();
+    expect($stock->status)->toBe(DealerStock::STATUS_AVAILABLE);
+    expect($stock->colour)->toBe('White');
+});
+
+test('manual add can land a vehicle directly at a linked body builder', function () {
+    $dealer  = makeDealer();
+    $manager = makeStockManager($dealer);
+    $this->actingAs($manager);
+
+    $bb = Company::create(['name' => 'Direct BB', 'type' => Company::TYPE_BODY_BUILDER]);
+    $bb->linkedDealers()->attach($dealer->id, ['is_active' => true]);
+    $yard = App\Models\Location::create([
+        'company_id'   => $bb->id,
+        'type'         => App\Models\Location::TYPE_BODY_BUILDER,
+        'company_name' => 'Direct BB Yard',
+        'address'      => '1 Workshop St',
+        'is_active'    => true,
+    ]);
+
+    \Livewire\Volt\Volt::test('customer.stock.create')
+        ->set('vin', 'FACTORYBB001')
+        ->set('location_type', DealerStock::LOCATION_BODY_BUILDER)
+        ->set('body_builder_company_id', $bb->id)
+        ->set('body_builder_location_id', $yard->id)
+        ->call('save')
+        ->assertHasNoErrors();
+
+    $stock = DealerStock::where('vin', 'FACTORYBB001')->firstOrFail();
+    expect($stock->current_location_type)->toBe(DealerStock::LOCATION_BODY_BUILDER);
+    expect((int) $stock->current_location_id)->toBe((int) $yard->id);
+});
+
+test('manual add rejects a duplicate VIN on the same dealer', function () {
+    $dealer  = makeDealer();
+    $manager = makeStockManager($dealer);
+    $this->actingAs($manager);
+
+    DealerStock::create([
+        'dealer_company_id'     => $dealer->id,
+        'vin'                   => 'DUPE000001',
+        'current_location_type' => DealerStock::LOCATION_PREMISES,
+        'status'                => DealerStock::STATUS_AVAILABLE,
+    ]);
+
+    \Livewire\Volt\Volt::test('customer.stock.create')
+        ->set('vin', 'DUPE000001')
+        ->set('location_type', DealerStock::LOCATION_PREMISES)
+        ->call('save');
+
+    // Still exactly one row -- the second create was sidelined.
+    expect(DealerStock::where('vin', 'DUPE000001')->count())->toBe(1);
+});
+
+test('manual add requires a BB yard when starting bucket is body builder', function () {
+    $dealer  = makeDealer();
+    $manager = makeStockManager($dealer);
+    $this->actingAs($manager);
+
+    \Livewire\Volt\Volt::test('customer.stock.create')
+        ->set('vin', 'NEEDBBYARD01')
+        ->set('location_type', DealerStock::LOCATION_BODY_BUILDER)
+        // body_builder_company_id + body_builder_location_id intentionally blank
+        ->call('save')
+        ->assertHasErrors(['body_builder_company_id', 'body_builder_location_id']);
+
+    expect(DealerStock::where('vin', 'NEEDBBYARD01')->exists())->toBeFalse();
+});
+
+test('a sold unit can be reversed back to available while still on the ledger', function () {
     $dealer = makeDealer();
     $manager = makeStockManager($dealer);
     $this->actingAs($manager);
@@ -365,49 +498,21 @@ test('a sold-but-undelivered unit can be reversed back to available', function (
     expect($stock->sold_at)->toBeNull();
 });
 
-test('a delivered sale can no longer be reversed', function () {
+test('reverseSale refuses when the row is not marked sold', function () {
     $dealer = makeDealer();
     $manager = makeStockManager($dealer);
     $this->actingAs($manager);
 
     $stock = DealerStock::create([
-        'dealer_company_id'   => $dealer->id,
-        'vin'                 => 'REVVIN0002',
-        'current_location_type' => DealerStock::LOCATION_DELIVERED,
-        'status'              => DealerStock::STATUS_SOLD,
-        'sale_customer_name'  => 'Done Deal',
-        'sold_at'             => now()->subDay(),
-        'delivered_at'        => now(),
+        'dealer_company_id'     => $dealer->id,
+        'vin'                   => 'REVVIN0002',
+        'current_location_type' => DealerStock::LOCATION_PREMISES,
+        'status'                => DealerStock::STATUS_AVAILABLE,
     ]);
 
     \Livewire\Volt\Volt::test('customer.stock.show', ['dealerStock' => $stock])
         ->call('reverseSale')
         ->assertStatus(422);
-
-    expect($stock->fresh()->status)->toBe(DealerStock::STATUS_SOLD);
-});
-
-test('marking a sold unit delivered stamps delivered_at and locks the sale', function () {
-    $dealer = makeDealer();
-    $manager = makeStockManager($dealer);
-    $this->actingAs($manager);
-
-    $stock = DealerStock::create([
-        'dealer_company_id'   => $dealer->id,
-        'vin'                 => 'DELVIN0001',
-        'current_location_type' => DealerStock::LOCATION_PREMISES,
-        'status'              => DealerStock::STATUS_SOLD,
-        'sale_customer_name'  => 'Final Buyer',
-        'sold_at'             => now(),
-    ]);
-
-    \Livewire\Volt\Volt::test('customer.stock.show', ['dealerStock' => $stock])
-        ->call('markDelivered')
-        ->assertHasNoErrors();
-
-    $stock->refresh();
-    expect($stock->delivered_at)->not->toBeNull();
-    expect($stock->current_location_type)->toBe(DealerStock::LOCATION_DELIVERED);
 });
 
 // ----- visibleTo scope ----------------------------------------------
@@ -710,9 +815,9 @@ test('reverseSale clears reserved_at along with sale fields', function () {
     expect($stock->reserved_at)->toBeNull();
 });
 
-// ----- Dashboard cards: reserved + awaiting handover ----------------
+// ----- Dashboard card: reserved -------------------------------------
 
-test('countReserved and countAwaitingHandover surface the new commercial buckets', function () {
+test('countReserved surfaces the reserved commercial bucket', function () {
     Role::firstOrCreate(['slug' => 'customer_owner'], ['name' => 'Customer Owner', 'tier' => 'customer']);
     $dealer = makeDealer('Funnel Dealer');
     $user = User::factory()->create();
@@ -730,22 +835,211 @@ test('countReserved and countAwaitingHandover surface the new commercial buckets
     ]);
     DealerStock::create([
         'dealer_company_id'     => $dealer->id,
-        'vin'                   => 'FUNAWH0001',
+        'vin'                   => 'FUNAV0001',
         'current_location_type' => DealerStock::LOCATION_PREMISES,
-        'status'                => DealerStock::STATUS_SOLD,
-        'sold_at'               => now()->subDays(3),
-        // delivered_at intentionally NULL -- the unit is sold but
-        // hasn't been handed over to the customer yet.
-    ]);
-    DealerStock::create([
-        'dealer_company_id'     => $dealer->id,
-        'vin'                   => 'FUNDEL0001',
-        'current_location_type' => DealerStock::LOCATION_DELIVERED,
-        'status'                => DealerStock::STATUS_SOLD,
-        'sold_at'               => now()->subDays(3),
-        'delivered_at'          => now()->subDay(),
+        'status'                => DealerStock::STATUS_AVAILABLE,
     ]);
 
     expect(\Livewire\Volt\Volt::test('customer.dashboard')->get('countReserved'))->toBe(1);
-    expect(\Livewire\Volt\Volt::test('customer.dashboard')->get('countAwaitingHandover'))->toBe(1);
+});
+
+// ----- Fitment chain (multi-BB build process) ----------------------
+
+function makeFitmentBb(string $name = 'Fit BB'): Company
+{
+    return Company::create(['name' => $name, 'type' => Company::TYPE_BODY_BUILDER]);
+}
+
+test('saveFitment adds a planned leg with notes + per-leg share fields', function () {
+    $dealer  = makeDealer('Fit Dealer A');
+    $bb      = makeFitmentBb('Dropside Co');
+    $manager = makeStockManager($dealer);
+    $this->actingAs($manager);
+
+    // Link the BB to the dealer so the picker accepts it.
+    $bb->linkedDealers()->attach($dealer->id, ['is_active' => true]);
+
+    $stock = DealerStock::create([
+        'dealer_company_id'     => $dealer->id,
+        'vin'                   => 'FITVIN00001',
+        'current_location_type' => DealerStock::LOCATION_PREMISES,
+        'status'                => DealerStock::STATUS_AVAILABLE,
+    ]);
+
+    \Livewire\Volt\Volt::test('customer.stock.show', ['dealerStock' => $stock])
+        ->set('fitment_body_builder_id', $bb->id)
+        ->set('fitment_type', 'Dropside body')
+        ->set('fitment_notes', 'Steel dropside, 4.2m, blue cab')
+        ->set('fitment_share_with_bb', true)
+        ->set('fitment_share_salesperson', 'Pieter S.')
+        ->set('fitment_share_end_customer', 'ABC Logistics')
+        ->call('saveFitment')
+        ->assertHasNoErrors();
+
+    $leg = $stock->fitments()->first();
+    expect($leg)->not->toBeNull();
+    expect($leg->body_builder_company_id)->toBe($bb->id);
+    expect($leg->sequence)->toBe(1);
+    expect($leg->status)->toBe(DealerStockFitment::STATUS_PLANNED);
+    expect($leg->fitment_type)->toBe('Dropside body');
+    expect($leg->notes)->toBe('Steel dropside, 4.2m, blue cab');
+    expect($leg->share_with_bb)->toBeTrue();
+    expect($leg->share_salesperson)->toBe('Pieter S.');
+    expect($leg->share_end_customer)->toBe('ABC Logistics');
+});
+
+test('multiple legs preserve their own notes and share state independently', function () {
+    $dealer  = makeDealer('Fit Dealer B');
+    $bbDrop  = makeFitmentBb('Dropside Co');
+    $bbCrane = makeFitmentBb('Crane Co');
+    $manager = makeStockManager($dealer);
+    $this->actingAs($manager);
+
+    $bbDrop->linkedDealers()->attach($dealer->id, ['is_active' => true]);
+    $bbCrane->linkedDealers()->attach($dealer->id, ['is_active' => true]);
+
+    $stock = DealerStock::create([
+        'dealer_company_id'     => $dealer->id,
+        'vin'                   => 'FITVIN00002',
+        'current_location_type' => DealerStock::LOCATION_PREMISES,
+        'status'                => DealerStock::STATUS_AVAILABLE,
+    ]);
+
+    $component = \Livewire\Volt\Volt::test('customer.stock.show', ['dealerStock' => $stock]);
+
+    // Leg 1 -- dropside, share end customer ON.
+    $component->set('fitment_body_builder_id', $bbDrop->id)
+        ->set('fitment_type', 'Dropside body')
+        ->set('fitment_notes', 'Steel dropside')
+        ->set('fitment_share_with_bb', true)
+        ->set('fitment_share_end_customer', 'ABC Logistics')
+        ->call('saveFitment')
+        ->assertHasNoErrors();
+
+    // Leg 2 -- crane, share OFF (confidential).
+    $component->set('fitment_body_builder_id', $bbCrane->id)
+        ->set('fitment_type', 'Crane mount')
+        ->set('fitment_notes', 'Hiab 088 BS, rear-mounted')
+        ->set('fitment_share_with_bb', false)
+        ->set('fitment_share_end_customer', '')
+        ->call('saveFitment')
+        ->assertHasNoErrors();
+
+    $legs = $stock->fitments()->orderBy('sequence')->get();
+    expect($legs)->toHaveCount(2);
+
+    expect($legs[0]->body_builder_company_id)->toBe($bbDrop->id);
+    expect($legs[0]->sequence)->toBe(1);
+    expect($legs[0]->share_with_bb)->toBeTrue();
+    expect($legs[0]->share_end_customer)->toBe('ABC Logistics');
+
+    expect($legs[1]->body_builder_company_id)->toBe($bbCrane->id);
+    expect($legs[1]->sequence)->toBe(2);
+    expect($legs[1]->share_with_bb)->toBeFalse();
+    expect($legs[1]->share_end_customer)->toBeNull();
+    expect($legs[1]->notes)->toBe('Hiab 088 BS, rear-mounted');
+});
+
+test('startFitment moves a planned leg to in_progress and auto-completes any other active leg', function () {
+    $dealer  = makeDealer('Fit Dealer C');
+    $bb1     = makeFitmentBb('BB One');
+    $bb2     = makeFitmentBb('BB Two');
+    $manager = makeStockManager($dealer);
+    $this->actingAs($manager);
+
+    $bb1->linkedDealers()->attach($dealer->id, ['is_active' => true]);
+    $bb2->linkedDealers()->attach($dealer->id, ['is_active' => true]);
+
+    $stock = DealerStock::create([
+        'dealer_company_id'     => $dealer->id,
+        'vin'                   => 'FITVIN00003',
+        'current_location_type' => DealerStock::LOCATION_PREMISES,
+        'status'                => DealerStock::STATUS_AVAILABLE,
+    ]);
+
+    $legActive = $stock->fitments()->create([
+        'body_builder_company_id' => $bb1->id,
+        'sequence'                => 1,
+        'status'                  => DealerStockFitment::STATUS_IN_PROGRESS,
+        'started_at'              => now()->subDays(2),
+    ]);
+    $legPlanned = $stock->fitments()->create([
+        'body_builder_company_id' => $bb2->id,
+        'sequence'                => 2,
+        'status'                  => DealerStockFitment::STATUS_PLANNED,
+    ]);
+
+    \Livewire\Volt\Volt::test('customer.stock.show', ['dealerStock' => $stock])
+        ->call('startFitment', $legPlanned->id)
+        ->assertHasNoErrors();
+
+    expect($legActive->fresh()->status)->toBe(DealerStockFitment::STATUS_COMPLETED);
+    expect($legActive->fresh()->completed_at)->not->toBeNull();
+    expect($legPlanned->fresh()->status)->toBe(DealerStockFitment::STATUS_IN_PROGRESS);
+    expect($legPlanned->fresh()->started_at)->not->toBeNull();
+});
+
+test('completeFitment stamps completed_at on an in-progress leg', function () {
+    $dealer  = makeDealer('Fit Dealer D');
+    $bb      = makeFitmentBb('Final BB');
+    $manager = makeStockManager($dealer);
+    $this->actingAs($manager);
+    $bb->linkedDealers()->attach($dealer->id, ['is_active' => true]);
+
+    $stock = DealerStock::create([
+        'dealer_company_id'     => $dealer->id,
+        'vin'                   => 'FITVIN00004',
+        'current_location_type' => DealerStock::LOCATION_BODY_BUILDER,
+        'status'                => DealerStock::STATUS_AVAILABLE,
+    ]);
+    $leg = $stock->fitments()->create([
+        'body_builder_company_id' => $bb->id,
+        'sequence'                => 1,
+        'status'                  => DealerStockFitment::STATUS_IN_PROGRESS,
+        'started_at'              => now()->subDay(),
+    ]);
+
+    \Livewire\Volt\Volt::test('customer.stock.show', ['dealerStock' => $stock])
+        ->call('completeFitment', $leg->id)
+        ->assertHasNoErrors();
+
+    expect($leg->fresh()->status)->toBe(DealerStockFitment::STATUS_COMPLETED);
+    expect($leg->fresh()->completed_at)->not->toBeNull();
+});
+
+test('deleteFitment only removes planned legs', function () {
+    $dealer  = makeDealer('Fit Dealer E');
+    $bb      = makeFitmentBb('Plan BB');
+    $manager = makeStockManager($dealer);
+    $this->actingAs($manager);
+    $bb->linkedDealers()->attach($dealer->id, ['is_active' => true]);
+
+    $stock = DealerStock::create([
+        'dealer_company_id'     => $dealer->id,
+        'vin'                   => 'FITVIN00005',
+        'current_location_type' => DealerStock::LOCATION_PREMISES,
+        'status'                => DealerStock::STATUS_AVAILABLE,
+    ]);
+    $planned = $stock->fitments()->create([
+        'body_builder_company_id' => $bb->id,
+        'sequence'                => 1,
+        'status'                  => DealerStockFitment::STATUS_PLANNED,
+    ]);
+    $completed = $stock->fitments()->create([
+        'body_builder_company_id' => $bb->id,
+        'sequence'                => 2,
+        'status'                  => DealerStockFitment::STATUS_COMPLETED,
+        'started_at'              => now()->subDays(5),
+        'completed_at'            => now()->subDay(),
+    ]);
+
+    \Livewire\Volt\Volt::test('customer.stock.show', ['dealerStock' => $stock])
+        ->call('deleteFitment', $planned->id)
+        ->assertHasNoErrors();
+    expect(DealerStockFitment::find($planned->id))->toBeNull();
+
+    \Livewire\Volt\Volt::test('customer.stock.show', ['dealerStock' => $stock])
+        ->call('deleteFitment', $completed->id)
+        ->assertStatus(422);
+    expect(DealerStockFitment::find($completed->id))->not->toBeNull();
 });

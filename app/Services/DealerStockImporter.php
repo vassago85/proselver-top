@@ -51,17 +51,32 @@ class DealerStockImporter
      * non-alphanumerics before matching so "VIN", "Engine No."
      * and "Engine#" all resolve identically.  First match wins.
      */
+    /*
+     * Heuristic header-name → field guesses.  We lower-case + strip
+     * non-alphanumerics before matching so "VIN", "Engine No."
+     * and "Engine#" all resolve identically.  First match wins, so
+     * order matters within each field's hint list -- specific aliases
+     * come before generic ones (e.g. 'enginenumber' before 'engine'
+     * so we don't grab an "Engine size" column).
+     *
+     * Synonyms accumulated from real-world DMS exports we've seen:
+     *   - Pinnacle:  VIN, Variant, Model Year, Reg No, Engine No
+     *   - Kerridge:  Chassis No, Description, Make, Model
+     *   - Autoline:  Chassis, Reg, Make, Model, Colour
+     *   - Automate:  StockNo, VIN, Make, Model Variant
+     *   - generic:   Vehicle, Stock #, Year Model, Color
+     */
     private const HEADER_HINTS = [
-        'vin'           => ['vin', 'chassis', 'chassisnumber'],
+        'vin'           => ['vin', 'chassisno', 'chassisnumber', 'chassis'],
         'suffix'        => ['suffix'],
-        'variant'       => ['variant'],
-        'description'   => ['description', 'desc'],
-        'engine_number' => ['engineno', 'enginenumber', 'engine'],
-        'colour'        => ['colour', 'color'],
-        'registration'  => ['registration', 'reg', 'regno', 'regnumber', 'licenseplate'],
-        'model_name'    => ['model', 'modelname'],
-        'brand'         => ['brand', 'make', 'manufacturer'],
-        'model_year'    => ['year', 'modelyear', 'yearmodel'],
+        'variant'       => ['variant', 'modelvariant', 'derivative', 'trim'],
+        'description'   => ['description', 'desc', 'vehicledescription'],
+        'engine_number' => ['engineno', 'enginenumber', 'enginenum', 'motorno', 'motornumber', 'engine'],
+        'colour'        => ['colour', 'color', 'exteriorcolour', 'exteriorcolor', 'bodycolour'],
+        'registration'  => ['registration', 'regno', 'regnumber', 'licenseplate', 'licenseno', 'numberplate', 'reg'],
+        'model_name'    => ['modelname', 'vehiclemodel', 'model'],
+        'brand'         => ['brand', 'make', 'manufacturer', 'marque'],
+        'model_year'    => ['modelyear', 'yearmodel', 'vehicleyear', 'year'],
     ];
 
     /**
@@ -238,10 +253,21 @@ class DealerStockImporter
      * a result summary keyed by created/updated/skipped.  Idempotent
      * upsert on (dealer_company_id, vin).
      *
+     * `defaultLocationType` lets the caller declare a starting bucket
+     * for NEW rows (the common case: an OEM-direct-to-BB batch).
+     * Existing rows keep their current location -- the linker + dealer
+     * actions own movement after import, so this only ever applies on
+     * first insert.  Defaults to LOCATION_PREMISES which matches the
+     * historical behaviour.
+     *
      * @param  array<int, array{data: array, warnings: array, errors: array}>  $previewRows
      */
-    public function commit(array $previewRows, Company $dealer): array
-    {
+    public function commit(
+        array $previewRows,
+        Company $dealer,
+        string $defaultLocationType = DealerStock::LOCATION_PREMISES,
+        ?int $defaultLocationId = null,
+    ): array {
         $created = 0;
         $updated = 0;
         $skipped = 0;
@@ -310,7 +336,11 @@ class DealerStockImporter
                 DealerStock::create(array_merge($attrs, [
                     'dealer_company_id'     => $dealer->id,
                     'vin'                   => $vin,
-                    'current_location_type' => DealerStock::LOCATION_PREMISES,
+                    'current_location_type' => $defaultLocationType,
+                    'current_location_id'   => in_array($defaultLocationType, [
+                        DealerStock::LOCATION_BODY_BUILDER,
+                        DealerStock::LOCATION_STORAGE,
+                    ], true) ? $defaultLocationId : null,
                     'status'                => DealerStock::STATUS_AVAILABLE,
                 ]));
                 $created++;
