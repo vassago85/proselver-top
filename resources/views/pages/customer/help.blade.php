@@ -53,12 +53,14 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <ul class="space-y-0.5">
                     @php
                         $toc = [
+                            ['journey', 'The dealer journey'],
                             ['nav', 'Finding your way around'],
                             ['roles', 'Roles &amp; what they can do'],
                             ['dashboard', 'Dashboard'],
                             ['stock', 'Stock — three views'],
-                            ['vehicle', 'Vehicle card actions'],
-                            ['orders', 'Orders &amp; movements'],
+                            ['vehicle', 'Vehicle card &amp; lifecycle'],
+                            ['reserve', 'Reserve workflow'],
+                            ['orders', 'Movements &amp; bookings'],
                             ['bb', 'Body builders — two flows'],
                             ['trips', 'Trips &amp; drivers'],
                             ['reports', 'Reports &amp; resources'],
@@ -85,6 +87,22 @@ new #[Layout('components.layouts.app')] class extends Component {
         {{-- Content --}}
         <article class="space-y-10 text-sm leading-6 text-slate-800">
 
+            {{-- 0. Journey overview --------------------------------------------- --}}
+            <section id="journey" class="scroll-mt-6">
+                <h3 class="text-lg font-semibold text-slate-900">The dealer journey</h3>
+                <p class="mt-2">The portal is organised around one job, in this order:</p>
+                <ol class="mt-3 space-y-2 list-decimal pl-5">
+                    <li><strong>Track your vehicles</strong> — see where every VIN is (premises, BB, storage, transit, on demo).</li>
+                    <li><strong>Reserve</strong> the vehicle when a customer commits — capture salesperson + buyer.</li>
+                    <li><strong>Book a delivery</strong> with ProSelver (or your own driver) to move the chassis where it needs to go.</li>
+                    <li><strong>Mark sold</strong> when the paperwork is done — the reserve carries forward automatically.</li>
+                    <li><strong>Mark handed over</strong> when the buyer collects — that finalises the sale.</li>
+                </ol>
+                <p class="mt-3 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-900">
+                    Every step is visible on the <strong>vehicle card</strong> as a single lifecycle timeline, plus a separate panel for the active transport job. Open any row in <em>All stock</em> to see both at once.
+                </p>
+            </section>
+
             {{-- 1. Navigation ---------------------------------------------------- --}}
             <section id="nav" class="scroll-mt-6">
                 <h3 class="text-lg font-semibold text-slate-900">Finding your way around</h3>
@@ -98,7 +116,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                             </tr>
                         </thead>
                         <tbody class="divide-y divide-slate-100">
-                            <tr><td class="px-3 py-2 font-medium">Orders</td><td class="px-3 py-2">Dashboard, new orders, bulk upload, order list</td></tr>
+                            <tr><td class="px-3 py-2 font-medium">Movements</td><td class="px-3 py-2">Dashboard, <em>Book a delivery</em>, bulk upload, <em>My movements</em></td></tr>
                             <tr><td class="px-3 py-2 font-medium">Stock</td><td class="px-3 py-2">Full stock ledger and the off-site / in-transit view</td></tr>
                             <tr><td class="px-3 py-2 font-medium">Trips</td><td class="px-3 py-2">Plan trips for your own drivers; drivers use <em>My Day</em></td></tr>
                             <tr><td class="px-3 py-2 font-medium">Reports</td><td class="px-3 py-2">Deliveries report and the live wallboard</td></tr>
@@ -108,6 +126,9 @@ new #[Layout('components.layouts.app')] class extends Component {
                         </tbody>
                     </table>
                 </div>
+                <p class="mt-2 text-xs text-slate-600">
+                    OEM and body-builder tenants see slightly different labels — the section above describes the dealer sidebar.
+                </p>
 
                 <h4 class="mt-5 text-sm font-semibold text-slate-900">Sidebar badges to watch for</h4>
                 <ul class="mt-2 list-disc pl-5 space-y-1">
@@ -156,7 +177,12 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <h3 class="text-lg font-semibold text-slate-900">Dashboard</h3>
                 <p class="mt-2">
                     <a href="{{ route('customer.dashboard') }}" class="font-semibold text-blue-600 hover:text-blue-800">Open the dashboard</a> —
-                    seven cards showing where every vehicle on your books is. Tap a card to jump straight into the matching filter on <em>All stock</em>.
+                    eight cards in a tablet-friendly grid, showing where every vehicle on your books is right now.
+                    Tap a card to jump straight into the matching filter on <em>All stock</em>; tap it again to clear.
+                </p>
+                <p class="mt-2 text-xs text-slate-600">
+                    The top row mirrors the commercial funnel (Available → Reserved → Body builder → Scheduled).
+                    The bottom row tracks the physical journey (In transit → Storage → On demo → Awaiting handover).
                 </p>
                 <div class="mt-3 overflow-x-auto">
                     <table class="min-w-full divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white">
@@ -168,12 +194,13 @@ new #[Layout('components.layouts.app')] class extends Component {
                         </thead>
                         <tbody class="divide-y divide-slate-100">
                             <tr><td class="px-3 py-2 font-medium">At premises</td><td class="px-3 py-2">On your dealership floor</td></tr>
+                            <tr><td class="px-3 py-2 font-medium">Reserved</td><td class="px-3 py-2">Held for a customer (salesperson + contact captured)</td></tr>
                             <tr><td class="px-3 py-2 font-medium">At body builder / fitment</td><td class="px-3 py-2">Parked at a linked BB</td></tr>
                             <tr><td class="px-3 py-2 font-medium">Scheduled for movement</td><td class="px-3 py-2">Transport booked; collection not started</td></tr>
                             <tr><td class="px-3 py-2 font-medium">In transit</td><td class="px-3 py-2">On the road with an active job</td></tr>
                             <tr><td class="px-3 py-2 font-medium">At another storage</td><td class="px-3 py-2">Parked at another yard</td></tr>
                             <tr><td class="px-3 py-2 font-medium">On demo with customer</td><td class="px-3 py-2">Out on demo</td></tr>
-                            <tr><td class="px-3 py-2 font-medium">Recently sold</td><td class="px-3 py-2">Marked sold in the last 30 days (may still be in transit)</td></tr>
+                            <tr><td class="px-3 py-2 font-medium">Sold — awaiting handover</td><td class="px-3 py-2">Marked sold; customer has not taken delivery yet</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -226,8 +253,20 @@ new #[Layout('components.layouts.app')] class extends Component {
 
             {{-- 5. Vehicle card ------------------------------------------------- --}}
             <section id="vehicle" class="scroll-mt-6">
-                <h3 class="text-lg font-semibold text-slate-900">Vehicle card actions</h3>
-                <p class="mt-2">From <em>All stock</em>, click any row to open the vehicle card. What you can do depends on your permissions.</p>
+                <h3 class="text-lg font-semibold text-slate-900">Vehicle card &amp; lifecycle</h3>
+                <p class="mt-2">From <em>All stock</em>, click any row to open the vehicle card. The card has four parts:</p>
+                <ol class="mt-3 space-y-1.5 list-decimal pl-5 text-sm">
+                    <li><strong>Vehicle details</strong> — VIN, make, model, registration, colour, dealership.</li>
+                    <li><strong>Where</strong> — the bucket and (if known) the specific location name.</li>
+                    <li><strong>Lifecycle timeline</strong> — Available → Reserved → Sold → Customer handover, with the date and person at each step.</li>
+                    <li><strong>Transport movement</strong> — the active ProSelver job (number, status, pickup → delivery) or "No active transport job".</li>
+                </ol>
+                <p class="mt-3 text-xs text-slate-600">
+                    The lifecycle (commercial) and the transport movement (physical) run independently — a vehicle can be sold while still in transit, or transit before it's reserved. The card shows both at once.
+                </p>
+
+                <h4 class="mt-5 text-sm font-semibold text-slate-900">Actions available</h4>
+                <p class="mt-1 text-xs text-slate-600">What you can do depends on your <em>Manage Dealer Stock</em> permission and the current state of the vehicle.</p>
                 <div class="mt-3 overflow-x-auto">
                     <table class="min-w-full divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white">
                         <thead class="bg-slate-50">
@@ -237,35 +276,87 @@ new #[Layout('components.layouts.app')] class extends Component {
                             </tr>
                         </thead>
                         <tbody class="divide-y divide-slate-100">
-                            <tr><td class="px-3 py-2 font-medium">Mark as sold</td><td class="px-3 py-2">Records salesperson + customer, sets status to sold</td></tr>
+                            <tr><td class="px-3 py-2 font-medium">Book delivery</td><td class="px-3 py-2">Start a transport order pre-filled with this VIN, pickup, brand, model</td></tr>
+                            <tr><td class="px-3 py-2 font-medium">Reserve</td><td class="px-3 py-2">Hold for a buyer — assign salesperson + customer; edit or clear at any time</td></tr>
+                            <tr><td class="px-3 py-2 font-medium">Clear reserve</td><td class="px-3 py-2">Release the hold; the vehicle returns to <em>Available</em></td></tr>
+                            <tr><td class="px-3 py-2 font-medium">Mark sold (from reserve)</td><td class="px-3 py-2">Reserved customer carries forward; stamps <em>sold_at</em></td></tr>
+                            <tr><td class="px-3 py-2 font-medium">Mark as sold</td><td class="px-3 py-2">If not previously reserved — capture salesperson + customer</td></tr>
                             <tr><td class="px-3 py-2 font-medium">Send out on demo</td><td class="px-3 py-2">Captures customer + due-back date, swings to <em>On demo</em></td></tr>
                             <tr><td class="px-3 py-2 font-medium">Return from demo</td><td class="px-3 py-2">Brings the unit back from demo</td></tr>
-                            <tr><td class="px-3 py-2 font-medium">Mark handed over</td><td class="px-3 py-2">Customer handover complete</td></tr>
-                            <tr><td class="px-3 py-2 font-medium">Reverse sale</td><td class="px-3 py-2">Undoes a sale while still allowed</td></tr>
+                            <tr><td class="px-3 py-2 font-medium">Mark as delivered</td><td class="px-3 py-2">Customer handover complete — stamps <em>delivered_at</em>, sale is final</td></tr>
+                            <tr><td class="px-3 py-2 font-medium">Reverse sale</td><td class="px-3 py-2">Undoes a sale while still allowed (before handover)</td></tr>
                             <tr><td class="px-3 py-2 font-medium">Archive</td><td class="px-3 py-2">Removes from active dashboards (soft archive)</td></tr>
                             <tr><td class="px-3 py-2 font-medium">Body builder details</td><td class="px-3 py-2">Optional fields the BB sees when the vehicle is on their premises</td></tr>
+                            <tr><td class="px-3 py-2 font-medium">Print delivery note</td><td class="px-3 py-2">PDF for the customer handover (available on any live unit)</td></tr>
                         </tbody>
                     </table>
                 </div>
             </section>
 
-            {{-- 6. Orders ------------------------------------------------------- --}}
-            <section id="orders" class="scroll-mt-6">
-                <h3 class="text-lg font-semibold text-slate-900">Orders &amp; movements</h3>
+            {{-- 5b. Reserve workflow -------------------------------------------- --}}
+            <section id="reserve" class="scroll-mt-6">
+                <h3 class="text-lg font-semibold text-slate-900">Reserve workflow</h3>
+                <p class="mt-2">
+                    <strong>Reserve</strong> is the step between &ldquo;on the floor&rdquo; and &ldquo;sold&rdquo;. It captures
+                    <em>who is buying</em> and <em>who is selling it to them</em> before the deal closes — so the unit is held off the available list and any salesperson on the team can see it's spoken for.
+                </p>
 
-                <h4 class="mt-3 text-sm font-semibold text-slate-900">Creating an order</h4>
+                <div class="mt-3 grid gap-3 md:grid-cols-2">
+                    <div class="rounded-lg border border-amber-200 bg-amber-50 p-4">
+                        <p class="text-sm font-semibold text-amber-900">When to reserve</p>
+                        <ul class="mt-2 list-disc pl-5 space-y-1 text-xs text-amber-900">
+                            <li>A customer has paid a deposit or signed.</li>
+                            <li>You're holding a specific chassis for a fitment that's already been scoped.</li>
+                            <li>The vehicle is allocated to a deal even though paperwork isn't final yet.</li>
+                        </ul>
+                    </div>
+                    <div class="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                        <p class="text-sm font-semibold text-slate-900">What gets captured</p>
+                        <ul class="mt-2 list-disc pl-5 space-y-1 text-xs text-slate-700">
+                            <li><strong>Salesperson</strong> (optional but recommended)</li>
+                            <li><strong>Customer name</strong> (required)</li>
+                            <li>Customer <strong>phone</strong> and <strong>email</strong> (optional)</li>
+                            <li>Date stamp (<em>reserved_at</em>) — survives through to sold for the timeline</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <h4 class="mt-5 text-sm font-semibold text-slate-900">Reserve → Sold flow</h4>
+                <ol class="mt-2 list-decimal pl-5 space-y-1.5">
+                    <li>On the vehicle card click <strong>Reserve</strong>, enter salesperson + customer, save.</li>
+                    <li>The card shows a <em>Reserved</em> panel with the customer details and timestamp.</li>
+                    <li>When the deal closes, click <strong>Mark sold (from reserve)</strong> — the form is already pre-filled, just confirm.</li>
+                    <li>If anything changes before the close, use <strong>Edit reserve</strong> or <strong>Clear reserve</strong>.</li>
+                </ol>
+
+                <h4 class="mt-5 text-sm font-semibold text-slate-900">Finding reserved units</h4>
+                <ul class="mt-2 list-disc pl-5 space-y-1">
+                    <li>Dashboard <strong>Reserved</strong> card — tap to filter <em>All stock</em>.</li>
+                    <li>All stock → <strong>Reserved only</strong> button next to the status dropdown.</li>
+                    <li>Salesperson filter pills — find every reservation by a specific sales rep.</li>
+                </ul>
+            </section>
+
+            {{-- 6. Movements ---------------------------------------------------- --}}
+            <section id="orders" class="scroll-mt-6">
+                <h3 class="text-lg font-semibold text-slate-900">Movements &amp; bookings</h3>
+
+                <h4 class="mt-3 text-sm font-semibold text-slate-900">Book a delivery</h4>
                 <p class="mt-1">
-                    <a href="{{ route('customer.orders.create') }}" class="font-semibold text-blue-600 hover:text-blue-800">New order</a> —
+                    <a href="{{ route('customer.orders.create') }}" class="font-semibold text-blue-600 hover:text-blue-800">Open Book a delivery</a> —
                     choose pickup, delivery, vehicle, and an <strong>executor</strong>: ProSelver, your own driver, courier, or self-collect. Most dealers use ProSelver for long-distance work.
                 </p>
+                <p class="mt-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-900">
+                    <strong>Tip:</strong> The fastest way to book a delivery is from the vehicle itself — open the stock row (or click <em>Book</em> on the row) and the VIN, pickup location, brand and model are pre-filled.
+                </p>
 
-                <h4 class="mt-4 text-sm font-semibold text-slate-900">My Orders list</h4>
+                <h4 class="mt-4 text-sm font-semibold text-slate-900">My movements list</h4>
                 <p class="mt-1">
-                    <a href="{{ route('customer.orders.index') }}" class="font-semibold text-blue-600 hover:text-blue-800">Open My Orders</a> —
-                    lists movements where your dealership is the booking customer <em>and</em> movements where you are only the <strong>vehicle owner</strong>.
+                    <a href="{{ route('customer.orders.index') }}" class="font-semibold text-blue-600 hover:text-blue-800">Open My movements</a> —
+                    lists movements where your dealership is the booking customer <em>and</em> movements where you are only the <strong>vehicle owner</strong> (body-builder direct orders).
                 </p>
                 <p class="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                    The amber banner means there are direct orders from a body builder waiting for your owner approval. Use <a href="{{ route('customer.orders.index', ['owner_pending' => 1]) }}" class="font-semibold underline">Show only these</a> to focus.
+                    An amber banner means there are direct orders from a body builder waiting for your owner approval. Use <a href="{{ route('customer.orders.index', ['owner_pending' => 1]) }}" class="font-semibold underline">Show only these</a> to focus.
                 </p>
 
                 <p class="mt-3 text-xs text-slate-600">When you are only the vehicle owner, <strong>pricing is hidden</strong> — you are approving the move, not paying for it.</p>
@@ -364,9 +455,13 @@ new #[Layout('components.layouts.app')] class extends Component {
                         </thead>
                         <tbody class="divide-y divide-slate-100">
                             <tr><td class="px-3 py-2">See everything on my books</td><td class="px-3 py-2"><a href="{{ route('customer.stock.index') }}" class="font-semibold text-blue-600 hover:text-blue-800">Stock → All stock</a></td></tr>
+                            <tr><td class="px-3 py-2">Reserve a vehicle for a customer</td><td class="px-3 py-2">Open the vehicle card → <em>Reserve</em></td></tr>
+                            <tr><td class="px-3 py-2">See only reserved units</td><td class="px-3 py-2"><a href="{{ route('customer.stock.index', ['status' => \App\Models\DealerStock::STATUS_RESERVED]) }}" class="font-semibold text-blue-600 hover:text-blue-800">All stock → Reserved only</a></td></tr>
+                            <tr><td class="px-3 py-2">See sold vehicles awaiting handover</td><td class="px-3 py-2"><a href="{{ route('customer.stock.index', ['awaiting_handover' => 1]) }}" class="font-semibold text-blue-600 hover:text-blue-800">All stock → Awaiting handover</a></td></tr>
                             <tr><td class="px-3 py-2">See only vehicles at a body builder</td><td class="px-3 py-2"><a href="{{ route('customer.stock.index', ['bucket' => 'body_builder']) }}" class="font-semibold text-blue-600 hover:text-blue-800">All stock → Body builder</a></td></tr>
                             <tr><td class="px-3 py-2">See what is on the road right now</td><td class="px-3 py-2"><a href="{{ route('customer.stock.index', ['bucket' => 'in_transit']) }}" class="font-semibold text-blue-600 hover:text-blue-800">In transit bucket</a></td></tr>
-                            <tr><td class="px-3 py-2">Book ProSelver to move a vehicle</td><td class="px-3 py-2"><a href="{{ route('customer.orders.create') }}" class="font-semibold text-blue-600 hover:text-blue-800">Orders → New Order</a></td></tr>
+                            <tr><td class="px-3 py-2">Book a delivery for a specific VIN</td><td class="px-3 py-2">All stock row → <em>Book</em>, or vehicle card → <em>Book delivery</em></td></tr>
+                            <tr><td class="px-3 py-2">Book ProSelver to move a vehicle</td><td class="px-3 py-2"><a href="{{ route('customer.orders.create') }}" class="font-semibold text-blue-600 hover:text-blue-800">Movements → Book a delivery</a></td></tr>
                             <tr><td class="px-3 py-2">Approve a BB's &ldquo;please move this&rdquo; request</td><td class="px-3 py-2"><a href="{{ route('customer.movement-requests.index') }}" class="font-semibold text-blue-600 hover:text-blue-800">Movement Requests</a></td></tr>
                             <tr><td class="px-3 py-2">Approve a BB's ProSelver booking on my VIN</td><td class="px-3 py-2"><a href="{{ route('customer.orders.index', ['owner_pending' => 1]) }}" class="font-semibold text-blue-600 hover:text-blue-800">My Orders → owner approvals</a></td></tr>
                             <tr><td class="px-3 py-2">Mark a vehicle sold</td><td class="px-3 py-2">All stock → open the row → <em>Mark as sold</em></td></tr>
@@ -386,14 +481,17 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <h3 class="text-lg font-semibold text-slate-900">Glossary</h3>
                 <dl class="mt-3 grid gap-3 sm:grid-cols-2">
                     <div><dt class="text-sm font-semibold text-slate-900">Stock ledger</dt><dd class="text-xs text-slate-700">Your register of vehicles on the books.</dd></div>
-                    <div><dt class="text-sm font-semibold text-slate-900">Bucket</dt><dd class="text-xs text-slate-700">Where the system thinks the vehicle is.</dd></div>
+                    <div><dt class="text-sm font-semibold text-slate-900">Bucket</dt><dd class="text-xs text-slate-700">Where the system thinks the vehicle is (premises, BB, transit, etc.).</dd></div>
+                    <div><dt class="text-sm font-semibold text-slate-900">Status</dt><dd class="text-xs text-slate-700">Commercial state: available, reserved, sold, demo, archived.</dd></div>
+                    <div><dt class="text-sm font-semibold text-slate-900">Reserve</dt><dd class="text-xs text-slate-700">Hold for a customer — assigns salesperson + buyer before sale.</dd></div>
                     <div><dt class="text-sm font-semibold text-slate-900">Movement / order / job</dt><dd class="text-xs text-slate-700">A transport booking in ProSelver.</dd></div>
-                    <div><dt class="text-sm font-semibold text-slate-900">Handed over</dt><dd class="text-xs text-slate-700">Customer-delivery step recorded on the ledger.</dd></div>
-                    <div><dt class="text-sm font-semibold text-slate-900">Recently sold</dt><dd class="text-xs text-slate-700">Sold in the last 30 days.</dd></div>
+                    <div><dt class="text-sm font-semibold text-slate-900">Awaiting handover</dt><dd class="text-xs text-slate-700">Sold on paper but the buyer hasn't taken delivery yet.</dd></div>
+                    <div><dt class="text-sm font-semibold text-slate-900">Handed over</dt><dd class="text-xs text-slate-700">Customer-delivery step recorded; the sale is final.</dd></div>
+                    <div><dt class="text-sm font-semibold text-slate-900">Recently sold</dt><dd class="text-xs text-slate-700">Sold in the last 30 days (may still be in transit).</dd></div>
                     <div><dt class="text-sm font-semibold text-slate-900">Movement request</dt><dd class="text-xs text-slate-700">BB asks the dealer to arrange transport.</dd></div>
                     <div><dt class="text-sm font-semibold text-slate-900">Direct order</dt><dd class="text-xs text-slate-700">BB books ProSelver; dealer approves as owner.</dd></div>
                     <div><dt class="text-sm font-semibold text-slate-900">Owner approval</dt><dd class="text-xs text-slate-700">Dealer OK for someone else's booking against their VIN.</dd></div>
-                    <div class="sm:col-span-2"><dt class="text-sm font-semibold text-slate-900">Group view</dt><dd class="text-xs text-slate-700">One login sees multiple sibling dealerships.</dd></div>
+                    <div><dt class="text-sm font-semibold text-slate-900">Group view</dt><dd class="text-xs text-slate-700">One login sees multiple sibling dealerships.</dd></div>
                 </dl>
             </section>
 

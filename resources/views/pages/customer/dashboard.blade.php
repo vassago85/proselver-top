@@ -19,13 +19,15 @@ use Livewire\Volt\Component;
  * (OEMs, body builders, etc.) the original jobs-based KPI strip is
  * preserved so we don't regress their workflow.
  *
- * Card model (Phase 2):
+ * Card model (Phase 2 -- 8 cards):
  *   1. At premises               (premises slate)
- *   2. At body builder / fitment (body_builder amber)
- *   3. Scheduled for movement    (joined transport_jobs status, blue)
- *   4. At another storage        (storage indigo)
- *   5. On demo with customer     (on_demo / status=demo teal)
- *   6. Recently sold               (status=sold + sold_at >= now-30d green)
+ *   2. Reserved                  (status=reserved amber)
+ *   3. At body builder / fitment (body_builder amber)
+ *   4. Scheduled for movement    (joined transport_jobs status, sky)
+ *   5. In transit                (in_transit blue)
+ *   6. At another storage        (storage indigo)
+ *   7. On demo with customer     (on_demo / status=demo teal)
+ *   8. Sold — awaiting handover  (status=sold + delivered_at IS NULL emerald)
  *
  * Counts are #[Computed] properties so tapping a card doesn't
  * re-run unrelated data fetches; only the filtered list re-renders.
@@ -48,6 +50,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         $allowed = [
             'premises', 'body_builder', 'storage', 'in_transit',
             'on_demo', 'scheduled', 'recently_delivered',
+            'reserved', 'awaiting_handover',
         ];
 
         if ($bucket === $this->selectedBucket || $bucket === null) {
@@ -64,15 +67,20 @@ new #[Layout('components.layouts.app')] class extends Component {
     }
 
     /**
-     * Map dashboard card keys to stock-index bucket query params.
-     * recently_delivered on the dashboard is "recently sold" on the
-     * ledger (sold in the last 30 days, not the handed-over bucket).
+     * Map dashboard card keys to a stock-index URL.  Some cards map
+     * to bucket filters; others (reserved, awaiting_handover) map to
+     * the status filter instead since they aren't physical buckets.
+     *
+     * Returns ['bucket' => ...] or ['status' => ...] params, ready
+     * to spread into route('customer.stock.index', $params).
      */
-    public function stockIndexBucketParam(string $cardKey): string
+    public function stockIndexParams(string $cardKey): array
     {
         return match ($cardKey) {
-            'recently_delivered' => 'recently_sold',
-            default              => $cardKey,
+            'recently_delivered' => ['bucket' => 'recently_sold'],
+            'awaiting_handover'  => ['status' => DealerStock::STATUS_SOLD, 'awaiting_handover' => 1],
+            'reserved'           => ['status' => DealerStock::STATUS_RESERVED],
+            default              => ['bucket' => $cardKey],
         };
     }
 
@@ -92,6 +100,8 @@ new #[Layout('components.layouts.app')] class extends Component {
             'on_demo'            => $query->onDemo(),
             'scheduled'          => $query->scheduledForMovement(),
             'recently_delivered' => $query->recentlyDelivered(),
+            'reserved'           => $query->reserved(),
+            'awaiting_handover'  => $query->soldAwaitingHandover(),
             default              => $query,
         };
     }
@@ -146,6 +156,18 @@ new #[Layout('components.layouts.app')] class extends Component {
     public function countRecentlyDelivered(): int
     {
         return $this->dealerStockBase()->recentlyDelivered()->count();
+    }
+
+    #[Computed]
+    public function countReserved(): int
+    {
+        return $this->dealerStockBase()->reserved()->count();
+    }
+
+    #[Computed]
+    public function countAwaitingHandover(): int
+    {
+        return $this->dealerStockBase()->soldAwaitingHandover()->count();
     }
 
     /**
@@ -367,14 +389,18 @@ new #[Layout('components.layouts.app')] class extends Component {
                  prefers-reduced-motion via Tailwind's motion-safe variant.
                  ============================================================ --}}
             @php
+                // 8-card grid: top row mirrors the commercial funnel
+                // (Available → Reserved → BB/fitment → Scheduled), bottom
+                // row tracks the physical / post-sale journey.
                 $cards = [
                     ['key' => 'premises',           'label' => 'At premises',              'count' => $this->countPremises,           'accent' => 'slate',    'icon' => 'office'],
-                    ['key' => 'body_builder',       'label' => 'At body builder / fitment','count' => $this->countBodyBuilder,        'accent' => 'amber',    'icon' => 'wrench'],
-                    ['key' => 'scheduled',          'label' => 'Scheduled for movement',   'count' => $this->countScheduled,          'accent' => 'blue',     'icon' => 'calendar'],
-                    ['key' => 'in_transit',         'label' => 'In transit',               'count' => $this->countInTransit,          'accent' => 'sky',      'icon' => 'truck'],
+                    ['key' => 'reserved',           'label' => 'Reserved',                 'count' => $this->countReserved,           'accent' => 'amber',    'icon' => 'bookmark'],
+                    ['key' => 'body_builder',       'label' => 'At body builder',          'count' => $this->countBodyBuilder,        'accent' => 'amber',    'icon' => 'wrench'],
+                    ['key' => 'scheduled',          'label' => 'Scheduled for movement',   'count' => $this->countScheduled,          'accent' => 'sky',      'icon' => 'calendar'],
+                    ['key' => 'in_transit',         'label' => 'In transit',               'count' => $this->countInTransit,          'accent' => 'blue',     'icon' => 'truck'],
                     ['key' => 'storage',            'label' => 'At another storage',       'count' => $this->countStorage,            'accent' => 'indigo',   'icon' => 'box'],
-                    ['key' => 'on_demo',            'label' => 'On demo with customer',    'count' => $this->countOnDemo,             'accent' => 'teal',     'icon' => 'user', 'tooltip' => 'Vehicles marked on demo'],
-                    ['key' => 'recently_delivered', 'label' => 'Recently sold',            'count' => $this->countRecentlyDelivered,  'accent' => 'emerald',  'icon' => 'check', 'tooltip' => 'Marked sold in the last 30 days'],
+                    ['key' => 'on_demo',            'label' => 'On demo with customer',    'count' => $this->countOnDemo,             'accent' => 'teal',     'icon' => 'user'],
+                    ['key' => 'awaiting_handover', 'label'  => 'Sold — awaiting handover', 'count' => $this->countAwaitingHandover,   'accent' => 'emerald',  'icon' => 'check'],
                 ];
                 $accentMap = [
                     'slate'   => ['ring' => 'ring-slate-300',   'chip' => 'bg-slate-100   text-slate-700',   'active' => 'border-slate-900   bg-slate-50',   'count' => 'text-slate-900'],
@@ -387,25 +413,29 @@ new #[Layout('components.layouts.app')] class extends Component {
                 ];
                 $emptyMessages = [
                     'premises'           => 'No vehicles sitting at your dealership right now.',
+                    'reserved'           => 'No vehicles reserved for a customer.',
                     'body_builder'       => 'No vehicles at a body builder right now.',
                     'scheduled'          => 'Nothing scheduled for movement.',
                     'in_transit'         => 'No vehicles on the road right now.',
                     'storage'            => 'No vehicles at another storage location.',
                     'on_demo'            => 'No vehicles out on demo with customers.',
                     'recently_delivered' => 'No vehicles marked sold in the last 30 days.',
+                    'awaiting_handover'  => 'No sold vehicles awaiting customer handover.',
                 ];
                 $cardTooltips = [
                     'premises'           => 'Physically at your dealership',
+                    'reserved'           => 'Held for a customer; salesperson and contact captured',
                     'body_builder'       => 'Parked at a body builder or fitment centre',
                     'scheduled'          => 'Transport booked — collection not started yet',
                     'in_transit'         => 'On the road with an active transport job',
                     'storage'            => 'Parked at another storage yard',
                     'on_demo'            => 'Out on demo with a customer',
                     'recently_delivered' => 'Marked sold in the last 30 days (may still be in transit)',
+                    'awaiting_handover'  => 'Sold but the customer has not taken delivery yet',
                 ];
             @endphp
 
-            <div class="mb-6 grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-3">
+            <div class="mb-6 grid grid-cols-2 md:grid-cols-4 gap-3">
                 @foreach($cards as $i => $c)
                     @php
                         $isActive = $selectedBucket === $c['key'];
@@ -415,7 +445,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                             ? $accent['active'] . ' shadow-sm'
                             : 'border-slate-200 hover:border-slate-300 hover:shadow-sm';
                     @endphp
-                    <a href="{{ route('customer.stock.index', ['bucket' => $this->stockIndexBucketParam($c['key'])]) }}"
+                    <a href="{{ route('customer.stock.index', $this->stockIndexParams($c['key'])) }}"
                        title="{{ $cardTooltips[$c['key']] ?? $c['label'] }}"
                        class="{{ $base }} {{ $stateCls }} {{ $accent['ring'] }}"
                        style="animation-delay: {{ $i * 40 }}ms">
@@ -442,6 +472,9 @@ new #[Layout('components.layouts.app')] class extends Component {
                                         @break
                                     @case('check')
                                         <svg viewBox="0 0 24 24" class="h-4.5 w-4.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.85 8.62a4 4 0 0 1 4.78-4.77 4 4 0 0 1 6.74 0 4 4 0 0 1 4.78 4.78 4 4 0 0 1 0 6.74 4 4 0 0 1-4.77 4.78 4 4 0 0 1-6.75 0 4 4 0 0 1-4.78-4.77 4 4 0 0 1 0-6.76Z"/><path d="m9 12 2 2 4-4"/></svg>
+                                        @break
+                                    @case('bookmark')
+                                        <svg viewBox="0 0 24 24" class="h-4.5 w-4.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/></svg>
                                         @break
                                 @endswitch
                             </span>
@@ -480,7 +513,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                         @if($selectedBucket)
                             <button wire:click="selectBucket(null)" class="text-xs font-semibold text-slate-600 hover:text-slate-900">Show all</button>
                         @endif
-                        <a href="{{ route('customer.stock.index', $selectedBucket ? ['bucket' => $this->stockIndexBucketParam($selectedBucket)] : []) }}" class="text-xs font-semibold text-blue-600 hover:text-blue-500">Open full stock →</a>
+                        <a href="{{ route('customer.stock.index', $selectedBucket ? $this->stockIndexParams($selectedBucket) : []) }}" class="text-xs font-semibold text-blue-600 hover:text-blue-500">Open full stock →</a>
                     </div>
                 </div>
 

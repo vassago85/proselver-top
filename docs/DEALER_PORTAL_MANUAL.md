@@ -6,14 +6,19 @@ This guide is for dealership staff who use the **Dealer Portal** to track vehicl
 
 ## 1. What the portal does
 
-The Dealer Portal helps you:
+The Dealer Portal is built around one job, in this order:
 
-- See **where every vehicle on your stock ledger is** (at your yard, at a body builder, on the road, on demo, sold, or handed over).
-- **Book movements** with ProSelver, your own drivers, a courier, or self-collection.
-- **Approve** body-builder requests and movements placed against your vehicles.
-- **Manage your team**, addresses, branding, and (where permitted) internal drivers and petty cash.
+1. **Track your own vehicles** — see where every VIN is (premises, BB, storage, transit, on demo).
+2. **Reserve** when a customer commits — capture salesperson + buyer.
+3. **Book a delivery** with ProSelver (or your own driver) to move the chassis where it needs to go.
+4. **Mark sold** when the paperwork is done — the reserved customer carries forward automatically.
+5. **Mark handed over** when the buyer collects — that finalises the sale.
+
+Supporting features (body-builder admin, bulk upload, trips, petty cash) are there but aren't the day-to-day path.
 
 You sign in with the same ProSelver account your administrator created for you. What you see in the sidebar depends on your **role** and **permissions**.
+
+> **Two parallel tracks**: every vehicle has a **commercial lifecycle** (available → reserved → sold → handed over) and an independent **transport movement** (booked → in transit → at destination). The vehicle card shows both side by side.
 
 ---
 
@@ -23,7 +28,7 @@ When your company is a dealer, the sidebar header reads **Dealer Portal**. Main 
 
 | Section | What it is for |
 |---------|----------------|
-| **Orders** | Dashboard, new orders, bulk upload, order list |
+| **Movements** | Dashboard, **Book a delivery**, bulk upload, **My movements** |
 | **Stock** | Full stock ledger and off-site / in-transit view |
 | **Trips** | Plan trips for your own drivers; drivers use **My Day** |
 | **Reports** | Deliveries report; live wallboard |
@@ -31,10 +36,12 @@ When your company is a dealer, the sidebar header reads **Dealer Portal**. Main 
 | **Body Builders** | Movement requests; linked BBs; request a new BB |
 | **Account** | Team, branding, drivers, petty cash |
 
+> OEM and body-builder tenants see different labels (still "Orders / New Order / My Orders" rather than "Movements"). This guide describes the **dealer** sidebar.
+
 **Badges on the sidebar**
 
 - **Movement Requests** — amber number = pending requests from linked body builders waiting for your decision.
-- **My Orders** — amber number = **direct orders** where a body builder booked ProSelver and you must approve the move as **vehicle owner**.
+- **My movements** — amber number = **direct orders** where a body builder booked ProSelver and you must approve the move as **vehicle owner**.
 
 If you do not see a menu item, your role may not include that permission. Ask your **Dealer Owner** or ProSelver operations to adjust your access.
 
@@ -58,26 +65,35 @@ Group or franchise principals who manage **multiple dealerships** see a **dealer
 
 ## 4. Dashboard
 
-**Path:** Orders → **Dashboard** (`/customer/dashboard`)
+**Path:** Movements → **Dashboard** (`/customer/dashboard`)
 
-The dashboard is a tablet-friendly **stock console**: seven cards showing counts for your visible dealerships.
+The dashboard is a tablet-friendly **stock console**: eight cards in a 4×2 grid showing counts for your visible dealerships.
+
+**Top row — commercial funnel:**
 
 | Card | Meaning |
 |------|---------|
 | **At premises** | On your dealership floor |
+| **Reserved** | Held for a customer (salesperson + contact captured) |
 | **At body builder / fitment** | Parked at a linked body builder |
 | **Scheduled for movement** | Transport booked; collection not started yet |
+
+**Bottom row — physical & post-sale:**
+
+| Card | Meaning |
+|------|---------|
 | **In transit** | On the road with an active ProSelver job |
 | **At another storage** | Parked at another yard or storage site |
 | **On demo with customer** | Out on demo |
-| **Recently sold** | Marked **sold** in the last 30 days (may still be in transit) |
+| **Sold — awaiting handover** | Marked **sold** but customer has not taken delivery yet |
 
-**Tap any card** to open the **full stock ledger** filtered to that bucket.
+**Tap any card** to open the **full stock ledger** filtered to that bucket. Tap the same card again to clear the filter.
 
 Quick actions at the top:
 
-- **New Order** — if you may submit bookings.
-- **View Orders** — your movement list.
+- **Book a delivery** — if you may submit bookings.
+- **View movements** — your movement list.
+- **Help** — opens this guide.
 
 Use **Open full stock →** below the list for the complete paginated ledger with extra filters (body builder, salesperson, search).
 
@@ -91,12 +107,26 @@ Dealers have **three** stock-related screens. They answer slightly different que
 
 **Path:** Stock → **All stock** (`/customer/stock`)
 
-This is the main **“where is my stock?”** table.
+This is the main **“where is my stock?”** table. Each row shows:
 
-- Filter by **bucket** (location/status chips).
-- Filter by **body builder** or **salesperson** (multi-select pills).
-- Search by VIN, registration, model, etc.
-- Click a row to open the **vehicle card**.
+- **VIN, Vehicle, Colour, Reg** — identity columns.
+- **Where** — the bucket pill plus the concrete location name underneath (which yard, which BB).
+- **Status** — Available / Reserved / Sold / Demo. Sold-without-handover shows an *Awaiting handover* sub-label.
+- **Salesperson** — assigned via reserve or sale.
+- **Customer** — the buyer (also showing during reserve, before sale closes).
+- **Last movement** — active job number + status, or "No active movement".
+- **Actions** — **Book** (deep-links to *Book a delivery* with VIN, pickup, brand, model pre-filled) and **Print delivery note**.
+
+Filters:
+
+- **Bucket chips** (location-based) plus **Scheduled for movement** and **Recently sold** virtual buckets.
+- **Reserved only** one-tap button next to the status dropdown.
+- **Body builder** multi-select pills (only shown when at least one BB hosts your stock).
+- **Salesperson** multi-select pills.
+- **Search** by VIN, registration, model, colour, etc.
+- **Dealership chip strip** (for group / franchise principals).
+
+Click any row to open the **vehicle card**.
 
 **Bucket labels**
 
@@ -139,28 +169,74 @@ Same buckets as the ledger, optimised for quick counts on a tablet. Cards link s
 
 **Path:** click any row on **All stock** → `/customer/stock/{id}`
 
-What you can do here depends on **Manage Dealer Stock**:
+The card has four parts:
+
+1. **Vehicle details** — VIN, make, model, registration, colour, dealership.
+2. **Where** — the bucket and (if known) the specific location name.
+3. **Lifecycle timeline** — Available → Reserved → Sold → Customer handover, each step showing the date and person.
+4. **Transport movement** — the active ProSelver job (number, status, pickup → delivery, scheduled date) or "No active transport job".
+
+The lifecycle and the transport movement run **independently** — a vehicle can be sold while still in transit, or in transit before it's reserved. Both are visible at a glance.
+
+If the vehicle is at a body builder (or has been shared with one), an optional **Body builder details** panel lets you toggle sharing on, set the salesperson/end-customer to show the BB, and write build notes.
+
+### Actions available
 
 | Action | What it does |
 |--------|----------------|
-| **Mark as sold** | Records salesperson and customer; sets status to sold |
-| **Send out on demo** | Customer details and due-back date; location becomes on demo |
+| **Book delivery** | Opens *Book a delivery* pre-filled with this VIN, pickup location, brand, model |
+| **Reserve** | Holds the vehicle for a customer — captures salesperson + customer name (phone/email optional). Status becomes *Reserved*; `reserved_at` is stamped |
+| **Edit reserve / Clear reserve** | Update or release the reserve at any time |
+| **Mark sold (from reserve)** | Reserved customer carries forward; just confirm and stamp `sold_at` |
+| **Mark as sold** | If not previously reserved — captures salesperson + customer fresh |
+| **Send out on demo** | Customer details and due-back date; location becomes *On demo* |
 | **Return from demo** | Brings the unit back from demo |
-| **Mark handed over** | Customer handover complete (ledger location: handed over) |
-| **Reverse sale** | Undoes a sale while still allowed |
+| **Mark as delivered** | Customer handover complete; stamps `delivered_at`; ledger bucket *Handed over*. **Final** |
+| **Reverse sale** | Undoes a sale while still allowed (before handover) |
 | **Archive** | Removes from active dashboards/lists (soft archive) |
-| **Body builder details** | Optional fields shared with the BB when the vehicle is on their premises |
-| **Sale delivery note** | Print/download where available |
+| **Print delivery note** | PDF for the customer handover (available on any live unit) |
 
 Share salesperson and end-customer details with the body builder only when you intend them to see that information on their yard app.
 
 ---
 
-## 7. Orders and movements
+## 7. Reserve workflow
 
-### 7.1 Creating an order
+**Reserve** is the step between "on the floor" and "sold". It captures *who is buying* and *who is selling to them* before the deal closes — so the unit is held off the available list and any salesperson on the team can see it's spoken for.
 
-**Path:** Orders → **New Order** (`/customer/orders/create`)
+### When to reserve
+
+- A customer has paid a deposit or signed.
+- You're holding a specific chassis for a fitment that's already been scoped.
+- The vehicle is allocated to a deal even though paperwork isn't final yet.
+
+### What gets captured
+
+- **Salesperson** (optional but recommended)
+- **Customer name** (required)
+- Customer **phone** and **email** (optional)
+- **Date stamp** (`reserved_at`) — survives through to sold for the timeline
+
+### Reserve → Sold flow
+
+1. On the vehicle card click **Reserve**, enter salesperson + customer, save.
+2. The card shows a **Reserved** panel with the customer details and timestamp; status becomes *Reserved*.
+3. When the deal closes, click **Mark sold (from reserve)** — the form is already pre-filled, just confirm.
+4. If anything changes before the close, use **Edit reserve** or **Clear reserve**.
+
+### Finding reserved units
+
+- Dashboard **Reserved** card — tap to filter *All stock*.
+- All stock → **Reserved only** button next to the status dropdown.
+- Salesperson filter pills — find every reservation by a specific rep.
+
+---
+
+## 8. Movements and bookings
+
+### 8.1 Book a delivery
+
+**Path:** Movements → **Book a delivery** (`/customer/orders/create`)
 
 You choose:
 
@@ -170,33 +246,33 @@ You choose:
 
 Most dealers use **ProSelver** for long-distance transport. Your own driver and trip planner are for internal fleet workflows.
 
-You can also reach create-order from **Off-site & in transit** via **Book return**.
+**Faster route — book from the vehicle:** open the row in *All stock* (or click the row's **Book** action) and the form opens with VIN, pickup location, brand, and model pre-filled. Same shortcut works from **Off-site & in transit** via **Book return**.
 
-### 7.2 My Orders
+### 8.2 My movements
 
-**Path:** Orders → **My Orders** (`/customer/orders`)
+**Path:** Movements → **My movements** (`/customer/orders`)
 
-Lists movements where your dealership is the **booking customer** and movements where you are only the **vehicle owner** (e.g. body-builder direct orders).
+Lists movements where your dealership is the **booking customer** and movements where you are only the **vehicle owner** (body-builder direct orders).
 
 **Filters:** search, status, archived, dealership (group users), and **owner pending only** when approvals are waiting.
 
-**Amber banner:** “Movements awaiting your approval” = **direct orders** (see section 8). Use **Show only these** to filter the list.
+**Amber banner:** "Movements awaiting your approval" = **direct orders** (see section 9). Use **Show only these** to filter the list.
 
-Open an order to confirm readiness, mark urgent, change executor, assign your driver, upload documents or POs, and approve or reject **owner** movements.
+Open a movement to confirm readiness, mark urgent, change executor, assign your driver, upload documents or POs, and approve or reject **owner** movements.
 
 When you are only the vehicle owner, **pricing is hidden** — you are approving that the vehicle may move, not paying the transport.
 
-### 7.3 Bulk upload
+### 8.3 Bulk upload
 
-**Path:** Orders → **Bulk Upload** — for principals and similar roles. Upload a spreadsheet of multiple movements at once.
+**Path:** Movements → **Bulk Upload** — for principals and similar roles. Upload a spreadsheet of multiple movements at once.
 
 ---
 
-## 8. Body builders — two different flows
+## 9. Body builders — two different flows
 
 This is the most common source of confusion. There are **two** ways a body builder moves your stock.
 
-### 8.1 Movement request (BB asks you)
+### 9.1 Movement request (BB asks you)
 
 | | |
 |---|---|
@@ -207,15 +283,15 @@ This is the most common source of confusion. There are **two** ways a body build
 
 Check the sidebar badge on **Movement Requests** for pending items.
 
-### 8.2 Direct order (BB books ProSelver)
+### 9.2 Direct order (BB books ProSelver)
 
 | | |
 |---|---|
 | **Who books transport?** | **The body builder** with ProSelver |
 | **Who pays ProSelver?** | The body builder |
 | **Your role** | **Vehicle owner** — approve or reject that **your** VIN may move |
-| **Where to act** | **My Orders** (not Movement Requests) |
-| **Badge** | Amber count on **My Orders** in the sidebar |
+| **Where to act** | **My movements** (not Movement Requests) |
+| **Badge** | Amber count on **My movements** in the sidebar |
 
 You do **not** see commercial pricing on these owner-only views.
 
@@ -224,7 +300,7 @@ You do **not** see commercial pricing on these owner-only views.
 - **Movement request** = “BB asks you to arrange the move.”
 - **Direct order** = “BB booked ProSelver; you only approve the move.”
 
-### 8.3 Linking body builders
+### 9.3 Linking body builders
 
 **Path:** Body Builders → **Linked Body Builders**
 
@@ -234,7 +310,7 @@ Dealer owners link authorised body builders so they can raise requests or direct
 
 ---
 
-## 9. Trips (own drivers)
+## 10. Trips (own drivers)
 
 **Path:** Trips → **Trip Planner**
 
@@ -246,7 +322,7 @@ Jobs still waiting for **owner approval** cannot be attached to a trip until app
 
 ---
 
-## 10. Reports and resources
+## 11. Reports and resources
 
 | Item | Path | Purpose |
 |------|------|---------|
@@ -257,7 +333,7 @@ Jobs still waiting for **owner approval** cannot be attached to a trip until app
 
 ---
 
-## 11. Account settings
+## 12. Account settings
 
 | Item | Who typically uses it |
 |------|------------------------|
@@ -270,41 +346,50 @@ Jobs still waiting for **owner approval** cannot be attached to a trip until app
 
 ---
 
-## 12. Common tasks — quick reference
+## 13. Common tasks — quick reference
 
 | I want to… | Go to… |
 |------------|--------|
 | See everything on my books | Stock → **All stock** |
+| Reserve a vehicle for a customer | Vehicle card → **Reserve** |
+| See only reserved units | Dashboard **Reserved** card or All stock → **Reserved only** |
+| See sold vehicles awaiting handover | Dashboard **Sold — awaiting handover** card |
 | See only vehicles at a body builder | Dashboard card or All stock → **Body builder** |
 | See what is on the road right now | **In transit** bucket or Off-site & in transit |
-| Book ProSelver to move a vehicle | Orders → **New Order** |
-| Approve a BB’s “please move this” request | Body Builders → **Movement Requests** |
-| Approve a BB’s ProSelver booking on my VIN | Orders → **My Orders** (check badge) |
-| Mark a vehicle sold | All stock → vehicle → **Mark as sold** |
-| Record customer handover | Vehicle card → **Mark handed over** |
+| Book a delivery for a specific VIN | All stock row → **Book**, or vehicle card → **Book delivery** |
+| Book ProSelver to move a vehicle | Movements → **Book a delivery** |
+| Approve a BB's "please move this" request | Body Builders → **Movement Requests** |
+| Approve a BB's ProSelver booking on my VIN | Movements → **My movements** (owner pending) |
+| Mark a vehicle sold (from reserve) | Vehicle card → **Mark sold (from reserve)** |
+| Mark a vehicle sold (no reserve) | Vehicle card → **Mark as sold** |
+| Record customer handover | Vehicle card → **Mark as delivered** |
+| Reverse a sale before handover | Vehicle card → **Reverse sale** |
 | Import new stock | All stock → **Import stock** |
 | Add a delivery address | Resources → **Address Book** |
-| Upload a PO | Open the order → documents section |
+| Upload a PO | Open the movement → documents section |
 
 ---
 
-## 13. Glossary
+## 14. Glossary
 
 | Term | Meaning |
 |------|---------|
 | **Stock ledger** | Your register of vehicles on the books (`dealer_stock`) |
 | **Bucket** | Where the system thinks the vehicle is (premises, BB, in transit, etc.) |
+| **Status** | Commercial state: Available, Reserved, Sold, Demo, Archived |
+| **Reserve** | Hold for a customer — assigns salesperson + buyer before sale |
 | **Movement / order / job** | A transport booking in ProSelver |
-| **Handed over** | Customer delivery step completed on the ledger |
-| **Recently sold** | Sold in the last 30 days |
+| **Awaiting handover** | Sold on paper but the buyer hasn't taken delivery yet |
+| **Handed over** | Customer-delivery step recorded; sale is final |
+| **Recently sold** | Sold in the last 30 days (may still be in transit) |
 | **Movement request** | BB asks dealer to arrange transport |
 | **Direct order** | BB books ProSelver; dealer approves as owner |
-| **Owner approval** | Dealer OK for someone else’s booking against their VIN |
+| **Owner approval** | Dealer OK for someone else's booking against their VIN |
 | **Group view** | One login sees multiple sibling dealerships |
 
 ---
 
-## 14. Getting help
+## 15. Getting help
 
 - **Access or permissions** — contact your dealership’s **Dealer Owner** or ProSelver operations.
 - **Wrong location on stock** — check that the related transport job is completed; stock location often follows job status. Stock controllers can correct details on the vehicle card where permitted.
@@ -313,14 +398,16 @@ Jobs still waiting for **owner approval** cannot be attached to a trip until app
 
 ---
 
-## 15. Suggested walkthrough (new users)
+## 16. Suggested walkthrough (new users)
 
-1. Log in and open **Dashboard** — note the seven card counts.
-2. Tap **At body builder** and confirm the ledger filter matches your expectation.
-3. Open **Stock → All stock** and try search on a known VIN.
-4. Open **Orders → My Orders** and note whether any amber owner-approval badge appears.
-5. Open **Body Builders → Movement Requests** and read the blue info box (movement request vs direct order).
-6. If you manage users, skim **Account → Team** to see role names for your colleagues.
+1. Log in and open **Dashboard** — note the eight card counts and how they line up against the lifecycle.
+2. Tap **At body builder** and confirm the ledger filter matches your expectation; tap again to clear.
+3. Open **Stock → All stock**, try search on a known VIN, then click **Reserved only** to see what's on hold.
+4. Open any vehicle row and look at the **Lifecycle timeline** and **Transport movement** panels.
+5. Click **Book delivery** from a vehicle card and see the create-order form pre-fill.
+6. Open **Movements → My movements** and note whether any amber owner-approval badge appears.
+7. Open **Body Builders → Movement Requests** and read the blue info box (movement request vs direct order).
+8. If you manage users, skim **Account → Team** to see role names for your colleagues.
 
 ---
 

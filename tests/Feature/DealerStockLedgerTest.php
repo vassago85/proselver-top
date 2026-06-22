@@ -550,3 +550,202 @@ test('new order form flags an unknown VIN as a new vehicle', function () {
         ->assertSet('matchedStock', null)
         ->assertSet('vinChecked', true);
 });
+
+// ----- Reserve workflow --------------------------------------------
+
+test('reserving a vehicle captures salesperson + customer and stamps reserved_at', function () {
+    $dealer = makeDealer('Reserve Dealer');
+    $manager = makeStockManager($dealer);
+    $this->actingAs($manager);
+
+    $stock = DealerStock::create([
+        'dealer_company_id'     => $dealer->id,
+        'vin'                   => 'RESVIN0001',
+        'current_location_type' => DealerStock::LOCATION_PREMISES,
+        'status'                => DealerStock::STATUS_AVAILABLE,
+    ]);
+
+    \Livewire\Volt\Volt::test('customer.stock.show', ['dealerStock' => $stock])
+        ->set('salesperson_user_id', $manager->id)
+        ->set('sale_customer_name', 'Hold Customer')
+        ->set('sale_customer_phone', '0821234567')
+        ->call('reserveStock')
+        ->assertHasNoErrors();
+
+    $stock->refresh();
+    expect($stock->status)->toBe(DealerStock::STATUS_RESERVED);
+    expect($stock->salesperson_user_id)->toBe($manager->id);
+    expect($stock->sale_customer_name)->toBe('Hold Customer');
+    expect($stock->sale_customer_phone)->toBe('0821234567');
+    expect($stock->reserved_at)->not->toBeNull();
+});
+
+test('reserve requires a customer name', function () {
+    $dealer = makeDealer('Reserve Dealer 2');
+    $manager = makeStockManager($dealer);
+    $this->actingAs($manager);
+
+    $stock = DealerStock::create([
+        'dealer_company_id'     => $dealer->id,
+        'vin'                   => 'RESVIN0002',
+        'current_location_type' => DealerStock::LOCATION_PREMISES,
+        'status'                => DealerStock::STATUS_AVAILABLE,
+    ]);
+
+    \Livewire\Volt\Volt::test('customer.stock.show', ['dealerStock' => $stock])
+        ->set('sale_customer_name', '')
+        ->call('reserveStock')
+        ->assertHasErrors(['sale_customer_name']);
+
+    expect($stock->fresh()->status)->toBe(DealerStock::STATUS_AVAILABLE);
+});
+
+test('editing an existing reserve preserves the original reserved_at', function () {
+    $dealer = makeDealer('Reserve Dealer 3');
+    $manager = makeStockManager($dealer);
+    $this->actingAs($manager);
+
+    $originalReservedAt = now()->subDays(2);
+
+    $stock = DealerStock::create([
+        'dealer_company_id'     => $dealer->id,
+        'vin'                   => 'RESVIN0003',
+        'current_location_type' => DealerStock::LOCATION_PREMISES,
+        'status'                => DealerStock::STATUS_RESERVED,
+        'sale_customer_name'    => 'Original Customer',
+        'reserved_at'           => $originalReservedAt,
+    ]);
+
+    \Livewire\Volt\Volt::test('customer.stock.show', ['dealerStock' => $stock])
+        ->set('sale_customer_name', 'Updated Customer')
+        ->call('reserveStock')
+        ->assertHasNoErrors();
+
+    $stock->refresh();
+    expect($stock->sale_customer_name)->toBe('Updated Customer');
+    // Truncate to seconds to dodge sub-second drift between the
+    // factory now() and the model's persisted timestamp.
+    expect($stock->reserved_at->timestamp)->toBe($originalReservedAt->timestamp);
+});
+
+test('clearing a reserve wipes the customer fields and returns to available', function () {
+    $dealer = makeDealer('Reserve Dealer 4');
+    $manager = makeStockManager($dealer);
+    $this->actingAs($manager);
+
+    $stock = DealerStock::create([
+        'dealer_company_id'     => $dealer->id,
+        'vin'                   => 'RESVIN0004',
+        'current_location_type' => DealerStock::LOCATION_PREMISES,
+        'status'                => DealerStock::STATUS_RESERVED,
+        'sale_customer_name'    => 'Customer To Clear',
+        'sale_customer_phone'   => '0820000000',
+        'reserved_at'           => now(),
+        'salesperson_user_id'   => $manager->id,
+    ]);
+
+    \Livewire\Volt\Volt::test('customer.stock.show', ['dealerStock' => $stock])
+        ->call('clearReserve')
+        ->assertHasNoErrors();
+
+    $stock->refresh();
+    expect($stock->status)->toBe(DealerStock::STATUS_AVAILABLE);
+    expect($stock->sale_customer_name)->toBeNull();
+    expect($stock->sale_customer_phone)->toBeNull();
+    expect($stock->reserved_at)->toBeNull();
+    expect($stock->salesperson_user_id)->toBeNull();
+});
+
+test('a reserved unit can be marked sold and carries the customer forward', function () {
+    $dealer = makeDealer('Reserve Dealer 5');
+    $manager = makeStockManager($dealer);
+    $this->actingAs($manager);
+
+    $stock = DealerStock::create([
+        'dealer_company_id'     => $dealer->id,
+        'vin'                   => 'RESVIN0005',
+        'current_location_type' => DealerStock::LOCATION_PREMISES,
+        'status'                => DealerStock::STATUS_RESERVED,
+        'sale_customer_name'    => 'Reserved Customer',
+        'sale_customer_phone'   => '0833334444',
+        'reserved_at'           => now()->subDay(),
+    ]);
+
+    \Livewire\Volt\Volt::test('customer.stock.show', ['dealerStock' => $stock])
+        // Mount pre-fills the form from the reserved row, so a
+        // straight call to markSold should succeed.
+        ->call('markSold')
+        ->assertHasNoErrors();
+
+    $stock->refresh();
+    expect($stock->status)->toBe(DealerStock::STATUS_SOLD);
+    expect($stock->sale_customer_name)->toBe('Reserved Customer');
+    expect($stock->sold_at)->not->toBeNull();
+    // reserved_at survives the sale -- the lifecycle timeline uses
+    // it to render Reserved -> Sold.
+    expect($stock->reserved_at)->not->toBeNull();
+});
+
+test('reverseSale clears reserved_at along with sale fields', function () {
+    $dealer = makeDealer('Reverse Sale Dealer');
+    $manager = makeStockManager($dealer);
+    $this->actingAs($manager);
+
+    $stock = DealerStock::create([
+        'dealer_company_id'     => $dealer->id,
+        'vin'                   => 'REVRESVIN1',
+        'current_location_type' => DealerStock::LOCATION_PREMISES,
+        'status'                => DealerStock::STATUS_SOLD,
+        'sale_customer_name'    => 'Sold Customer',
+        'sold_at'               => now(),
+        'reserved_at'           => now()->subDay(),
+    ]);
+
+    \Livewire\Volt\Volt::test('customer.stock.show', ['dealerStock' => $stock])
+        ->call('reverseSale')
+        ->assertHasNoErrors();
+
+    $stock->refresh();
+    expect($stock->status)->toBe(DealerStock::STATUS_AVAILABLE);
+    expect($stock->reserved_at)->toBeNull();
+});
+
+// ----- Dashboard cards: reserved + awaiting handover ----------------
+
+test('countReserved and countAwaitingHandover surface the new commercial buckets', function () {
+    Role::firstOrCreate(['slug' => 'customer_owner'], ['name' => 'Customer Owner', 'tier' => 'customer']);
+    $dealer = makeDealer('Funnel Dealer');
+    $user = User::factory()->create();
+    $user->assignRole('customer_owner');
+    $dealer->users()->attach($user->id);
+    $this->actingAs($user);
+
+    DealerStock::create([
+        'dealer_company_id'     => $dealer->id,
+        'vin'                   => 'FUNRES0001',
+        'current_location_type' => DealerStock::LOCATION_PREMISES,
+        'status'                => DealerStock::STATUS_RESERVED,
+        'sale_customer_name'    => 'Reserved Buyer',
+        'reserved_at'           => now(),
+    ]);
+    DealerStock::create([
+        'dealer_company_id'     => $dealer->id,
+        'vin'                   => 'FUNAWH0001',
+        'current_location_type' => DealerStock::LOCATION_PREMISES,
+        'status'                => DealerStock::STATUS_SOLD,
+        'sold_at'               => now()->subDays(3),
+        // delivered_at intentionally NULL -- the unit is sold but
+        // hasn't been handed over to the customer yet.
+    ]);
+    DealerStock::create([
+        'dealer_company_id'     => $dealer->id,
+        'vin'                   => 'FUNDEL0001',
+        'current_location_type' => DealerStock::LOCATION_DELIVERED,
+        'status'                => DealerStock::STATUS_SOLD,
+        'sold_at'               => now()->subDays(3),
+        'delivered_at'          => now()->subDay(),
+    ]);
+
+    expect(\Livewire\Volt\Volt::test('customer.dashboard')->get('countReserved'))->toBe(1);
+    expect(\Livewire\Volt\Volt::test('customer.dashboard')->get('countAwaitingHandover'))->toBe(1);
+});

@@ -50,6 +50,15 @@ new #[Layout('components.layouts.app')] class extends Component {
     #[Url(as: 'sp')]
     public array $salespersonFilter = [];
 
+    /**
+     * Narrows status=sold rows to those with delivered_at NULL.
+     * Set by the dashboard "Sold — awaiting handover" card so the
+     * stock list shows only the funnel sitting between paperwork
+     * and customer handover.
+     */
+    #[Url(as: 'awaiting_handover')]
+    public bool $awaitingHandover = false;
+
     public function mount(): void
     {
         abort_unless(auth()->user()?->hasPermission('view_dealer_stock'), 403);
@@ -109,7 +118,14 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         $query = DealerStock::query()
             ->whereIn('dealer_company_id', $effectiveCompanyIds)
-            ->with(['brand:id,name', 'currentLocation:id,company_name,city,company_id', 'currentLocation.company:id,name', 'dealerCompany:id,name', 'salesperson:id,name'])
+            ->with([
+                'brand:id,name',
+                'currentLocation:id,company_name,city,company_id',
+                'currentLocation.company:id,name',
+                'dealerCompany:id,name',
+                'salesperson:id,name',
+                'currentJob:id,job_number,status,scheduled_date',
+            ])
             ->whereNull('archived_at')
             ->orderByDesc('updated_at');
 
@@ -123,6 +139,11 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         if ($this->statusFilter !== '') {
             $query->where('status', $this->statusFilter);
+        }
+
+        if ($this->awaitingHandover) {
+            $query->where('status', DealerStock::STATUS_SOLD)
+                ->whereNull('delivered_at');
         }
 
         // Body-builder filter: vehicle's current_location must belong
@@ -386,6 +407,18 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <option value="{{ $key }}">{{ $label }}</option>
             @endforeach
         </select>
+        {{-- One-tap quick filter for Reserved -- the commercial-funnel
+             status the dealer cares about most.  Independent of bucket
+             so reserved-and-at-BB shows up here too. --}}
+        <button type="button"
+                wire:click="$set('statusFilter', '{{ $statusFilter === \App\Models\DealerStock::STATUS_RESERVED ? '' : \App\Models\DealerStock::STATUS_RESERVED }}')"
+                @class([
+                    'inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-semibold transition-colors',
+                    'bg-amber-600 text-white border-amber-600' => $statusFilter === \App\Models\DealerStock::STATUS_RESERVED,
+                    'bg-white text-amber-700 border-amber-300 hover:bg-amber-50' => $statusFilter !== \App\Models\DealerStock::STATUS_RESERVED,
+                ])>
+            Reserved only
+        </button>
     </div>
 
     {{-- Table --}}
@@ -401,9 +434,11 @@ new #[Layout('components.layouts.app')] class extends Component {
                     <th class="px-3 py-2 text-left text-xs font-medium uppercase text-slate-500">Colour</th>
                     <th class="px-3 py-2 text-left text-xs font-medium uppercase text-slate-500">Reg</th>
                     <th class="px-3 py-2 text-left text-xs font-medium uppercase text-slate-500">Where</th>
-                    <th class="px-3 py-2 text-left text-xs font-medium uppercase text-slate-500">Salesperson</th>
                     <th class="px-3 py-2 text-left text-xs font-medium uppercase text-slate-500">Status</th>
-                    <th class="px-3 py-2 text-left text-xs font-medium uppercase text-slate-500">Last update</th>
+                    <th class="px-3 py-2 text-left text-xs font-medium uppercase text-slate-500">Salesperson</th>
+                    <th class="px-3 py-2 text-left text-xs font-medium uppercase text-slate-500">Customer</th>
+                    <th class="px-3 py-2 text-left text-xs font-medium uppercase text-slate-500">Last movement</th>
+                    <th class="px-3 py-2"></th>
                 </tr>
             </thead>
             <tbody class="divide-y divide-slate-100 bg-white">
@@ -442,24 +477,80 @@ new #[Layout('components.layouts.app')] class extends Component {
                                 </div>
                             @endif
                         </td>
-                        <td class="px-3 py-2 text-slate-700">{{ $row->salesperson?->name ?: '—' }}</td>
-                        <td class="px-3 py-2 text-slate-700">
-                            <span>{{ $statusLabels[$row->status] ?? $row->status }}</span>
-                            @if($row->status !== \App\Models\DealerStock::STATUS_ARCHIVED)
-                                <a href="{{ route('dealer-stock.sale-delivery-note.download', $row) }}"
-                                   target="_blank" rel="noopener"
-                                   onclick="event.stopPropagation()"
-                                   title="Print delivery note"
-                                   class="ml-1 inline-flex text-slate-400 hover:text-blue-600 align-middle">
-                                    <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect width="12" height="8" x="6" y="14"/></svg>
-                                </a>
+                        <td class="px-3 py-2">
+                            @php
+                                $statusClass = match($row->status) {
+                                    \App\Models\DealerStock::STATUS_RESERVED => 'bg-amber-50 text-amber-700 border-amber-200',
+                                    \App\Models\DealerStock::STATUS_SOLD     => 'bg-emerald-50 text-emerald-700 border-emerald-200',
+                                    \App\Models\DealerStock::STATUS_DEMO     => 'bg-teal-50 text-teal-700 border-teal-200',
+                                    \App\Models\DealerStock::STATUS_ARCHIVED => 'bg-slate-100 text-slate-600 border-slate-300',
+                                    default => 'bg-slate-50 text-slate-700 border-slate-200',
+                                };
+                            @endphp
+                            <span class="inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold {{ $statusClass }}">
+                                {{ $statusLabels[$row->status] ?? $row->status }}
+                            </span>
+                            @if($row->status === \App\Models\DealerStock::STATUS_SOLD && !$row->delivered_at)
+                                <div class="mt-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700">Awaiting handover</div>
                             @endif
                         </td>
-                        <td class="px-3 py-2 text-slate-500">{{ $row->updated_at->diffForHumans() }}</td>
+                        <td class="px-3 py-2 text-slate-700">{{ $row->salesperson?->name ?: '—' }}</td>
+                        <td class="px-3 py-2 text-slate-700">
+                            @if($row->sale_customer_name)
+                                <div class="font-medium text-slate-900 truncate max-w-[12rem]" title="{{ $row->sale_customer_name }}">{{ $row->sale_customer_name }}</div>
+                                @if($row->sale_customer_phone)
+                                    <div class="text-[11px] text-slate-500">{{ $row->sale_customer_phone }}</div>
+                                @endif
+                            @else
+                                <span class="text-slate-400">—</span>
+                            @endif
+                        </td>
+                        <td class="px-3 py-2 text-slate-500">
+                            @if($row->currentJob)
+                                <div class="text-[11px] font-semibold text-blue-700">{{ $row->currentJob->job_number }}</div>
+                                <div class="text-[11px] text-slate-500">{{ ucfirst(str_replace('_', ' ', $row->currentJob->status)) }}</div>
+                            @else
+                                <div class="text-[11px]">No active movement</div>
+                            @endif
+                            <div class="text-[10px] text-slate-400 mt-0.5">Updated {{ $row->updated_at->diffForHumans() }}</div>
+                        </td>
+                        <td class="px-3 py-2 text-right">
+                            @php
+                                $canBook = $row->status !== \App\Models\DealerStock::STATUS_ARCHIVED
+                                    && $row->current_location_type !== \App\Models\DealerStock::LOCATION_IN_TRANSIT
+                                    && $row->current_location_type !== \App\Models\DealerStock::LOCATION_DELIVERED;
+                                $bookParams = array_filter([
+                                    'vin'                => $row->vin,
+                                    'pickup_location_id' => $row->current_location_id,
+                                    'brand_id'           => $row->brand_id,
+                                    'model_name'         => $row->model_name,
+                                ]);
+                            @endphp
+                            <div class="inline-flex items-center gap-1.5">
+                                @if($canBook)
+                                    <a href="{{ route('customer.orders.create', $bookParams) }}"
+                                       onclick="event.stopPropagation()"
+                                       title="Book delivery for this vehicle"
+                                       class="inline-flex items-center gap-1 rounded-md border border-blue-200 bg-blue-50 px-2 py-1 text-[11px] font-semibold text-blue-700 hover:bg-blue-100">
+                                        <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 18V6a1 1 0 0 0-1-1H3a1 1 0 0 0-1 1v11a1 1 0 0 0 1 1h1"/><path d="M14 9h4l4 4v4a1 1 0 0 1-1 1h-1"/><circle cx="7" cy="18" r="2"/><circle cx="17" cy="18" r="2"/></svg>
+                                        Book
+                                    </a>
+                                @endif
+                                @if($row->status !== \App\Models\DealerStock::STATUS_ARCHIVED)
+                                    <a href="{{ route('dealer-stock.sale-delivery-note.download', $row) }}"
+                                       target="_blank" rel="noopener"
+                                       onclick="event.stopPropagation()"
+                                       title="Print delivery note"
+                                       class="inline-flex text-slate-400 hover:text-blue-600 align-middle">
+                                        <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect width="12" height="8" x="6" y="14"/></svg>
+                                    </a>
+                                @endif
+                            </div>
+                        </td>
                     </tr>
                 @empty
                     <tr>
-                        <td colspan="{{ $isMultiCompany ? 9 : 8 }}" class="px-3 py-12 text-center text-sm text-slate-500">
+                        <td colspan="{{ $isMultiCompany ? 11 : 10 }}" class="px-3 py-12 text-center text-sm text-slate-500">
                             No stock matches these filters.
                         </td>
                     </tr>
