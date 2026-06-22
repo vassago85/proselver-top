@@ -21,7 +21,7 @@ document.addEventListener('alpine:init', () => {
     window.Alpine.data('searchableSelect', (config) => ({
         groups: config.groups || [],
         value: '',
-        label: '',
+        label: config.initialLabel || '',
         query: '',
         open: false,
         active: -1,
@@ -29,6 +29,18 @@ document.addEventListener('alpine:init', () => {
         emptyText: config.emptyText || 'No matches.',
         allowClear: !!config.allowClear,
         disabled: !!config.disabled,
+
+        /**
+         * Tracks whether we've ever successfully read the bound value
+         * from Livewire.  Until then we treat "wire returned empty" as
+         * "wire isn't ready yet", not "user cleared the field" -- so a
+         * race between Alpine x-init and Livewire boot can't silently
+         * wipe the selected label (the bug where ?companyId=1 filtered
+         * the page but the dropdown showed "Pick a customer" placeholder
+         * with no way to reset it because the X button is gated on
+         * value !== '').
+         */
+        _wireReady: false,
 
         hydrate() {
             const hidden = this.$refs.hiddenInput;
@@ -56,16 +68,39 @@ document.addEventListener('alpine:init', () => {
             // Always non-propagating (passes false) — we're MIRRORING the
             // Livewire state visually, not changing it, so this never
             // triggers a roundtrip back to the server.
+            //
+            // CRITICAL: don't blow away a previously-set label just
+            // because we momentarily can't read the bound value.  An
+            // empty hidden.value is ambiguous on Livewire 3 -- it can
+            // mean "user cleared" OR "wire hasn't pushed the URL value
+            // into the DOM yet".  Treat "wire ready" as ground truth
+            // and ignore hidden.value when it's empty AND wire isn't
+            // confirmed -- otherwise ?companyId=1 deep-links flicker
+            // back to the placeholder + lose the clear button.
             const readAndApply = () => {
-                let v = '';
+                let fromWire;
                 if (wireProp && this.$wire) {
-                    try { v = this.$wire.get(wireProp) ?? ''; } catch (e) { /* not in livewire scope */ }
+                    try { fromWire = this.$wire.get(wireProp); } catch (e) { /* livewire not ready */ }
                 }
-                if (v === '' || v == null) {
-                    v = hidden.value ?? '';
+
+                if (fromWire !== undefined) {
+                    this._wireReady = true;
+                    const v = fromWire == null ? '' : String(fromWire);
+                    if (v !== String(this.value ?? '')) {
+                        this.applyValue(v, false);
+                    }
+                    return;
                 }
-                if (String(v ?? '') !== String(this.value ?? '')) {
-                    this.applyValue(v ?? '', false);
+
+                // Wire not ready.  Only trust hidden.value when it's
+                // non-empty -- an empty hidden input doesn't tell us
+                // anything we can act on without risking wiping the
+                // server-rendered initialLabel.
+                if (hidden.value) {
+                    const v = String(hidden.value);
+                    if (v !== String(this.value ?? '')) {
+                        this.applyValue(v, false);
+                    }
                 }
             };
 
@@ -90,6 +125,15 @@ document.addEventListener('alpine:init', () => {
             // already fired earlier — addEventListener silently no-ops
             // and the synchronous pass above already did the work.
             document.addEventListener('livewire:initialized', readAndApply, { once: true });
+
+            // Pass 3b — safety net for the race where
+            // `livewire:initialized` has already fired before we attach
+            // the listener.  Runs once 50ms after mount; by then
+            // Livewire is universally booted and $wire.get() returns
+            // the URL-decoded value.  Cheap enough to skip on every
+            // mount; without it, ?companyId=1 deep-links land with an
+            // empty-looking dropdown and no clear button.
+            setTimeout(readAndApply, 50);
 
             // Pass 4 — every subsequent wire:navigate landing.  Without
             // this, navigating away and back to the same page with a

@@ -377,12 +377,25 @@ new #[Layout('components.layouts.app')] class extends Component {
             ->select('company_id')
             ->distinct();
 
-        $companyOptions = Company::query()
+        $customerCompanies = Company::query()
             ->whereIn('id', $proselverCompanyIds)
             ->orderBy('name')
-            ->get(['id', 'name'])
-            ->map(fn ($c) => ['value' => $c->id, 'label' => $c->name])
-            ->all();
+            ->get(['id', 'name']);
+
+        // First option clears the filter (matches the X-button on the
+        // dropdown) so accounts can flip back to "all customers" without
+        // hunting for the corner X.
+        $companyOptions = array_merge(
+            [['value' => '', 'label' => 'All customers']],
+            $customerCompanies->map(fn ($c) => ['value' => (string) $c->id, 'label' => $c->name])->all(),
+        );
+
+        // Server-resolved label so the dropdown shows the right customer
+        // name on first paint even when Livewire's JS state hasn't booted
+        // yet (?companyId=1 deep-link, page refresh).
+        $companyLabel = $this->companyId
+            ? ($customerCompanies->firstWhere('id', (int) $this->companyId)?->name)
+            : null;
 
         // Window-wide counts: deliberately ignore the completion filter
         // so the "X of Y complete" indicator is stable as the user toggles
@@ -438,6 +451,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         return [
             'jobs' => $jobs,
             'companyOptions' => $companyOptions,
+            'companyLabel' => $companyLabel,
             'totals' => $totals,
             'canExclude' => $canExclude,
         ];
@@ -502,6 +516,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <x-searchable-select
                     wire:model.live="companyId"
                     :options="$companyOptions"
+                    :selected-label="$companyLabel"
                     placeholder="Pick a customer"
                 />
             </div>

@@ -19,6 +19,15 @@
     'name' => null,
     'required' => false,
     'id' => null,
+    /*
+     * Optional server-resolved label of the currently selected option.
+     * When provided we paint it as the initial label so the dropdown
+     * shows the right text on first render, before Livewire's JS state
+     * has booted -- otherwise a deep-link like /admin/invoices?companyId=1
+     * filters the page correctly but the box shows the placeholder
+     * (and the X-clear button is hidden, so the user can't reset).
+     */
+    'selectedLabel' => null,
 ])
 
 @php
@@ -91,6 +100,7 @@
     x-data="searchableSelect({
         groups: @js($groups),
         initial: $refs.hiddenInput?.value ?? '',
+        initialLabel: @js($selectedLabel),
         placeholder: @js($placeholder),
         emptyText: @js($emptyText),
         allowClear: @js((bool) $allowClear),
@@ -133,8 +143,8 @@
             type="text"
             autocomplete="off"
             :disabled="disabled"
-            :placeholder="open ? (value ? label : placeholder) : (value ? label : placeholder)"
-            :value="open ? query : (value ? label : '')"
+            :placeholder="label || placeholder"
+            :value="open ? query : (label || '')"
             @input="query = $event.target.value; openAndFocus()"
             @focus="openAndFocus()"
             @keydown.down.prevent="open ? moveActive(1) : openAndFocus()"
@@ -146,7 +156,7 @@
         <span class="flex shrink-0 items-center gap-1.5">
             <button
                 type="button"
-                x-show="allowClear && value !== '' && !disabled"
+                x-show="allowClear && (value !== '' || label !== '') && !disabled"
                 @click.stop="clear(); $refs.search.focus()"
                 class="flex h-4 w-4 items-center justify-center rounded text-gray-400 hover:bg-gray-100 hover:text-gray-600"
                 title="Clear"
