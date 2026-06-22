@@ -735,19 +735,27 @@ new #[Layout('components.layouts.app')] class extends Component {
     {{-- ──────────────────────────────────────────────────────────────
          Advance & toll estimate (read-only for dealers).
 
-         Surfaces the carrier's estimated toll cost and any advance plan
-         already attached to the trip. Helps dealers who run executor=
-         internal jobs see what cash their driver is expected to need.
-         Hidden when nothing has been calculated yet.
+         Surfaces the toll estimate and any advance plan attached to
+         the trip.  Designed for dealers who run executor=internal
+         jobs and need to see what cash their own driver is expected
+         to need; the phone pill on the bottom is the driver's
+         cellphone for bank-send.
 
-         Driver phone shows as a copy-friendly pill so the dealer admin
-         can paste it straight into the banking app when paying out
-         petty cash on the dedicated /customer/petty-cash queue.
+         NEVER shown when ProSelver is the executor -- in that case
+         the advance / toll budget is ProSelver's internal operational
+         data (driver cellphones, expense categories, route budget).
+         The dealer paid a quoted line haul to ProSelver and has no
+         business with the driver-cash breakdown.  Same for the
+         driver-phone allocate-cash pill -- those are ProSelver staff
+         personal numbers and stay internal.
+
+         Hidden when nothing has been calculated yet.
          ────────────────────────────────────────────────────────────── --}}
     @php
-        $hasAdvance = (float) ($job->advance_total ?? 0) > 0;
-        $hasTollEstimate = (float) ($job->estimated_toll_cost ?? 0) > 0;
-        $driverPhone = $job->driver?->phone;
+        $isProselverExecuted = $job->executor_type === \App\Models\Job::EXECUTOR_PROSELVER;
+        $hasAdvance = !$isProselverExecuted && (float) ($job->advance_total ?? 0) > 0;
+        $hasTollEstimate = !$isProselverExecuted && (float) ($job->estimated_toll_cost ?? 0) > 0;
+        $driverPhone = $isProselverExecuted ? null : $job->driver?->phone;
     @endphp
     @if($hasAdvance || $hasTollEstimate)
         <section class="mb-6 rounded-xl bg-white border border-slate-200 p-5">
