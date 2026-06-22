@@ -159,8 +159,15 @@ new #[Layout('components.layouts.app')] class extends Component
         </div>
 
         <form wire:submit.prevent="addLink" class="rounded-xl border border-slate-200 bg-white p-5 space-y-3">
-            <h2 class="text-sm font-semibold text-slate-900">Add a body builder</h2>
-            <p class="text-xs text-slate-500">Search the directory of registered body-builder companies. Don't see them? Contact ProSelver to set them up first.</p>
+            <div class="flex items-center justify-between">
+                <h2 class="text-sm font-semibold text-slate-900">Add a body builder</h2>
+                <a href="{{ route('customer.body-builders.requests.index') }}" class="text-xs font-semibold text-blue-600 hover:text-blue-800 underline">Requests</a>
+            </div>
+            <p class="text-xs text-slate-500">
+                Search the directory of registered body-builder companies. Don't see them?
+                <a href="{{ route('customer.body-builders.requests.create') }}" class="font-semibold text-blue-600 underline">Request a new one</a>
+                — ProSelver ops will add it (or point you at the existing entry).
+            </p>
 
             <div>
                 <label class="block text-xs font-medium text-slate-700">Search</label>

@@ -70,13 +70,25 @@ new #[Layout('components.layouts.app')] class extends Component {
             ? array_values(array_intersect($visibleCompanyIds, [(int) $this->dealershipFilter]))
             : $visibleCompanyIds;
 
-        $query = Job::whereIn('company_id', $effectiveCompanyIds)
+        // Dealer-visible orders: jobs the dealer placed themselves
+        // (company_id) AND jobs placed by someone else against a
+        // vehicle on their stock ledger (owner_company_id -- e.g. a
+        // BB raising a direct order with Proselver against their VIN).
+        // Owner-only rows are masked of commercial detail on the show
+        // page, but they MUST appear in this list so the dealer can
+        // see + approve them.
+        $query = Job::query()
+            ->where(function ($q) use ($effectiveCompanyIds) {
+                $q->whereIn('company_id', $effectiveCompanyIds)
+                    ->orWhereIn('owner_company_id', $effectiveCompanyIds);
+            })
             ->with([
                 'pickupLocation:id,company_name,city',
                 'deliveryLocation:id,company_name,city',
                 'brand:id,name',
                 'driver:id,name',
                 'company:id,name',
+                'ownerCompany:id,name',
             ])
             ->latest('created_at');
 
@@ -117,11 +129,23 @@ new #[Layout('components.layouts.app')] class extends Component {
             ? Company::whereIn('id', $visibleCompanyIds)->orderBy('name')->get(['id', 'name'])
             : collect();
 
+        // Pending-owner-approval badge: how many jobs are waiting
+        // for THIS dealer to OK a movement someone else raised on
+        // their stock.  Surfaces on the page as a top-line callout
+        // so dealers can't miss BB direct orders.
+        $pendingOwnerApprovalCount = Job::query()
+            ->whereIn('owner_company_id', $effectiveCompanyIds)
+            ->where('requires_owner_approval', true)
+            ->where('owner_approval_status', Job::OWNER_APPROVAL_PENDING)
+            ->count();
+
         return [
             'jobs' => $query->paginate(15),
             'archivedCount' => Job::whereIn('company_id', $visibleCompanyIds)->whereNotNull('archived_at')->count(),
             'visibleCompanies' => $visibleCompanies,
             'isMultiCompany' => $visibleCompanies->isNotEmpty(),
+            'pendingOwnerApprovalCount' => $pendingOwnerApprovalCount,
+            'currentCompanyIds' => $effectiveCompanyIds,
         ];
     }
 };
@@ -133,6 +157,21 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     {{-- Dealership chip strip (multi-tenant CEO only) --}}
     <x-dealership-chip-strip :companies="$visibleCompanies" :selected="$dealershipFilter" wire-model="dealershipFilter" />
+
+    @if($pendingOwnerApprovalCount > 0)
+        <div class="mb-4 rounded-xl border-2 border-amber-300 bg-amber-50 p-4 flex items-start gap-3">
+            <svg class="h-6 w-6 mt-0.5 shrink-0 text-amber-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+            <div class="flex-1">
+                <div class="text-sm font-bold text-amber-900">
+                    {{ $pendingOwnerApprovalCount }} movement{{ $pendingOwnerApprovalCount === 1 ? '' : 's' }} awaiting your approval
+                </div>
+                <p class="text-xs text-amber-800 mt-0.5">
+                    Body builders (or other tenants) have placed direct orders to move vehicles from your stock
+                    ledger.  Open each one below to approve or reject.
+                </p>
+            </div>
+        </div>
+    @endif
 
     {{-- Filters --}}
     <div class="mb-6 flex flex-col sm:flex-row gap-4 items-start sm:items-center">
@@ -175,10 +214,22 @@ new #[Layout('components.layouts.app')] class extends Component {
             </thead>
             <tbody class="divide-y divide-gray-200">
                 @forelse($jobs as $job)
+                @php
+                    $ownsButDidntPlace = $job->owner_company_id
+                        && in_array($job->owner_company_id, $currentCompanyIds, true)
+                        && !in_array($job->company_id, $currentCompanyIds, true);
+                @endphp
                 <tr class="hover:bg-gray-50 cursor-pointer" onclick="window.location='{{ route('customer.orders.show', $job) }}'">
-                    <td class="px-4 py-3 text-sm font-medium text-blue-600">{{ $job->job_number ?? '—' }}</td>
+                    <td class="px-4 py-3 text-sm font-medium text-blue-600">
+                        {{ $job->job_number ?? '—' }}
+                        @if($ownsButDidntPlace && $job->isPendingOwnerApproval())
+                            <span class="ml-1 inline-flex items-center rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800 align-middle">approve</span>
+                        @elseif($ownsButDidntPlace)
+                            <span class="ml-1 inline-flex items-center rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600 align-middle">by {{ $job->company?->name }}</span>
+                        @endif
+                    </td>
                     @if($isMultiCompany)
-                        <td class="px-4 py-3 text-sm text-gray-700">{{ $job->company?->name ?? '—' }}</td>
+                        <td class="px-4 py-3 text-sm text-gray-700">{{ ($ownsButDidntPlace ? $job->ownerCompany?->name : $job->company?->name) ?? '—' }}</td>
                     @endif
                     <td class="px-4 py-3 text-sm text-gray-900">{{ $job->brand?->name }} {{ $job->model_name }}</td>
                     <td class="px-4 py-3 text-sm font-mono text-gray-600 uppercase">{{ $job->vin ? strtoupper($job->vin) : '—' }}</td>

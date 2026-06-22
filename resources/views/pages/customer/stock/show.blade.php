@@ -39,6 +39,14 @@ new #[Layout('components.layouts.app')] class extends Component {
     public string $demo_customer_email = '';
     public string $demo_due_back_at = '';
 
+    // Body-builder share metadata -- bound directly to the stock row.
+    // The toggle decides whether the BB user (when the vehicle is on
+    // their workshop premises) gets to see these fields.
+    public bool $bb_share_with_body_builder = false;
+    public string $bb_share_salesperson = '';
+    public string $bb_share_end_customer = '';
+    public string $bb_build_notes = '';
+
     public function mount(DealerStock $dealerStock): void
     {
         $user = auth()->user();
@@ -50,6 +58,43 @@ new #[Layout('components.layouts.app')] class extends Component {
         );
 
         $this->stock = $dealerStock;
+
+        // Seed the share fields from the persisted stock row so the
+        // form shows what's currently saved.
+        $this->bb_share_with_body_builder = (bool) $dealerStock->bb_share_with_body_builder;
+        $this->bb_share_salesperson  = (string) ($dealerStock->bb_share_salesperson  ?? '');
+        $this->bb_share_end_customer = (string) ($dealerStock->bb_share_end_customer ?? '');
+        $this->bb_build_notes        = (string) ($dealerStock->bb_build_notes        ?? '');
+    }
+
+    /**
+     * Persist the "Body builder details" panel.  Separate save action
+     * because mixing it with sale/demo flows would force every dealer
+     * action to know about BB fields; keeping it isolated also lets us
+     * track who last touched the BB share state if we want to add that
+     * later without redoing every sale write.
+     */
+    public function saveBodyBuilderDetails(): void
+    {
+        $this->ensureManage();
+
+        $this->validate([
+            'bb_share_with_body_builder' => 'boolean',
+            'bb_share_salesperson'       => 'nullable|string|max:120',
+            'bb_share_end_customer'      => 'nullable|string|max:200',
+            'bb_build_notes'             => 'nullable|string|max:2000',
+        ]);
+
+        $this->stock->update([
+            'bb_share_with_body_builder' => $this->bb_share_with_body_builder,
+            'bb_share_salesperson'  => $this->bb_share_salesperson  ?: null,
+            'bb_share_end_customer' => $this->bb_share_end_customer ?: null,
+            'bb_build_notes'        => $this->bb_build_notes        ?: null,
+        ]);
+
+        session()->flash('success', $this->bb_share_with_body_builder
+            ? 'Body builder details saved -- they\'ll see these when the vehicle arrives.'
+            : 'Body builder details saved (sharing is OFF).');
     }
 
     protected function ensureManage(): User
@@ -290,6 +335,51 @@ new #[Layout('components.layouts.app')] class extends Component {
                     <div><dt class="text-xs text-slate-500">Sold at</dt><dd class="text-slate-900">{{ optional($stock->sold_at)->format('d M Y H:i') ?? '—' }}</dd></div>
                     <div><dt class="text-xs text-slate-500">Delivered</dt><dd class="text-slate-900">{{ $stock->delivered_at ? $stock->delivered_at->format('d M Y H:i') : 'Not yet — sale still reversible' }}</dd></div>
                 </dl>
+            @endif
+
+            {{-- Body-builder share panel.  Edited inline so the dealer
+                 can flip the share toggle + capture build notes without
+                 leaving the stock card. --}}
+            @if($canManageStock)
+                <hr class="my-4 border-slate-100">
+                <form wire:submit="saveBodyBuilderDetails">
+                    <div class="flex items-start justify-between gap-3 mb-3">
+                        <div>
+                            <h3 class="text-sm font-semibold text-slate-900">Body builder details</h3>
+                            <p class="text-xs text-slate-500 mt-0.5">Optional. If sharing is on, the body builder sees these when the vehicle is on their premises.</p>
+                        </div>
+                        <label class="inline-flex items-center gap-2 text-xs">
+                            <input type="checkbox" wire:model.live="bb_share_with_body_builder" class="h-4 w-4 rounded border-slate-300 text-blue-600">
+                            <span class="font-medium text-slate-700">Share with BB</span>
+                        </label>
+                    </div>
+
+                    @if($bb_internal_job_number = $stock->bb_internal_job_number)
+                        <div class="mb-3 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">
+                            BB's internal job #: <strong>{{ $bb_internal_job_number }}</strong>
+                        </div>
+                    @endif
+
+                    <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        <div>
+                            <label class="block text-xs font-medium text-slate-600 mb-1">Salesperson (shown to BB)</label>
+                            <input wire:model="bb_share_salesperson" type="text" class="w-full rounded border border-slate-300 px-2 py-1.5 text-sm" placeholder="e.g. {{ $stock->salesperson?->name ?: 'Sales rep' }}">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-slate-600 mb-1">End customer (shown to BB)</label>
+                            <input wire:model="bb_share_end_customer" type="text" class="w-full rounded border border-slate-300 px-2 py-1.5 text-sm" placeholder="e.g. ABC Logistics">
+                        </div>
+                    </div>
+
+                    <div class="mt-3">
+                        <label class="block text-xs font-medium text-slate-600 mb-1">Build notes / instructions</label>
+                        <textarea wire:model="bb_build_notes" rows="3" class="w-full rounded border border-slate-300 px-2 py-1.5 text-sm" placeholder="Tipper body, blue cab, tow-bar..."></textarea>
+                    </div>
+
+                    <button type="submit" class="mt-3 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-700">
+                        Save body builder details
+                    </button>
+                </form>
             @endif
 
             @if($stock->status === DealerStock::STATUS_DEMO)

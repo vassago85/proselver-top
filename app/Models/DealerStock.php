@@ -78,6 +78,7 @@ class DealerStock extends Model
     protected $fillable = [
         'uuid',
         'dealer_company_id',
+        'oem_company_id',
         'vin',
         'engine_number',
         'registration',
@@ -105,6 +106,11 @@ class DealerStock extends Model
         'demo_due_back_at',
         'delivered_at',
         'archived_at',
+        'bb_share_with_body_builder',
+        'bb_share_salesperson',
+        'bb_share_end_customer',
+        'bb_build_notes',
+        'bb_internal_job_number',
     ];
 
     protected $casts = [
@@ -114,6 +120,7 @@ class DealerStock extends Model
         'delivered_at'     => 'datetime',
         'archived_at'      => 'datetime',
         'model_year'       => 'integer',
+        'bb_share_with_body_builder' => 'boolean',
     ];
 
     protected static function booted(): void
@@ -141,6 +148,28 @@ class DealerStock extends Model
     public function dealerCompany(): BelongsTo
     {
         return $this->belongsTo(Company::class, 'dealer_company_id');
+    }
+
+    /**
+     * The OEM that dispatched the chassis.  Set when a body-builder
+     * records an OEM-direct arrival (chassis lands at the workshop
+     * before the dealer has been allocated).  May still be set after
+     * the dealer is assigned -- it's informational, not a tenancy
+     * link.
+     */
+    public function oemCompany(): BelongsTo
+    {
+        return $this->belongsTo(Company::class, 'oem_company_id');
+    }
+
+    /**
+     * Chassis arrived at a body-builder but hasn't yet been allocated
+     * to a dealer.  Drives the "Unassigned" badge on the yard list
+     * and the "Assign to dealer" panel on the yard show page.
+     */
+    public function isUnassigned(): bool
+    {
+        return $this->dealer_company_id === null;
     }
 
     public function brand(): BelongsTo
@@ -183,6 +212,16 @@ class DealerStock extends Model
     public function scopeAtPremises(Builder $query): Builder
     {
         return $query->where('current_location_type', self::LOCATION_PREMISES);
+    }
+
+    /**
+     * Stock rows where the dealer hasn't been allocated yet (OEM-
+     * direct arrivals at a body-builder).  Used by the BB yard view
+     * to surface vehicles that still need a dealer attached.
+     */
+    public function scopeUnassigned(Builder $query): Builder
+    {
+        return $query->whereNull('dealer_company_id');
     }
 
     public function scopeAtBodyBuilder(Builder $query): Builder

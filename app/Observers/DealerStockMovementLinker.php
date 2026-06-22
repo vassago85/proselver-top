@@ -118,9 +118,41 @@ class DealerStockMovementLinker
         if (!$vin || !$job->company_id) {
             return null;
         }
-        return DealerStock::where('dealer_company_id', $job->company_id)
+
+        // Primary match: dealer's own row for this VIN.
+        $stock = DealerStock::where('dealer_company_id', $job->company_id)
             ->where('vin', $vin)
             ->first();
+        if ($stock) {
+            return $stock;
+        }
+
+        // Fallback: an unassigned arrival (OEM-direct chassis sitting
+        // at a body builder, recorded by the BB before the dealer
+        // was known).  When the job that lifts it comes through with
+        // company_id = a dealer, we claim the row by stamping the
+        // dealer onto it.
+        //
+        // Refuse to claim if ANY dealer already holds this VIN -- the
+        // data is ambiguous (could be the same chassis with a
+        // duplicate record, could be a VIN typo).  Bailing avoids
+        // accidentally re-assigning a vehicle that's already on a
+        // different dealer's books.
+        $unclaimed = DealerStock::whereNull('dealer_company_id')
+            ->where('vin', $vin)
+            ->first();
+        if ($unclaimed) {
+            $anyOtherDealerOwnsVin = DealerStock::whereNotNull('dealer_company_id')
+                ->where('vin', $vin)
+                ->exists();
+            if (!$anyOtherDealerOwnsVin) {
+                $unclaimed->dealer_company_id = $job->company_id;
+                $unclaimed->save();
+                return $unclaimed->fresh();
+            }
+        }
+
+        return null;
     }
 
     protected function applyScheduled(DealerStock $stock, Job $job): void

@@ -58,6 +58,18 @@ class TripPlanner
             );
         }
 
+        // Owner-approval gate.  When a BB places a direct order against
+        // a vehicle on a dealer's stock ledger, the dealer must approve
+        // before we plan / dispatch.  Refusing to attach the job to a
+        // trip until that lock is cleared is the simplest enforcement
+        // point -- it blocks both driver assignment and trip-day
+        // planning in one place.
+        if ($job->isPendingOwnerApproval()) {
+            throw new InvalidArgumentException(
+                "Job #{$job->id} is awaiting approval from the vehicle owner ({$job->ownerCompany?->name}). Cannot plan until approved."
+            );
+        }
+
         return DB::transaction(function () use ($trip, $job) {
             $baseSeq = $trip->nextSequence();
 

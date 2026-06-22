@@ -56,5 +56,9 @@ Volt::route('trips/{trip}', 'customer.trips.show')->name('trips.show');
 // against their inventory.  Companion movement-requests queue handles
 // the approve / reject side.
 Volt::route('body-builders', 'customer.body-builders.index')->name('body-builders.index');
+// Dealer-initiated "add a body builder we don't have in the directory"
+// workflow.  Ops approves, optionally merging into an existing BB.
+Volt::route('body-builders/requests', 'customer.body-builders.requests.index')->name('body-builders.requests.index');
+Volt::route('body-builders/requests/create', 'customer.body-builders.requests.create')->name('body-builders.requests.create');
 Volt::route('movement-requests', 'customer.movement-requests.index')->name('movement-requests.index');
 Volt::route('movement-requests/{request}', 'customer.movement-requests.show')->name('movement-requests.show');

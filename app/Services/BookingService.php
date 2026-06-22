@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\Company;
+use App\Models\DealerStock;
 use App\Models\Job;
 use App\Models\JobEvent;
 use App\Models\Location;
@@ -68,6 +69,19 @@ class BookingService
             (bool) ($data['bypass_po_verification'] ?? false),
         );
 
+        // Owner-approval gate: when a body builder (or any other
+        // tenant that isn't the dealer) places a movement on a VIN
+        // sitting on a dealer's stock ledger, the dealer MUST sign
+        // off before dispatch can roll.  We pre-compute these fields
+        // here so they get stamped at insert time -- backfilling them
+        // post-create would leave a brief window where the gate
+        // doesn't apply.
+        $ownerFields = $this->resolveOwnerApprovalFields(
+            customerCompanyId: (int) ($data['company_id'] ?? 0),
+            vin: (string) ($data['vin'] ?? ''),
+            explicitOwnerCompanyId: $data['owner_company_id'] ?? null,
+        );
+
         $job = Job::create([
             'job_number' => $this->numberGenerator->generate(),
             'job_type' => Job::TYPE_TRANSPORT,
@@ -129,6 +143,9 @@ class BookingService
             'self_collect_id_number' => $executorType === Job::EXECUTOR_SELF_COLLECT
                 ? ($data['self_collect_id_number'] ?? null)
                 : null,
+            'owner_company_id' => $ownerFields['owner_company_id'],
+            'requires_owner_approval' => $ownerFields['requires_owner_approval'],
+            'owner_approval_status' => $ownerFields['owner_approval_status'],
         ]);
 
         // Zone-rate pricing is ProSelver's commercial pricing — it
@@ -236,6 +253,55 @@ class BookingService
         return $companyId
             ? Company::whereKey($companyId)->value('workflow_type')
             : null;
+    }
+
+    /**
+     * Decide whether this booking needs the vehicle-owner's blessing
+     * before it can dispatch -- and if so, who that owner is.
+     *
+     * Triggered when ANYONE other than the dealer that owns the VIN
+     * places the order (typically a body builder placing a direct
+     * order with Proselver to ship a finished build elsewhere).  The
+     * owner_company_id is taken from the dealer_stock row that the
+     * VIN matches; if no match exists the gate is off (it's a brand
+     * new vehicle that the platform hasn't seen before, e.g. an
+     * OEM-direct supply order placed by the BB).
+     *
+     * Callers can also pass an explicit owner_company_id to override
+     * the VIN lookup (used by direct admin edits / scripts).
+     *
+     * @return array{owner_company_id: ?int, requires_owner_approval: bool, owner_approval_status: ?string}
+     */
+    protected function resolveOwnerApprovalFields(
+        int $customerCompanyId,
+        string $vin,
+        ?int $explicitOwnerCompanyId = null,
+    ): array {
+        $ownerCompanyId = $explicitOwnerCompanyId;
+
+        if ($ownerCompanyId === null && $vin !== '') {
+            $ownerCompanyId = DealerStock::query()
+                ->whereRaw('UPPER(vin) = ?', [strtoupper(trim($vin))])
+                ->whereNotNull('dealer_company_id')
+                ->whereNull('archived_at')
+                ->value('dealer_company_id');
+        }
+
+        // Same tenant placing the order on their own vehicle -- no
+        // owner gate (they ARE the owner).
+        if ($ownerCompanyId === null || (int) $ownerCompanyId === $customerCompanyId) {
+            return [
+                'owner_company_id' => null,
+                'requires_owner_approval' => false,
+                'owner_approval_status' => null,
+            ];
+        }
+
+        return [
+            'owner_company_id' => (int) $ownerCompanyId,
+            'requires_owner_approval' => true,
+            'owner_approval_status' => Job::OWNER_APPROVAL_PENDING,
+        ];
     }
 
     protected function calculateAndStoreRoute(Job $job): void

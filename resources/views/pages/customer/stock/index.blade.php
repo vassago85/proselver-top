@@ -2,6 +2,8 @@
 
 use App\Models\Company;
 use App\Models\DealerStock;
+use App\Models\Location;
+use App\Models\User;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\Url;
 use Livewire\Volt\Component;
@@ -29,6 +31,25 @@ new #[Layout('components.layouts.app')] class extends Component {
     #[Url(as: 'dealership')]
     public string $dealershipFilter = '';
 
+    /**
+     * Multi-select body-builder filter -- IDs of Company rows (BB
+     * tenants) whose Locations host any of the dealer's stock.  The
+     * picker only ever surfaces the BBs the dealer is actually
+     * dealing with, so we don't drown them in 200 random BB names.
+     *
+     * @var array<int>
+     */
+    #[Url(as: 'bb')]
+    public array $bodyBuilderFilter = [];
+
+    /**
+     * Multi-select salesperson filter -- user IDs.
+     *
+     * @var array<int>
+     */
+    #[Url(as: 'sp')]
+    public array $salespersonFilter = [];
+
     public function mount(): void
     {
         abort_unless(auth()->user()?->hasPermission('view_dealer_stock'), 403);
@@ -38,6 +59,44 @@ new #[Layout('components.layouts.app')] class extends Component {
     public function updatedBucketFilter(): void { $this->resetPage(); }
     public function updatedStatusFilter(): void { $this->resetPage(); }
     public function updatedDealershipFilter(): void { $this->resetPage(); }
+    public function updatedBodyBuilderFilter(): void { $this->resetPage(); }
+    public function updatedSalespersonFilter(): void { $this->resetPage(); }
+
+    /**
+     * Pill-style toggle: clicking the same value removes it from the
+     * filter array; clicking a new value adds it.  Cast to int so we
+     * never store a string-vs-int mismatch (Livewire URL hydration
+     * can pull either back).
+     */
+    public function toggleBodyBuilder(int $companyId): void
+    {
+        $existing = array_map('intval', $this->bodyBuilderFilter);
+        $this->bodyBuilderFilter = in_array($companyId, $existing, true)
+            ? array_values(array_diff($existing, [$companyId]))
+            : array_values(array_merge($existing, [$companyId]));
+        $this->resetPage();
+    }
+
+    public function toggleSalesperson(int $userId): void
+    {
+        $existing = array_map('intval', $this->salespersonFilter);
+        $this->salespersonFilter = in_array($userId, $existing, true)
+            ? array_values(array_diff($existing, [$userId]))
+            : array_values(array_merge($existing, [$userId]));
+        $this->resetPage();
+    }
+
+    public function clearBodyBuilderFilter(): void
+    {
+        $this->bodyBuilderFilter = [];
+        $this->resetPage();
+    }
+
+    public function clearSalespersonFilter(): void
+    {
+        $this->salespersonFilter = [];
+        $this->resetPage();
+    }
 
     public function with(): array
     {
@@ -50,7 +109,7 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         $query = DealerStock::query()
             ->whereIn('dealer_company_id', $effectiveCompanyIds)
-            ->with(['brand:id,name', 'currentLocation:id,company_name,city', 'dealerCompany:id,name', 'salesperson:id,name'])
+            ->with(['brand:id,name', 'currentLocation:id,company_name,city,company_id', 'currentLocation.company:id,name', 'dealerCompany:id,name', 'salesperson:id,name'])
             ->whereNull('archived_at')
             ->orderByDesc('updated_at');
 
@@ -60,6 +119,19 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         if ($this->statusFilter !== '') {
             $query->where('status', $this->statusFilter);
+        }
+
+        // Body-builder filter: vehicle's current_location must belong
+        // to one of the picked BB companies.  Implies the bucket is
+        // body_builder so we narrow that too (saves a join hit when
+        // someone picks a BB without first clicking the bucket).
+        if (!empty($this->bodyBuilderFilter)) {
+            $query->where('current_location_type', DealerStock::LOCATION_BODY_BUILDER)
+                ->whereHas('currentLocation', fn ($q) => $q->whereIn('company_id', array_map('intval', $this->bodyBuilderFilter)));
+        }
+
+        if (!empty($this->salespersonFilter)) {
+            $query->whereIn('salesperson_user_id', array_map('intval', $this->salespersonFilter));
         }
 
         if ($this->search !== '') {
@@ -95,9 +167,49 @@ new #[Layout('components.layouts.app')] class extends Component {
             ? Company::whereIn('id', $visibleCompanyIds)->orderBy('name')->get(['id', 'name'])
             : collect();
 
+        // BB picker -- only the BBs actually holding the dealer's
+        // stock right now (so the filter strip stays short and
+        // relevant).  Built off the bucket-counted dataset so we
+        // ignore the user's own bucket/search filters; otherwise
+        // selecting "Pretoria BB" would hide every other BB.
+        $bbOptions = Location::query()
+            ->whereIn('id', (clone $baseCounts)
+                ->where('current_location_type', DealerStock::LOCATION_BODY_BUILDER)
+                ->whereNotNull('current_location_id')
+                ->distinct()
+                ->pluck('current_location_id')
+            )
+            ->with('company:id,name')
+            ->get(['id', 'company_id', 'company_name'])
+            ->groupBy('company_id')
+            ->map(function ($locs, $companyId) {
+                $first = $locs->first();
+                return [
+                    'id'    => (int) $companyId,
+                    'name'  => $first->company?->name ?: $first->company_name,
+                    'count' => $locs->count(),
+                ];
+            })
+            ->sortBy('name')
+            ->values();
+
+        // Salesperson picker -- users who own at least one stock row
+        // in scope.  Same "only show people that have stock" logic as
+        // BBs so we don't enumerate every sales role on the company.
+        $spOptions = User::query()
+            ->whereIn('id', (clone $baseCounts)
+                ->whereNotNull('salesperson_user_id')
+                ->distinct()
+                ->pluck('salesperson_user_id')
+            )
+            ->orderBy('name')
+            ->get(['id', 'name']);
+
         return [
             'rows' => $query->paginate(25),
             'bucketCounts' => $bucketCounts,
+            'bbOptions' => $bbOptions,
+            'spOptions' => $spOptions,
             'bucketLabels' => [
                 DealerStock::LOCATION_PREMISES     => 'At premises',
                 DealerStock::LOCATION_BODY_BUILDER => 'Body builder',
@@ -171,6 +283,68 @@ new #[Layout('components.layouts.app')] class extends Component {
         @endforeach
     </div>
 
+    {{-- Body-builder filter pills.  Only rendered when at least one
+         BB hosts the dealer's stock -- no point showing an empty
+         filter strip on dealers who never go to a body builder. --}}
+    @if($bbOptions->isNotEmpty())
+        <div class="mb-3">
+            <div class="mb-1 flex items-center gap-2">
+                <span class="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Body builders</span>
+                @if(!empty($bodyBuilderFilter))
+                    <button wire:click="clearBodyBuilderFilter" type="button"
+                        class="text-[10px] font-semibold text-slate-500 hover:text-rose-600 underline">
+                        Clear
+                    </button>
+                @endif
+            </div>
+            <div class="flex flex-wrap gap-2">
+                @foreach($bbOptions as $bb)
+                    @php $active = in_array((int) $bb['id'], array_map('intval', $bodyBuilderFilter), true); @endphp
+                    <button type="button" wire:click="toggleBodyBuilder({{ $bb['id'] }})" @class([
+                        'inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors',
+                        'bg-amber-600 text-white border-amber-600' => $active,
+                        'bg-amber-50 text-amber-900 border-amber-200 hover:bg-amber-100' => !$active,
+                    ])>
+                        {{ $bb['name'] }}
+                        <span @class([
+                            'rounded-full px-1.5 text-[10px] tabular-nums',
+                            'bg-white/30' => $active,
+                            'bg-amber-100 text-amber-700' => !$active,
+                        ])>{{ $bb['count'] }}</span>
+                    </button>
+                @endforeach
+            </div>
+        </div>
+    @endif
+
+    {{-- Salesperson filter pills.  Only rendered when at least one
+         row has a salesperson attached. --}}
+    @if($spOptions->isNotEmpty())
+        <div class="mb-4">
+            <div class="mb-1 flex items-center gap-2">
+                <span class="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Salespeople</span>
+                @if(!empty($salespersonFilter))
+                    <button wire:click="clearSalespersonFilter" type="button"
+                        class="text-[10px] font-semibold text-slate-500 hover:text-rose-600 underline">
+                        Clear
+                    </button>
+                @endif
+            </div>
+            <div class="flex flex-wrap gap-2">
+                @foreach($spOptions as $sp)
+                    @php $active = in_array((int) $sp->id, array_map('intval', $salespersonFilter), true); @endphp
+                    <button type="button" wire:click="toggleSalesperson({{ $sp->id }})" @class([
+                        'inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors',
+                        'bg-slate-900 text-white border-slate-900' => $active,
+                        'bg-white text-slate-700 border-slate-300 hover:bg-slate-50' => !$active,
+                    ])>
+                        {{ $sp->name }}
+                    </button>
+                @endforeach
+            </div>
+        </div>
+    @endif
+
     {{-- Search + status filter --}}
     <div class="mb-4 flex flex-col sm:flex-row gap-3">
         <input wire:model.live.debounce.300ms="search" type="text"
@@ -197,7 +371,8 @@ new #[Layout('components.layouts.app')] class extends Component {
                     <th class="px-3 py-2 text-left text-xs font-medium uppercase text-slate-500">Vehicle</th>
                     <th class="px-3 py-2 text-left text-xs font-medium uppercase text-slate-500">Colour</th>
                     <th class="px-3 py-2 text-left text-xs font-medium uppercase text-slate-500">Reg</th>
-                    <th class="px-3 py-2 text-left text-xs font-medium uppercase text-slate-500">Bucket</th>
+                    <th class="px-3 py-2 text-left text-xs font-medium uppercase text-slate-500">Where</th>
+                    <th class="px-3 py-2 text-left text-xs font-medium uppercase text-slate-500">Salesperson</th>
                     <th class="px-3 py-2 text-left text-xs font-medium uppercase text-slate-500">Status</th>
                     <th class="px-3 py-2 text-left text-xs font-medium uppercase text-slate-500">Last update</th>
                 </tr>
@@ -221,7 +396,24 @@ new #[Layout('components.layouts.app')] class extends Component {
                             <span class="inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold {{ ($colours[$row->current_location_type][0] ?? 'bg-slate-100 text-slate-700 border-slate-300') }}">
                                 {{ $bucketLabels[$row->current_location_type] ?? $row->current_location_type }}
                             </span>
+                            {{-- Concrete location surfaces underneath the bucket
+                                 pill -- mainly so "Body builder" rows show
+                                 WHICH builder (the bucket alone is useless when
+                                 you're juggling 5 workshops). --}}
+                            @if($row->currentLocation)
+                                @php
+                                    $locLabel = $row->currentLocation->company?->name
+                                        ?: $row->currentLocation->company_name;
+                                    if ($row->currentLocation->city && $locLabel) {
+                                        $locLabel .= ' · ' . $row->currentLocation->city;
+                                    }
+                                @endphp
+                                <div class="mt-0.5 text-[11px] text-slate-500 truncate max-w-[14rem]" title="{{ $locLabel }}">
+                                    {{ $locLabel }}
+                                </div>
+                            @endif
                         </td>
+                        <td class="px-3 py-2 text-slate-700">{{ $row->salesperson?->name ?: '—' }}</td>
                         <td class="px-3 py-2 text-slate-700">
                             <span>{{ $statusLabels[$row->status] ?? $row->status }}</span>
                             @if($row->status !== \App\Models\DealerStock::STATUS_ARCHIVED)
@@ -238,7 +430,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                     </tr>
                 @empty
                     <tr>
-                        <td colspan="{{ $isMultiCompany ? 8 : 7 }}" class="px-3 py-12 text-center text-sm text-slate-500">
+                        <td colspan="{{ $isMultiCompany ? 9 : 8 }}" class="px-3 py-12 text-center text-sm text-slate-500">
                             No stock matches these filters.
                         </td>
                     </tr>

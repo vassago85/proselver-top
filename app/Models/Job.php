@@ -448,7 +448,20 @@ class Job extends Model
         'self_collect_phone',
         'self_collect_id_number',
         'archived_at',
+        // BB direct-order owner-approval gate.  Set when a BB places a
+        // movement on a vehicle that's on a dealer's stock ledger -- the
+        // dealer (owner) has to approve before dispatch can roll.
+        'owner_company_id',
+        'requires_owner_approval',
+        'owner_approval_status',
+        'owner_approved_at',
+        'owner_approved_by_user_id',
+        'owner_decision_notes',
     ];
+
+    public const OWNER_APPROVAL_PENDING  = 'pending';
+    public const OWNER_APPROVAL_APPROVED = 'approved';
+    public const OWNER_APPROVAL_REJECTED = 'rejected';
 
     protected function casts(): array
     {
@@ -459,6 +472,8 @@ class Job extends Model
             'po_amount' => 'decimal:2',
             'po_verified' => 'boolean',
             'po_verified_at' => 'datetime',
+            'requires_owner_approval' => 'boolean',
+            'owner_approved_at' => 'datetime',
             'is_urgent' => 'boolean',
             'urgent_marked_at' => 'datetime',
             'recalled_at' => 'datetime',
@@ -967,6 +982,34 @@ class Job extends Model
         return $this->belongsTo(User::class, 'created_by_user_id');
     }
 
+    /**
+     * The dealer who OWNS the vehicle this job is moving.  Distinct
+     * from $this->company_id (the paying customer) -- only populated
+     * when a non-owner tenant (e.g. a body builder) places the order
+     * on a vehicle that's already on a dealer's stock ledger.
+     */
+    public function ownerCompany(): BelongsTo
+    {
+        return $this->belongsTo(Company::class, 'owner_company_id');
+    }
+
+    public function ownerApprovedBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'owner_approved_by_user_id');
+    }
+
+    public function isPendingOwnerApproval(): bool
+    {
+        return $this->requires_owner_approval
+            && $this->owner_approval_status === self::OWNER_APPROVAL_PENDING;
+    }
+
+    public function isOwnerApproved(): bool
+    {
+        return ! $this->requires_owner_approval
+            || $this->owner_approval_status === self::OWNER_APPROVAL_APPROVED;
+    }
+
     public function damageAcknowledgedBy(): BelongsTo
     {
         return $this->belongsTo(User::class, 'damage_acknowledged_by');
@@ -1118,7 +1161,13 @@ class Job extends Model
 
         return $query->where(function (Builder $q) use ($companyIds) {
             $q->whereIn('company_id', $companyIds)
-                ->orWhereIn('executing_company_id', $companyIds);
+                ->orWhereIn('executing_company_id', $companyIds)
+                // Vehicle-owner visibility: a dealer must see jobs
+                // placed against their stock by anyone else (notably
+                // a body builder placing a direct order).  Without
+                // this clause they wouldn't even know the vehicle was
+                // moving until it disappeared from the BB's yard.
+                ->orWhereIn('owner_company_id', $companyIds);
         });
     }
 

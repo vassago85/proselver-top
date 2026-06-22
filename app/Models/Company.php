@@ -40,6 +40,7 @@ class Company extends Model
     public function isOem(): bool { return $this->type === self::TYPE_OEM; }
     public function isDealer(): bool { return $this->type === self::TYPE_DEALER; }
     public function isInternal(): bool { return $this->type === self::TYPE_INTERNAL; }
+    public function isBodyBuilder(): bool { return $this->type === self::TYPE_BODY_BUILDER; }
 
     protected $fillable = [
         'uuid',

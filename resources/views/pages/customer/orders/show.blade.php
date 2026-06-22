@@ -11,6 +11,20 @@ new #[Layout('components.layouts.app')] class extends Component {
     public Job $job;
     public bool $requiresConfirmation = false;
 
+    /**
+     * True when the viewing tenant is the vehicle OWNER on this job
+     * but NOT the customer who placed (and is paying for) the order.
+     * Surfaces in the view so price-bearing panels (PO amounts, sell
+     * prices, invoices) are hidden -- the owner gets visibility +
+     * approval rights, not commercial detail.
+     */
+    public bool $isOwnerOnlyView = false;
+
+    // Owner-approval decision form state (only used when the viewing
+    // tenant is the vehicle owner AND the job is pending sign-off).
+    public bool $showOwnerDecisionPanel = false;
+    public string $ownerDecisionNotes = '';
+
     public bool $showIssuePanel = false;
     public string $issueReason = '';
     public string $issueNote = '';
@@ -40,7 +54,12 @@ new #[Layout('components.layouts.app')] class extends Component {
     {
         $user = auth()->user();
         $company = $user->company();
-        abort_unless($company && $job->company_id === $company->id, 403);
+        // Customer (paid for it) OR vehicle owner (BB placed a direct
+        // order against their stock) can both open this page.
+        $isCustomer = $company && $job->company_id === $company->id;
+        $isOwner    = $company && $job->owner_company_id && $job->owner_company_id === $company->id;
+        abort_unless($isCustomer || $isOwner, 403);
+        $this->isOwnerOnlyView = $isOwner && !$isCustomer;
 
         // Location scoping for dispatcher-level customer users: mirror the
         // order list rule — you can only open an order that either collects
@@ -60,10 +79,101 @@ new #[Layout('components.layouts.app')] class extends Component {
             'driver:id,name,phone',
             'documents',
             'purchaseOrders',
+            'ownerCompany:id,name',
+            'ownerApprovedBy:id,name',
+            'company:id,name',
         ]);
 
         $this->requiresConfirmation = $company->requiresExternalConfirmation();
         $this->newExecutorType = $job->executor_type ?: Job::EXECUTOR_PROSELVER;
+    }
+
+    /* ----------------------------------------------------------------
+     | Owner approval -- the dealer who owns the VIN approves /
+     | rejects a movement raised by someone else (typically a BB
+     | placing a direct order with Proselver against their stock).
+     |-----------------------------------------------------------------*/
+
+    public function openOwnerDecisionPanel(): void
+    {
+        $this->showOwnerDecisionPanel = true;
+        $this->ownerDecisionNotes = '';
+    }
+
+    public function closeOwnerDecisionPanel(): void
+    {
+        $this->showOwnerDecisionPanel = false;
+        $this->ownerDecisionNotes = '';
+    }
+
+    public function approveAsOwner(): void
+    {
+        $this->guardOwnerDecision();
+
+        $this->job->update([
+            'owner_approval_status'     => Job::OWNER_APPROVAL_APPROVED,
+            'owner_approved_at'         => now(),
+            'owner_approved_by_user_id' => auth()->id(),
+            'owner_decision_notes'      => $this->ownerDecisionNotes ?: null,
+        ]);
+
+        \App\Models\JobEvent::create([
+            'job_id'     => $this->job->id,
+            'event_type' => 'owner_approved_movement',
+            'event_at'   => now(),
+            'user_id'    => auth()->id(),
+            'notes'      => $this->ownerDecisionNotes ?: 'Movement approved by vehicle owner.',
+        ]);
+
+        $this->showOwnerDecisionPanel = false;
+        $this->ownerDecisionNotes = '';
+        session()->flash('success', 'Movement approved.');
+        $this->job->refresh()->load(['ownerCompany:id,name', 'ownerApprovedBy:id,name']);
+    }
+
+    public function rejectAsOwner(): void
+    {
+        $this->guardOwnerDecision();
+
+        $this->job->update([
+            'owner_approval_status'     => Job::OWNER_APPROVAL_REJECTED,
+            'owner_approved_at'         => now(),
+            'owner_approved_by_user_id' => auth()->id(),
+            'owner_decision_notes'      => $this->ownerDecisionNotes ?: null,
+            // Reject = the BB can't move our vehicle.  We cancel the
+            // job so Proselver ops sees it gone from the queue.
+            'status'                    => Job::STATUS_CANCELLED,
+            'cancelled_at'              => now(),
+            'cancellation_reason'       => 'Rejected by vehicle owner: ' . ($this->ownerDecisionNotes ?: 'no reason given.'),
+        ]);
+
+        \App\Models\JobEvent::create([
+            'job_id'     => $this->job->id,
+            'event_type' => 'owner_rejected_movement',
+            'event_at'   => now(),
+            'user_id'    => auth()->id(),
+            'notes'      => $this->ownerDecisionNotes ?: 'Movement rejected by vehicle owner.',
+        ]);
+
+        $this->showOwnerDecisionPanel = false;
+        $this->ownerDecisionNotes = '';
+        session()->flash('success', 'Movement rejected -- Proselver has been notified.');
+        $this->job->refresh()->load(['ownerCompany:id,name', 'ownerApprovedBy:id,name']);
+    }
+
+    /**
+     * Centralise the owner-decision gate so approve / reject share
+     * the same permission and state checks.  Authorised callers are:
+     *   - users whose company is the vehicle owner on this job,
+     *   - holding the owner_approve_movement permission,
+     *   - on a job that's actually pending an owner decision.
+     */
+    protected function guardOwnerDecision(): void
+    {
+        $user = auth()->user();
+        abort_unless($user && $user->hasPermission('owner_approve_movement'), 403);
+        abort_unless($this->job->owner_company_id === $user->company()?->id, 403);
+        abort_unless($this->job->isPendingOwnerApproval(), 422, 'This movement is no longer awaiting your approval.');
     }
 
     /* ----------------------------------------------------------------
@@ -349,6 +459,83 @@ new #[Layout('components.layouts.app')] class extends Component {
             <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="5"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><line x1="10" x2="14" y1="12" y2="12"/></svg>
             Archived on {{ $job->archived_at->format('d M Y') }} — hidden from the active order list.
         </div>
+    @endif
+
+    {{-- Owner-approval banner.
+
+         Shown when the viewing user's tenant is the vehicle owner on
+         this job but didn't place it (BB placed a direct order against
+         their stock).  Three states:
+
+           - pending : approve / reject buttons, plus a notes textarea.
+           - approved: green confirmation strip with timestamp.
+           - rejected: red strip; the job is already cancelled.
+
+         Commercial values (sell price, PO amounts) are masked everywhere
+         else on this page when $isOwnerOnlyView is true. --}}
+    @if($job->requires_owner_approval && $job->owner_company_id === auth()->user()?->company()?->id)
+        @if($job->isPendingOwnerApproval())
+            <div class="mb-4 rounded-xl border-2 border-amber-300 bg-amber-50 p-4">
+                <div class="flex items-start gap-3">
+                    <svg class="h-6 w-6 mt-0.5 shrink-0 text-amber-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+                    <div class="flex-1 min-w-0">
+                        <h2 class="text-sm font-bold text-amber-900">
+                            {{ $job->company?->name }} wants to move your vehicle
+                        </h2>
+                        <p class="mt-1 text-sm text-amber-800">
+                            VIN <span class="font-mono font-semibold">{{ $job->vin }}</span>
+                            is on your stock ledger.  {{ $job->company?->name }} has placed a direct order with
+                            Proselver to move it from {{ $job->pickupLocation?->company_name }} to
+                            {{ $job->deliveryLocation?->company_name }} on {{ $job->scheduled_date?->format('d M Y') }}.
+                        </p>
+                        <p class="mt-2 text-xs text-amber-700">
+                            Proselver will only dispatch once you've approved.  The price is between Proselver and
+                            {{ $job->company?->name }} -- you won't see commercial detail on this page.
+                        </p>
+
+                        @if($showOwnerDecisionPanel)
+                            <div class="mt-3 space-y-2">
+                                <label class="block text-xs font-semibold text-amber-900">Notes (optional)</label>
+                                <textarea wire:model="ownerDecisionNotes" rows="2"
+                                    class="w-full rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm focus:border-amber-500 focus:ring-amber-500"
+                                    placeholder="e.g. OK to move on Tuesday; please confirm with our service manager first."></textarea>
+                                <div class="flex flex-wrap gap-2">
+                                    <button wire:click="approveAsOwner" type="button"
+                                        class="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-500">
+                                        Approve movement
+                                    </button>
+                                    <button wire:click="rejectAsOwner"
+                                        wire:confirm="Reject this movement?  The order will be cancelled."
+                                        type="button"
+                                        class="inline-flex items-center gap-1.5 rounded-lg border border-rose-300 bg-white px-3 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50">
+                                        Reject
+                                    </button>
+                                    <button wire:click="closeOwnerDecisionPanel" type="button"
+                                        class="text-xs font-semibold text-amber-800 hover:text-amber-900 px-2">Cancel</button>
+                                </div>
+                            </div>
+                        @else
+                            <button wire:click="openOwnerDecisionPanel" type="button"
+                                class="mt-3 inline-flex items-center gap-1.5 rounded-lg bg-amber-600 px-3.5 py-2 text-sm font-semibold text-white hover:bg-amber-500">
+                                Review &amp; decide
+                            </button>
+                        @endif
+                    </div>
+                </div>
+            </div>
+        @elseif($job->owner_approval_status === \App\Models\Job::OWNER_APPROVAL_APPROVED)
+            <div class="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm text-emerald-800 flex items-center gap-2">
+                <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                You approved this movement on {{ $job->owner_approved_at?->format('d M Y H:i') }}{{ $job->ownerApprovedBy ? ' (' . $job->ownerApprovedBy->name . ')' : '' }}.
+            </div>
+        @elseif($job->owner_approval_status === \App\Models\Job::OWNER_APPROVAL_REJECTED)
+            <div class="mb-4 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
+                <div class="font-semibold">You rejected this movement on {{ $job->owner_approved_at?->format('d M Y H:i') }}.</div>
+                @if($job->owner_decision_notes)
+                    <div class="mt-1 italic">"{{ $job->owner_decision_notes }}"</div>
+                @endif
+            </div>
+        @endif
     @endif
 
     <div class="mb-4 flex items-center justify-between gap-2">
@@ -1033,8 +1220,13 @@ new #[Layout('components.layouts.app')] class extends Component {
             <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
                 {{-- Purchase orders live on their own route (signed uploads
                      have a different preview endpoint), so they're rendered
-                     above the driver-captured paperwork. --}}
-                @if($job->purchaseOrders->isNotEmpty())
+                     above the driver-captured paperwork.
+
+                     Owner-only viewers (a dealer looking at a job placed
+                     by a BB against their stock) DON'T see PO amounts --
+                     the BB is the paying customer here, not the dealer,
+                     so commercial detail is masked. --}}
+                @if($job->purchaseOrders->isNotEmpty() && !$isOwnerOnlyView)
                     <h3 class="text-lg font-semibold text-gray-900 mb-3">Purchase orders</h3>
                     <ul class="space-y-2 mb-5">
                         @foreach($job->purchaseOrders as $po)

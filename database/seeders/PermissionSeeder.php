@@ -50,6 +50,8 @@ class PermissionSeeder extends Seeder
             ['name' => 'Raise BB Movement Request', 'slug' => 'bb_request_movement', 'group' => 'Body Builder', 'description' => 'Raise a next-fitment or collection request back to the dealer'],
             ['name' => 'Approve BB Movement Requests', 'slug' => 'dealer_approve_bb_requests', 'group' => 'Body Builder', 'description' => 'Approve or reject body-builder movement requests against your inventory'],
             ['name' => 'Manage BB Links', 'slug' => 'manage_bb_links', 'group' => 'Body Builder', 'description' => 'Link / pause / unlink authorised body builders for your dealership'],
+            ['name' => 'Place BB Direct Order', 'slug' => 'bb_place_direct_order', 'group' => 'Body Builder', 'description' => 'Place a direct movement order with Proselver (BB is the paying customer; vehicle owner must approve)'],
+            ['name' => 'Approve Owner Movement', 'slug' => 'owner_approve_movement', 'group' => 'Body Builder', 'description' => 'Approve / reject a movement raised by another tenant against a vehicle on your stock ledger'],
 
             // Phase 1 dealer stock ledger.
             ['name' => 'View Dealer Stock', 'slug' => 'view_dealer_stock', 'group' => 'Dealer Stock', 'description' => 'View the dealer stock ledger'],
@@ -128,12 +130,33 @@ class PermissionSeeder extends Seeder
         $rolePermissions['body_builder_owner'] = [
             'view_all_bookings', 'view_own_bookings', 'view_stock',
             'manage_dealer_users', 'manage_locations', 'view_locations',
-            'bb_confirm_receipt', 'bb_request_movement',
+            'bb_confirm_receipt', 'bb_request_movement', 'bb_place_direct_order',
+            // BB owners also need to be able to view + manage the BB's
+            // own outgoing direct orders.
+            'submit_booking', 'edit_own_bookings', 'cancel_booking', 'upload_documents',
         ];
         $rolePermissions['body_builder_user'] = [
             'view_own_bookings', 'view_stock', 'view_locations',
             'bb_confirm_receipt', 'bb_request_movement',
         ];
+
+        // Dealer-side counterpart to BB direct-order: dealers need to
+        // be able to approve / reject movements raised by a BB against
+        // their stock.  Default the new perm onto every dealer role
+        // that already approves BB requests today, so the existing
+        // role mappings stay self-consistent.
+        foreach ([
+            'dealer_principal',
+            'sales_manager_new',
+            'sales_manager_used',
+            'stock_controller',
+            'customer_admin',
+            'customer_dispatcher',
+        ] as $dealerRole) {
+            if (isset($rolePermissions[$dealerRole])) {
+                $rolePermissions[$dealerRole] = array_unique(array_merge($rolePermissions[$dealerRole], ['owner_approve_movement']));
+            }
+        }
 
         // Phase 1 role-permission mappings (internal tier)
         // Super Admin and Developer bypass permission checks in HasRoles, but we still assign

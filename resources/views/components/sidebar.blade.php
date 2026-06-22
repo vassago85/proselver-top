@@ -228,6 +228,25 @@
                             <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></x-slot:icon>
                             Groups
                         </x-sidebar-link>
+                        @php
+                            // Cached for the duration of the request -- the sidebar
+                            // renders on every admin page so we don't want a fresh
+                            // count() query each time. Cheap and visible regardless.
+                            $bbRequestPendingCount = \Illuminate\Support\Facades\Cache::remember(
+                                'admin.body_builder_requests.pending_count',
+                                15,
+                                fn () => \App\Models\BodyBuilderRequest::where('status', 'pending')->count(),
+                            );
+                        @endphp
+                        <x-sidebar-link :href="route('admin.body-builder-requests.index')" :active="request()->routeIs('admin.body-builder-requests.*')">
+                            <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="15" y2="17"/></svg></x-slot:icon>
+                            <span class="flex flex-1 items-center justify-between">
+                                BB requests
+                                @if($bbRequestPendingCount > 0)
+                                    <span class="ml-2 inline-flex items-center rounded-full bg-amber-500 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">{{ $bbRequestPendingCount }}</span>
+                                @endif
+                            </span>
+                        </x-sidebar-link>
                     </ul>
                 </li>
                 @endif
@@ -304,6 +323,11 @@
                         <x-sidebar-link :href="route('body-builder.dashboard')" :active="request()->routeIs('body-builder.dashboard')">
                             <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg></x-slot:icon>
                             Dashboard
+                        </x-sidebar-link>
+
+                        <x-sidebar-link :href="route('body-builder.yard.index')" :active="request()->routeIs('body-builder.yard.*')">
+                            <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18"/><path d="M5 21V7l8-4v18"/><path d="M19 21V11l-6-4"/></svg></x-slot:icon>
+                            Yard (touch)
                         </x-sidebar-link>
 
                         <x-sidebar-link :href="route('body-builder.jobs.index')" :active="request()->routeIs('body-builder.jobs.*')">
@@ -504,9 +528,13 @@
                         @endif
 
                         @if($user->canManageBbLinks())
-                        <x-sidebar-link :href="route('customer.body-builders.index')" :active="request()->routeIs('customer.body-builders.*')">
+                        <x-sidebar-link :href="route('customer.body-builders.index')" :active="request()->routeIs('customer.body-builders.index')">
                             <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18"/><path d="M5 21V7l8-4v18"/><path d="M19 21V11l-6-4"/></svg></x-slot:icon>
                             Linked Body Builders
+                        </x-sidebar-link>
+                        <x-sidebar-link :href="route('customer.body-builders.requests.index')" :active="request()->routeIs('customer.body-builders.requests.*')">
+                            <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="15" y2="17"/></svg></x-slot:icon>
+                            Request a BB
                         </x-sidebar-link>
                         @endif
                     </ul>
