@@ -85,36 +85,60 @@ new #[Layout('components.layouts.app')] class extends Component {
         ]));
     @endphp
 
-    {{-- Mobile / tablet TOC: a single collapsed <details> so the menu
-         doesn't eat half the screen on small viewports.  Hidden on
-         lg+ where the sticky aside takes over. --}}
-    <details class="group lg:hidden mb-4 rounded-lg border border-slate-200 bg-white">
-        <summary class="cursor-pointer list-none px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 select-none flex items-center justify-between">
-            <span>Jump to section</span>
+    {{-- One TOC for all viewports.  Collapsed by default so the menu
+         never eats the reading area; sticky to the top so users can
+         re-open it after scrolling without hunting for it.
+
+         When open, the link panel is absolutely-positioned (overlay
+         style) so it floats over content instead of pushing the
+         article down -- click a link, the page jumps to the anchor
+         and the <details> can be closed with one tap to keep reading.
+
+         Pairs with the floating "Back to top" button below for the
+         common round-trip pattern (read a section -> back to menu
+         -> jump to next section). --}}
+    <details
+        x-data="{ }"
+        @click.outside="$el.removeAttribute('open')"
+        class="group relative sticky top-2 z-30 mb-4">
+        <summary class="cursor-pointer list-none rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50 select-none flex items-center justify-between">
+            <span class="inline-flex items-center gap-2">
+                <svg class="h-3.5 w-3.5 text-slate-400" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="15" y2="12"/><line x1="3" y1="18" x2="18" y2="18"/></svg>
+                Jump to section
+            </span>
             <svg class="h-3.5 w-3.5 text-slate-400 transition-transform group-open:rotate-180" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
         </summary>
-        <ul class="grid grid-cols-2 gap-x-2 gap-y-0.5 border-t border-slate-100 px-2 py-2 text-xs">
+        <ul role="navigation" aria-label="Help table of contents"
+            class="absolute left-0 right-0 top-full mt-1 grid grid-cols-2 sm:grid-cols-3 gap-x-2 gap-y-0.5 rounded-lg border border-slate-200 bg-white px-2 py-2 text-xs shadow-lg">
             @foreach($toc as [$id, $label])
-                <li><a href="#{{ $id }}" class="block rounded px-2 py-1 text-slate-700 hover:bg-slate-50 hover:text-slate-900">{!! $label !!}</a></li>
+                <li>
+                    <a href="#{{ $id }}"
+                       @click="$root.removeAttribute('open')"
+                       class="block rounded px-2 py-1 text-slate-700 hover:bg-slate-50 hover:text-slate-900">
+                        {!! $label !!}
+                    </a>
+                </li>
             @endforeach
         </ul>
     </details>
 
-    <div class="grid grid-cols-1 lg:grid-cols-[200px,1fr] gap-6">
-        {{-- Sticky TOC (desktop): compact list, no extra "Stuck?" card
-             -- support copy already lives in section 13 (Getting help). --}}
-        <aside class="hidden lg:block lg:sticky lg:top-4 lg:self-start">
-            <nav class="rounded-lg border border-slate-200 bg-white p-2 text-xs" aria-label="Help table of contents">
-                <p class="px-2 pb-1.5 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">On this page</p>
-                <ul class="space-y-px">
-                    @foreach($toc as [$id, $label])
-                        <li>
-                            <a href="#{{ $id }}" class="block rounded px-2 py-0.5 text-slate-700 hover:bg-slate-50 hover:text-slate-900">{!! $label !!}</a>
-                        </li>
-                    @endforeach
-                </ul>
-            </nav>
-        </aside>
+    <div>
+        {{-- Floating "Back to top" pill -- fades in once the user has
+             scrolled past the first viewport so they can re-open the
+             TOC without scrolling all the way up by hand.  No JS state
+             persisted; pure Alpine reactivity. --}}
+        <button
+            type="button"
+            x-data="{ shown: false }"
+            x-init="window.addEventListener('scroll', () => shown = window.scrollY > 400)"
+            x-show="shown"
+            x-transition.opacity
+            @click="window.scrollTo({ top: 0, behavior: 'smooth' })"
+            class="fixed bottom-6 right-6 z-40 inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 shadow-lg hover:bg-slate-50"
+            aria-label="Back to top">
+            <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke-width="2.2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"/></svg>
+            Back to top
+        </button>
 
         {{-- Content --}}
         <article class="space-y-10 text-sm leading-6 text-slate-800">
