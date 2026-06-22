@@ -178,6 +178,12 @@ Export your inventory out of your dealership management system (Kerridge, Pinnac
 
 **Re-uploading is safe.** Vehicles are matched on (your company, VIN). Existing rows have their attributes refreshed; their location and sale state are untouched.
 
+**Duplicate VIN handling**
+
+- **Same VIN twice in the same spreadsheet** &mdash; hard error in the preview (row turns red, blocked from commit). Fix the source export and re-upload.
+- **VIN already on your books** &mdash; amber "Already on file" warning in the preview. The commit refreshes the vehicle's identity columns (make / model / colour / suffix / variant / engine / reg / year) but **does not touch** its location, status, salesperson, customer, fitment chain, or any commercial state. This is what makes re-running the same DMS export safe.
+- **VIN on file at *another* dealership on the platform** &mdash; not yet flagged. If you've just bought a unit from another dealer, ask them to **Mark as delivered** on their side so their record closes out; otherwise both dealerships will hold the same VIN on their active boards until they do.
+
 **Header aliases we recognise** &mdash; column names like Chassis No, Reg No, License Plate, Engine No, Make, Manufacturer, Year Model and similar are all picked up automatically. Need a starting template? The import page has a **Download sample CSV template** link.
 
 > Whole batch shipped factory-direct to a fitter? Set the import's starting location to that body builder and the entire upload lands in the BB bucket in one pass.
@@ -336,6 +342,8 @@ Lists movements where your dealership is the **booking customer** and movements 
 Open a movement to confirm readiness, mark urgent, change executor, assign your driver, upload documents or POs, and approve or reject **owner** movements.
 
 When you are only the vehicle owner, **pricing is hidden** — you are approving that the vehicle may move, not paying the transport.
+
+> **What you won't see on a ProSelver-executed movement.** When **ProSelver** is the executor on one of your jobs, you won't see the *Driver advance & tolls* widget — the advance total, toll estimate, food / taxi / accommodation breakdown, and the "Allocate cash to" pill with the driver's cellphone. That block is ProSelver's internal driver-cash plan; you paid a quoted line haul, so there's nothing to act on. **The same block does appear** when your executor is your **own driver** (`executor=internal`) — it's then your own driver's cash plan, and the cellphone pill copies straight into a bank-send.
 
 ### 8.3 Bulk upload
 

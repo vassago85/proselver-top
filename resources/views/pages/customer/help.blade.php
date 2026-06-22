@@ -326,6 +326,12 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <p class="mt-2 text-xs text-slate-600">
                     The import page also has a <em>Download sample CSV template</em> link if you need a starting layout.
                 </p>
+                <p class="mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                    <strong>Duplicate VIN handling.</strong>
+                    The importer blocks a VIN that appears <em>twice in the same spreadsheet</em> with a hard error (preview row turns red, the row is skipped at commit). A VIN that's <em>already on your books</em> is detected as well &mdash; you'll see an amber <em>Already on file</em> warning in the preview, and the commit refreshes the vehicle's identity columns (make / model / colour / etc.) without touching its location or sale state.
+                    <br><br>
+                    <strong>One caveat:</strong> the importer doesn't yet flag VINs that are on file at <em>another</em> dealership on the platform. If you've just bought a unit from another dealer, ask them to <em>Mark as delivered</em> on their side so their record closes out cleanly &mdash; otherwise you'll both have the same VIN on your active boards until they do.
+                </p>
                 @endif
             </section>
 
@@ -496,6 +502,9 @@ new #[Layout('components.layouts.app')] class extends Component {
                     An amber banner means there are direct orders from a body builder waiting for your owner approval. Use <a href="{{ route('customer.orders.index', ['owner_pending' => 1]) }}" class="font-semibold underline">Show only these</a> to focus.
                 </p>
                 <p class="mt-3 text-xs text-slate-600">When you are only the vehicle owner, <strong>pricing is hidden</strong> — you are approving the move, not paying for it.</p>
+                <p class="mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                    <strong>When ProSelver moves a vehicle for you,</strong> you won't see any <em>Driver advance &amp; tolls</em> breakdown (advance total, tolls, food, taxi, the driver's cellphone for cash allocation) on the movement page. That's ProSelver's internal operational data — you paid a quoted line haul, so there's nothing for you to do there. The same block <strong>does</strong> appear when you run a movement with your <em>own</em> driver — it's your driver's cash plan to approve.
+                </p>
                 @endif
 
                 <h4 class="mt-4 text-sm font-semibold text-slate-900">Bulk upload</h4>
