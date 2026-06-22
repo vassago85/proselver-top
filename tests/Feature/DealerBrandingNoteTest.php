@@ -177,7 +177,61 @@ test('the sale delivery note service returns a PDF for a sold row', function () 
     $pdf = app(SaleDeliveryNoteService::class)->generate($stock);
 
     expect($pdf)->toStartWith('%PDF');
-    expect(strlen($pdf))->toBeGreaterThan(800);
+    // Four-page pack is materially larger than the original single page.
+    expect(strlen($pdf))->toBeGreaterThan(5000);
+});
+
+test('the sale delivery pack renders Customer Copy + Dealer Copy POD pages with handover capture fields', function () {
+    // The dealer pack mirrors the ProSelver/OEM pack: every detail the
+    // driver POD captures (odometer, fuel scale, condition checklist,
+    // damage / missing items box, dual signatures) is reproduced on
+    // the dealer's sale delivery note -- minus the collection note.
+    $dealer = brandedDealer();
+    $salesperson = User::factory()->create(['name' => 'Sam Seller']);
+
+    $stock = DealerStock::create([
+        'dealer_company_id'   => $dealer->id,
+        'vin'                 => 'SALEPACK0001',
+        'engine_number'       => 'ENG-PACK-1',
+        'colour'              => 'Galaxy Black',
+        'status'              => DealerStock::STATUS_SOLD,
+        'salesperson_user_id' => $salesperson->id,
+        'sale_customer_name'  => 'Carol Customer',
+        'sale_customer_phone' => '082 111 2222',
+        'sold_at'             => now(),
+    ]);
+
+    $issuer = IssuerProfile::forCompany($dealer, 'Delivery Note');
+    $html = view('documents.sale-delivery-note', [
+        'stock'     => $stock->fresh(['dealerCompany', 'brand', 'salesperson']),
+        'issuer'    => $issuer,
+        'docNumber' => app(SaleDeliveryNoteService::class)->documentNumber($stock),
+    ])->render();
+
+    // Pack structure: cover + Customer Copy + blank + Dealer Copy.
+    expect($html)->toContain('Sale Cover');
+    expect($html)->toContain('Customer Copy');
+    expect($html)->toContain('Dealer Copy');
+    expect($html)->toContain('Page 1 of 4');
+    expect($html)->toContain('Page 2 of 4');
+    expect($html)->toContain('Page 4 of 4');
+
+    // Comprehensive POD content -- odometer, fuel scale, condition checklist, damage box.
+    expect($html)->toContain('Odometer at handover (km)');
+    expect($html)->toContain('Fuel level');
+    expect($html)->toContain('Condition at Handover');
+    expect($html)->toContain('Spare wheel, jack &amp; tools present');
+    expect($html)->toContain('Tyres &mdash; legal tread, no visible damage');
+    expect($html)->toContain('Damage &amp; Missing Items noted at Handover');
+
+    // Dual signatures.
+    expect($html)->toContain('Released By (Dealer)');
+    expect($html)->toContain('Received By (Customer)');
+
+    // Buyer / salesperson / vehicle data threaded through the POD pages.
+    expect($html)->toContain('Sam Seller');
+    expect($html)->toContain('Carol Customer');
+    expect($html)->toContain('SALEPACK0001');
 });
 
 test('the document number is stable and zero-padded', function () {

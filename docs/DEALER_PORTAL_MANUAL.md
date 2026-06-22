@@ -228,7 +228,7 @@ A **Fitment chain** panel below the timeline tracks one or more body-builder sto
 | **Return from demo** | Brings the unit back from demo |
 | **Reverse sale** | Undo a sale while the row is still on the active ledger (chassis swaps, spec changes, finance fall-through) |
 | **Archive** | Closes the row once the vehicle has left your books (soft archive) |
-| **Print delivery note** | PDF for the buyer (available on any live unit) |
+| **Print delivery note** | 4-page handover pack: sale cover + Customer Copy POD + blank backside + Dealer Copy POD. Each POD page captures odometer, fuel level (1–10), condition checklist (panels, glass, lights, interior, keys, spare wheel/jack/tools, manual, dash lights, tyres, fuel cap, plates), damage & missing items, and dual signatures — same shape as the ProSelver/OEM pack with the collection note removed |
 
 Share salesperson and end-customer details with each body builder only when you intend them to see that information on their yard app. Sharing is per-leg in the fitment chain — see below.
 
