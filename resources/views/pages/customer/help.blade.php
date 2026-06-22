@@ -120,10 +120,10 @@ new #[Layout('components.layouts.app')] class extends Component {
         <article class="space-y-10 text-sm leading-6 text-slate-800">
 
             {{-- 0. Journey overview --------------------------------------------- --}}
-            {{-- Dealer-only.  The "Track → Reserve → Book → Sold → Archive"
-                 sequence is the dealer commercial funnel; OEM moves are
-                 pure logistics with no sold/reserved state, so this
-                 section is hidden from OEM and BB tenants. --}}
+            {{-- Dealer-only.  The Reserve → Sold → Delivered → Archive
+                 sequence is the dealer commercial funnel; OEM moves
+                 are pure logistics with no sold/reserved state, so
+                 this section is hidden from OEM and BB tenants. --}}
             @if($isDealer)
             <section id="journey" class="scroll-mt-6">
                 <h3 class="text-lg font-semibold text-slate-900">The dealer journey</h3>
@@ -133,10 +133,13 @@ new #[Layout('components.layouts.app')] class extends Component {
                     <li><strong>Reserve</strong> the vehicle when a customer commits — capture salesperson + buyer.</li>
                     <li><strong>Book a delivery</strong> with ProSelver (or your own driver) to move the chassis where it needs to go.</li>
                     <li><strong>Mark sold</strong> when the paperwork is done — the reserve carries forward automatically.</li>
-                    <li><strong>Archive</strong> once the vehicle has left your books — the row drops off the active ledger.</li>
+                    <li><strong>Mark as delivered</strong> when the buyer takes the keys — the row leaves the active board but stays in your <em>Recently delivered</em> history.</li>
                 </ol>
                 <p class="mt-3 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-900">
                     Every step is visible on the <strong>vehicle card</strong> as a single lifecycle timeline, plus a separate panel for the active transport job. Open any row in <em>All stock</em> to see both at once.
+                </p>
+                <p class="mt-2 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-900">
+                    <strong>Archive is not part of the journey.</strong> Use it only for mistakes, test vehicles, or duplicate rows that should never have been on the books — archived rows are hidden from history. For a normal handover, always use <em>Mark as delivered</em>.
                 </p>
             </section>
             @elseif($isOem)
@@ -258,7 +261,8 @@ new #[Layout('components.layouts.app')] class extends Component {
                             <tr><td class="px-3 py-2 font-medium">In transit</td><td class="px-3 py-2">On the road with an active job</td></tr>
                             <tr><td class="px-3 py-2 font-medium">At another storage</td><td class="px-3 py-2">Parked at another yard</td></tr>
                             <tr><td class="px-3 py-2 font-medium">On demo with customer</td><td class="px-3 py-2">Out on demo</td></tr>
-                            <tr><td class="px-3 py-2 font-medium">Recently sold</td><td class="px-3 py-2">Sold in the last 30 days — archive when off your books</td></tr>
+                            <tr><td class="px-3 py-2 font-medium">Recently sold</td><td class="px-3 py-2">Sold but still on your books — Mark as delivered when the buyer takes the keys</td></tr>
+                            <tr><td class="px-3 py-2 font-medium">Recently delivered</td><td class="px-3 py-2">Handed over in the last 30 days — archived from the active board, kept here for your records</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -294,10 +298,11 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <ul class="mt-2 list-disc pl-5 space-y-1">
                     <li><strong>At premises / Body builder / Other storage / In transit / On demo</strong> — physical location.</li>
                     <li><strong>Scheduled for movement</strong> — a job is booked but collection has not started yet.</li>
-                    <li><strong>Recently sold</strong> — sold in the last 30 days. Archive the row once the vehicle is off your books.</li>
+                    <li><strong>Recently sold</strong> — sold in the last 30 days and <em>still on your books</em>. Hit <em>Mark as delivered</em> on the vehicle card the moment the buyer takes the keys.</li>
+                    <li><strong>Recently delivered</strong> — delivered in the last 30 days. The row has been archived from the active board but stays here as your delivery history.</li>
                 </ul>
                 <p class="mt-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-900">
-                    <strong>Sold is sold.</strong> When a deal closes, mark the row sold; once the vehicle has left your floor, archive it. There is no separate &ldquo;customer handover&rdquo; step.
+                    <strong>Sold &ne; Delivered.</strong> A vehicle stays in <em>Recently sold</em> while the paperwork is finalising; <em>Mark as delivered</em> closes the row out the moment the keys change hands. <em>Archive</em> is a separate action reserved for mistakes and test vehicles.
                 </p>
 
                 @if($isDealer)
@@ -331,12 +336,12 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <ol class="mt-3 space-y-1.5 list-decimal pl-5 text-sm">
                     <li><strong>Vehicle details</strong> — VIN, make, model, registration, colour, dealership.</li>
                     <li><strong>Where</strong> — the bucket and (if known) the specific location name.</li>
-                    <li><strong>Lifecycle timeline</strong> — Available → Reserved → Sold, with the date and person at each step.</li>
+                    <li><strong>Lifecycle timeline</strong> — Available → Reserved → Sold → Delivered, with the date and person at each step.</li>
                     <li><strong>Transport movement</strong> — the active ProSelver job (number, status, pickup → delivery) or "No active transport job".</li>
                     <li><strong>Fitment chain</strong> — the ordered list of body builders / fitment stops (dropside, crane, fridge body, fridge unit, paint, ...). Each step has its own notes and per-step sharing toggle.</li>
                 </ol>
                 <p class="mt-3 text-xs text-slate-600">
-                    The lifecycle (commercial), transport movement (physical) and fitment chain (build) run independently — a vehicle can be sold while still in transit, or have legs planned at three BBs before transport is even booked. The card shows them all at once. Once a sale is final and the vehicle has left your books, <em>Archive</em> closes the row.
+                    The lifecycle (commercial), transport movement (physical) and fitment chain (build) run independently — a vehicle can be sold while still in transit, or have legs planned at three BBs before transport is even booked. The card shows them all at once. <em>Mark as delivered</em> is the happy-path exit from the active board; <em>Archive</em> is the escape hatch for mistakes / test vehicles only.
                 </p>
 
                 <h4 class="mt-5 text-sm font-semibold text-slate-900">Actions available</h4>
@@ -358,7 +363,8 @@ new #[Layout('components.layouts.app')] class extends Component {
                             <tr><td class="px-3 py-2 font-medium">Send out on demo</td><td class="px-3 py-2">Captures customer + due-back date, swings to <em>On demo</em></td></tr>
                             <tr><td class="px-3 py-2 font-medium">Return from demo</td><td class="px-3 py-2">Brings the unit back from demo</td></tr>
                             <tr><td class="px-3 py-2 font-medium">Reverse sale</td><td class="px-3 py-2">Undo a sale while the row is still on the active ledger</td></tr>
-                            <tr><td class="px-3 py-2 font-medium">Archive</td><td class="px-3 py-2">Closes the row once the vehicle has left your books (soft archive)</td></tr>
+                            <tr><td class="px-3 py-2 font-medium">Mark as delivered</td><td class="px-3 py-2"><strong>Happy-path close.</strong> Stamps <em>delivered_at</em>, archives the row, lands it in <em>Recently delivered</em>. Only available once the row is <em>Sold</em>.</td></tr>
+                            <tr><td class="px-3 py-2 font-medium">Archive (mistake / test)</td><td class="px-3 py-2"><strong>Escape hatch.</strong> Use only for mistakes, test vehicles, or duplicates. Archived rows are hidden from delivery history. For a normal handover use <em>Mark as delivered</em> instead.</td></tr>
                             <tr><td class="px-3 py-2 font-medium">Fitment chain — add step</td><td class="px-3 py-2">Plan one or more body-builder stops for this VIN (dropside, crane, fridge, paint, ...). Each step has its own notes and sharing.</td></tr>
                             <tr><td class="px-3 py-2 font-medium">Fitment chain — share with BB (per step)</td><td class="px-3 py-2">Choose <em>per step</em> whether the BB sees the salesperson + end customer. Useful when one fitter needs the context and another doesn't.</td></tr>
                             <tr><td class="px-3 py-2 font-medium">Print delivery note</td><td class="px-3 py-2">PDF for the buyer (available on any live unit)</td></tr>
@@ -610,7 +616,8 @@ new #[Layout('components.layouts.app')] class extends Component {
                                 <tr><td class="px-3 py-2">Approve a BB's &ldquo;please move this&rdquo; request</td><td class="px-3 py-2"><a href="{{ route('customer.movement-requests.index') }}" class="font-semibold text-blue-600 hover:text-blue-800">Movement Requests</a></td></tr>
                                 <tr><td class="px-3 py-2">Approve a BB's ProSelver booking on my VIN</td><td class="px-3 py-2"><a href="{{ route('customer.orders.index', ['owner_pending' => 1]) }}" class="font-semibold text-blue-600 hover:text-blue-800">My Orders → owner approvals</a></td></tr>
                                 <tr><td class="px-3 py-2">Mark a vehicle sold</td><td class="px-3 py-2">All stock → open the row → <em>Mark as sold</em></td></tr>
-                                <tr><td class="px-3 py-2">Close a row off the active ledger</td><td class="px-3 py-2">Vehicle card → <em>Archive</em></td></tr>
+                                <tr><td class="px-3 py-2">Close a sale once the buyer has the keys</td><td class="px-3 py-2">Vehicle card → <em>Mark as delivered</em> (archives the row but keeps it in <em>Recently delivered</em>)</td></tr>
+                                <tr><td class="px-3 py-2">Remove a mistake / test row</td><td class="px-3 py-2">Vehicle card → <em>Archive (mistake / test)</em> — hidden from delivery history</td></tr>
                                 <tr><td class="px-3 py-2">Add one vehicle to stock (e.g. factory-direct to BB)</td><td class="px-3 py-2"><a href="{{ route('customer.stock.create') }}" class="font-semibold text-blue-600 hover:text-blue-800">Stock → + Add vehicle</a></td></tr>
                                 <tr><td class="px-3 py-2">Import new stock in bulk</td><td class="px-3 py-2"><a href="{{ route('customer.stock.import') }}" class="font-semibold text-blue-600 hover:text-blue-800">Stock → Import stock</a></td></tr>
                             @endif
@@ -630,8 +637,10 @@ new #[Layout('components.layouts.app')] class extends Component {
                     <div><dt class="text-sm font-semibold text-slate-900">Status</dt><dd class="text-xs text-slate-700">Commercial state: available, reserved, sold, demo, archived.</dd></div>
                     <div><dt class="text-sm font-semibold text-slate-900">Reserve</dt><dd class="text-xs text-slate-700">Hold for a customer — assigns salesperson + buyer before sale.</dd></div>
                     <div><dt class="text-sm font-semibold text-slate-900">Movement / order / job</dt><dd class="text-xs text-slate-700">A transport booking in ProSelver.</dd></div>
-                    <div><dt class="text-sm font-semibold text-slate-900">Recently sold</dt><dd class="text-xs text-slate-700">Sold in the last 30 days. Archive when the vehicle is off your books.</dd></div>
-                    <div><dt class="text-sm font-semibold text-slate-900">Archive</dt><dd class="text-xs text-slate-700">Soft-removes a row from the active ledger and dashboards.</dd></div>
+                    <div><dt class="text-sm font-semibold text-slate-900">Recently sold</dt><dd class="text-xs text-slate-700">Sold and still on your books — handover not yet captured.</dd></div>
+                    <div><dt class="text-sm font-semibold text-slate-900">Mark as delivered</dt><dd class="text-xs text-slate-700">Happy-path close: stamps <em>delivered_at</em>, archives the row, lands it in <em>Recently delivered</em>.</dd></div>
+                    <div><dt class="text-sm font-semibold text-slate-900">Recently delivered</dt><dd class="text-xs text-slate-700">Delivered in the last 30 days. Archived from the active board, kept for your records.</dd></div>
+                    <div><dt class="text-sm font-semibold text-slate-900">Archive</dt><dd class="text-xs text-slate-700">Escape hatch for mistakes / test vehicles. Hides the row from delivery history.</dd></div>
                     <div><dt class="text-sm font-semibold text-slate-900">Movement request</dt><dd class="text-xs text-slate-700">BB asks the dealer to arrange transport.</dd></div>
                     <div><dt class="text-sm font-semibold text-slate-900">Direct order</dt><dd class="text-xs text-slate-700">BB books ProSelver; dealer approves as owner.</dd></div>
                     <div><dt class="text-sm font-semibold text-slate-900">Owner approval</dt><dd class="text-xs text-slate-700">Dealer OK for someone else's booking against their VIN.</dd></div>

@@ -114,6 +114,13 @@ new #[Layout('components.layouts.app')] class extends Component {
             ? array_values(array_intersect($visibleCompanyIds, [(int) $this->dealershipFilter]))
             : $visibleCompanyIds;
 
+        // The Delivered bucket is the only view that crosses the
+        // archive boundary -- delivered rows have archived_at set by
+        // design, so we drop the archived_at filter for that case
+        // and let scopeRecentlyDelivered do the work.  Every other
+        // bucket stays on the active ledger.
+        $crossesArchive = $this->bucketFilter === 'recently_delivered';
+
         $query = DealerStock::query()
             ->whereIn('dealer_company_id', $effectiveCompanyIds)
             ->with([
@@ -124,14 +131,15 @@ new #[Layout('components.layouts.app')] class extends Component {
                 'salesperson:id,name',
                 'currentJob:id,job_number,status,scheduled_date',
             ])
-            ->whereNull('archived_at')
+            ->when(!$crossesArchive, fn ($q) => $q->whereNull('archived_at'))
             ->orderByDesc('updated_at');
 
         if ($this->bucketFilter !== '') {
             match ($this->bucketFilter) {
-                'scheduled'     => $query->scheduledForMovement(),
-                'recently_sold' => $query->recentlyDelivered(),
-                default         => $query->where('current_location_type', $this->bucketFilter),
+                'scheduled'          => $query->scheduledForMovement(),
+                'recently_sold'      => $query->recentlySold(),
+                'recently_delivered' => $query->recentlyDelivered(),
+                default              => $query->where('current_location_type', $this->bucketFilter),
             };
         }
 
@@ -179,8 +187,14 @@ new #[Layout('components.layouts.app')] class extends Component {
             DealerStock::LOCATION_IN_TRANSIT   => (clone $baseCounts)->where('current_location_type', DealerStock::LOCATION_IN_TRANSIT)->count(),
             DealerStock::LOCATION_ON_DEMO      => (clone $baseCounts)->where('current_location_type', DealerStock::LOCATION_ON_DEMO)->count(),
             DealerStock::LOCATION_DELIVERED    => (clone $baseCounts)->where('current_location_type', DealerStock::LOCATION_DELIVERED)->count(),
-            'scheduled'     => (clone $baseCounts)->scheduledForMovement()->count(),
-            'recently_sold' => (clone $baseCounts)->recentlyDelivered()->count(),
+            'scheduled'          => (clone $baseCounts)->scheduledForMovement()->count(),
+            'recently_sold'      => (clone $baseCounts)->recentlySold()->count(),
+            // Delivered bucket crosses archived_at -- count it from
+            // the unscoped per-company query instead of $baseCounts.
+            'recently_delivered' => DealerStock::query()
+                ->whereIn('dealer_company_id', $effectiveCompanyIds)
+                ->recentlyDelivered()
+                ->count(),
         ];
 
         $visibleCompanies = count($visibleCompanyIds) > 1
@@ -246,8 +260,9 @@ new #[Layout('components.layouts.app')] class extends Component {
                 DealerStock::LOCATION_IN_TRANSIT   => 'In transit',
                 DealerStock::LOCATION_ON_DEMO      => 'On demo',
                 DealerStock::LOCATION_DELIVERED    => 'Delivered to dealer',
-                'scheduled'     => 'Scheduled for movement',
-                'recently_sold' => 'Recently sold',
+                'scheduled'          => 'Scheduled for movement',
+                'recently_sold'      => 'Recently sold',
+                'recently_delivered' => 'Recently delivered',
             ],
             'bucketTooltips' => [
                 DealerStock::LOCATION_PREMISES     => 'Physically at your dealership',
@@ -256,8 +271,9 @@ new #[Layout('components.layouts.app')] class extends Component {
                 DealerStock::LOCATION_IN_TRANSIT   => 'On the road with an active transport job',
                 DealerStock::LOCATION_ON_DEMO      => 'Out on demo with a customer',
                 DealerStock::LOCATION_DELIVERED    => 'A transport job ended at a dealer destination (vehicle arrived at the dealership)',
-                'scheduled'     => 'A transport job is booked but collection has not started',
-                'recently_sold' => 'Marked sold in the last 30 days — archive when off your books',
+                'scheduled'          => 'A transport job is booked but collection has not started',
+                'recently_sold'      => 'Sold but still on your books — Mark as delivered when the buyer takes the keys',
+                'recently_delivered' => 'Marked delivered in the last 30 days — archived from the active board but kept here for your records',
             ],
             'statusLabels' => [
                 DealerStock::STATUS_AVAILABLE => 'Available',
@@ -306,8 +322,9 @@ new #[Layout('components.layouts.app')] class extends Component {
                 'in_transit'   => ['bg-blue-50 text-blue-800 border-blue-200',      'bg-blue-600 text-white border-blue-600'],
                 'on_demo'      => ['bg-teal-50 text-teal-800 border-teal-200',      'bg-teal-600 text-white border-teal-600'],
                 'delivered'    => ['bg-emerald-50 text-emerald-800 border-emerald-200', 'bg-emerald-600 text-white border-emerald-600'],
-                'scheduled'    => ['bg-sky-50 text-sky-800 border-sky-200',         'bg-sky-600 text-white border-sky-600'],
-                'recently_sold'=> ['bg-green-50 text-green-800 border-green-200',   'bg-green-600 text-white border-green-600'],
+                'scheduled'          => ['bg-sky-50 text-sky-800 border-sky-200',           'bg-sky-600 text-white border-sky-600'],
+                'recently_sold'      => ['bg-green-50 text-green-800 border-green-200',     'bg-green-600 text-white border-green-600'],
+                'recently_delivered' => ['bg-emerald-50 text-emerald-800 border-emerald-200', 'bg-emerald-600 text-white border-emerald-600'],
             ];
             $locationBucketKeys = [
                 DealerStock::LOCATION_PREMISES,

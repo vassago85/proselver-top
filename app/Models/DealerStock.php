@@ -18,9 +18,24 @@ use Illuminate\Support\Str;
  *   - dealer staff actions in customer.stock.* Volt pages
  *
  * The dashboard cards read directly from this model via the
- * scopeAt* / scopeOn* / scopeRecentlyDelivered / scopeScheduledForMovement
- * scopes.  Every read is filtered through scopeVisibleTo() so a
- * franchise CEO sees stock across every dealership in their group.
+ * scopeAt* / scopeOn* / scopeRecentlySold / scopeRecentlyDelivered /
+ * scopeScheduledForMovement scopes.  Every read is filtered through
+ * scopeVisibleTo() so a franchise CEO sees stock across every
+ * dealership in their group.
+ *
+ * Sold vs Delivered vs Archived  --------------------------------
+ *   - Sold       : commercial state, vehicle still on the active
+ *                  ledger; the deal is closed but the buyer hasn't
+ *                  physically taken the keys yet.
+ *   - Delivered  : sales rep marked the vehicle handed over.  We
+ *                  stamp delivered_at AND archived_at so the row
+ *                  drops off the active board, but the new
+ *                  scopeDelivered / scopeRecentlyDelivered keep it
+ *                  visible in the dealer's delivery history.
+ *   - Archived   : escape hatch for mistakes / test vehicles.
+ *                  archived_at is set but delivered_at stays NULL,
+ *                  so the row is hidden from history -- it never
+ *                  should have been on the books in the first place.
  */
 class DealerStock extends Model
 {
@@ -267,11 +282,68 @@ class DealerStock extends Model
         return $query->where('status', self::STATUS_DEMO);
     }
 
-    public function scopeRecentlyDelivered(Builder $query, int $days = self::RECENT_DELIVERED_DAYS): Builder
+    /**
+     * "Recently sold" -- still on the active ledger but a sale has
+     * been captured.  These are the rows in the dealer's handover
+     * pipeline (sold, awaiting Mark as delivered).  Filtered to the
+     * last $days days so the card stays current.
+     *
+     * Once the rep clicks Mark as delivered the row moves to
+     * status=archived + delivered_at set and drops out of this
+     * scope automatically.
+     */
+    public function scopeRecentlySold(Builder $query, int $days = self::RECENT_DELIVERED_DAYS): Builder
     {
         return $query
             ->where('status', self::STATUS_SOLD)
             ->where('sold_at', '>=', now()->subDays($days));
+    }
+
+    /**
+     * Every row the dealer has marked delivered, regardless of how
+     * long ago.  Delivered rows are also archived (delivered_at
+     * implies archived_at), so callers that want the full history
+     * must bypass scopeActive().
+     */
+    public function scopeDelivered(Builder $query): Builder
+    {
+        return $query->whereNotNull('delivered_at');
+    }
+
+    /**
+     * Delivered in the last $days days -- powers the "Recently
+     * delivered" dashboard card and the Delivered bucket on the
+     * stock index.  Like scopeDelivered, this crosses the archive
+     * boundary so callers must NOT also apply scopeActive().
+     */
+    public function scopeRecentlyDelivered(Builder $query, int $days = self::RECENT_DELIVERED_DAYS): Builder
+    {
+        return $query
+            ->whereNotNull('delivered_at')
+            ->where('delivered_at', '>=', now()->subDays($days));
+    }
+
+    /**
+     * Mark this stock unit as delivered to the buyer.  Stamps
+     * delivered_at, sets archived_at + status=archived so the row
+     * leaves the active board.  The row stays visible via
+     * scopeDelivered / scopeRecentlyDelivered for the dealer's
+     * delivery history.
+     *
+     * Safe to call regardless of the source status (Sold, Reserved,
+     * Available) -- the UI restricts the action to Sold rows but
+     * the model itself does no gate-keeping, so admin / data
+     * migrations can drive it directly.
+     */
+    public function markDelivered(?\DateTimeInterface $at = null): void
+    {
+        $now = $at ? \Carbon\Carbon::parse($at) : now();
+
+        $this->forceFill([
+            'delivered_at' => $now,
+            'archived_at'  => now(),
+            'status'       => self::STATUS_ARCHIVED,
+        ])->save();
     }
 
     public function scopeReserved(Builder $query): Builder

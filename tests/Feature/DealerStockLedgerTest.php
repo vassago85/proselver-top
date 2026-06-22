@@ -515,6 +515,112 @@ test('reverseSale refuses when the row is not marked sold', function () {
         ->assertStatus(422);
 });
 
+// ----- Delivered vs Archive --------------------------------------------
+
+test('markDelivered stamps delivered_at + archived_at and drops the row off the active board', function () {
+    $dealer  = makeDealer();
+    $manager = makeStockManager($dealer);
+    $this->actingAs($manager);
+
+    $stock = DealerStock::create([
+        'dealer_company_id'     => $dealer->id,
+        'vin'                   => 'DELIVERED0001',
+        'current_location_type' => DealerStock::LOCATION_PREMISES,
+        'status'                => DealerStock::STATUS_SOLD,
+        'sale_customer_name'    => 'Happy Buyer',
+        'sold_at'               => now()->subDays(2),
+    ]);
+
+    \Livewire\Volt\Volt::test('customer.stock.show', ['dealerStock' => $stock])
+        ->call('markDelivered')
+        ->assertHasNoErrors();
+
+    $stock->refresh();
+
+    expect($stock->delivered_at)->not->toBeNull();
+    expect($stock->archived_at)->not->toBeNull();
+    expect($stock->status)->toBe(DealerStock::STATUS_ARCHIVED);
+
+    // Active ledger excludes it.
+    expect(DealerStock::active()->whereKey($stock->id)->exists())->toBeFalse();
+    // Delivered history includes it.
+    expect(DealerStock::delivered()->whereKey($stock->id)->exists())->toBeTrue();
+    expect(DealerStock::recentlyDelivered()->whereKey($stock->id)->exists())->toBeTrue();
+});
+
+test('markDelivered refuses when the row is not marked sold', function () {
+    $dealer  = makeDealer();
+    $manager = makeStockManager($dealer);
+    $this->actingAs($manager);
+
+    $stock = DealerStock::create([
+        'dealer_company_id'     => $dealer->id,
+        'vin'                   => 'NOTSOLD0001',
+        'current_location_type' => DealerStock::LOCATION_PREMISES,
+        'status'                => DealerStock::STATUS_AVAILABLE,
+    ]);
+
+    \Livewire\Volt\Volt::test('customer.stock.show', ['dealerStock' => $stock])
+        ->call('markDelivered');
+
+    $stock->refresh();
+    expect($stock->delivered_at)->toBeNull();
+    expect($stock->archived_at)->toBeNull();
+    expect($stock->status)->toBe(DealerStock::STATUS_AVAILABLE);
+});
+
+test('plain archive leaves delivered_at NULL so the row is hidden from delivery history (mistake/test path)', function () {
+    $dealer  = makeDealer();
+    $manager = makeStockManager($dealer);
+    $this->actingAs($manager);
+
+    $stock = DealerStock::create([
+        'dealer_company_id'     => $dealer->id,
+        'vin'                   => 'MISTAKE0001',
+        'current_location_type' => DealerStock::LOCATION_PREMISES,
+        'status'                => DealerStock::STATUS_AVAILABLE,
+    ]);
+
+    \Livewire\Volt\Volt::test('customer.stock.show', ['dealerStock' => $stock])
+        ->call('archive')
+        ->assertHasNoErrors();
+
+    $stock->refresh();
+    expect($stock->archived_at)->not->toBeNull();
+    expect($stock->delivered_at)->toBeNull();
+    expect($stock->status)->toBe(DealerStock::STATUS_ARCHIVED);
+
+    // Off the active board AND off the delivered history.
+    expect(DealerStock::active()->whereKey($stock->id)->exists())->toBeFalse();
+    expect(DealerStock::delivered()->whereKey($stock->id)->exists())->toBeFalse();
+    expect(DealerStock::recentlyDelivered()->whereKey($stock->id)->exists())->toBeFalse();
+});
+
+test('recentlySold excludes a row that has been marked delivered (it moved to delivered history)', function () {
+    // Regression guard for the legacy "Recently sold" card.  The
+    // moment markDelivered() runs, the row's status flips to
+    // archived and recentlySold() (status=sold + sold_at fresh)
+    // stops matching it, so the dealer's sold-pipeline count
+    // doesn't drift out of sync with the delivered handover.
+    $dealer = makeDealer();
+
+    $stock = DealerStock::create([
+        'dealer_company_id'     => $dealer->id,
+        'vin'                   => 'PIPELINE0001',
+        'current_location_type' => DealerStock::LOCATION_PREMISES,
+        'status'                => DealerStock::STATUS_SOLD,
+        'sale_customer_name'    => 'In Pipeline',
+        'sold_at'               => now()->subDay(),
+    ]);
+
+    expect(DealerStock::recentlySold()->whereKey($stock->id)->exists())->toBeTrue();
+
+    $stock->markDelivered();
+
+    expect(DealerStock::recentlySold()->whereKey($stock->id)->exists())->toBeFalse();
+    expect(DealerStock::recentlyDelivered()->whereKey($stock->id)->exists())->toBeTrue();
+});
+
 // ----- visibleTo scope ----------------------------------------------
 
 test('scopeVisibleTo limits to the user\'s visible company ids', function () {

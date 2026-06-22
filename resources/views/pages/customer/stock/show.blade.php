@@ -446,6 +446,40 @@ new #[Layout('components.layouts.app')] class extends Component {
         session()->flash('success', "{$this->stock->vin} is back from demo.");
     }
 
+    /**
+     * Mark the vehicle as delivered to the buyer.  This is the
+     * happy-path end of the lifecycle: the deal is done AND the
+     * keys have changed hands.  We stamp delivered_at AND
+     * archived_at so the row drops off the active board, but it
+     * stays visible in the dealer's delivery history via
+     * scopeDelivered / scopeRecentlyDelivered.
+     *
+     * Restricted to Sold rows in the UI; the model itself accepts
+     * any source state so admin / data migrations can drive it.
+     */
+    public function markDelivered(): void
+    {
+        $this->ensureManage();
+
+        if ($this->stock->status !== DealerStock::STATUS_SOLD) {
+            session()->flash('error', 'Only a sold vehicle can be marked delivered.');
+            return;
+        }
+
+        $this->stock->markDelivered();
+
+        session()->flash('success', "Delivered {$this->stock->vin} to {$this->stock->sale_customer_name}.");
+        $this->redirect(route('customer.stock.index', ['bucket' => 'recently_delivered']), navigate: true);
+    }
+
+    /**
+     * Archive the row WITHOUT stamping delivered_at -- the escape
+     * hatch for mistakes / test vehicles / duplicates that should
+     * never have been on the books.  Because delivered_at stays
+     * NULL, archived-as-mistake rows are excluded from
+     * scopeDelivered / scopeRecentlyDelivered so they don't
+     * pollute the dealer's delivery history.
+     */
     public function archive(): void
     {
         $this->ensureManage();
@@ -588,15 +622,20 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <p class="mt-3 text-xs text-slate-500">Once the vehicle has left your books, archive this row to clear it from the active ledger.</p>
             @endif
 
-            {{-- Commercial lifecycle.  Three steps -- Available,
-                 Reserved, Sold.  "Sold" is the end of the line; once
-                 the vehicle has left the dealer's books the row is
-                 archived (separate action, separate concept). --}}
+            {{-- Commercial lifecycle.  Four steps -- Available,
+                 Reserved, Sold, Delivered.  "Mark as delivered"
+                 stamps delivered_at AND archives the row, so the
+                 final step is both the success state and the
+                 natural exit from the active board. "Archive" is a
+                 separate action (mistakes / test vehicles) and
+                 deliberately not shown here -- it doesn't belong
+                 on the happy-path lifecycle. --}}
             <hr class="my-4 border-slate-100">
             <h3 class="text-sm font-semibold text-slate-900 mb-3">Lifecycle</h3>
             @php
                 $reserved   = $stock->reserved_at;
                 $sold       = $stock->sold_at;
+                $delivered  = $stock->delivered_at;
                 $currentJob = $stock->currentJob;
                 $steps = [
                     [
@@ -617,6 +656,13 @@ new #[Layout('components.layouts.app')] class extends Component {
                         'detail' => $sold
                             ? $sold->format('d M Y') . ($stock->salesperson?->name ? ' · ' . $stock->salesperson->name : '')
                             : 'Not yet',
+                    ],
+                    [
+                        'label'  => 'Delivered',
+                        'done'   => (bool) $delivered,
+                        'detail' => $delivered
+                            ? $delivered->format('d M Y') . ($stock->sale_customer_name ? ' · handed to ' . $stock->sale_customer_name : '')
+                            : 'Not yet — Mark as delivered once the buyer takes the keys',
                     ],
                 ];
             @endphp
@@ -959,11 +1005,32 @@ new #[Layout('components.layouts.app')] class extends Component {
                         </a>
                     @endif
 
+                    {{-- Mark as delivered -- the happy-path "we're done"
+                         button.  Stamps delivered_at AND archived_at so
+                         the row leaves the active ledger but is still
+                         visible in the Delivered history bucket.  Only
+                         offered on Sold rows because that's the natural
+                         sequence; Reserved rows must be sold first. --}}
+                    @if($stock->status === DealerStock::STATUS_SOLD)
+                        <button wire:click="markDelivered"
+                                wire:confirm="Mark {{ $stock->vin }} as delivered to {{ $stock->sale_customer_name }}? The row moves to your Delivered history."
+                                class="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-500">
+                            Mark as delivered
+                        </button>
+                    @endif
+
+                    {{-- Archive -- the escape hatch for mistakes /
+                         test vehicles / rows that should never have
+                         been on the books.  Distinct from Mark as
+                         delivered: archive leaves delivered_at NULL
+                         so the row is excluded from delivery history.
+                         Confirm copy spells out the distinction. --}}
                     @if($stock->status !== DealerStock::STATUS_ARCHIVED)
                         <button wire:click="archive"
-                                wire:confirm="Archive {{ $stock->vin }}? It will stop appearing in the active stock list."
-                                class="rounded-lg border border-red-300 bg-white px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-50">
-                            Archive
+                                wire:confirm="Archive {{ $stock->vin }} as a mistake or test vehicle? This is NOT the same as Mark as delivered — archived rows are hidden from your delivery history."
+                                class="rounded-lg border border-red-300 bg-white px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-50"
+                                title="For mistakes or test vehicles. For a normal handover use Mark as delivered.">
+                            Archive (mistake / test)
                         </button>
                     @endif
                 </div>

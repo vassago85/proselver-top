@@ -49,7 +49,7 @@ new #[Layout('components.layouts.app')] class extends Component {
     {
         $allowed = [
             'premises', 'body_builder', 'storage', 'in_transit',
-            'on_demo', 'scheduled', 'recently_delivered',
+            'on_demo', 'scheduled', 'recently_sold', 'recently_delivered',
             'reserved',
         ];
 
@@ -68,9 +68,11 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     /**
      * Map dashboard card keys to a stock-index URL.  Most cards map
-     * to a bucket filter; "reserved" maps to the status filter since
-     * it isn't a physical bucket; "recently_delivered" maps to the
-     * "recently_sold" virtual bucket on the ledger.
+     * to a bucket filter; "reserved" maps to the status filter
+     * since it isn't a physical bucket.  "recently_sold" and
+     * "recently_delivered" both map to virtual buckets on the
+     * ledger (one shows on-the-books sold rows, the other shows
+     * archived rows with a delivered_at stamp).
      *
      * Returns ['bucket' => ...] or ['status' => ...] params, ready
      * to spread into route('customer.stock.index', $params).
@@ -78,9 +80,8 @@ new #[Layout('components.layouts.app')] class extends Component {
     public function stockIndexParams(string $cardKey): array
     {
         return match ($cardKey) {
-            'recently_delivered' => ['bucket' => 'recently_sold'],
-            'reserved'           => ['status' => DealerStock::STATUS_RESERVED],
-            default              => ['bucket' => $cardKey],
+            'reserved' => ['status' => DealerStock::STATUS_RESERVED],
+            default    => ['bucket' => $cardKey],
         };
     }
 
@@ -99,6 +100,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             'in_transit'         => $query->inTransit(),
             'on_demo'            => $query->onDemo(),
             'scheduled'          => $query->scheduledForMovement(),
+            'recently_sold'      => $query->recentlySold(),
             'recently_delivered' => $query->recentlyDelivered(),
             'reserved'           => $query->reserved(),
             default              => $query,
@@ -152,9 +154,22 @@ new #[Layout('components.layouts.app')] class extends Component {
     }
 
     #[Computed]
+    public function countRecentlySold(): int
+    {
+        return $this->dealerStockBase()->recentlySold()->count();
+    }
+
+    /**
+     * Delivered rows are archived (delivered_at implies archived_at)
+     * so we have to bypass the active() scope on the base query --
+     * those rows are out of the active ledger by design.
+     */
+    #[Computed]
     public function countRecentlyDelivered(): int
     {
-        return $this->dealerStockBase()->recentlyDelivered()->count();
+        return DealerStock::visibleTo(auth()->user())
+            ->recentlyDelivered()
+            ->count();
     }
 
     #[Computed]
@@ -172,7 +187,15 @@ new #[Layout('components.layouts.app')] class extends Component {
     #[Computed]
     public function filteredStock()
     {
-        $query = $this->dealerStockBase()
+        // Delivered rows are archived, so the drill-down for the
+        // Recently delivered card has to start from the unscoped
+        // visibleTo query.  Every other bucket stays on the active
+        // ledger.
+        $base = $this->selectedBucket === 'recently_delivered'
+            ? DealerStock::visibleTo(auth()->user())
+            : $this->dealerStockBase();
+
+        $query = $base
             ->with(['brand:id,name', 'currentLocation:id,company_name,city', 'dealerCompany:id,name', 'salesperson:id,name'])
             ->latest('updated_at');
 
@@ -393,7 +416,8 @@ new #[Layout('components.layouts.app')] class extends Component {
                     ['key' => 'in_transit',         'label' => 'In transit',               'count' => $this->countInTransit,          'accent' => 'blue',     'icon' => 'truck'],
                     ['key' => 'storage',            'label' => 'At another storage',       'count' => $this->countStorage,            'accent' => 'indigo',   'icon' => 'box'],
                     ['key' => 'on_demo',            'label' => 'On demo with customer',    'count' => $this->countOnDemo,             'accent' => 'teal',     'icon' => 'user'],
-                    ['key' => 'recently_delivered', 'label' => 'Recently sold',            'count' => $this->countRecentlyDelivered,  'accent' => 'emerald',  'icon' => 'check'],
+                    ['key' => 'recently_sold',      'label' => 'Recently sold',            'count' => $this->countRecentlySold,       'accent' => 'amber',    'icon' => 'check'],
+                    ['key' => 'recently_delivered', 'label' => 'Recently delivered',       'count' => $this->countRecentlyDelivered,  'accent' => 'emerald',  'icon' => 'check'],
                 ];
                 $accentMap = [
                     'slate'   => ['ring' => 'ring-slate-300',   'chip' => 'bg-slate-100   text-slate-700',   'active' => 'border-slate-900   bg-slate-50',   'count' => 'text-slate-900'],
@@ -412,7 +436,8 @@ new #[Layout('components.layouts.app')] class extends Component {
                     'in_transit'         => 'No vehicles on the road right now.',
                     'storage'            => 'No vehicles at another storage location.',
                     'on_demo'            => 'No vehicles out on demo with customers.',
-                    'recently_delivered' => 'No vehicles marked sold in the last 30 days.',
+                    'recently_sold'      => 'No vehicles marked sold in the last 30 days.',
+                    'recently_delivered' => 'No vehicles marked delivered in the last 30 days.',
                 ];
                 $cardTooltips = [
                     'premises'           => 'Physically at your dealership',
@@ -422,7 +447,8 @@ new #[Layout('components.layouts.app')] class extends Component {
                     'in_transit'         => 'On the road with an active transport job',
                     'storage'            => 'Parked at another storage yard',
                     'on_demo'            => 'Out on demo with a customer',
-                    'recently_delivered' => 'Marked sold in the last 30 days — archive when off your books',
+                    'recently_sold'      => 'Sold and still on your books — click Mark as delivered when the buyer takes the keys',
+                    'recently_delivered' => 'Marked delivered in the last 30 days — archived but still here for your records',
                 ];
             @endphp
 

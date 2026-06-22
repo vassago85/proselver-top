@@ -11,8 +11,10 @@ The Dealer Portal is built around one job, in this order:
 1. **Track your own vehicles** — see where every VIN is (premises, BB, storage, transit, on demo).
 2. **Reserve** when a customer commits — capture salesperson + buyer.
 3. **Book a delivery** with ProSelver (or your own driver) to move the chassis where it needs to go.
-4. **Mark sold** when the paperwork is done — the reserved customer carries forward automatically. Sold is sold.
-5. **Archive** once the vehicle has left your books — the row drops off the active ledger.
+4. **Mark sold** when the paperwork is done — the reserved customer carries forward automatically.
+5. **Mark as delivered** when the buyer takes the keys — the row leaves the active board but stays in your **Recently delivered** history.
+
+> **Archive is not part of the journey.** Use it only for mistakes, test vehicles, or duplicates. Archived rows are hidden from delivery history. For a normal handover, always use **Mark as delivered**.
 
 Supporting features (body-builder admin, bulk upload, trips, petty cash) are there but aren't the day-to-day path.
 
@@ -85,7 +87,8 @@ The dashboard is a tablet-friendly **stock console**: eight cards in a 4×2 grid
 | **In transit** | On the road with an active ProSelver job |
 | **At another storage** | Parked at another yard or storage site |
 | **On demo with customer** | Out on demo |
-| **Recently sold** | Marked **sold** in the last 30 days — archive each row when the vehicle is off your books |
+| **Recently sold** | Marked **sold** in the last 30 days and still on your books — hit **Mark as delivered** the moment the buyer takes the keys |
+| **Recently delivered** | Marked **delivered** in the last 30 days. Archived from the active board, kept here as your delivery history |
 
 **Tap any card** to open the **full stock ledger** filtered to that bucket. Tap the same card again to clear the filter.
 
@@ -119,7 +122,7 @@ This is the main **“where is my stock?”** table. Each row shows:
 
 Filters:
 
-- **Bucket chips** (location-based) plus **Scheduled for movement** and **Recently sold** virtual buckets.
+- **Bucket chips** (location-based) plus **Scheduled for movement**, **Recently sold**, and **Recently delivered** virtual buckets. The Delivered chip is the only one that crosses the archive boundary — it's the dealer's handover history.
 - **Reserved only** one-tap button next to the status dropdown.
 - **Body builder** multi-select pills (only shown when at least one BB hosts your stock).
 - **Salesperson** multi-select pills.
@@ -139,7 +142,8 @@ Click any row to open the **vehicle card**.
 | On demo | With a customer on demo |
 | Delivered to dealer | A transport job ended at a dealer destination (the vehicle arrived at your premises) |
 | Scheduled for movement | Job booked, not yet collected |
-| **Recently sold** | Sold in the last 30 days. Archive when the vehicle has left your books |
+| **Recently sold** | Sold and still on your books — hit **Mark as delivered** when the buyer takes the keys |
+| **Recently delivered** | Handed over in the last 30 days. Archived from the active board, kept for your records |
 
 > **Sold is sold.** When a deal closes, mark the row sold; once the vehicle has left your floor, archive it. There is no separate "customer handover" step in the dealer flow.
 
@@ -208,10 +212,10 @@ The card has four parts:
 
 1. **Vehicle details** — VIN, make, model, registration, colour, dealership.
 2. **Where** — the bucket and (if known) the specific location name.
-3. **Lifecycle timeline** — Available → Reserved → Sold, each step showing the date and person.
+3. **Lifecycle timeline** — Available → Reserved → Sold → Delivered, each step showing the date and person.
 4. **Transport movement** — the active ProSelver job (number, status, pickup → delivery, scheduled date) or "No active transport job".
 
-The lifecycle and the transport movement run **independently** — a vehicle can be sold while still in transit, or in transit before it's reserved. Both are visible at a glance. Once a sale is final and the vehicle has left your books, **Archive** closes the row.
+The lifecycle and the transport movement run **independently** — a vehicle can be sold while still in transit, or in transit before it's reserved. Both are visible at a glance. **Mark as delivered** is the happy-path exit from the active board; **Archive** is the escape hatch for mistakes / test vehicles only.
 
 A **Fitment chain** panel below the timeline tracks one or more body-builder stops as ordered steps (dropside → crane, fridge body → fridge unit, etc.). Each step has its own fitment type, notes, internal job number and independent **Share with BB** toggle so you can disclose end-customer details to one fitter and keep them confidential from the next. See *Fitment chain* below for the full workflow.
 
@@ -227,7 +231,8 @@ A **Fitment chain** panel below the timeline tracks one or more body-builder sto
 | **Send out on demo** | Customer details and due-back date; location becomes *On demo* |
 | **Return from demo** | Brings the unit back from demo |
 | **Reverse sale** | Undo a sale while the row is still on the active ledger (chassis swaps, spec changes, finance fall-through) |
-| **Archive** | Closes the row once the vehicle has left your books (soft archive) |
+| **Mark as delivered** | **Happy-path close.** Stamps `delivered_at`, archives the row, lands it in *Recently delivered*. Only available once the row is **Sold** |
+| **Archive (mistake / test)** | **Escape hatch.** For mistakes, test vehicles, or duplicates. Hidden from delivery history. For a normal handover use **Mark as delivered** instead |
 | **Print delivery note** | 4-page handover pack: sale cover + Customer Copy POD + blank backside + Dealer Copy POD. Each POD page captures odometer, fuel level (1–10), condition checklist (panels, glass, lights, interior, keys, spare wheel/jack/tools, manual, dash lights, tyres, fuel cap, plates), damage & missing items, and dual signatures — same shape as the ProSelver/OEM pack with the collection note removed |
 
 Share salesperson and end-customer details with each body builder only when you intend them to see that information on their yard app. Sharing is per-leg in the fitment chain — see below.
@@ -432,7 +437,8 @@ Jobs still waiting for **owner approval** cannot be attached to a trip until app
 | Approve a BB's ProSelver booking on my VIN | Movements → **My movements** (owner pending) |
 | Mark a vehicle sold (from reserve) | Vehicle card → **Mark sold (from reserve)** |
 | Mark a vehicle sold (no reserve) | Vehicle card → **Mark as sold** |
-| Close a row off the active ledger | Vehicle card → **Archive** |
+| Close a sale once the buyer has the keys | Vehicle card → **Mark as delivered** (archives the row but keeps it in *Recently delivered*) |
+| Remove a mistake / test row | Vehicle card → **Archive (mistake / test)** — hidden from delivery history |
 | Undo a sale | Vehicle card → **Reverse sale** (while the row is still on the active ledger) |
 | Import new stock | Stock → **Import stock** |
 | Add a delivery address | Resources → **Address Book** |
@@ -449,8 +455,10 @@ Jobs still waiting for **owner approval** cannot be attached to a trip until app
 | **Status** | Commercial state: Available, Reserved, Sold, Demo, Archived |
 | **Reserve** | Hold for a customer — assigns salesperson + buyer before sale |
 | **Movement / order / job** | A transport booking in ProSelver |
-| **Recently sold** | Sold in the last 30 days — archive when off your books |
-| **Archive** | Soft-removes a row from the active ledger and dashboards |
+| **Recently sold** | Sold and still on your books — handover not yet captured |
+| **Mark as delivered** | Happy-path close: stamps `delivered_at`, archives the row, lands it in *Recently delivered* |
+| **Recently delivered** | Delivered in the last 30 days. Archived from the active board, kept for your records |
+| **Archive** | Escape hatch for mistakes / test vehicles. Hides the row from delivery history |
 | **Movement request** | BB asks dealer to arrange transport |
 | **Direct order** | BB books ProSelver; dealer approves as owner |
 | **Owner approval** | Dealer OK for someone else's booking against their VIN |
