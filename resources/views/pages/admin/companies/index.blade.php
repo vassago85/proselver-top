@@ -27,6 +27,14 @@ new #[Layout('components.layouts.app')] class extends Component {
     #[Url]
     public string $groupFilter = '';
 
+    // Trash toggle -- super-admins can flip to "Show deleted" and see
+    // soft-deleted rows alongside the live ones (with a Restore action
+    // in place of the normal View / Delete actions).  Deep-linkable so
+    // an admin can bookmark or paste the URL straight into the trash
+    // view when triaging duplicates.
+    #[Url]
+    public bool $showDeleted = false;
+
     // Create-form state. Kept on the component (rather than a child
     // Volt page) so the modal can read the same $typeFilter etc. and
     // we don't have to re-resolve the user permission twice.
@@ -77,6 +85,11 @@ new #[Layout('components.layouts.app')] class extends Component {
     }
 
     public function updatedGroupFilter(): void
+    {
+        $this->resetPage();
+    }
+
+    public function updatedShowDeleted(): void
     {
         $this->resetPage();
     }
@@ -314,6 +327,45 @@ new #[Layout('components.layouts.app')] class extends Component {
     }
 
     /**
+     * Soft-delete a company.  Gated on the CompanyPolicy@delete check
+     * (super_admin only) and refuses to ever drop the platform-owner
+     * row -- that one is referenced as the issuer on every document
+     * and is not safe to retire from this surface.  SoftDeletes on
+     * the model means the row stays in the DB and can be restored
+     * from the "Show deleted" view if the admin clicks the wrong row.
+     */
+    public function deleteCompany(int $id): void
+    {
+        $company = Company::findOrFail($id);
+        abort_unless(Gate::allows('delete', $company), 403);
+
+        if ($company->is_platform_owner) {
+            session()->flash('error', "Refusing to delete {$company->name} -- it is the platform owner row.");
+            return;
+        }
+
+        $name = $company->name;
+        $company->delete();
+
+        session()->flash('success', "Soft-deleted {$name}. Toggle 'Show deleted' to restore if this was a mistake.");
+    }
+
+    /**
+     * Bring a soft-deleted company back.  Same gate as delete -- a
+     * super-admin can both retire and resurrect; nobody else.
+     */
+    public function restoreCompany(int $id): void
+    {
+        $company = Company::withTrashed()->findOrFail($id);
+        abort_unless(Gate::allows('delete', $company), 403);
+        if (! $company->trashed()) {
+            return;
+        }
+        $company->restore();
+        session()->flash('success', "Restored {$company->name}.");
+    }
+
+    /**
      * Build the company list query honouring the currently-applied
      * search, type and group filters.  Shared between the on-screen
      * paginated table and the CSV download so the two never drift
@@ -324,6 +376,13 @@ new #[Layout('components.layouts.app')] class extends Component {
         $query = Company::withCount('users')
             ->with('group:id,name')
             ->orderBy('name');
+
+        // When the super-admin flips "Show deleted" we switch to the
+        // soft-deleted set so they can review and restore duplicates
+        // they removed by mistake.  Default view shows live rows only.
+        if ($this->showDeleted) {
+            $query->onlyTrashed();
+        }
 
         if ($this->search) {
             $needle = '%' . $this->search . '%';
@@ -458,10 +517,19 @@ new #[Layout('components.layouts.app')] class extends Component {
             ->orderBy('name')
             ->get(['id', 'name']);
 
+        // Delete / restore actions are super-admin only (per
+        // CompanyPolicy@delete).  Cache the gate result here so the
+        // view doesn't re-resolve it for every row of the paginated
+        // table.  We pass a model instance to Gate so the policy can
+        // see the full row signature, but the slug check itself does
+        // not depend on $company -- a single boolean is enough.
+        $canDelete = $actor && Gate::allows('delete', new Company);
+
         return [
             'companies'      => $query->paginate(20),
             'canManage'      => Gate::allows('create', Company::class),
             'canCreateUsers' => (bool) $actor?->canManageInternalUsers(),
+            'canDelete'      => $canDelete,
             'typeLabels'     => $typeLabels,
             'firstUserRoles' => $firstUserRoles,
             'groups'         => $groups,
@@ -476,6 +544,21 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     @if(session('success'))
         <div class="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{{ session('success') }}</div>
+    @endif
+    @if(session('error'))
+        <div class="mb-4 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">{{ session('error') }}</div>
+    @endif
+
+    @if($showDeleted)
+        <div class="mb-4 flex items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            <div>
+                <strong>Viewing deleted companies.</strong>
+                These rows have been soft-deleted and are hidden from every dealer / customer view.  Restore brings them back into the live list.
+            </div>
+            <button type="button" wire:click="$set('showDeleted', false)" class="rounded border border-amber-300 bg-white px-2.5 py-1 text-xs font-semibold text-amber-900 hover:bg-amber-100">
+                Back to active companies
+            </button>
+        </div>
     @endif
 
     {{-- Filters --}}
@@ -502,6 +585,14 @@ new #[Layout('components.layouts.app')] class extends Component {
             <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
             Download CSV
         </button>
+        @if($canDelete)
+            <button type="button" wire:click="$toggle('showDeleted')"
+                    class="inline-flex items-center gap-1.5 rounded-lg border px-3 py-2.5 text-sm font-medium {{ $showDeleted ? 'border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100' : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50' }}"
+                    title="Toggle between live and soft-deleted companies (super-admin only)">
+                <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/></svg>
+                {{ $showDeleted ? 'Showing deleted' : 'Show deleted' }}
+            </button>
+        @endif
         <a href="{{ route('admin.companies.groups') }}" class="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50">
             Manage groups
         </a>
@@ -571,7 +662,29 @@ new #[Layout('components.layouts.app')] class extends Component {
                     </td>
                     <td class="px-4 py-3 text-sm text-gray-600">{{ $company->users_count }}</td>
                     <td class="px-4 py-3">
-                        <a href="{{ route('admin.companies.show', $company) }}" class="text-sm font-medium text-blue-600 hover:text-blue-800">View / Edit</a>
+                        <div class="flex items-center gap-3 text-sm font-medium">
+                            @if($company->trashed())
+                                <a href="{{ route('admin.companies.show', $company) }}" class="text-blue-600 hover:text-blue-800">View</a>
+                                @if($canDelete)
+                                    <button type="button"
+                                            wire:click="restoreCompany({{ $company->id }})"
+                                            wire:confirm="Restore {{ $company->name }} to the active list?"
+                                            class="text-emerald-700 hover:text-emerald-900">
+                                        Restore
+                                    </button>
+                                @endif
+                            @else
+                                <a href="{{ route('admin.companies.show', $company) }}" class="text-blue-600 hover:text-blue-800">View / Edit</a>
+                                @if($canDelete && ! $company->is_platform_owner)
+                                    <button type="button"
+                                            wire:click="deleteCompany({{ $company->id }})"
+                                            wire:confirm="Soft-delete {{ $company->name }}?&#10;&#10;Users, jobs and stock attached to this company stay in the database but the row disappears from every customer-facing list. Use 'Show deleted' to restore."
+                                            class="text-rose-600 hover:text-rose-800">
+                                        Delete
+                                    </button>
+                                @endif
+                            @endif
+                        </div>
                     </td>
                 </tr>
                 @empty

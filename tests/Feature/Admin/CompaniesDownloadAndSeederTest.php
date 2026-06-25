@@ -131,3 +131,77 @@ test('ProselverCustomersSeeder maps OEM/Dealer to OEM and Group/Dealer to Dealer
     expect($cfao)->not->toBeNull();
     expect($cfao->type)->toBe(Company::TYPE_DEALER);
 });
+
+/*
+ * Delete / restore -- super-admin-only soft-delete path for cleaning
+ * up duplicate companies from the listing.  The full lifecycle is:
+ *
+ *   1. super_admin clicks Delete -> row goes to the trashed set.
+ *   2. Default list query no longer surfaces it.
+ *   3. showDeleted=true flips the view to onlyTrashed().
+ *   4. Restore puts the row back on the active board.
+ *
+ * Plus two safety rails:
+ *   - The platform-owner row is never deletable from this surface.
+ *   - Non-super-admins cannot call deleteCompany (403 from the policy).
+ */
+test('a super_admin can soft-delete a company and the row drops off the active list', function () {
+    $dup = Company::factory()->create(['name' => 'Hino Eastrand', 'type' => Company::TYPE_DEALER]);
+
+    $this->actingAs(asAdminUser());
+
+    Volt::test('admin.companies.index')
+        ->call('deleteCompany', $dup->id);
+
+    expect(Company::find($dup->id))->toBeNull();
+    expect(Company::withTrashed()->find($dup->id))->not->toBeNull();
+});
+
+test('toggling showDeleted reveals the soft-deleted rows so a super_admin can restore', function () {
+    $dup = Company::factory()->create(['name' => 'WILLIAM HUNT THE GLEN', 'type' => Company::TYPE_DEALER]);
+    $dup->delete();
+
+    $this->actingAs(asAdminUser());
+
+    [, $body] = captureCsvBody(function ($test) {
+        $test->set('showDeleted', true);
+    });
+    expect($body)->toContain('WILLIAM HUNT THE GLEN');
+
+    Volt::test('admin.companies.index')
+        ->set('showDeleted', true)
+        ->call('restoreCompany', $dup->id);
+
+    expect(Company::find($dup->id))->not->toBeNull();
+});
+
+test('the platform-owner row can never be soft-deleted from this surface', function () {
+    $owner = Company::factory()->create([
+        'name'              => 'ProSelver Technologies',
+        'type'              => Company::TYPE_INTERNAL,
+        'is_platform_owner' => true,
+    ]);
+
+    $this->actingAs(asAdminUser());
+
+    Volt::test('admin.companies.index')
+        ->call('deleteCompany', $owner->id);
+
+    expect(Company::find($owner->id))->not->toBeNull();
+});
+
+test('a non-super-admin user is rejected by the policy when trying to delete a company', function () {
+    Role::create(['name' => 'Operations Controller', 'slug' => 'operations_controller', 'tier' => 'internal']);
+    $opsCtl = User::factory()->create(['is_active' => true]);
+    $opsCtl->assignRole('operations_controller');
+
+    $dup = Company::factory()->create(['name' => 'Some Duplicate', 'type' => Company::TYPE_DEALER]);
+
+    $this->actingAs($opsCtl);
+
+    Volt::test('admin.companies.index')
+        ->call('deleteCompany', $dup->id)
+        ->assertStatus(403);
+
+    expect(Company::find($dup->id))->not->toBeNull();
+});
