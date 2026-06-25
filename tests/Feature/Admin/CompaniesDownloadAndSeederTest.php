@@ -205,3 +205,27 @@ test('a non-super-admin user is rejected by the policy when trying to delete a c
 
     expect(Company::find($dup->id))->not->toBeNull();
 });
+
+test('the platform-owner cohort (developer / owner) can also soft-delete companies', function () {
+    Role::create(['name' => 'Developer', 'slug' => 'developer',  'tier' => 'internal']);
+    Role::create(['name' => 'Owner',     'slug' => 'owner',      'tier' => 'internal']);
+
+    $developer = User::factory()->create(['is_active' => true]);
+    $developer->assignRole('developer');
+
+    $owner = User::factory()->create(['is_active' => true]);
+    $owner->assignRole('owner');
+
+    $dupA = Company::factory()->create(['name' => 'Duplicate A', 'type' => Company::TYPE_DEALER]);
+    $dupB = Company::factory()->create(['name' => 'Duplicate B', 'type' => Company::TYPE_DEALER]);
+
+    $this->actingAs($developer);
+    Volt::test('admin.companies.index')->call('deleteCompany', $dupA->id);
+    expect(Company::find($dupA->id))->toBeNull();
+    expect(Company::withTrashed()->find($dupA->id))->not->toBeNull();
+
+    $this->actingAs($owner);
+    Volt::test('admin.companies.index')->call('deleteCompany', $dupB->id);
+    expect(Company::find($dupB->id))->toBeNull();
+    expect(Company::withTrashed()->find($dupB->id))->not->toBeNull();
+});

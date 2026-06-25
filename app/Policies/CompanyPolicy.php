@@ -48,7 +48,17 @@ class CompanyPolicy
 
     public function delete(User $user, Company $company): bool
     {
-        return $user->isSuperAdmin();
+        // Delete sits one tier ABOVE edit -- ops staff can create
+        // and update companies but only the platform-owner cohort
+        // (developer / super_admin / owner) may soft-delete or
+        // restore them.  Soft-deleting a real customer by accident
+        // hides them from every dealer / OEM / BB surface across
+        // the platform until restored, so the gate is intentionally
+        // narrower than create()/update().  This matches the
+        // index page's Delete button + Show-deleted toggle.
+        return $user->isDeveloper()
+            || $user->isSuperAdmin()
+            || $user->isOwner();
     }
 
     public function manageUsers(User $user, Company $company): bool
