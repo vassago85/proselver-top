@@ -116,7 +116,30 @@ new #[Layout('components.layouts.app')] class extends Component {
         // rather than the old 3-value subset, so admin can promote /
         // change a company without surgery on the DB.
         $rules = [
-            'name' => 'required|string|max:255',
+            'name' => [
+                'required', 'string', 'max:255',
+                // Catch case-only / accent-only duplicates BEFORE the
+                // update SQL fires, otherwise the DB's unique index on
+                // normalized_name throws a 500 (the column is always
+                // lower-ASCII so "Isuzu Motors SA" and "ISUZU MOTORS
+                // SA" collide there even though the literal name is
+                // different).  withTrashed so the admin sees "you
+                // already deleted that one -- restore from Show
+                // deleted" instead of being silently blocked.
+                function (string $attribute, mixed $value, \Closure $fail) {
+                    $normalized = Str::lower(Str::ascii(trim((string) $value)));
+                    $clash = Company::withTrashed()
+                        ->where('normalized_name', $normalized)
+                        ->where('id', '!=', $this->company->id)
+                        ->first();
+                    if ($clash) {
+                        $hint = $clash->trashed()
+                            ? '(it is currently soft-deleted -- restore it from Show deleted on the company list)'
+                            : '(open and merge / delete the duplicate first)';
+                        $fail("Another company already uses this name {$hint}.");
+                    }
+                },
+            ],
             'type' => 'required|in:' . implode(',', Company::TYPES),
             'workflowType' => 'required|in:standard,faw',
             'address' => 'nullable|string|max:500',

@@ -206,6 +206,56 @@ test('a non-super-admin user is rejected by the policy when trying to delete a c
     expect(Company::find($dup->id))->not->toBeNull();
 });
 
+/*
+ * Name-collision validation -- the DB has a unique index on the
+ * lower-ASCII normalized_name column, so case- and accent-only
+ * duplicates would 500 with a SQLSTATE 23505 if we only validate
+ * the literal name.  Both the create modal and the edit page have
+ * to catch the collision at validation time.
+ */
+test('the edit page refuses to rename a company to a name that already exists (case-different)', function () {
+    Company::factory()->create(['name' => 'Isuzu Motors South Africa (Pty) Ltd', 'type' => Company::TYPE_OEM]);
+    $other = Company::factory()->create(['name' => 'Isuzu Motors SA', 'type' => Company::TYPE_OEM]);
+
+    $this->actingAs(asAdminUser());
+
+    Volt::test('admin.companies.show', ['company' => $other])
+        ->set('editing', true)
+        ->set('name', 'ISUZU MOTORS SOUTH AFRICA (PTY) LTD')
+        ->call('save')
+        ->assertHasErrors(['name']);
+
+    expect(Company::find($other->id)->name)->toBe('Isuzu Motors SA');
+});
+
+test('the create modal refuses a name whose normalized form already exists on the platform', function () {
+    Company::factory()->create(['name' => 'Isuzu Motors South Africa (Pty) Ltd', 'type' => Company::TYPE_OEM]);
+
+    $this->actingAs(asAdminUser());
+
+    Volt::test('admin.companies.index')
+        ->set('newName', 'ISUZU MOTORS SOUTH AFRICA (Pty) Ltd')
+        ->set('newType', Company::TYPE_OEM)
+        ->call('createCompany')
+        ->assertHasErrors(['newName']);
+
+    expect(Company::count())->toBe(1);
+});
+
+test('the edit page lets you save with the original name unchanged (does not self-collide)', function () {
+    $c = Company::factory()->create(['name' => 'Demo Motors', 'type' => Company::TYPE_DEALER]);
+
+    $this->actingAs(asAdminUser());
+
+    Volt::test('admin.companies.show', ['company' => $c])
+        ->set('editing', true)
+        ->set('phone', '012 345 6789')
+        ->call('save')
+        ->assertHasNoErrors();
+
+    expect(Company::find($c->id)->phone)->toBe('012 345 6789');
+});
+
 test('the platform-owner cohort (developer / owner) can also soft-delete companies', function () {
     Role::create(['name' => 'Developer', 'slug' => 'developer',  'tier' => 'internal']);
     Role::create(['name' => 'Owner',     'slug' => 'owner',      'tier' => 'internal']);

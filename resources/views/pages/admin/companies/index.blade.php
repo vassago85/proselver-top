@@ -176,7 +176,29 @@ new #[Layout('components.layouts.app')] class extends Component {
         abort_unless(Gate::allows('create', Company::class), 403);
 
         $rules = [
-            'newName'         => 'required|string|max:255|unique:companies,name',
+            'newName'         => [
+                'required', 'string', 'max:255',
+                // Validate against normalized_name so case-only and
+                // accent-only duplicates are caught BEFORE the
+                // creating hook stamps the unique-indexed column.
+                // Without this, PostgreSQL's default case-sensitive
+                // collation lets "ISUZU MOTORS SA" pass a plain
+                // unique:companies,name check when "Isuzu Motors
+                // SA" already exists, then the DB rejects the
+                // INSERT and the admin sees a 500.
+                function (string $attribute, mixed $value, \Closure $fail) {
+                    $normalized = Str::lower(Str::ascii(trim((string) $value)));
+                    $clash = Company::withTrashed()
+                        ->where('normalized_name', $normalized)
+                        ->first();
+                    if ($clash) {
+                        $hint = $clash->trashed()
+                            ? '(currently soft-deleted -- restore it from Show deleted)'
+                            : '';
+                        $fail(trim("Another company already uses this name {$hint}."));
+                    }
+                },
+            ],
             'newType'         => 'required|in:' . implode(',', Company::TYPES),
             'newWorkflowType' => 'required|in:standard,faw',
             'newPhone'        => 'nullable|string|max:30',
