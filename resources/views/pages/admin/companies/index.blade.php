@@ -313,7 +313,13 @@ new #[Layout('components.layouts.app')] class extends Component {
         };
     }
 
-    public function with(): array
+    /**
+     * Build the company list query honouring the currently-applied
+     * search, type and group filters.  Shared between the on-screen
+     * paginated table and the CSV download so the two never drift
+     * out of sync -- "what I see is what I download" is the contract.
+     */
+    protected function buildCompaniesQuery(): \Illuminate\Database\Eloquent\Builder
     {
         $query = Company::withCount('users')
             ->with('group:id,name')
@@ -344,6 +350,81 @@ new #[Layout('components.layouts.app')] class extends Component {
                 $query->where('company_group_id', (int) $this->groupFilter);
             }
         }
+
+        return $query;
+    }
+
+    /**
+     * Stream a CSV of every company matching the currently-applied
+     * filters.  Chunked through the DB so a few thousand rows don't
+     * inflate the PHP memory footprint; UTF-8 BOM prepended so Excel
+     * on Windows opens the file with the right encoding by default
+     * (a common gotcha when ProSelver staff double-click the file).
+     */
+    public function downloadCsv()
+    {
+        abort_unless(Gate::allows('viewAny', Company::class), 403);
+
+        $query = $this->buildCompaniesQuery();
+
+        $typeLabels = [
+            Company::TYPE_DEALER       => 'Dealer',
+            Company::TYPE_OEM          => 'OEM',
+            Company::TYPE_BODY_BUILDER => 'Body Builder',
+            Company::TYPE_TRANSPORTER  => 'Transporter',
+            Company::TYPE_YARD         => 'Yard / Storage',
+            Company::TYPE_INTERNAL     => 'Internal (ProSelver)',
+            Company::TYPE_CUSTOMER     => 'Customer',
+        ];
+
+        $filename = 'proselver-customers-' . now()->format('Ymd-His') . '.csv';
+
+        return response()->streamDownload(function () use ($query, $typeLabels) {
+            $out = fopen('php://output', 'w');
+            // BOM so Excel opens UTF-8 without garbling accented characters.
+            fwrite($out, "\xEF\xBB\xBF");
+            fputcsv($out, [
+                'Name',
+                'Group',
+                'Type',
+                'Workflow',
+                'Phone',
+                'Billing email',
+                'VAT number',
+                'Address',
+                'Active',
+                'Users',
+                'Created',
+            ]);
+
+            $query->chunkById(200, function ($rows) use ($out, $typeLabels) {
+                foreach ($rows as $c) {
+                    fputcsv($out, [
+                        $c->name,
+                        $c->group?->name ?? '',
+                        $typeLabels[$c->type] ?? ucfirst((string) $c->type),
+                        $c->workflow_type ?: 'standard',
+                        $c->phone,
+                        $c->billing_email,
+                        $c->vat_number,
+                        $c->address,
+                        $c->is_active ? 'Yes' : 'No',
+                        $c->users_count,
+                        optional($c->created_at)->format('Y-m-d'),
+                    ]);
+                }
+            });
+
+            fclose($out);
+        }, $filename, [
+            'Content-Type'  => 'text/csv; charset=UTF-8',
+            'Cache-Control' => 'no-store',
+        ]);
+    }
+
+    public function with(): array
+    {
+        $query = $this->buildCompaniesQuery();
 
         // Pretty labels for each Company::TYPE_* constant.  Kept here
         // (not on the model) because they're presentation strings —
@@ -416,6 +497,11 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <option value="{{ $g->id }}">{{ $g->name }}</option>
             @endforeach
         </select>
+        <button type="button" wire:click="downloadCsv" class="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                title="Download every company matching the current search / filters as a CSV (opens in Excel)">
+            <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+            Download CSV
+        </button>
         <a href="{{ route('admin.companies.groups') }}" class="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50">
             Manage groups
         </a>
