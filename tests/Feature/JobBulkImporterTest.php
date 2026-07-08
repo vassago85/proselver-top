@@ -262,6 +262,53 @@ it('preview() hard-errors rows with a blank origin or destination and commit() n
     expect(Job::count())->toBe(0);
 });
 
+it('links an existing shared body-builder location instead of spawning a city-less duplicate', function () {
+    $brand = Brand::create(['name' => 'FAW']);
+    $vehicleClass = VehicleClass::create(['name' => 'Truck Class 4']);
+
+    $oem = setUpOemCompany('Isuzu SA', ['VCDC Yard']);
+    $user = User::factory()->create();
+
+    // A real body builder that owns its own fully-addressed location.
+    $bb = Company::factory()->create(['name' => 'Anchor Body Builders', 'type' => Company::TYPE_BODY_BUILDER]);
+    $anchor = Location::create([
+        'company_id' => $bb->id,
+        'company_name' => 'Anchor Body Builders',
+        'address' => '12 Fitment Road, Isando',
+        'city' => 'Johannesburg',
+        'province' => 'Gauteng',
+        'type' => Location::TYPE_BODY_BUILDER,
+        'is_active' => true,
+    ]);
+
+    $tomorrow = now()->addDay()->format('d-m-Y');
+    $importer = app(JobBulkImporter::class);
+    $rows = [[
+        '_sheet' => 'X', '_row' => 2,
+        'Chassis No.' => 'SHAREDMATCH00001', 'Model' => '8.140FL',
+        'From' => 'VCDC Yard', 'To' => 'Anchor Body Builders',
+        'Movement Order Date' => $tomorrow, 'Comments' => '',
+    ]];
+
+    $mapping = $importer->detectMapping(['Chassis No.', 'Model', 'From', 'To', 'Movement Order Date', 'Comments']);
+    $preview = $importer->preview($oem, $rows, $mapping, ['default_vehicle_class_id' => $vehicleClass->id]);
+
+    // Resolved to the shared record → no "will be added to the address
+    // book" warning, so the row is ready rather than a warning.
+    expect($preview['rows'][0]['status'])->toBe('ready');
+    expect($preview['rows'][0]['parsed']['delivery_match']?->id)->toBe($anchor->id);
+
+    $result = $importer->commit($oem, $user->id, $preview['rows'], $brand->id, $vehicleClass->id);
+
+    expect($result['created'])->toBe(1);
+    // No duplicate Anchor location spawned under the importing OEM.
+    expect(Location::where('company_name', 'Anchor Body Builders')->count())->toBe(1);
+
+    $job = Job::first();
+    expect($job->delivery_location_id)->toBe($anchor->id);
+    expect($job->deliveryLocation->city)->toBe('Johannesburg');
+});
+
 it('guessVehicleClassId() infers tonnage from FAW model strings', function () {
     $importer = app(JobBulkImporter::class);
 

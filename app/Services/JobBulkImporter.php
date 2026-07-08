@@ -346,7 +346,30 @@ class JobBulkImporter
         // both hit the same hint.
         $savedHints = (array) ($company->movement_csv_mapping['model_class_hints'] ?? []);
 
-        $locations = $company->locations()->get();
+        // The importing company's own address book takes precedence, but
+        // we ALSO let a row resolve to a shared operational location owned
+        // by another company. Body builders, yards and plants are platform
+        // infrastructure that turn up as origins / destinations on many
+        // customers' files (e.g. "Anchor Body Builders" on an OEM's import).
+        // Matching to the real record — which carries a proper street
+        // address / city — stops the importer spawning a blank, city-less
+        // duplicate under the importing company for every such row. We key
+        // off the LOCATION type (not the owner's company type) so an OEM's
+        // plant location, a body-builder's yard, and a standalone yard
+        // company are all reachable.
+        $ownLocations = $company->locations()->get();
+        $sharedLocations = Location::query()
+            ->where('is_active', true)
+            ->where('company_id', '!=', $company->id)
+            ->whereIn('type', [
+                Location::TYPE_BODY_BUILDER,
+                Location::TYPE_YARD,
+                Location::TYPE_PLANT,
+            ])
+            ->get();
+        // Own first so an exact / slug name clash resolves to the
+        // customer's own record rather than a shared one.
+        $locations = $ownLocations->concat($sharedLocations)->unique('id')->values();
 
         // VIN dedup: pull every in-flight job for this customer keyed by
         // VIN so we can warn operators about re-imports without
