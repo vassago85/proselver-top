@@ -221,6 +221,47 @@ it('preview() flags rows that are missing a vehicle class as errors', function (
     expect($preview['rows'][0]['errors'])->toContain('Vehicle class needed — set per row in the preview, or pick a default on the previous step');
 });
 
+it('preview() hard-errors rows with a blank origin or destination and commit() never creates them', function () {
+    $brand = Brand::create(['name' => 'FAW']);
+    $vehicleClass = VehicleClass::create(['name' => 'Truck Class 4']);
+    $company = setUpOemCompany('FAW SA', ['PE Plant']);
+    $user = User::factory()->create();
+    $tomorrow = now()->addDay()->format('d-m-Y');
+
+    $importer = app(JobBulkImporter::class);
+    $rows = [
+        // Blank destination — must be blocked.
+        [
+            '_sheet' => 'X', '_row' => 2,
+            'Chassis No.' => 'BLANKDEST0000001', 'Model' => '8.140FL',
+            'From' => 'PE Plant', 'To' => '',
+            'Movement Order Date' => $tomorrow, 'Comments' => '',
+        ],
+        // Whitespace-only origin — must be blocked too (trimmed to empty).
+        [
+            '_sheet' => 'X', '_row' => 3,
+            'Chassis No.' => 'BLANKORIG0000002', 'Model' => '8.140FL',
+            'From' => '   ', 'To' => 'GB Bodies',
+            'Movement Order Date' => $tomorrow, 'Comments' => '',
+        ],
+    ];
+
+    $mapping = $importer->detectMapping(['Chassis No.', 'Model', 'From', 'To', 'Movement Order Date', 'Comments']);
+    $preview = $importer->preview($company, $rows, $mapping, [
+        'default_vehicle_class_id' => $vehicleClass->id,
+    ]);
+
+    expect($preview['rows'][0]['status'])->toBe('error');
+    expect($preview['rows'][0]['errors'])->toContain('Delivery is missing');
+    expect($preview['rows'][1]['status'])->toBe('error');
+    expect($preview['rows'][1]['errors'])->toContain('Pickup is missing');
+
+    $result = $importer->commit($company, $user->id, $preview['rows'], $brand->id, $vehicleClass->id);
+
+    expect($result['created'])->toBe(0);
+    expect(Job::count())->toBe(0);
+});
+
 it('guessVehicleClassId() infers tonnage from FAW model strings', function () {
     $importer = app(JobBulkImporter::class);
 
