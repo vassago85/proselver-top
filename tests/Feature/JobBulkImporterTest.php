@@ -59,6 +59,12 @@ function setUpOemCompany(string $name = 'FAW SA', array $locationNames = []): Co
             'company_name' => $locName,
             'address' => $locName,
             'type' => Location::TYPE_PLANT,
+            // Seed real SA coordinates so these fixtures represent a
+            // properly-geocoded address book. Without them every matched
+            // row would now surface a "no map coordinates — tolls won't
+            // calculate" warning and drop out of the "ready" status.
+            'latitude' => -33.9608,
+            'longitude' => 25.6022,
             'is_active' => true,
         ]);
     }
@@ -172,7 +178,7 @@ it('preview() flags rows with on-hold dates and surfaces missing locations as wa
 
     expect($preview['rows'][0]['status'])->toBe('ready');
     expect($preview['rows'][1]['status'])->toBe('warning');
-    expect($preview['rows'][1]['warnings'])->toContain('Delivery “East London” will be added to the address book');
+    expect($preview['rows'][1]['warnings'])->toContain('Delivery “East London” will be added to the address book — set a street address on it so route & tolls calculate');
     expect($preview['rows'][2]['status'])->toBe('skipped');
     expect($preview['stats']['ready'])->toBe(2);
     expect($preview['stats']['on_hold'])->toBe(1);
@@ -277,6 +283,8 @@ it('links an existing shared body-builder location instead of spawning a city-le
         'address' => '12 Fitment Road, Isando',
         'city' => 'Johannesburg',
         'province' => 'Gauteng',
+        'latitude' => -26.1420,
+        'longitude' => 28.2294,
         'type' => Location::TYPE_BODY_BUILDER,
         'is_active' => true,
     ]);
@@ -307,6 +315,40 @@ it('links an existing shared body-builder location instead of spawning a city-le
     $job = Job::first();
     expect($job->delivery_location_id)->toBe($anchor->id);
     expect($job->deliveryLocation->city)->toBe('Johannesburg');
+});
+
+it('warns (but still imports) when a matched location has no coordinates so tolls will not calculate', function () {
+    $vehicleClass = VehicleClass::create(['name' => 'Truck Class 4']);
+    $company = setUpOemCompany('FAW SA', ['PE Plant']); // PE Plant is geocoded by the helper
+
+    // A book entry that exists but was never geocoded (address = name).
+    Location::create([
+        'company_id' => $company->id,
+        'company_name' => 'GB Bodies',
+        'address' => 'GB Bodies',
+        'type' => Location::TYPE_BODY_BUILDER,
+        'is_active' => true,
+        // no latitude / longitude — this is the un-tollable case
+    ]);
+
+    $tomorrow = now()->addDay()->format('d-m-Y');
+    $importer = app(JobBulkImporter::class);
+    $rows = [[
+        '_sheet' => 'X', '_row' => 2,
+        'Model' => 'J5N 28.290FL', 'Chassis No.' => 'NOCOORDS00000001',
+        'From' => 'PE Plant', 'To' => 'GB Bodies',
+        'Movement Order Date' => $tomorrow, 'Comments' => 'standard',
+    ]];
+
+    $mapping = $importer->detectMapping(['Model', 'Chassis No.', 'From', 'To', 'Movement Order Date', 'Comments']);
+    $preview = $importer->preview($company, $rows, $mapping, ['default_vehicle_class_id' => $vehicleClass->id]);
+
+    // Matched on both ends, so not an error — but the coordinate-less
+    // delivery downgrades it to a warning rather than a clean "ready".
+    expect($preview['rows'][0]['status'])->toBe('warning');
+    expect($preview['rows'][0]['warnings'])->toContain('Delivery “GB Bodies” has no map coordinates — route & tolls won\'t calculate until its address is fixed');
+    // Still counts toward the import ("ready" stat includes warnings).
+    expect($preview['stats']['ready'])->toBe(1);
 });
 
 it('guessVehicleClassId() infers tonnage from FAW model strings', function () {

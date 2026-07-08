@@ -988,17 +988,25 @@ class JobBulkImporter
 
         if ($pickup !== null && $pickup !== '' && !$pickupMatch) {
             if ($autoCreate) {
-                $warnings[] = "Pickup “{$pickup}” will be added to the address book";
+                // A brand-new book entry is seeded with the raw name as its
+                // address, which Google usually can't geocode — so it lands
+                // without coordinates and the route/toll estimate can't run.
+                // Flag it up front so ops knows to set a real street address.
+                $warnings[] = "Pickup “{$pickup}” will be added to the address book — set a street address on it so route & tolls calculate";
             } else {
                 $errors[] = "Pickup “{$pickup}” isn't in the address book";
             }
+        } elseif ($pickupMatch && !$this->locationHasCoordinates($pickupMatch)) {
+            $warnings[] = "Pickup “{$pickupMatch->company_name}” has no map coordinates — route & tolls won't calculate until its address is fixed";
         }
         if ($delivery !== null && $delivery !== '' && !$deliveryMatch) {
             if ($autoCreate) {
-                $warnings[] = "Delivery “{$delivery}” will be added to the address book";
+                $warnings[] = "Delivery “{$delivery}” will be added to the address book — set a street address on it so route & tolls calculate";
             } else {
                 $errors[] = "Delivery “{$delivery}” isn't in the address book";
             }
+        } elseif ($deliveryMatch && !$this->locationHasCoordinates($deliveryMatch)) {
+            $warnings[] = "Delivery “{$deliveryMatch->company_name}” has no map coordinates — route & tolls won't calculate until its address is fixed";
         }
 
         return [
@@ -1111,6 +1119,16 @@ class JobBulkImporter
      *
      * Returns the matching Location or null.
      */
+    /**
+     * A location can only produce a route (and therefore a toll estimate)
+     * when it has both coordinates. Mirrors the falsy guard in
+     * RouteCalculationService so a 0/blank coord counts as "missing".
+     */
+    private function locationHasCoordinates(Location $location): bool
+    {
+        return !empty($location->latitude) && !empty($location->longitude);
+    }
+
     private function matchLocation(?string $name, \Illuminate\Support\Collection $locations): ?Location
     {
         if ($name === null || $name === '') {
