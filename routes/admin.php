@@ -136,6 +136,12 @@ Volt::route('drivers/{user}/edit', 'admin.drivers.edit')->name('drivers.edit');
 // keep test runs and write-offs out of the FAW spreadsheet.
 Volt::route('invoices', 'admin.invoices.index')->name('invoices.index');
 
+// ProSelver platform licence meter (SaaS fee for Trident). Owner +
+// developer only — mount() 403s everyone else. Separate from customer
+// freight invoicing above. Rates live in SystemSetting; copy block for
+// Invoice Ninja (no API).
+Volt::route('billing', 'admin.billing')->name('billing');
+
 // Users
 Volt::route('users', 'admin.users.index')->name('users.index');
 Volt::route('users/create', 'admin.users.create')->name('users.create');
