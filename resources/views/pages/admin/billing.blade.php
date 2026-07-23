@@ -122,13 +122,13 @@ new #[Layout('components.layouts.app')] class extends Component {
                         : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50' }}"
             >
                 <span>{{ $rm['label'] }}</span>
-                <span class="tabular-nums opacity-80">{{ $rm['count'] }} · {{ $money($rm['total_excl_vat']) }}</span>
+                <span class="tabular-nums opacity-80">{{ $rm['count'] }} · {{ $money($rm['total']) }}</span>
             </button>
         @endforeach
     </div>
 
-    {{-- Headline --}}
-    <div class="grid grid-cols-2 gap-3 lg:grid-cols-5">
+    {{-- Headline — no VAT (supplier not VAT-registered) --}}
+    <div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <div class="rounded-lg border border-slate-200 bg-white px-4 py-3">
             <p class="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Completed moves</p>
             <p class="mt-1 text-2xl font-bold tabular-nums text-slate-900">{{ $summary['count'] }}</p>
@@ -143,14 +143,10 @@ new #[Layout('components.layouts.app')] class extends Component {
             <p class="mt-1 text-2xl font-bold tabular-nums text-slate-900">{{ $money($summary['moves_subtotal']) }}</p>
             <p class="mt-0.5 text-[11px] text-slate-400">{{ $summary['count'] }} × {{ $money($summary['per_move']) }}</p>
         </div>
-        <div class="rounded-lg border border-slate-200 bg-white px-4 py-3">
-            <p class="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Total excl. VAT</p>
-            <p class="mt-1 text-2xl font-bold tabular-nums text-slate-900">{{ $money($summary['total_excl_vat']) }}</p>
-        </div>
         <div class="rounded-lg border border-slate-900 bg-slate-900 px-4 py-3 text-white">
-            <p class="text-[10px] font-semibold uppercase tracking-wide text-slate-300">Incl. VAT (15%)</p>
-            <p class="mt-1 text-2xl font-bold tabular-nums">{{ $money($summary['total_incl_vat']) }}</p>
-            <p class="mt-0.5 text-[11px] text-slate-400">VAT {{ $money($summary['vat']) }}</p>
+            <p class="text-[10px] font-semibold uppercase tracking-wide text-slate-300">Total</p>
+            <p class="mt-1 text-2xl font-bold tabular-nums">{{ $money($summary['total']) }}</p>
+            <p class="mt-0.5 text-[11px] text-slate-400">No VAT</p>
         </div>
     </div>
 

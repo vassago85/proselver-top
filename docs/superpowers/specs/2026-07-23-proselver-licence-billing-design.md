@@ -33,14 +33,19 @@ Keys:
 - `proselver_licence_base_fee` (float)
 - `proselver_licence_per_move` (float)
 
+## Tax
+
+No VAT. Supplier is not VAT-registered. All amounts and Invoice Ninja copy
+text are the charged total with an explicit “No VAT” note.
+
 ## UI
 
 - Route: `/admin/billing` (`admin.billing`)
-- Month selector + headline (count, base, per-move subtotal, total, VAT 15%)
+- Month selector + headline (count, base, per-move subtotal, total)
 - Inline rate editors + save
 - Drill-down table of billable jobs (link to order)
 - Recent months strip
-- “Copy for Invoice Ninja” — clipboard text with period, lines, totals (no API)
+- “Copy for Invoice Ninja” — clipboard text with period, lines, total (no VAT, no API)
 
 ## Out of scope (v1)
 

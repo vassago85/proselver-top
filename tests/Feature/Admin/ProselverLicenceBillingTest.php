@@ -113,9 +113,7 @@ test('summarise counts only ProSelver-executed delivered/completed jobs in the m
         ->and($summary['base'])->toBe(3500.0)
         ->and($summary['per_move'])->toBe(50.0)
         ->and($summary['moves_subtotal'])->toBe(100.0)
-        ->and($summary['total_excl_vat'])->toBe(3600.0)
-        ->and($summary['vat'])->toBe(540.0)
-        ->and($summary['total_incl_vat'])->toBe(4140.0);
+        ->and($summary['total'])->toBe(3600.0);
 });
 
 test('saving rates updates SystemSetting and recalculates the bill', function () {
@@ -134,10 +132,10 @@ test('saving rates updates SystemSetting and recalculates the bill', function ()
         ->and((float) SystemSetting::get(ProselverLicenceBilling::SETTING_PER_MOVE))->toBe(75.0);
 
     $summary = app(ProselverLicenceBilling::class)->summarise(now()->startOfMonth());
-    expect($summary['total_excl_vat'])->toBe(4150.0); // 4000 + 2×75
+    expect($summary['total'])->toBe(4150.0); // 4000 + 2×75
 });
 
-test('Invoice Ninja copy text includes period, counts and totals', function () {
+test('Invoice Ninja copy text includes period, counts and totals with no VAT', function () {
     billingProselverJob(['delivered_at' => now()]);
 
     $billing = app(ProselverLicenceBilling::class);
@@ -147,6 +145,8 @@ test('Invoice Ninja copy text includes period, counts and totals', function () {
     expect($text)
         ->toContain('ProSelver platform licence')
         ->toContain('Completed ProSelver movements: 1 × R50.00')
-        ->toContain('Total excl. VAT: R3,550.00')
-        ->toContain('Total incl. VAT:');
+        ->toContain('Total: R3,550.00')
+        ->toContain('No VAT — not VAT registered')
+        ->not->toContain('VAT (15%)')
+        ->not->toContain('incl. VAT');
 });

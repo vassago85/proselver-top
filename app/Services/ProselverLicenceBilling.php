@@ -23,8 +23,6 @@ class ProselverLicenceBilling
     public const DEFAULT_BASE = 3500.0;
     public const DEFAULT_PER_MOVE = 50.0;
 
-    public const VAT_RATE = 0.15;
-
     public function baseFee(): float
     {
         return (float) SystemSetting::get(self::SETTING_BASE, self::DEFAULT_BASE);
@@ -78,9 +76,7 @@ class ProselverLicenceBilling
      *   base: float,
      *   per_move: float,
      *   moves_subtotal: float,
-     *   total_excl_vat: float,
-     *   vat: float,
-     *   total_incl_vat: float,
+     *   total: float,
      *   jobs: Collection
      * }
      */
@@ -91,8 +87,7 @@ class ProselverLicenceBilling
         $perMove = $this->perMoveFee();
         $count = $jobs->count();
         $movesSubtotal = $count * $perMove;
-        $excl = $base + $movesSubtotal;
-        $vat = round($excl * self::VAT_RATE, 2);
+        $total = $base + $movesSubtotal;
 
         return [
             'month' => $month->format('Y-m'),
@@ -101,15 +96,14 @@ class ProselverLicenceBilling
             'base' => $base,
             'per_move' => $perMove,
             'moves_subtotal' => $movesSubtotal,
-            'total_excl_vat' => $excl,
-            'vat' => $vat,
-            'total_incl_vat' => $excl + $vat,
+            'total' => $total,
             'jobs' => $jobs,
         ];
     }
 
     /**
      * Plain-text block ready to paste into Invoice Ninja line items / notes.
+     * No VAT — supplier is not VAT-registered.
      */
     public function invoiceNinjaText(array $summary): string
     {
@@ -124,9 +118,8 @@ class ProselverLicenceBilling
                 number_format($summary['moves_subtotal'], 2, '.', ','),
             ),
             '',
-            sprintf('Total excl. VAT: R%s', number_format($summary['total_excl_vat'], 2, '.', ',')),
-            sprintf('VAT (15%%): R%s', number_format($summary['vat'], 2, '.', ',')),
-            sprintf('Total incl. VAT: R%s', number_format($summary['total_incl_vat'], 2, '.', ',')),
+            sprintf('Total: R%s', number_format($summary['total'], 2, '.', ',')),
+            '(No VAT — not VAT registered)',
             '',
             'Billable = executor ProSelver, status delivered/completed, by delivered_at.',
         ];
@@ -137,7 +130,7 @@ class ProselverLicenceBilling
     /**
      * Recent calendar months (newest first) with billable counts only.
      *
-     * @return list<array{month: string, label: string, count: int, total_excl_vat: float}>
+     * @return list<array{month: string, label: string, count: int, total: float}>
      */
     public function recentMonths(int $howMany = 6): array
     {
@@ -158,7 +151,7 @@ class ProselverLicenceBilling
                 'month' => $month->format('Y-m'),
                 'label' => $month->format('M Y'),
                 'count' => $count,
-                'total_excl_vat' => $base + ($count * $perMove),
+                'total' => $base + ($count * $perMove),
             ];
         }
 
