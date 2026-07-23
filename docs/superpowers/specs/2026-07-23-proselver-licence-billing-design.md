@@ -32,6 +32,8 @@ Rates stored in `SystemSetting` and editable on the page by owner/developer.
 Keys:
 - `proselver_licence_base_fee` (float)
 - `proselver_licence_per_move` (float)
+- `proselver_licence_billing_enabled` (boolean, default **false**) — page and
+  sidebar stay hidden until commercial agreement; flip to `true` to open.
 
 ## Tax
 

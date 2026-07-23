@@ -19,9 +19,26 @@ class ProselverLicenceBilling
 {
     public const SETTING_BASE = 'proselver_licence_base_fee';
     public const SETTING_PER_MOVE = 'proselver_licence_per_move';
+    /** When false the page and sidebar link stay hidden (pre-agreement). */
+    public const SETTING_ENABLED = 'proselver_licence_billing_enabled';
 
     public const DEFAULT_BASE = 3500.0;
     public const DEFAULT_PER_MOVE = 50.0;
+
+    public function isEnabled(): bool
+    {
+        return (bool) SystemSetting::get(self::SETTING_ENABLED, false);
+    }
+
+    public function setEnabled(bool $enabled): void
+    {
+        SystemSetting::set(
+            self::SETTING_ENABLED,
+            $enabled,
+            'boolean',
+            'Show ProSelver platform licence billing (owner/developer). Off until commercial agreement.',
+        );
+    }
 
     public function baseFee(): float
     {

@@ -29,6 +29,12 @@ new #[Layout('components.layouts.app')] class extends Component {
             abort(403);
         }
 
+        // Hidden until commercial agreement — flip
+        // proselver_licence_billing_enabled via SystemSetting to open.
+        if (! app(ProselverLicenceBilling::class)->isEnabled()) {
+            abort(404);
+        }
+
         if ($this->month === '' || ! preg_match('/^\d{4}-\d{2}$/', $this->month)) {
             $this->month = now()->format('Y-m');
         }
