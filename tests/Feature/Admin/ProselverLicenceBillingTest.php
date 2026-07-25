@@ -101,17 +101,14 @@ test('owner and developer can open the billing page once enabled; accounts and s
         ->assertForbidden();
 });
 
-test('summarise counts only ProSelver-executed delivered/completed jobs in the month', function () {
+test('summarise counts only ProSelver-executed delivered/completed jobs at R150 + VAT', function () {
     billingProselverJob(['delivered_at' => now()]);
     billingProselverJob(['delivered_at' => now(), 'status' => Job::STATUS_COMPLETED]);
-    // Wrong executor
     billingProselverJob([
         'executor_type' => Job::EXECUTOR_INTERNAL,
         'delivered_at' => now(),
     ]);
-    // Wrong month
     billingProselverJob(['delivered_at' => now()->subMonth()]);
-    // Cancelled — not billable even if delivered_at set
     billingProselverJob([
         'status' => Job::STATUS_CANCELLED,
         'delivered_at' => now(),
@@ -120,13 +117,13 @@ test('summarise counts only ProSelver-executed delivered/completed jobs in the m
     $summary = app(ProselverLicenceBilling::class)->summarise(now()->startOfMonth());
 
     expect($summary['count'])->toBe(2)
-        ->and($summary['base'])->toBe(3500.0)
-        ->and($summary['per_move'])->toBe(50.0)
-        ->and($summary['moves_subtotal'])->toBe(100.0)
-        ->and($summary['total'])->toBe(3600.0);
+        ->and($summary['per_move'])->toBe(150.0)
+        ->and($summary['total_excl_vat'])->toBe(300.0)
+        ->and($summary['vat'])->toBe(45.0)
+        ->and($summary['total_incl_vat'])->toBe(345.0);
 });
 
-test('saving rates updates SystemSetting and recalculates the bill', function () {
+test('saving the per-move rate updates SystemSetting and recalculates with VAT', function () {
     app(ProselverLicenceBilling::class)->setEnabled(true);
     billingProselverJob(['delivered_at' => now()]);
     billingProselverJob(['delivered_at' => now()]);
@@ -134,30 +131,31 @@ test('saving rates updates SystemSetting and recalculates the bill', function ()
     $this->actingAs(billingOwner());
 
     Volt::test('admin.billing')
-        ->set('baseFee', '4000')
-        ->set('perMoveFee', '75')
+        ->set('perMoveFee', '200')
         ->call('saveRates')
         ->assertHasNoErrors();
 
-    expect((float) SystemSetting::get(ProselverLicenceBilling::SETTING_BASE))->toBe(4000.0)
-        ->and((float) SystemSetting::get(ProselverLicenceBilling::SETTING_PER_MOVE))->toBe(75.0);
+    expect((float) SystemSetting::get(ProselverLicenceBilling::SETTING_PER_MOVE))->toBe(200.0);
 
     $summary = app(ProselverLicenceBilling::class)->summarise(now()->startOfMonth());
-    expect($summary['total'])->toBe(4150.0); // 4000 + 2×75
+    expect($summary['total_excl_vat'])->toBe(400.0)
+        ->and($summary['vat'])->toBe(60.0)
+        ->and($summary['total_incl_vat'])->toBe(460.0);
 });
 
-test('Invoice Ninja copy text includes period, counts and totals with no VAT', function () {
+test('invoice copy text includes period, counts, VAT and no Invoice Ninja branding', function () {
     billingProselverJob(['delivered_at' => now()]);
 
     $billing = app(ProselverLicenceBilling::class);
     $summary = $billing->summarise(now()->startOfMonth());
-    $text = $billing->invoiceNinjaText($summary);
+    $text = $billing->invoiceCopyText($summary);
 
     expect($text)
         ->toContain('ProSelver platform licence')
-        ->toContain('Completed ProSelver movements: 1 × R50.00')
-        ->toContain('Total: R3,550.00')
-        ->toContain('No VAT — not VAT registered')
-        ->not->toContain('VAT (15%)')
-        ->not->toContain('incl. VAT');
+        ->toContain('Completed ProSelver movements: 1 × R150.00 (excl. VAT) = R150.00')
+        ->toContain('Total excl. VAT: R150.00')
+        ->toContain('VAT (15%): R22.50')
+        ->toContain('Total incl. VAT: R172.50')
+        ->not->toContain('Invoice Ninja')
+        ->not->toContain('not VAT registered');
 });

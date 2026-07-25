@@ -11,19 +11,18 @@ use Illuminate\Support\Collection;
  * ProSelver platform licence meter.
  *
  * Counts ProSelver-executed jobs that reached delivered/completed in a
- * calendar month (by delivered_at), then applies editable rates from
- * SystemSetting. Other SaaS customers will use different structures —
- * this service is intentionally ProSelver-only.
+ * calendar month (by delivered_at), then applies an editable per-move
+ * rate + 15% VAT. No monthly base fee — the supplier company invoices
+ * ProSelver per completed vehicle only.
  */
 class ProselverLicenceBilling
 {
-    public const SETTING_BASE = 'proselver_licence_base_fee';
     public const SETTING_PER_MOVE = 'proselver_licence_per_move';
     /** When false the page and sidebar link stay hidden (pre-agreement). */
     public const SETTING_ENABLED = 'proselver_licence_billing_enabled';
 
-    public const DEFAULT_BASE = 3500.0;
-    public const DEFAULT_PER_MOVE = 50.0;
+    public const DEFAULT_PER_MOVE = 150.0;
+    public const VAT_RATE = 0.15;
 
     public function isEnabled(): bool
     {
@@ -40,29 +39,18 @@ class ProselverLicenceBilling
         );
     }
 
-    public function baseFee(): float
-    {
-        return (float) SystemSetting::get(self::SETTING_BASE, self::DEFAULT_BASE);
-    }
-
     public function perMoveFee(): float
     {
         return (float) SystemSetting::get(self::SETTING_PER_MOVE, self::DEFAULT_PER_MOVE);
     }
 
-    public function saveRates(float $base, float $perMove): void
+    public function saveRates(float $perMove): void
     {
-        SystemSetting::set(
-            self::SETTING_BASE,
-            $base,
-            'float',
-            'ProSelver platform licence — monthly hosting & maintenance (ZAR)',
-        );
         SystemSetting::set(
             self::SETTING_PER_MOVE,
             $perMove,
             'float',
-            'ProSelver platform licence — fee per completed ProSelver-executed move (ZAR)',
+            'ProSelver platform licence — fee per completed ProSelver-executed move excl. VAT (ZAR)',
         );
     }
 
@@ -90,53 +78,53 @@ class ProselverLicenceBilling
      *   month: string,
      *   label: string,
      *   count: int,
-     *   base: float,
      *   per_move: float,
      *   moves_subtotal: float,
-     *   total: float,
+     *   total_excl_vat: float,
+     *   vat: float,
+     *   total_incl_vat: float,
      *   jobs: Collection
      * }
      */
     public function summarise(Carbon $month): array
     {
         $jobs = $this->billableJobs($month);
-        $base = $this->baseFee();
         $perMove = $this->perMoveFee();
         $count = $jobs->count();
-        $movesSubtotal = $count * $perMove;
-        $total = $base + $movesSubtotal;
+        $excl = $count * $perMove;
+        $vat = round($excl * self::VAT_RATE, 2);
 
         return [
             'month' => $month->format('Y-m'),
             'label' => $month->format('F Y'),
             'count' => $count,
-            'base' => $base,
             'per_move' => $perMove,
-            'moves_subtotal' => $movesSubtotal,
-            'total' => $total,
+            'moves_subtotal' => $excl,
+            'total_excl_vat' => $excl,
+            'vat' => $vat,
+            'total_incl_vat' => $excl + $vat,
             'jobs' => $jobs,
         ];
     }
 
     /**
-     * Plain-text block ready to paste into Invoice Ninja line items / notes.
-     * No VAT — supplier is not VAT-registered.
+     * Plain-text block ready to paste into any invoicing system.
      */
-    public function invoiceNinjaText(array $summary): string
+    public function invoiceCopyText(array $summary): string
     {
         $lines = [
             'ProSelver platform licence — ' . $summary['label'],
             '',
-            sprintf('Hosting & maintenance: R%s', number_format($summary['base'], 2, '.', ',')),
             sprintf(
-                'Completed ProSelver movements: %d × R%s = R%s',
+                'Completed ProSelver movements: %d × R%s (excl. VAT) = R%s',
                 $summary['count'],
                 number_format($summary['per_move'], 2, '.', ','),
-                number_format($summary['moves_subtotal'], 2, '.', ','),
+                number_format($summary['total_excl_vat'], 2, '.', ','),
             ),
             '',
-            sprintf('Total: R%s', number_format($summary['total'], 2, '.', ',')),
-            '(No VAT — not VAT registered)',
+            sprintf('Total excl. VAT: R%s', number_format($summary['total_excl_vat'], 2, '.', ',')),
+            sprintf('VAT (15%%): R%s', number_format($summary['vat'], 2, '.', ',')),
+            sprintf('Total incl. VAT: R%s', number_format($summary['total_incl_vat'], 2, '.', ',')),
             '',
             'Billable = executor ProSelver, status delivered/completed, by delivered_at.',
         ];
@@ -147,11 +135,10 @@ class ProselverLicenceBilling
     /**
      * Recent calendar months (newest first) with billable counts only.
      *
-     * @return list<array{month: string, label: string, count: int, total: float}>
+     * @return list<array{month: string, label: string, count: int, total_incl_vat: float}>
      */
     public function recentMonths(int $howMany = 6): array
     {
-        $base = $this->baseFee();
         $perMove = $this->perMoveFee();
         $out = [];
 
@@ -164,11 +151,14 @@ class ProselverLicenceBilling
                 ->whereBetween('delivered_at', [$month->copy()->startOfMonth(), $month->copy()->endOfMonth()])
                 ->count();
 
+            $excl = $count * $perMove;
+            $vat = round($excl * self::VAT_RATE, 2);
+
             $out[] = [
                 'month' => $month->format('Y-m'),
                 'label' => $month->format('M Y'),
                 'count' => $count,
-                'total' => $base + ($count * $perMove),
+                'total_incl_vat' => $excl + $vat,
             ];
         }
 

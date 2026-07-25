@@ -9,15 +9,14 @@ use Livewire\Volt\Component;
 /**
  * ProSelver platform licence billing — owner + developer only.
  *
- * Live meter of ProSelver-executed completed movements × editable rates.
- * Copy block for pasting into Invoice Ninja (no API). Not customer
- * freight invoicing — that lives under /admin/invoices.
+ * Live meter: completed ProSelver-executed movements × editable
+ * per-move fee + 15% VAT. Copy block for pasting into any invoicing
+ * system. Not customer freight invoicing (/admin/invoices).
  */
 new #[Layout('components.layouts.app')] class extends Component {
     #[Url]
     public string $month = '';
 
-    public string $baseFee = '';
     public string $perMoveFee = '';
 
     public bool $copied = false;
@@ -40,7 +39,6 @@ new #[Layout('components.layouts.app')] class extends Component {
         }
 
         $billing = app(ProselverLicenceBilling::class);
-        $this->baseFee = number_format($billing->baseFee(), 2, '.', '');
         $this->perMoveFee = number_format($billing->perMoveFee(), 2, '.', '');
     }
 
@@ -52,19 +50,14 @@ new #[Layout('components.layouts.app')] class extends Component {
         }
 
         $this->validate([
-            'baseFee' => 'required|numeric|min:0|max:999999',
             'perMoveFee' => 'required|numeric|min:0|max:99999',
         ]);
 
-        app(ProselverLicenceBilling::class)->saveRates(
-            (float) $this->baseFee,
-            (float) $this->perMoveFee,
-        );
+        app(ProselverLicenceBilling::class)->saveRates((float) $this->perMoveFee);
 
-        $this->baseFee = number_format((float) $this->baseFee, 2, '.', '');
         $this->perMoveFee = number_format((float) $this->perMoveFee, 2, '.', '');
 
-        session()->flash('success', 'Licence rates updated.');
+        session()->flash('success', 'Licence rate updated.');
     }
 
     public function selectMonth(string $month): void
@@ -84,7 +77,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         return [
             'summary' => $summary,
             'recentMonths' => $billing->recentMonths(6),
-            'invoiceNinjaText' => $billing->invoiceNinjaText($summary),
+            'invoiceCopyText' => $billing->invoiceCopyText($summary),
             'money' => fn (float $n) => 'R' . number_format($n, 2, '.', ','),
         ];
     }
@@ -95,7 +88,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         <div>
             <h1 class="text-2xl font-bold text-slate-900">Platform licence</h1>
             <p class="mt-1 text-sm text-slate-500">
-                ProSelver hosting &amp; completed-movement fee. Owner and developer only.
+                Per completed ProSelver-executed vehicle + VAT. Owner and developer only.
                 Customer freight invoices stay under <a href="{{ route('admin.invoices.index') }}" class="font-medium text-blue-600 hover:underline">Customer Invoicing</a>.
             </p>
         </div>
@@ -128,12 +121,12 @@ new #[Layout('components.layouts.app')] class extends Component {
                         : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50' }}"
             >
                 <span>{{ $rm['label'] }}</span>
-                <span class="tabular-nums opacity-80">{{ $rm['count'] }} · {{ $money($rm['total']) }}</span>
+                <span class="tabular-nums opacity-80">{{ $rm['count'] }} · {{ $money($rm['total_incl_vat']) }}</span>
             </button>
         @endforeach
     </div>
 
-    {{-- Headline — no VAT (supplier not VAT-registered) --}}
+    {{-- Headline --}}
     <div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <div class="rounded-lg border border-slate-200 bg-white px-4 py-3">
             <p class="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Completed moves</p>
@@ -141,40 +134,28 @@ new #[Layout('components.layouts.app')] class extends Component {
             <p class="mt-0.5 text-[11px] text-slate-400">ProSelver-executed</p>
         </div>
         <div class="rounded-lg border border-slate-200 bg-white px-4 py-3">
-            <p class="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Hosting</p>
-            <p class="mt-1 text-2xl font-bold tabular-nums text-slate-900">{{ $money($summary['base']) }}</p>
-        </div>
-        <div class="rounded-lg border border-slate-200 bg-white px-4 py-3">
-            <p class="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Moves subtotal</p>
-            <p class="mt-1 text-2xl font-bold tabular-nums text-slate-900">{{ $money($summary['moves_subtotal']) }}</p>
+            <p class="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Excl. VAT</p>
+            <p class="mt-1 text-2xl font-bold tabular-nums text-slate-900">{{ $money($summary['total_excl_vat']) }}</p>
             <p class="mt-0.5 text-[11px] text-slate-400">{{ $summary['count'] }} × {{ $money($summary['per_move']) }}</p>
         </div>
+        <div class="rounded-lg border border-slate-200 bg-white px-4 py-3">
+            <p class="text-[10px] font-semibold uppercase tracking-wide text-slate-500">VAT (15%)</p>
+            <p class="mt-1 text-2xl font-bold tabular-nums text-slate-900">{{ $money($summary['vat']) }}</p>
+        </div>
         <div class="rounded-lg border border-slate-900 bg-slate-900 px-4 py-3 text-white">
-            <p class="text-[10px] font-semibold uppercase tracking-wide text-slate-300">Total</p>
-            <p class="mt-1 text-2xl font-bold tabular-nums">{{ $money($summary['total']) }}</p>
-            <p class="mt-0.5 text-[11px] text-slate-400">No VAT</p>
+            <p class="text-[10px] font-semibold uppercase tracking-wide text-slate-300">Incl. VAT</p>
+            <p class="mt-1 text-2xl font-bold tabular-nums">{{ $money($summary['total_incl_vat']) }}</p>
         </div>
     </div>
 
     <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
         {{-- Rates --}}
         <div class="rounded-lg border border-slate-200 bg-white p-5">
-            <h2 class="text-sm font-semibold text-slate-900">Licence rates</h2>
+            <h2 class="text-sm font-semibold text-slate-900">Licence rate</h2>
             <p class="mt-1 text-xs text-slate-500">Saved in system settings. Applies to every month’s calculation.</p>
             <form wire:submit="saveRates" class="mt-4 space-y-4">
                 <div>
-                    <label class="block text-xs font-medium text-slate-700">Hosting &amp; maintenance / month (ZAR)</label>
-                    <input
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        wire:model="baseFee"
-                        class="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm tabular-nums shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                    />
-                    @error('baseFee') <p class="mt-1 text-xs text-red-600">{{ $message }}</p> @enderror
-                </div>
-                <div>
-                    <label class="block text-xs font-medium text-slate-700">Per completed ProSelver move (ZAR)</label>
+                    <label class="block text-xs font-medium text-slate-700">Per completed ProSelver move (excl. VAT, ZAR)</label>
                     <input
                         type="number"
                         step="0.01"
@@ -188,18 +169,18 @@ new #[Layout('components.layouts.app')] class extends Component {
                     type="submit"
                     class="inline-flex items-center rounded-md bg-slate-900 px-3.5 py-2 text-xs font-semibold text-white hover:bg-slate-800"
                 >
-                    Save rates
+                    Save rate
                 </button>
             </form>
         </div>
 
-        {{-- Invoice Ninja copy --}}
+        {{-- Generic invoice copy --}}
         <div
             class="rounded-lg border border-slate-200 bg-white p-5"
             x-data="{
                 copied: false,
                 async copy() {
-                    const el = this.$refs.ninjaText;
+                    const el = this.$refs.copyText;
                     try {
                         await navigator.clipboard.writeText(el.value);
                     } catch (e) {
@@ -213,8 +194,8 @@ new #[Layout('components.layouts.app')] class extends Component {
         >
             <div class="flex items-center justify-between gap-3">
                 <div>
-                    <h2 class="text-sm font-semibold text-slate-900">Copy for Invoice Ninja</h2>
-                    <p class="mt-1 text-xs text-slate-500">Paste into the invoice description / line notes.</p>
+                    <h2 class="text-sm font-semibold text-slate-900">Copy for invoice</h2>
+                    <p class="mt-1 text-xs text-slate-500">Paste into your invoicing system.</p>
                 </div>
                 <button
                     type="button"
@@ -225,11 +206,11 @@ new #[Layout('components.layouts.app')] class extends Component {
                 </button>
             </div>
             <textarea
-                x-ref="ninjaText"
+                x-ref="copyText"
                 readonly
                 rows="10"
                 class="mt-4 w-full rounded-md border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-xs text-slate-800"
-            >{{ $invoiceNinjaText }}</textarea>
+            >{{ $invoiceCopyText }}</textarea>
         </div>
     </div>
 

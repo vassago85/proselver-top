@@ -1,18 +1,21 @@
 # ProSelver platform licence billing (owner + developer)
 
 **Date:** 2026-07-23  
-**Status:** Approved for implementation
+**Status:** Implemented (page hidden until enabled)
 
 ## Purpose
 
-Internal meter for what **ProSelver** owes for the Trident platform licence.  
-Separate from Customer Invoicing (freight). Other SaaS clients may use different pricing later; this page is ProSelver-only.
+Internal meter for what **ProSelver** owes for the Trident platform licence,
+invoiced by a separate supplier company. Separate from Customer Invoicing
+(freight). Other SaaS clients may use different pricing later.
 
 ## Access
 
 - Visible and usable only when `isOwner()` or `isDeveloper()`.
 - Route mount aborts 403 for everyone else.
 - Sidebar link gated the same way.
+- `proselver_licence_billing_enabled` (boolean, default **false**) — page and
+  sidebar stay hidden until commercial agreement; flip to `true` to open.
 
 ## Billable unit
 
@@ -23,35 +26,32 @@ Separate from Customer Invoicing (freight). Other SaaS clients may use different
 ## Formula
 
 ```
-total = base_fee + (billable_count × per_move_fee)
+excl VAT = billable_count × per_move_fee
+VAT (15%) = excl × 0.15
+incl VAT  = excl + VAT
 ```
 
-Defaults: base R3,500 / month, R50 per completed ProSelver move.  
-Rates stored in `SystemSetting` and editable on the page by owner/developer.
-
-Keys:
-- `proselver_licence_base_fee` (float)
-- `proselver_licence_per_move` (float)
-- `proselver_licence_billing_enabled` (boolean, default **false**) — page and
-  sidebar stay hidden until commercial agreement; flip to `true` to open.
+Default per-move fee: **R150** (excl. VAT). No monthly base fee.  
+Rate stored in `SystemSetting` key `proselver_licence_per_move` (float),
+editable on the page by owner/developer.
 
 ## Tax
 
-No VAT. Supplier is not VAT-registered. All amounts and Invoice Ninja copy
-text are the charged total with an explicit “No VAT” note.
+15% VAT is calculated and shown (supplier company is VAT-registered).
 
 ## UI
 
 - Route: `/admin/billing` (`admin.billing`)
-- Month selector + headline (count, base, per-move subtotal, total)
-- Inline rate editors + save
+- Month selector + headline (count, excl VAT, VAT, incl VAT)
+- Rate editor + save
 - Drill-down table of billable jobs (link to order)
 - Recent months strip
-- “Copy for Invoice Ninja” — clipboard text with period, lines, total (no VAT, no API)
+- **Copy for invoice** — plain-text clipboard block for any invoicing system
+  (not Invoice Ninja–branded; no API)
 
 ## Out of scope (v1)
 
-- Invoice Ninja API push
+- Invoicing-system API push
 - PDF generation
 - Payment tracking
 - Multi-tenant SaaS pricing for other clients
