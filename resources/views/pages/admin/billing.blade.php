@@ -28,8 +28,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             abort(403);
         }
 
-        // Hidden until commercial agreement — flip
-        // proselver_licence_billing_enabled via SystemSetting to open.
+        // Soft-hide via SystemSetting if needed (default enabled).
         if (! app(ProselverLicenceBilling::class)->isEnabled()) {
             abort(404);
         }

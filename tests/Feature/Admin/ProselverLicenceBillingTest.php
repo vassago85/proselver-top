@@ -69,16 +69,16 @@ function billingProselverJob(array $extras = []): Job
     ], $extras));
 }
 
-test('billing page is hidden (404) until the enabled setting is flipped on', function () {
-    expect(app(ProselverLicenceBilling::class)->isEnabled())->toBeFalse();
+test('billing page is hidden (404) when the enabled setting is flipped off', function () {
+    app(ProselverLicenceBilling::class)->setEnabled(false);
 
     $this->actingAs(billingOwner())
         ->get(route('admin.billing'))
         ->assertNotFound();
 });
 
-test('owner and developer can open the billing page once enabled; accounts and super_admin cannot', function () {
-    app(ProselverLicenceBilling::class)->setEnabled(true);
+test('owner and developer can open the billing page by default; accounts and super_admin cannot', function () {
+    expect(app(ProselverLicenceBilling::class)->isEnabled())->toBeTrue();
 
     $this->actingAs(billingOwner())
         ->get(route('admin.billing'))
@@ -124,7 +124,6 @@ test('summarise counts only ProSelver-executed delivered/completed jobs at R150 
 });
 
 test('saving the per-move rate updates SystemSetting and recalculates with VAT', function () {
-    app(ProselverLicenceBilling::class)->setEnabled(true);
     billingProselverJob(['delivered_at' => now()]);
     billingProselverJob(['delivered_at' => now()]);
 

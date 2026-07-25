@@ -1,7 +1,7 @@
 # ProSelver platform licence billing (owner + developer)
 
 **Date:** 2026-07-23  
-**Status:** Implemented (page hidden until enabled)
+**Status:** Implemented (enabled for owner/developer)
 
 ## Purpose
 
@@ -14,8 +14,8 @@ invoiced by a separate supplier company. Separate from Customer Invoicing
 - Visible and usable only when `isOwner()` or `isDeveloper()`.
 - Route mount aborts 403 for everyone else.
 - Sidebar link gated the same way.
-- `proselver_licence_billing_enabled` (boolean, default **false**) — page and
-  sidebar stay hidden until commercial agreement; flip to `true` to open.
+- `proselver_licence_billing_enabled` (boolean, default **true**) — flip to
+  `false` to soft-hide the page and sidebar again.
 
 ## Billable unit
 
