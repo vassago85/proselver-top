@@ -9,9 +9,10 @@ use Livewire\Volt\Volt;
 // has been retired in favour of this consolidated view.
 Volt::route('dashboard', 'admin.dashboard')->name('dashboard');
 
-// Petty-cash overview dashboard. Owner + developer only -- the component's
-// mount() will 403 anyone else, so this is a soft gate that just hides
-// the URL from accidental visitors.
+// Petty-cash overview dashboard. Owner, developer, accounts and the
+// operations controller can land here -- the component's mount() is
+// the source of truth; everyone else 403s.  The tab in the Petty
+// Cash section strip mirrors this list.
 Volt::route('overview', 'admin.overview')->name('overview');
 
 // Keep the old /admin/executive link resolvable for anyone who bookmarked
@@ -126,6 +127,10 @@ Volt::route('drivers', 'admin.drivers.index')->name('drivers.index');
 // idle, who is late, who is overloaded. Separate from /admin/drivers
 // (roster + compliance) by design: ops and HR are different jobs.
 Volt::route('drivers/operations', 'admin.drivers.operations')->name('drivers.operations');
+// Month-end driver pay & movement report -- accounts / owner / developer only;
+// component mount() 403s anyone else.  Bundled with the Petty Cash tab strip
+// because it's the same monthly recon workflow.
+Volt::route('drivers/pay', 'admin.drivers.pay')->name('drivers.pay');
 Volt::route('drivers/create', 'admin.drivers.create')->name('drivers.create');
 Volt::route('drivers/{user}/edit', 'admin.drivers.edit')->name('drivers.edit');
 

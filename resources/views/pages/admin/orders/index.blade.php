@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\Job;
+use App\Models\User;
 use Livewire\Volt\Component;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\Url;
@@ -31,6 +32,15 @@ new #[Layout('components.layouts.app')] class extends Component {
     #[Url(except: 'proselver')]
     public string $executorFilter = 'proselver';
 
+    /**
+     * "Movement per driver" filter (CRM request 23-Jul).  Ops can pick
+     * a driver from the dropdown to see everything assigned to them,
+     * without having to type the name into search.  Ignored when the
+     * search box is populated (same rule as executor scope).
+     */
+    #[Url(as: 'driver')]
+    public ?int $driverId = null;
+
     public function with(): array
     {
         $query = Job::with([
@@ -55,6 +65,13 @@ new #[Layout('components.layouts.app')] class extends Component {
             $this->applyExecutorScope($query);
         }
 
+        // Driver filter (bypassed by search for the same reason as
+        // executor -- a phoned-in job # lookup must always find its
+        // row).
+        if (! $this->search && $this->driverId) {
+            $query->where('driver_user_id', (int) $this->driverId);
+        }
+
         if ($this->search) {
             $query->where(function ($q) {
                 $q->where('job_number', 'ilike', "%{$this->search}%")
@@ -68,12 +85,16 @@ new #[Layout('components.layouts.app')] class extends Component {
             });
         }
 
-        // Status counts pills must respect the active executor filter --
-        // otherwise the pill says "23 In Transit" but the table shows 6
-        // because the other 17 are dealer-internal.
+        // Status counts pills must respect the active executor + driver
+        // filters -- otherwise the pill says "23 In Transit" but the
+        // table shows 6 because the other 17 are dealer-internal or
+        // assigned to a different driver.
         $countsQuery = Job::whereIn('status', Job::PHASE1_STATUSES);
         if (! $this->search) {
             $this->applyExecutorScope($countsQuery);
+            if ($this->driverId) {
+                $countsQuery->where('driver_user_id', (int) $this->driverId);
+            }
         }
         $statusCounts = $countsQuery
             ->selectRaw('status, COUNT(*) as c')
@@ -89,12 +110,32 @@ new #[Layout('components.layouts.app')] class extends Component {
                 ->count()
             : 0;
 
+        // Driver dropdown options -- all active platform drivers,
+        // plus dealer-internal drivers so ops can filter regardless of
+        // which pool the person belongs to.  Query is cheap (single
+        // table with roles join) and cached-friendly across renders.
+        $driverOptions = User::query()
+            ->whereHas('roles', fn ($q) => $q->where('slug', 'driver'))
+            ->orderBy('name')
+            ->get(['id', 'name'])
+            ->map(fn ($d) => ['value' => (string) $d->id, 'label' => $d->name])
+            ->prepend(['value' => '', 'label' => 'All drivers'])
+            ->all();
+
+        // Server-resolved label so ?driver=42 deep-links show the right
+        // name before Livewire's JS boots.
+        $driverLabel = $this->driverId
+            ? User::whereKey($this->driverId)->value('name')
+            : null;
+
         return [
             'jobs' => $query->paginate(20),
             'statuses' => Job::PHASE1_STATUS_LABELS,
             'statusCounts' => $statusCounts,
             'totalCount' => array_sum($statusCounts),
             'hiddenExternalCount' => $hiddenExternalCount,
+            'driverOptions' => $driverOptions,
+            'driverLabel' => $driverLabel,
         ];
     }
 
@@ -130,6 +171,11 @@ new #[Layout('components.layouts.app')] class extends Component {
         $this->resetPage();
     }
 
+    public function updatedDriverId(): void
+    {
+        $this->resetPage();
+    }
+
     public function setFilter(string $status): void
     {
         $this->statusFilter = $this->statusFilter === $status ? '' : $status;
@@ -141,6 +187,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         $this->search = '';
         $this->statusFilter = '';
         $this->executorFilter = 'proselver';
+        $this->driverId = null;
         $this->resetPage();
     }
 };
@@ -155,7 +202,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         title="Orders"
         :subtitle="number_format($totalCount) . ' active bookings in the Phase 1 lifecycle'">
         <x-slot:actions>
-            @if($search || $statusFilter)
+            @if($search || $statusFilter || $driverId)
                 <x-button variant="ghost" size="sm" wire:click="clearFilters">
                     <x-slot:icon>
                         <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
@@ -209,6 +256,15 @@ new #[Layout('components.layouts.app')] class extends Component {
             <option value="external">Dealer / 3rd-party / Self-collect</option>
             <option value="all">All executors</option>
         </select>
+        {{-- Movement per driver (CRM request 23-Jul).  Bypassed while
+             search is active. --}}
+        <div class="w-full sm:w-56">
+            <x-searchable-select
+                wire:model.live="driverId"
+                :options="$driverOptions"
+                :selected-label="$driverLabel"
+                placeholder="All drivers"/>
+        </div>
     </div>
 
     @if($hiddenExternalCount > 0)

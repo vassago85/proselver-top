@@ -35,6 +35,14 @@ new #[Layout('components.layouts.app')] class extends Component {
     #[Url] public string $range = 'this_month';
 
     /**
+     * When $range === 'month', this holds the picked month as YYYY-MM.
+     * Empty otherwise (falls back to the current calendar month).
+     * Added at accounts' request for month-end recon so they can pull
+     * numbers for any specific month instead of only "this_month".
+     */
+    #[Url] public string $monthPick = '';
+
+    /**
      * Modal state for the "Clear reconciliation query" action.  Lives on
      * the dashboard so Accounts/Owner can sign off the issued-on-cancelled
      * query without having to bounce through the order detail page.
@@ -43,15 +51,18 @@ new #[Layout('components.layouts.app')] class extends Component {
     public string $clearQueryNote = '';
     public bool $showClearQueryModal = false;
 
-    public const RANGES = ['today', 'this_week', 'this_month', 'this_year', 'all'];
+    public const RANGES = ['today', 'this_week', 'this_month', 'this_year', 'all', 'month'];
 
     public function mount(): void
     {
         // Accounts is allowed alongside owner+developer because the petty
         // cash + reconciliation queries on this page are Accounts' day-to-day
         // work (matches the new accounts-first sign-off model elsewhere).
+        // The operations controller was added at CRM's request so they can
+        // see trip / movement counts and driver spend per period for their
+        // month-end briefing without asking accounts to pull it.
         $u = auth()->user();
-        if (!$u || (!$u->isAccounts() && !$u->isOwner() && !$u->isDeveloper())) {
+        if (!$u || (!$u->isAccounts() && !$u->isOwner() && !$u->isDeveloper() && !$u->isOperationsController())) {
             abort(403);
         }
         if (!in_array($this->range, self::RANGES, true)) {
@@ -132,6 +143,19 @@ new #[Layout('components.layouts.app')] class extends Component {
     }
 
     /**
+     * Selecting a month from the native <input type="month"> picker
+     * also flips the range to 'month' so the numbers reload against
+     * the picked window without accounts having to click the chip
+     * afterwards.
+     */
+    public function updatedMonthPick($value): void
+    {
+        if (trim((string) $value) !== '') {
+            $this->range = 'month';
+        }
+    }
+
+    /**
      * Build [from, to] for the current range plus [prevFrom, prevTo]
      * one window back, so every headline can show a delta vs the
      * immediately preceding period.  "all" is unbounded back so we
@@ -161,12 +185,43 @@ new #[Layout('components.layouts.app')] class extends Component {
                 'prevFrom' => null, 'prevTo' => null,
                 'label' => 'all time',
             ],
+            'month' => (function () use ($now) {
+                // Falls back to current calendar month if the picker
+                // is empty or badly formed -- so a bookmarked
+                // ?range=month&monthPick= URL still renders sensibly.
+                $picked = $this->parseMonthPick() ?? $now->copy()->startOfMonth();
+                $prev = $picked->copy()->subMonthNoOverflow();
+                return [
+                    'from' => $picked->copy()->startOfMonth(),
+                    'to'   => $picked->copy()->endOfMonth(),
+                    'prevFrom' => $prev->copy()->startOfMonth(),
+                    'prevTo'   => $prev->copy()->endOfMonth(),
+                    'label'    => $picked->format('F Y') . ' vs ' . $prev->format('F Y'),
+                ];
+            })(),
             default => [
                 'from' => $now->copy()->startOfMonth(), 'to' => $now->copy()->endOfMonth(),
                 'prevFrom' => $now->copy()->subMonth()->startOfMonth(), 'prevTo' => $now->copy()->subMonth()->endOfMonth(),
                 'label' => 'this month vs last month',
             ],
         };
+    }
+
+    /**
+     * Parse the YYYY-MM picker.  Returns null when empty or malformed
+     * so the caller can fall back to the current month.
+     */
+    private function parseMonthPick(): ?Carbon
+    {
+        $raw = trim($this->monthPick);
+        if ($raw === '' || !preg_match('/^\d{4}-\d{2}$/', $raw)) {
+            return null;
+        }
+        try {
+            return Carbon::createFromFormat('!Y-m', $raw);
+        } catch (\Throwable $e) {
+            return null;
+        }
     }
 
     /** Sum approved+submitted+reimbursed slips for a window (cents → rand). */
@@ -378,6 +433,16 @@ new #[Layout('components.layouts.app')] class extends Component {
                         'bg-slate-100 text-slate-600 hover:bg-slate-200' => $range !== $val,
                     ])>{{ $lbl }}</button>
         @endforeach
+        {{-- Specific-month picker.  Feeds range='month' via
+             updatedMonthPick() so accounts can pull month-end numbers
+             for any past month without hunting through the chips. --}}
+        <label class="ml-2 inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-slate-600">
+            <span class="text-[10px] uppercase tracking-wider">Pick month</span>
+            <input type="month"
+                wire:model.live="monthPick"
+                class="rounded-md border-slate-300 bg-white px-1.5 py-0.5 text-[11px] shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                max="{{ now()->format('Y-m') }}"/>
+        </label>
         <span class="ml-3 text-[11px] text-slate-500">
             @if($win['from'])
                 {{ $win['from']->format('d M Y') }} → {{ $win['to']->format('d M Y') }}

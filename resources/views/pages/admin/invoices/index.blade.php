@@ -8,6 +8,7 @@ use Illuminate\Support\Carbon;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\Url;
 use Livewire\Volt\Component;
+use Livewire\WithPagination;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 /*
@@ -23,6 +24,17 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
  * can't read finance numbers.
  */
 new #[Layout('components.layouts.app')] class extends Component {
+    use WithPagination;
+
+    /**
+     * How many rows we render per page.  The table has 5 wire:model
+     * inputs per row and the whole $rows array is serialised into
+     * every Livewire round-trip, so the page size is deliberately
+     * modest -- larger pages made the page "jam" for accounts on
+     * OEMs with hundreds of monthly movements.
+     */
+    private const PAGE_SIZE = 50;
+
     #[Url] public ?int $companyId = null;
     #[Url] public string $dateFrom = '';
     #[Url] public string $dateTo = '';
@@ -62,6 +74,36 @@ new #[Layout('components.layouts.app')] class extends Component {
     }
 
     /**
+     * When any of the top-level filters change, reset the paginator
+     * and clear the per-row input buffer so we don't carry the old
+     * customer's edits over into the new selection (and don't ship
+     * a growing $rows blob across every Livewire request).
+     */
+    public function updated($field): void
+    {
+        if (in_array($field, ['companyId', 'dateFrom', 'dateTo', 'completion'], true)) {
+            $this->resetPage();
+            $this->rows = [];
+        }
+    }
+
+    /**
+     * Switching the completion view should reset the page and rows
+     * for the same reason as updated() -- otherwise the paginator
+     * ends up on page 4 of an empty result and $rows still holds
+     * job ids from a different filter.
+     */
+    public function setCompletion(string $completion): void
+    {
+        if (!in_array($completion, ['incomplete', 'all', 'complete', 'excluded'], true)) {
+            return;
+        }
+        $this->completion = $completion;
+        $this->resetPage();
+        $this->rows = [];
+    }
+
+    /**
      * "Last month" = the 2nd of the previous month through the 1st of
      * the current month, per the OEM billing convention.  Built today,
      * not the calendar month, so a run on the 3rd of June covers
@@ -88,6 +130,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         $this->dateFrom = $from->toDateString();
         $this->dateTo   = $to->toDateString();
         $this->rows = []; // force re-hydrate from DB
+        $this->resetPage();
     }
 
     /**
@@ -148,7 +191,19 @@ new #[Layout('components.layouts.app')] class extends Component {
             abort(403);
         }
 
+        // Only touch jobs for which we actually have per-row input in
+        // scope on this page.  Since with() prunes $rows to the visible
+        // page, this is both faster than re-scanning the full window
+        // and safer -- no risk of clobbering rows the user isn't
+        // looking at.
+        $rowIds = array_keys($this->rows);
+        if (empty($rowIds)) {
+            session()->flash('error', 'Nothing to save -- no rows on this page.');
+            return;
+        }
+
         $jobs = $this->baseQuery()
+            ->whereIn('id', $rowIds)
             ->whereNull('invoicing_excluded_at') // never write finance data onto excluded rows
             ->get(['id', 'invoice_number', 'invoice_amount', 'extras_amount', 'fuel_litres', 'fuel_amount']);
         $touched = 0;
@@ -355,10 +410,17 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     public function with(): array
     {
-        $jobs = $this->baseQuery()->get();
+        // Paginate to a modest page size so the Livewire payload stays
+        // flat regardless of how many movements the OEM has for the
+        // month.  See PAGE_SIZE for context.
+        $jobs = $this->baseQuery()->paginate(self::PAGE_SIZE);
 
-        // Hydrate the per-row inputs from the latest persisted values
-        // for any job we don't already have edits in flight for.
+        // Prune $rows down to the ids currently on screen and hydrate
+        // any that are missing.  Previous behaviour appended forever,
+        // so switching customer -> filter -> page kept growing the
+        // public array shipped in every round-trip.
+        $pageIds = collect($jobs->items())->pluck('id')->all();
+        $this->rows = array_intersect_key($this->rows, array_flip($pageIds));
         foreach ($jobs as $job) {
             if (!array_key_exists($job->id, $this->rows)) {
                 $this->rows[$job->id] = [
@@ -397,52 +459,57 @@ new #[Layout('components.layouts.app')] class extends Component {
             ? ($customerCompanies->firstWhere('id', (int) $this->companyId)?->name)
             : null;
 
-        // Window-wide counts: deliberately ignore the completion filter
-        // so the "X of Y complete" indicator is stable as the user toggles
-        // between Incomplete / All / Complete views.
-        $windowCounts = (function () {
-            $base = Job::query()
-                ->where('executor_type', Job::EXECUTOR_PROSELVER)
-                ->whereIn('status', [Job::STATUS_DELIVERED, Job::STATUS_COMPLETED, Job::STATUS_INVOICED])
-                ->whereNotNull('delivered_at');
-            if ($this->companyId) {
-                $base->where('company_id', (int) $this->companyId);
-            }
-            if ($this->dateFrom && $this->dateTo) {
-                $base->whereBetween('delivered_at', [
-                    Carbon::parse($this->dateFrom)->startOfDay(),
-                    Carbon::parse($this->dateTo)->endOfDay(),
-                ]);
-            }
-            // Billable = total - excluded.  We track excluded separately
-            // so the progress bar denominator is honest (jobs we will
-            // actually invoice) instead of being inflated by test runs.
-            $excluded = (clone $base)->whereNotNull('invoicing_excluded_at')->count();
-            $total    = (clone $base)->count();
-            $billable = $total - $excluded;
-            $done     = (clone $base)
-                ->whereNotNull('invoicing_completed_at')
-                ->whereNull('invoicing_excluded_at')
-                ->count();
-            return [
-                'total'    => $total,
-                'billable' => $billable,
-                'done'     => $done,
-                'excluded' => $excluded,
-            ];
-        })();
+        // Window aggregate: one query with conditional counts and sums
+        // instead of four separate COUNTs plus in-PHP summing of a
+        // fully-loaded collection.  Same numbers, ~1/6th the DB work,
+        // and honest across all pages (not just the visible slice).
+        $windowBase = Job::query()
+            ->where('executor_type', Job::EXECUTOR_PROSELVER)
+            ->whereIn('status', [Job::STATUS_DELIVERED, Job::STATUS_COMPLETED, Job::STATUS_INVOICED])
+            ->whereNotNull('delivered_at');
+        if ($this->companyId) {
+            $windowBase->where('company_id', (int) $this->companyId);
+        }
+        if ($this->dateFrom && $this->dateTo) {
+            $windowBase->whereBetween('delivered_at', [
+                Carbon::parse($this->dateFrom)->startOfDay(),
+                Carbon::parse($this->dateTo)->endOfDay(),
+            ]);
+        }
+
+        $windowAgg = (clone $windowBase)
+            ->selectRaw('COUNT(*) AS total_count')
+            ->selectRaw('COUNT(CASE WHEN invoicing_excluded_at IS NOT NULL THEN 1 END) AS excluded_count')
+            ->selectRaw('COUNT(CASE WHEN invoicing_completed_at IS NOT NULL AND invoicing_excluded_at IS NULL THEN 1 END) AS done_count')
+            ->first();
+
+        // Filter-scoped totals (respect the completion selector) --
+        // computed on the DB so pagination doesn't lie about "invoice
+        // total = R x" once the user is on page 2 of 5.
+        $filterAgg = (clone $this->baseQuery())
+            ->selectRaw('COUNT(*) AS row_count')
+            ->selectRaw('COALESCE(SUM(invoice_amount), 0) AS invoice_sum')
+            ->selectRaw('COALESCE(SUM(extras_amount), 0) AS extras_sum')
+            ->selectRaw('COALESCE(SUM(fuel_litres), 0) AS litres_sum')
+            ->selectRaw('COALESCE(SUM(fuel_amount), 0) AS fuel_sum')
+            ->selectRaw('COUNT(CASE WHEN (invoice_number IS NULL OR invoice_number = ?) AND invoicing_excluded_at IS NULL THEN 1 END) AS missing_count', [''])
+            ->first();
+
+        $windowTotal = (int) ($windowAgg->total_count ?? 0);
+        $windowExcluded = (int) ($windowAgg->excluded_count ?? 0);
+        $windowDone = (int) ($windowAgg->done_count ?? 0);
 
         $totals = [
-            'count'   => $jobs->count(),
-            'invoice' => (float) $jobs->sum(fn ($j) => (float) ($j->invoice_amount ?? 0)),
-            'extras'  => (float) $jobs->sum(fn ($j) => (float) ($j->extras_amount ?? 0)),
-            'litres'  => (float) $jobs->sum(fn ($j) => (float) ($j->fuel_litres ?? 0)),
-            'fuel'    => (float) $jobs->sum(fn ($j) => (float) ($j->fuel_amount ?? 0)),
-            'missing' => $jobs->filter(fn ($j) => empty($j->invoice_number) && !$j->invoicing_excluded_at)->count(),
-            'window_total'    => $windowCounts['total'],
-            'window_billable' => $windowCounts['billable'],
-            'window_complete' => $windowCounts['done'],
-            'window_excluded' => $windowCounts['excluded'],
+            'count'   => (int) ($filterAgg->row_count ?? 0),
+            'invoice' => (float) ($filterAgg->invoice_sum ?? 0),
+            'extras'  => (float) ($filterAgg->extras_sum ?? 0),
+            'litres'  => (float) ($filterAgg->litres_sum ?? 0),
+            'fuel'    => (float) ($filterAgg->fuel_sum ?? 0),
+            'missing' => (int) ($filterAgg->missing_count ?? 0),
+            'window_total'    => $windowTotal,
+            'window_billable' => $windowTotal - $windowExcluded,
+            'window_complete' => $windowDone,
+            'window_excluded' => $windowExcluded,
         ];
 
         $viewer = auth()->user();
@@ -487,22 +554,25 @@ new #[Layout('components.layouts.app')] class extends Component {
                      list) / all / complete (housekeeping review). Saved
                      to the URL so a refresh holds the chosen view. --}}
                 <div class="inline-flex rounded-md border border-gray-200 bg-white text-xs">
-                    <button wire:click="$set('completion','incomplete')"
+                    <button wire:click="setCompletion('incomplete')"
                         class="px-2.5 py-1 font-medium rounded-l-md {{ $completion === 'incomplete' ? 'bg-slate-900 text-white' : 'text-gray-700 hover:bg-gray-50' }}">Incomplete</button>
-                    <button wire:click="$set('completion','complete')"
+                    <button wire:click="setCompletion('complete')"
                         class="px-2.5 py-1 font-medium border-l border-gray-200 {{ $completion === 'complete' ? 'bg-slate-900 text-white' : 'text-gray-700 hover:bg-gray-50' }}">Complete</button>
-                    <button wire:click="$set('completion','excluded')"
+                    <button wire:click="setCompletion('excluded')"
                         class="px-2.5 py-1 font-medium border-l border-gray-200 {{ $completion === 'excluded' ? 'bg-slate-900 text-white' : 'text-gray-700 hover:bg-gray-50' }}">Not required</button>
-                    <button wire:click="$set('completion','all')"
+                    <button wire:click="setCompletion('all')"
                         class="px-2.5 py-1 font-medium border-l border-gray-200 rounded-r-md {{ $completion === 'all' ? 'bg-slate-900 text-white' : 'text-gray-700 hover:bg-gray-50' }}">All</button>
                 </div>
 
-                <button wire:click="save"
-                    class="inline-flex items-center gap-1.5 rounded-md bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-500">
-                    Save finance details
-                </button>
+                <div class="flex flex-col items-end">
+                    <button wire:click="save"
+                        class="inline-flex items-center gap-1.5 rounded-md bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-500">
+                        Save finance details
+                    </button>
+                    <span class="mt-0.5 text-[10px] text-slate-500">Saves this page. Save before moving on.</span>
+                </div>
                 <button wire:click="exportExcel"
-                    @if(!$companyId || $jobs->isEmpty()) disabled @endif
+                    @if(!$companyId || $totals['count'] === 0) disabled @endif
                     class="inline-flex items-center gap-1.5 rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed">
                     <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
                     Export Excel
@@ -522,11 +592,11 @@ new #[Layout('components.layouts.app')] class extends Component {
             </div>
             <div>
                 <label class="text-[10px] font-semibold uppercase tracking-wider text-gray-500">From</label>
-                <input type="date" wire:model.live="dateFrom" class="mt-1 w-full rounded-md border-gray-300 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"/>
+                <input type="date" wire:model.blur="dateFrom" class="mt-1 w-full rounded-md border-gray-300 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"/>
             </div>
             <div>
                 <label class="text-[10px] font-semibold uppercase tracking-wider text-gray-500">To</label>
-                <input type="date" wire:model.live="dateTo" class="mt-1 w-full rounded-md border-gray-300 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"/>
+                <input type="date" wire:model.blur="dateTo" class="mt-1 w-full rounded-md border-gray-300 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"/>
             </div>
             <div class="rounded-lg bg-slate-50 border border-slate-200 px-3 py-2 text-xs text-slate-700 flex flex-col justify-center">
                 <div class="flex items-center justify-between gap-2"><span>Movements ({{ $completion }})</span><strong>{{ $totals['count'] }}</strong></div>
@@ -542,7 +612,7 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     {{-- Table --}}
     <div class="rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden">
-        @if($jobs->isEmpty())
+        @if($totals['count'] === 0)
             <div class="px-5 py-10 text-center text-sm text-slate-500">
                 @if(!$companyId)
                     Pick a customer to see their ProSelver movements in this window.
@@ -665,6 +735,9 @@ new #[Layout('components.layouts.app')] class extends Component {
                         @endforeach
                     </tbody>
                 </table>
+            </div>
+            <div class="border-t border-slate-100 px-4 py-3">
+                {{ $jobs->onEachSide(1)->links() }}
             </div>
         @endif
     </div>

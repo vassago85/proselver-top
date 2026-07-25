@@ -44,6 +44,13 @@ new #[Layout('components.layouts.app')] class extends Component {
     public string $tollCardNumber = '';
     public string $notes = '';
 
+    /**
+     * Rand-per-completed-movement pay rate.  Visible only to
+     * accounts / owner / developer — ops shouldn't see or edit
+     * driver salary data on the driver form.
+     */
+    public ?string $ratePerMovement = null;
+
     // Existing document info
     public ?string $existingLicenseFilename = null;
     public ?string $existingPdpFilename = null;
@@ -74,9 +81,21 @@ new #[Layout('components.layouts.app')] class extends Component {
             $this->cameraId = $profile->camera_id ?? '';
             $this->tollCardNumber = $profile->toll_card_number ?? '';
             $this->notes = $profile->notes ?? '';
+            $this->ratePerMovement = $profile->rate_per_movement_cents !== null
+                ? number_format($profile->rate_per_movement_cents / 100, 2, '.', '')
+                : null;
             $this->existingLicenseFilename = $profile->license_document_filename;
             $this->existingPdpFilename = $profile->pdp_document_filename;
         }
+    }
+
+    /**
+     * Is the current viewer allowed to see and edit the pay rate?
+     */
+    public function canEditPay(): bool
+    {
+        $u = auth()->user();
+        return $u && ($u->isAccounts() || $u->isOwner() || $u->isDeveloper());
     }
 
     public function updatedResetPassword(): void
@@ -122,6 +141,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             'cameraId' => 'nullable|string|max:100',
             'tollCardNumber' => 'nullable|string|max:100',
             'notes' => 'nullable|string|max:2000',
+            'ratePerMovement' => 'nullable|numeric|min:0|max:100000',
             'licenseDocument' => 'nullable|file|mimes:pdf,jpg,jpeg,png|max:5120',
             'pdpDocument' => 'nullable|file|mimes:pdf,jpg,jpeg,png|max:5120',
         ]);
@@ -154,6 +174,16 @@ new #[Layout('components.layouts.app')] class extends Component {
             'toll_card_number' => trim($this->tollCardNumber) ?: null,
             'notes' => $this->notes ?: null,
         ];
+
+        // Only accounts/owner/developer may set salary data.  Server-side
+        // guard: a crafted Livewire payload from ops would otherwise
+        // write to a field the UI never showed them.  Blank / null
+        // input from an allowed role clears the rate.
+        if ($this->canEditPay()) {
+            $profileData['rate_per_movement_cents'] = ($this->ratePerMovement === null || $this->ratePerMovement === '')
+                ? null
+                : (int) round(((float) $this->ratePerMovement) * 100);
+        }
 
         $disk = \App\Support\StorageDisk::forUploads();
         $profile = $this->user->driverProfile;
@@ -426,6 +456,23 @@ new #[Layout('components.layouts.app')] class extends Component {
                     <input wire:model="tollCardNumber" type="text" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:ring-blue-500" placeholder="e-tag / fleet card number">
                     @error('tollCardNumber')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
                 </div>
+
+                @if($this->canEditPay())
+                    <div class="sm:col-span-2 mt-2 pt-4 border-t border-gray-100">
+                        <h4 class="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-3">
+                            Pay
+                            <span class="ml-1 rounded-full bg-amber-50 border border-amber-200 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-amber-800">Accounts</span>
+                        </h4>
+                    </div>
+                    <div class="sm:col-span-2">
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Rate per completed movement (R)</label>
+                        <input wire:model="ratePerMovement" type="number" step="0.01" min="0"
+                            class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:ring-blue-500"
+                            placeholder="e.g. 350.00">
+                        <p class="mt-1 text-xs text-gray-500">Used by the month-end driver pay report. Leave blank to clear.</p>
+                        @error('ratePerMovement')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
+                    </div>
+                @endif
 
                 <div class="sm:col-span-2">
                     <label class="block text-sm font-medium text-gray-700 mb-1">Notes</label>

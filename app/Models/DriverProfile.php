@@ -34,6 +34,7 @@ class DriverProfile extends Model
         'id_type',
         'cellphone',
         'base_location',
+        'rate_per_movement_cents',
         'trade_plate',
         'trade_plate_expiry',
         'trade_plate_returned_at',
@@ -65,7 +66,19 @@ class DriverProfile extends Model
             'trade_plate_expiry' => 'date',
             'trade_plate_returned_at' => 'datetime',
             'off_roster_at' => 'datetime',
+            'rate_per_movement_cents' => 'integer',
         ];
+    }
+
+    /**
+     * Rate per completed movement, in rand.  Null when unset.
+     * Used by the month-end pay report and the driver edit form.
+     */
+    public function ratePerMovementRand(): ?float
+    {
+        return $this->rate_per_movement_cents === null
+            ? null
+            : (float) $this->rate_per_movement_cents / 100;
     }
 
     public function offRosterBy(): BelongsTo

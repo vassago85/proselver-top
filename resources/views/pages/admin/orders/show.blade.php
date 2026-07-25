@@ -1,10 +1,12 @@
 <?php
 
 use App\Models\Job;
+use App\Models\Location;
 use App\Models\ModelTollClassHint;
 use App\Models\PettyCashPlan;
 use App\Models\RouteTollPlazaHint;
 use App\Models\TollPlaza;
+use App\Models\Trip;
 use App\Models\User;
 use App\Services\AuditService;
 use App\Services\TripCostEstimator;
@@ -38,6 +40,21 @@ new #[Layout('components.layouts.app')] class extends Component {
      */
     public bool $editingScheduledDate = false;
     public ?string $scheduledDateInput = null;
+
+    /*
+     * "Correct booking details" panel -- VIN, pickup location, delivery
+     * location.  Added at CRM's request (23-Jul) so ops can fix a bad
+     * bulk-upload row without cancelling and re-creating the job.
+     * Gated on JobPolicy::update; VIN history is preserved via the
+     * pre-existing original_vin / vehicle_reassigned_* columns; a
+     * location swap invalidates the route + toll cache and flags any
+     * saved advance as stale.
+     */
+    public bool $editingBookingDetails = false;
+    public string $newVin = '';
+    public ?int $newPickupLocationId = null;
+    public ?int $newDeliveryLocationId = null;
+    public string $bookingEditReason = '';
 
     // Executor change modal — ops can flip the executor on any job they
     // can see (subject to JobPolicy::changeExecutor). Resets driver and
@@ -400,6 +417,211 @@ new #[Layout('components.layouts.app')] class extends Component {
             Job::STATUS_COMPLETED,
             Job::STATUS_CANCELLED,
         ], true);
+    }
+
+    /*
+     * Can the current viewer open the "Correct booking details" panel?
+     * Wires up JobPolicy::update (previously unreferenced in app code)
+     * so the role list is centrally defined and the button doesn't have
+     * to duplicate the same isX() cocktail.
+     */
+    public function canEditBookingDetails(): bool
+    {
+        return auth()->user()?->can('update', $this->job) ?? false;
+    }
+
+    /*
+     * A job attached to an in-progress or planned trip can NOT have its
+     * pickup / delivery corrected here.  TripPlanner copies location_id
+     * onto trip_stops at attach time -- re-pointing the job would leave
+     * the stops silently stale.  Ops has to remove the job from the
+     * trip first, edit, then re-plan.  VIN edits are still allowed
+     * because they don't touch stop coordinates.
+     */
+    public function bookingLocationsLocked(): bool
+    {
+        if (in_array($this->job->status, [Job::STATUS_COMPLETED, Job::STATUS_CANCELLED], true)) {
+            return true;
+        }
+        $trip = $this->job->trip;
+        return $trip !== null
+            && in_array($trip->status, [Trip::STATUS_PLANNED, Trip::STATUS_IN_PROGRESS], true);
+    }
+
+    public function openEditBookingDetails(): void
+    {
+        if (!$this->canEditBookingDetails()) {
+            abort(403);
+        }
+        $this->newVin = $this->job->vin ?? '';
+        $this->newPickupLocationId = $this->job->pickup_location_id;
+        $this->newDeliveryLocationId = $this->job->delivery_location_id;
+        $this->bookingEditReason = '';
+        $this->editingBookingDetails = true;
+    }
+
+    public function cancelEditBookingDetails(): void
+    {
+        $this->editingBookingDetails = false;
+        $this->newVin = '';
+        $this->newPickupLocationId = null;
+        $this->newDeliveryLocationId = null;
+        $this->bookingEditReason = '';
+    }
+
+    /**
+     * Persist a booking-details correction (VIN / pickup / delivery).
+     * Order of operations matters: we snapshot the "before" state,
+     * write the "after" state, then invalidate the route cache for
+     * BOTH pairs (old and new) and flag any already-issued advance
+     * as stale so accounts sees the banner and re-checks the toll
+     * math.
+     */
+    public function saveBookingDetails(TripCostEstimator $estimator): void
+    {
+        if (!$this->canEditBookingDetails()) {
+            abort(403);
+        }
+
+        $rules = [
+            'newVin' => ['nullable', 'string', 'max:64'],
+            'bookingEditReason' => ['required', 'string', 'min:5', 'max:2000'],
+        ];
+
+        // Location edits are locked while the job is on an active
+        // trip.  Ops has to remove it from the trip first.
+        $locationsLocked = $this->bookingLocationsLocked();
+        if (!$locationsLocked) {
+            $rules['newPickupLocationId']   = ['required', 'integer', 'exists:locations,id'];
+            $rules['newDeliveryLocationId'] = ['required', 'integer', 'exists:locations,id', 'different:newPickupLocationId'];
+        }
+
+        $this->validate($rules, [
+            'bookingEditReason.required' => 'A reason is required so the audit trail makes sense.',
+            'bookingEditReason.min'      => 'Reason needs at least 5 characters.',
+            'newDeliveryLocationId.different' => 'Pickup and delivery must be different locations.',
+        ]);
+
+        $before = [
+            'vin' => $this->job->vin,
+            'pickup_location_id' => $this->job->pickup_location_id,
+            'delivery_location_id' => $this->job->delivery_location_id,
+        ];
+
+        $newVin = trim($this->newVin);
+        $newVin = $newVin === '' ? null : strtoupper($newVin);
+
+        $vinChanged = $newVin !== ($this->job->vin ?? null);
+        $pickupChanged = !$locationsLocked && ((int) $this->newPickupLocationId !== (int) $this->job->pickup_location_id);
+        $deliveryChanged = !$locationsLocked && ((int) $this->newDeliveryLocationId !== (int) $this->job->delivery_location_id);
+
+        if (!$vinChanged && !$pickupChanged && !$deliveryChanged) {
+            session()->flash('error', 'Nothing to save -- the values are unchanged.');
+            $this->cancelEditBookingDetails();
+            return;
+        }
+
+        // VIN history uses the columns that were already carved out
+        // in the schema for this exact use case: original_vin (first
+        // VIN we ever saw on this job) and vehicle_reassigned_at /
+        // vehicle_reassigned_by (the last correction).  We only set
+        // original_vin once, so a triple-correction still traces
+        // back to the original booking.
+        if ($vinChanged) {
+            if ($this->job->original_vin === null) {
+                $this->job->original_vin = $this->job->vin;
+            }
+            $this->job->vin = $newVin;
+            $this->job->vehicle_reassigned_at = now();
+            $this->job->vehicle_reassigned_by = auth()->id();
+        }
+
+        // Old pair cached under the OLD ids -- capture before write.
+        $oldPickupId   = $this->job->pickup_location_id;
+        $oldDeliveryId = $this->job->delivery_location_id;
+
+        if ($pickupChanged) {
+            $this->job->pickup_location_id = (int) $this->newPickupLocationId;
+        }
+        if ($deliveryChanged) {
+            $this->job->delivery_location_id = (int) $this->newDeliveryLocationId;
+        }
+
+        $this->job->save();
+
+        // Route + toll cache invalidation.  We wipe the OLD pair here
+        // and again for the NEW pair -- the estimator's next run will
+        // rebuild against the corrected coordinates.  distance_km is
+        // recomputed against the new zone-rate pair for ProSelver-
+        // executed jobs so the invoicing figures don't stay wrong.
+        if ($pickupChanged || $deliveryChanged) {
+            // OLD pair
+            $ghost = $this->job->replicate(['id']);
+            $ghost->pickup_location_id = $oldPickupId;
+            $ghost->delivery_location_id = $oldDeliveryId;
+            $estimator->invalidateRoute($ghost);
+
+            // NEW pair
+            $estimator->invalidateRoute($this->job);
+
+            // Re-run distance_km / transport_route_id.  Uses the same
+            // zone-rate lookup as booking creation; if either side has
+            // no zone the value stays as-is.
+            $this->recomputeDistanceForCurrentPair();
+        }
+
+        AuditService::log('booking_details_corrected', 'job', $this->job->id, null, [
+            'before' => $before,
+            'after'  => [
+                'vin' => $this->job->vin,
+                'pickup_location_id' => $this->job->pickup_location_id,
+                'delivery_location_id' => $this->job->delivery_location_id,
+            ],
+            'reason' => trim($this->bookingEditReason),
+            'locations_locked' => $locationsLocked,
+        ]);
+
+        $this->job->refresh();
+        $this->job->load(['pickupLocation', 'deliveryLocation']);
+        $this->cancelEditBookingDetails();
+
+        $notes = [];
+        if ($vinChanged) { $notes[] = 'VIN'; }
+        if ($pickupChanged) { $notes[] = 'pickup'; }
+        if ($deliveryChanged) { $notes[] = 'delivery'; }
+
+        $advWarning = '';
+        if (($pickupChanged || $deliveryChanged) && (float) ($this->job->advance_total ?? 0) > 0) {
+            $advWarning = ' The saved advance was based on the OLD route -- accounts should re-check the toll math.';
+        }
+
+        session()->flash('success', 'Booking details updated (' . implode(', ', $notes) . ').' . $advWarning);
+    }
+
+    /**
+     * Recompute distance_km against the current (post-edit) pickup +
+     * delivery pair using the same zone-rate lookup BookingService
+     * uses at booking creation.  Kept in the component to avoid
+     * having to expose calculateAndStoreRoute() as a public method
+     * on BookingService; the logic here is intentionally small.
+     */
+    private function recomputeDistanceForCurrentPair(): void
+    {
+        $pickup   = Location::find($this->job->pickup_location_id);
+        $delivery = Location::find($this->job->delivery_location_id);
+
+        if (!$pickup?->zone_id || !$delivery?->zone_id || !$this->job->vehicle_class_id) {
+            return;
+        }
+
+        $rate = \App\Models\ZoneRate::findRate($pickup->zone_id, $delivery->zone_id, $this->job->vehicle_class_id);
+        if (!$rate) {
+            return;
+        }
+
+        $multiplier = $this->job->is_round_trip ? 2 : 1;
+        $this->job->distance_km = round($rate->distance_km * $multiplier, 2);
+        $this->job->save();
     }
 
     public function markCollected(): void
@@ -1716,6 +1938,42 @@ new #[Layout('components.layouts.app')] class extends Component {
             ->limit(20)
             ->get();
 
+        // Location dropdown source for the "Correct booking details"
+        // panel.  Includes the customer's own addresses plus every
+        // shared operational location (body-builder / yard / plant)
+        // so ops can re-point a bad bulk-upload row to any legitimate
+        // pickup or delivery in one shot.  Kept cheap by loading only
+        // the columns we need for the label.
+        $bookingEditLocations = collect();
+        if ($this->editingBookingDetails) {
+            $ownLocations = $this->job->company_id
+                ? Location::query()
+                    ->where('company_id', $this->job->company_id)
+                    ->where('is_active', true)
+                    ->get(['id', 'company_id', 'company_name', 'city', 'type'])
+                : collect();
+            $sharedLocations = Location::query()
+                ->where('is_active', true)
+                ->where('company_id', '!=', $this->job->company_id)
+                ->whereIn('type', [
+                    Location::TYPE_BODY_BUILDER,
+                    Location::TYPE_YARD,
+                    Location::TYPE_PLANT,
+                ])
+                ->get(['id', 'company_id', 'company_name', 'city', 'type']);
+            $bookingEditLocations = $ownLocations
+                ->concat($sharedLocations)
+                ->unique('id')
+                ->sortBy(fn ($l) => strtolower((string) $l->company_name))
+                ->values();
+        }
+        $bookingLocationOptions = $bookingEditLocations
+            ->map(fn ($l) => [
+                'value' => (string) $l->id,
+                'label' => $l->company_name . ($l->city ? ' — ' . $l->city : ''),
+            ])
+            ->all();
+
         return [
             'drivers' => $drivers,
             'driverOptions' => $driverOptions,
@@ -1732,6 +1990,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             'canUnarchive' => $user->can('unarchive', $this->job),
             'executorChoices' => Job::EXECUTOR_LABELS,
             'advanceAudit' => $advanceAudit,
+            'bookingLocationOptions' => $bookingLocationOptions,
         ];
     }
 };
@@ -2618,6 +2877,100 @@ new #[Layout('components.layouts.app')] class extends Component {
                     </div>
                 </div>
             </div>
+            @endif
+
+            {{-- Correct booking details (VIN, pickup, delivery).  Added
+                 at CRM's request 23-Jul so ops can fix bad bulk-upload
+                 rows without cancelling.  Location swap is blocked
+                 while the job is on an active trip because
+                 TripPlanner has copied the coords onto trip_stops. --}}
+            @if($job->isTransport() && $this->canEditBookingDetails())
+                <div class="rounded-xl border border-slate-200 bg-white shadow-sm p-4 mb-4">
+                    @if(!$editingBookingDetails)
+                        <div class="flex items-center justify-between gap-3 flex-wrap">
+                            <div class="min-w-0">
+                                <h4 class="text-sm font-semibold text-slate-800">Booking details</h4>
+                                <p class="text-xs text-slate-500">VIN, pickup or destination captured wrong? Fix it here — the change is logged with a reason.</p>
+                            </div>
+                            <button type="button" wire:click="openEditBookingDetails"
+                                class="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50">
+                                <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
+                                Correct booking details
+                            </button>
+                        </div>
+                    @else
+                        <form wire:submit.prevent="saveBookingDetails" class="space-y-3">
+                            <div class="flex items-start justify-between gap-3">
+                                <div>
+                                    <h4 class="text-sm font-semibold text-slate-800">Correct booking details</h4>
+                                    @if($this->bookingLocationsLocked())
+                                        <p class="text-[11px] text-amber-700 mt-1">
+                                            Pickup / delivery cannot be changed while this job is on an active trip. Remove it from the trip first.
+                                        </p>
+                                    @endif
+                                </div>
+                                <button type="button" wire:click="cancelEditBookingDetails"
+                                    class="text-xs text-slate-500 hover:text-slate-700">Cancel</button>
+                            </div>
+                            <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                                <div>
+                                    <label class="text-[10px] font-semibold uppercase tracking-wider text-slate-500">VIN / Chassis</label>
+                                    <input wire:model="newVin" type="text" maxlength="64"
+                                        class="mt-1 w-full rounded-md border-slate-300 px-2.5 py-1.5 text-sm font-mono uppercase focus:border-blue-500 focus:ring-blue-500">
+                                    @error('newVin')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
+                                    @if($job->original_vin && $job->original_vin !== $job->vin)
+                                        <p class="mt-1 text-[10px] text-slate-500">Original VIN: <span class="font-mono">{{ $job->original_vin }}</span></p>
+                                    @endif
+                                </div>
+                                <div>
+                                    <label class="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Pickup</label>
+                                    @if($this->bookingLocationsLocked())
+                                        <input type="text" readonly value="{{ $job->pickupLocation?->company_name ?? '—' }}"
+                                            class="mt-1 w-full rounded-md border-slate-200 bg-slate-50 px-2.5 py-1.5 text-sm text-slate-500">
+                                    @else
+                                        <x-searchable-select
+                                            wire:model="newPickupLocationId"
+                                            :options="$bookingLocationOptions"
+                                            placeholder="Pick a location"/>
+                                        @error('newPickupLocationId')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
+                                    @endif
+                                </div>
+                                <div>
+                                    <label class="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Destination</label>
+                                    @if($this->bookingLocationsLocked())
+                                        <input type="text" readonly value="{{ $job->deliveryLocation?->company_name ?? '—' }}"
+                                            class="mt-1 w-full rounded-md border-slate-200 bg-slate-50 px-2.5 py-1.5 text-sm text-slate-500">
+                                    @else
+                                        <x-searchable-select
+                                            wire:model="newDeliveryLocationId"
+                                            :options="$bookingLocationOptions"
+                                            placeholder="Pick a location"/>
+                                        @error('newDeliveryLocationId')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
+                                    @endif
+                                </div>
+                            </div>
+                            <div>
+                                <label class="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Reason for change</label>
+                                <textarea wire:model="bookingEditReason" rows="2" minlength="5" maxlength="2000"
+                                    class="mt-1 w-full rounded-md border-slate-300 px-2.5 py-1.5 text-sm focus:border-blue-500 focus:ring-blue-500"
+                                    placeholder="e.g. VIN typo on bulk upload — customer confirmed correct VIN by e-mail 2026-07-25"></textarea>
+                                @error('bookingEditReason')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
+                            </div>
+                            @if(!$this->bookingLocationsLocked() && (float) ($job->advance_total ?? 0) > 0)
+                                <div class="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
+                                    <strong>Heads up:</strong> this order already has an advance of R {{ number_format((float) $job->advance_total, 2) }} saved.
+                                    Changing the pickup or destination will invalidate the toll cache — the advance stays but accounts will need to re-check it.
+                                </div>
+                            @endif
+                            <div class="flex items-center justify-end gap-2">
+                                <button type="button" wire:click="cancelEditBookingDetails"
+                                    class="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50">Cancel</button>
+                                <button type="submit"
+                                    class="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-500">Save changes</button>
+                            </div>
+                        </form>
+                    @endif
+                </div>
             @endif
 
             {{-- Pickup & Delivery -- full address + lat/lng status.  The

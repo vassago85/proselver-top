@@ -47,6 +47,15 @@ new #[Layout('components.layouts.app')] class extends Component {
     #[Url]
     public string $driverSearch = '';
 
+    /**
+     * When $range === 'month', the picked month as YYYY-MM.  Empty
+     * otherwise (falls back to the current calendar month).  Added
+     * at accounts' request so month-end recon can be run for any
+     * specific month, not just "this month".
+     */
+    #[Url]
+    public string $monthPick = '';
+
     /** Per-row reason input; keyed by entry id. */
     public array $reasonDrafts = [];
 
@@ -59,7 +68,7 @@ new #[Layout('components.layouts.app')] class extends Component {
     /** Per-driver EFT reference draft for the "Pay drivers" tab. */
     public array $payDrafts = [];
 
-    public const RANGES = ['today', 'this_week', 'this_month', 'this_year', 'all'];
+    public const RANGES = ['today', 'this_week', 'this_month', 'this_year', 'all', 'month'];
     public const STATUSES = ['submitted', 'approved', 'rejected', 'reimbursed', 'all'];
     public const TABS = ['slips', 'pay', 'trips', 'incentives'];
 
@@ -79,6 +88,54 @@ new #[Layout('components.layouts.app')] class extends Component {
         if (in_array($tab, self::TABS, true)) {
             $this->tab = $tab;
             $this->resetPage();
+        }
+    }
+
+    /**
+     * When accounts picks a specific month from the native <input
+     * type="month">, we also flip range to 'month' so the counters
+     * and list refresh against the chosen window without them having
+     * to click the chip afterwards.
+     */
+    public function updatedMonthPick($value): void
+    {
+        if (trim((string) $value) !== '') {
+            $this->range = 'month';
+            $this->resetPage();
+        }
+    }
+
+    /**
+     * Return [fromCarbon, toCarbon] for the current range, or [null, null]
+     * for 'all'.  Shared by buildQuery() and buildQueryWithoutStatus() so
+     * both the counters and the paginated list see the same window.
+     */
+    private function rangeBounds(): array
+    {
+        $now = now();
+        return match ($this->range) {
+            'today'      => [$now->copy()->startOfDay(),  $now->copy()->endOfDay()],
+            'this_week'  => [$now->copy()->startOfWeek(), $now->copy()->endOfWeek()],
+            'this_month' => [$now->copy()->startOfMonth(), $now->copy()->endOfMonth()],
+            'this_year'  => [$now->copy()->startOfYear(), $now->copy()->endOfYear()],
+            'month'      => (function () use ($now) {
+                $picked = $this->parseMonthPick() ?? $now->copy()->startOfMonth();
+                return [$picked->copy()->startOfMonth(), $picked->copy()->endOfMonth()];
+            })(),
+            default      => [null, null],
+        };
+    }
+
+    private function parseMonthPick(): ?\Illuminate\Support\Carbon
+    {
+        $raw = trim($this->monthPick);
+        if ($raw === '' || !preg_match('/^\d{4}-\d{2}$/', $raw)) {
+            return null;
+        }
+        try {
+            return \Illuminate\Support\Carbon::createFromFormat('!Y-m', $raw);
+        } catch (\Throwable $e) {
+            return null;
         }
     }
 
@@ -318,14 +375,9 @@ new #[Layout('components.layouts.app')] class extends Component {
             $q->where('status', $this->status);
         }
 
-        $now = now();
-        match ($this->range) {
-            'today'      => $q->whereDate('created_at', $now->toDateString()),
-            'this_week'  => $q->where('created_at', '>=', $now->copy()->startOfWeek()),
-            'this_month' => $q->where('created_at', '>=', $now->copy()->startOfMonth()),
-            'this_year'  => $q->where('created_at', '>=', $now->copy()->startOfYear()),
-            default      => null,
-        };
+        [$from, $to] = $this->rangeBounds();
+        if ($from) $q->where('created_at', '>=', $from);
+        if ($to)   $q->where('created_at', '<=', $to);
 
         if (trim($this->driverSearch) !== '') {
             $term = '%' . trim($this->driverSearch) . '%';
@@ -491,14 +543,9 @@ new #[Layout('components.layouts.app')] class extends Component {
     {
         $q = PettyCashEntry::query();
 
-        $now = now();
-        match ($this->range) {
-            'today'      => $q->whereDate('created_at', $now->toDateString()),
-            'this_week'  => $q->where('created_at', '>=', $now->copy()->startOfWeek()),
-            'this_month' => $q->where('created_at', '>=', $now->copy()->startOfMonth()),
-            'this_year'  => $q->where('created_at', '>=', $now->copy()->startOfYear()),
-            default      => null,
-        };
+        [$from, $to] = $this->rangeBounds();
+        if ($from) $q->where('created_at', '>=', $from);
+        if ($to)   $q->where('created_at', '<=', $to);
 
         if (trim($this->driverSearch) !== '') {
             $term = '%' . trim($this->driverSearch) . '%';
@@ -575,6 +622,15 @@ new #[Layout('components.layouts.app')] class extends Component {
                             'bg-slate-100 text-slate-600 hover:bg-slate-200' => $range !== $val,
                         ])>{{ $lbl }}</button>
             @endforeach
+            {{-- Specific-month picker (month-end recon).  Setting a
+                 value flips $range to 'month' via updatedMonthPick(). --}}
+            <label class="ml-2 inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-slate-600">
+                <span class="text-[10px] uppercase tracking-wider">Pick month</span>
+                <input type="month"
+                    wire:model.live="monthPick"
+                    class="rounded-md border-slate-300 bg-white px-1.5 py-0.5 text-[11px] shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                    max="{{ now()->format('Y-m') }}"/>
+            </label>
         </div>
 
         @if($tab === 'slips')
