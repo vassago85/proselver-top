@@ -557,14 +557,18 @@ test('the dashboard tab strip only offers dashboards the viewer can open', funct
 });
 
 test('the sidebar surfaces the finance pages that used to be buried as tabs', function () {
-    // Cash Reconciliation and Driver Pay previously had no sidebar entry
-    // at all -- they were only reachable from inside Petty Cash.
+    // The cash pages and Driver Pay previously had no sidebar entry at all --
+    // they were only reachable from inside Petty Cash. The overview entry is
+    // labelled "Cash Overview" rather than the original "Cash Reconciliation",
+    // which now belongs to the Reconciliation Queries report next to it.
     $this->actingAs(dashUser('accounts'))
         ->get(route('admin.dashboard.finance'))
         ->assertSee(route('admin.overview'))
+        ->assertSee(route('admin.petty-cash.reconciliation'))
         ->assertSee(route('admin.drivers.pay'))
         ->assertSee(route('admin.invoices.index'))
-        ->assertSee('Cash Reconciliation')
+        ->assertSee('Cash Overview')
+        ->assertSee('Reconciliation Queries')
         ->assertSee('Driver Pay');
 });
 

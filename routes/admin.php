@@ -87,6 +87,13 @@ Volt::route('petty-cash', 'admin.petty-cash.index')->name('petty-cash.index');
 // bundle.  Internal staff only -- the page exposes per-trip cost
 // breakdowns no customer should see.
 Volt::route('petty-cash/plans', 'admin.petty-cash.plans')->name('petty-cash.plans');
+
+// Reconciliation report -- advances that left the till on trips which were
+// then cancelled, plus the written explanation for every one already
+// settled.  The owner's audit of where that cash went; accounts and ops
+// clear queries from here as well as from the Overview.  Same gate as the
+// Overview (canViewPettyCashOverview), enforced in the component's mount().
+Volt::route('petty-cash/reconciliation', 'admin.petty-cash.reconciliation')->name('petty-cash.reconciliation');
 Volt::route('vehicles', 'vehicles.index')->name('vehicles.index');
 Volt::route('documents', 'admin.documents.index')->name('documents.index');
 // Companies (formerly "Customers" — the model has always been Company,

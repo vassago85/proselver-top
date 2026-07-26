@@ -1,13 +1,16 @@
 <?php
 
+use App\Models\AuditLog;
 use App\Models\BodyBuilderRequest;
 use App\Models\BookingChangeRequest;
 use App\Models\Job;
 use App\Models\PettyCashEntry;
 use App\Models\PettyCashPlan;
 use App\Models\SystemSetting;
+use App\Models\User;
 use App\Services\ProselverLicenceBilling;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Str;
 use Livewire\Attributes\Layout;
 use Livewire\Volt\Component;
 
@@ -102,6 +105,98 @@ new #[Layout('components.layouts.app')] class extends Component {
             ->count();
     }
 
+    /**
+     * Yesterday's activity, summarised. The owner's first question after being
+     * away is "what moved while I wasn't looking", and the audit log answers it
+     * but only if you already know what to filter for.
+     *
+     * A digest, deliberately -- counts and the top few actors/actions, every
+     * one of them a link into the audit log with the filter already applied.
+     * No table and no filters here, per this page's doctrine: the drill-down
+     * lives on the page that owns it.
+     */
+    private function yesterdayDigest(): array
+    {
+        $from = now()->subDay()->startOfDay();
+        $to = now()->subDay()->endOfDay();
+
+        $scoped = fn () => AuditLog::query()->whereBetween('created_at', [$from, $to]);
+
+        $byAction = $scoped()
+            ->selectRaw('action_type, COUNT(*) as cnt')
+            ->groupBy('action_type')
+            ->orderByDesc('cnt')
+            ->orderBy('action_type')
+            ->limit(5)
+            ->get()
+            ->map(fn ($row) => [
+                'label' => Str::of($row->action_type)->replace('_', ' ')->ucfirst()->toString(),
+                'count' => (int) $row->cnt,
+                'href' => route('admin.audit-log', [
+                    'actionType' => $row->action_type,
+                    'dateFrom' => $from->toDateString(),
+                    'dateTo' => $to->toDateString(),
+                ]),
+            ]);
+
+        $actorRows = $scoped()
+            ->whereNotNull('actor_user_id')
+            ->selectRaw('actor_user_id, COUNT(*) as cnt')
+            ->groupBy('actor_user_id')
+            ->orderByDesc('cnt')
+            ->orderBy('actor_user_id')
+            ->limit(3)
+            ->get();
+
+        $names = $actorRows->isEmpty()
+            ? collect()
+            : User::whereIn('id', $actorRows->pluck('actor_user_id'))->pluck('name', 'id');
+
+        return [
+            'date' => $from,
+            'total' => (int) $scoped()->count(),
+            'people' => (int) $scoped()->whereNotNull('actor_user_id')->distinct()->count('actor_user_id'),
+            'actions' => $byAction,
+            'actors' => $actorRows->map(fn ($row) => [
+                'name' => $names[$row->actor_user_id] ?? 'Unknown',
+                'count' => (int) $row->cnt,
+                'href' => route('admin.audit-log', [
+                    'actorId' => $row->actor_user_id,
+                    'dateFrom' => $from->toDateString(),
+                    'dateTo' => $to->toDateString(),
+                ]),
+            ]),
+        ];
+    }
+
+    /**
+     * Range shortcuts into the audit log. The owner asked to be able to pull
+     * every change for the current week, this month and last month without
+     * touching a date picker.
+     */
+    private function changeRanges(): array
+    {
+        $now = now();
+
+        $ranges = [
+            'Yesterday' => [$now->copy()->subDay()->startOfDay(), $now->copy()->subDay()->endOfDay()],
+            'This week' => [$now->copy()->startOfWeek(), $now->copy()->endOfWeek()],
+            'This month' => [$now->copy()->startOfMonth(), $now->copy()->endOfMonth()],
+            'Last month' => [
+                $now->copy()->subMonthNoOverflow()->startOfMonth(),
+                $now->copy()->subMonthNoOverflow()->endOfMonth(),
+            ],
+        ];
+
+        return collect($ranges)->map(fn ($window, $label) => [
+            'label' => $label,
+            'href' => route('admin.audit-log', [
+                'dateFrom' => $window[0]->toDateString(),
+                'dateTo' => $window[1]->toDateString(),
+            ]),
+        ])->values()->all();
+    }
+
     public function with(): array
     {
         $monthFrom = now()->startOfMonth();
@@ -192,7 +287,10 @@ new #[Layout('components.layouts.app')] class extends Component {
             [
                 'label' => 'Open reconciliation queries',
                 'count' => (int) Job::query()->issuedCancellationQueryOpen()->count(),
-                'href' => route('admin.overview'),
+                // Points at the dedicated report rather than the Overview: it
+                // lists every open query with the clearing action inline, and
+                // the settled ones with their explanations underneath.
+                'href' => route('admin.petty-cash.reconciliation'),
                 'severity' => 'high',
                 'note' => 'Trips cancelled after cash was issued, with no explanation signed off.',
             ],
@@ -266,6 +364,9 @@ new #[Layout('components.layouts.app')] class extends Component {
             'licence' => $licence,
 
             'attention' => $attention,
+
+            'digest' => $this->yesterdayDigest(),
+            'changeRanges' => $this->changeRanges(),
         ];
     }
 }; ?>
@@ -346,6 +447,84 @@ new #[Layout('components.layouts.app')] class extends Component {
     </x-dash.panel>
 
     {{-- ══════════════════════════════════════════════════════════════ --}}
+    {{-- WHAT CHANGED YESTERDAY                                         --}}
+    {{-- ══════════════════════════════════════════════════════════════ --}}
+    {{-- Second question after "is anything blocked on me": what did the team
+         do while I wasn't looking. A digest only — every figure is a link into
+         the audit log with the filter pre-applied, and the range row covers
+         the week / month / previous month without a date picker. --}}
+    <x-dash.panel
+        title="What changed yesterday"
+        :subtitle="$digest['date']->format('l d F Y')"
+        :tight="true">
+        <x-slot:actions>
+            <x-dash.pill :variant="$digest['total'] > 0 ? 'blue' : 'slate'">
+                {{ $num($digest['total']) }} {{ \Illuminate\Support\Str::plural('change', $digest['total']) }}
+            </x-dash.pill>
+        </x-slot:actions>
+
+        @if($digest['total'] === 0)
+            <div class="flex items-center gap-3 px-5 py-6">
+                <span class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-400">
+                    <svg class="h-4.5 w-4.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                </span>
+                <div>
+                    <p class="text-sm font-semibold text-slate-900">Nothing was recorded yesterday.</p>
+                    <p class="text-xs text-slate-500">No orders, cash or settings were touched.</p>
+                </div>
+            </div>
+        @else
+            <div class="grid grid-cols-1 divide-y divide-slate-100 sm:grid-cols-2 sm:divide-y-0 sm:divide-x">
+                <div class="px-5 py-4">
+                    <p class="mb-2.5 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">Most changed</p>
+                    <ul class="space-y-1.5">
+                        @foreach($digest['actions'] as $action)
+                            <li>
+                                <a href="{{ $action['href'] }}" class="group flex items-center justify-between gap-3">
+                                    <span class="min-w-0 truncate text-sm text-slate-700 group-hover:text-slate-900">{{ $action['label'] }}</span>
+                                    <span class="shrink-0 text-sm font-semibold tabular-nums text-slate-900">{{ $num($action['count']) }}</span>
+                                </a>
+                            </li>
+                        @endforeach
+                    </ul>
+                </div>
+
+                <div class="px-5 py-4">
+                    <p class="mb-2.5 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">
+                        Busiest people &middot; {{ $num($digest['people']) }} active
+                    </p>
+                    @if($digest['actors']->isEmpty())
+                        <p class="text-sm text-slate-500">All of yesterday's changes were automated.</p>
+                    @else
+                        <ul class="space-y-1.5">
+                            @foreach($digest['actors'] as $actor)
+                                <li>
+                                    <a href="{{ $actor['href'] }}" class="group flex items-center justify-between gap-3">
+                                        <span class="min-w-0 truncate text-sm text-slate-700 group-hover:text-slate-900">{{ $actor['name'] }}</span>
+                                        <span class="shrink-0 text-sm font-semibold tabular-nums text-slate-900">{{ $num($actor['count']) }}</span>
+                                    </a>
+                                </li>
+                            @endforeach
+                        </ul>
+                    @endif
+                </div>
+            </div>
+        @endif
+
+        <x-slot:footer>
+            <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
+                <span class="text-[11px] font-semibold uppercase tracking-[0.15em] text-slate-400">All changes for</span>
+                @foreach($changeRanges as $r)
+                    <a href="{{ $r['href'] }}" class="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-600 transition-colors hover:border-slate-300 hover:text-slate-900">
+                        {{ $r['label'] }}
+                    </a>
+                @endforeach
+                <a href="{{ route('admin.audit-log') }}" class="text-xs font-semibold text-blue-600 hover:text-blue-700">Full audit log &rarr;</a>
+            </div>
+        </x-slot:footer>
+    </x-dash.panel>
+
+    {{-- ══════════════════════════════════════════════════════════════ --}}
     {{-- OPERATIONS STRIP                                               --}}
     {{-- ══════════════════════════════════════════════════════════════ --}}
     <div>
@@ -374,7 +553,9 @@ new #[Layout('components.layouts.app')] class extends Component {
                 :value="$num($onRoad)"
                 color="teal"
                 :href="route('admin.vehicles.index', ['bucket' => 'live'])"
-                helper="Collected &amp; in transit">
+                {{-- Plain "and": the helper is echoed through Blade's escaping,
+                     so an &amp; here reaches the page as literal "&amp;". --}}
+                helper="Collected and in transit">
                 <x-slot:icon>
                     <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 16H9m10 0h3v-3.15a1 1 0 0 0-.84-.99L16 11l-2.7-3.6a1 1 0 0 0-.8-.4H5.24a2 2 0 0 0-1.8 1.1l-.8 1.63A6 6 0 0 0 2 12.42V16h2"/><circle cx="6.5" cy="16.5" r="2.5"/><circle cx="16.5" cy="16.5" r="2.5"/></svg>
                 </x-slot:icon>
@@ -413,7 +594,13 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <h2 class="text-sm font-semibold tracking-tight text-slate-900">Finance</h2>
                 <p class="text-xs text-slate-500">{{ $monthLabel }} &middot; by delivered date.</p>
             </div>
-            <a href="{{ route('admin.dashboard.finance') }}" class="text-xs font-semibold text-blue-600 hover:text-blue-700">Finance dashboard &rarr;</a>
+            {{-- Reconciliation is linked here as well as from "Waiting on you",
+                 because that row disappears at zero open queries and the owner
+                 still wants the settled-with-explanation history. --}}
+            <div class="flex shrink-0 items-center gap-3">
+                <a href="{{ route('admin.petty-cash.reconciliation') }}" class="text-xs font-semibold text-blue-600 hover:text-blue-700">Reconciliation &rarr;</a>
+                <a href="{{ route('admin.dashboard.finance') }}" class="text-xs font-semibold text-blue-600 hover:text-blue-700">Finance dashboard &rarr;</a>
+            </div>
         </div>
 
         <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">

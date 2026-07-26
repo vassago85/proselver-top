@@ -44,8 +44,8 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     /**
      * Modal state for the "Clear reconciliation query" action.  Lives on
-     * the dashboard so Accounts/Owner can sign off the issued-on-cancelled
-     * query without having to bounce through the order detail page.
+     * the dashboard so accounts, ops or the owner can sign off the
+     * issued-on-cancelled query without bouncing through the order page.
      */
     public ?int $clearQueryJobId = null;
     public string $clearQueryNote = '';
@@ -62,7 +62,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         // see trip / movement counts and driver spend per period for their
         // month-end briefing without asking accounts to pull it.
         $u = auth()->user();
-        if (!$u || (!$u->isAccounts() && !$u->isOwner() && !$u->isDeveloper() && !$u->isOperationsController())) {
+        if (!$u || !$u->canViewPettyCashOverview()) {
             abort(403);
         }
         if (!in_array($this->range, self::RANGES, true)) {
@@ -78,7 +78,7 @@ new #[Layout('components.layouts.app')] class extends Component {
     public function openClearQuery(int $jobId): void
     {
         $u = auth()->user();
-        if (!$u || (!$u->isAccounts() && !$u->isOwner() && !$u->isDeveloper())) {
+        if (!$u || !$u->canClearReconciliationQuery()) {
             abort(403);
         }
         $this->clearQueryJobId = $jobId;
@@ -100,7 +100,7 @@ new #[Layout('components.layouts.app')] class extends Component {
     public function submitClearQuery(): void
     {
         $u = auth()->user();
-        if (!$u || (!$u->isAccounts() && !$u->isOwner() && !$u->isDeveloper())) {
+        if (!$u || !$u->canClearReconciliationQuery()) {
             abort(403);
         }
 
@@ -607,10 +607,17 @@ new #[Layout('components.layouts.app')] class extends Component {
                                 <span class="line-clamp-2">{{ $q->cancellation_reason ?: '—' }}</span>
                             </td>
                             <td class="px-4 py-2 text-right">
-                                <button type="button" wire:click="openClearQuery({{ $q->id }})"
-                                    class="rounded-lg bg-rose-600 hover:bg-rose-500 px-3 py-1.5 text-[11px] font-semibold text-white transition-colors">
-                                    Clear with note
-                                </button>
+                                {{-- Everyone who can reach this page can currently clear, but
+                                     gate the button anyway so the two lists can diverge later
+                                     without leaving a button that only 403s. --}}
+                                @if(auth()->user()?->canClearReconciliationQuery())
+                                    <button type="button" wire:click="openClearQuery({{ $q->id }})"
+                                        class="rounded-lg bg-rose-600 hover:bg-rose-500 px-3 py-1.5 text-[11px] font-semibold text-white transition-colors">
+                                        Clear with note
+                                    </button>
+                                @else
+                                    <span class="text-[10px] italic text-rose-700/70">Waiting on accounts or ops</span>
+                                @endif
                             </td>
                         </tr>
                     @endforeach
@@ -829,7 +836,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1.5">Explanation</label>
                         <textarea wire:model="clearQueryNote" rows="4"
-                            placeholder="e.g. Driver returned cash on 27 May, booked back into petty cash float."
+                            placeholder="e.g. Advance moved to VIN …012345 on JOB-26070999, or driver returned cash on 27 May and it was booked back into the float."
                             class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-rose-500 focus:ring-rose-500"></textarea>
                         @error('clearQueryNote') <p class="mt-1 text-xs text-rose-600">{{ $message }}</p> @enderror
                     </div>

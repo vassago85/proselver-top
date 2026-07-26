@@ -172,6 +172,11 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         [$from, $to] = match ($range) {
             'today' => [$now->copy()->startOfDay(), $now->copy()],
+            // Yesterday and this-week exist because that's how the owner asks
+            // the question -- "what changed while I was away", "what have we
+            // done this week" -- and the Owner dashboard links straight in.
+            'yesterday' => [$now->copy()->subDay()->startOfDay(), $now->copy()->subDay()->endOfDay()],
+            'this_week' => [$now->copy()->startOfWeek(), $now->copy()->endOfWeek()],
             'last_7' => [$now->copy()->subDays(6), $now->copy()],
             'this_month' => [$now->copy()->startOfMonth(), $now->copy()->endOfMonth()],
             'last_month' => [
@@ -614,6 +619,8 @@ new #[Layout('components.layouts.app')] class extends Component {
         @php
             $ranges = [
                 'today' => 'Today',
+                'yesterday' => 'Yesterday',
+                'this_week' => 'This week',
                 'last_7' => 'Last 7 days',
                 'last_30' => 'Last 30 days',
                 'this_month' => 'This month',

@@ -200,6 +200,38 @@ trait HasRoles
         return $this->hasAnyRole(['super_admin', 'developer', 'ops_manager', 'operations_controller', 'accounts']);
     }
 
+    /**
+     * May reach the petty-cash oversight pages: the Overview dashboard and the
+     * reconciliation report. Accounts owns month-end recon, ops needs driver
+     * spend per movement, and the owner signs off. Previously this list was
+     * written out by hand in three places and had drifted — super_admin could
+     * not open the Overview at all.
+     */
+    public function canViewPettyCashOverview(): bool
+    {
+        return $this->hasAnyRole([
+            'super_admin', 'developer', 'owner', 'accounts', 'operations_controller',
+        ]);
+    }
+
+    /**
+     * May sign off an issued-on-cancelled reconciliation query — a trip that
+     * was cancelled after the driver's cash advance had already left the till.
+     *
+     * Operations is included because ops is usually the only party that knows
+     * where the money actually went (reassigned to another vehicle, applied to
+     * a swap trip, returned at the depot), and routing every one of those
+     * through accounts was leaving queries open for weeks. Both sides can
+     * clear, and every clearance is audited with a written explanation, so
+     * widening this costs oversight nothing.
+     */
+    public function canClearReconciliationQuery(): bool
+    {
+        return $this->hasAnyRole([
+            'super_admin', 'developer', 'owner', 'accounts', 'operations_controller',
+        ]);
+    }
+
     public function canBookTransport(): bool
     {
         return $this->hasPermission('submit_booking');

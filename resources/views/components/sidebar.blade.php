@@ -27,7 +27,7 @@
     // each have a different audience, so they're gated individually rather
     // than behind one "finance" flag.
     $canSeeInvoicing = $isAccounts || $isOwner || $isDeveloper;
-    $canSeePettyCashOverview = $isOwner || $isDeveloper || $isAccounts || $isOpsController;
+    $canSeePettyCashOverview = $user->canViewPettyCashOverview();
     $canSeeDriverPay = $isOwner || $isDeveloper || $isAccounts;
 
     // OEMs hold customer-tier roles for tenanting, so $isCustomer is true.
@@ -260,25 +260,38 @@
                         {{-- Driver-submitted slip approvals + reimbursement
                              tracking.  Open to all internal staff; the
                              PettyCashEntryPolicy decides who may approve.
-                             Covers both the slip queue and Plans · Sign-off,
-                             which share a tab strip -- so the highlight
-                             stays lit across petty-cash.* but NOT on the
-                             Overview / Driver pay routes, which now have
-                             their own entries below. --}}
+                             Covers the slip queue and Plans · Sign-off, which
+                             share a tab strip.  Listed route by route rather
+                             than as petty-cash.* because Reconciliation
+                             Queries lives under the same prefix but has its
+                             own entry below -- a wildcard here would light
+                             both up at once. --}}
                         <x-sidebar-link
                             :href="route('admin.petty-cash.index')"
-                            :active="request()->routeIs('admin.petty-cash.*')">
+                            :active="request()->routeIs('admin.petty-cash.index') || request()->routeIs('admin.petty-cash.plans')">
                             <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="14" x="2" y="5" rx="2"/><line x1="2" x2="22" y1="10" y2="10"/></svg></x-slot:icon>
                             Petty Cash
                         </x-sidebar-link>
 
                         {{-- Issued vs spent vs reconciled, with variance and
                              the needs-attention queue.  Accounts uses it for
-                             month-end; the ops controller for driver spend. --}}
+                             month-end; the ops controller for driver spend.
+                             Called "Cash Overview" rather than the old "Cash
+                             Reconciliation" so it doesn't read as the same
+                             thing as the Reconciliation Queries report below. --}}
                         @if($canSeePettyCashOverview)
                         <x-sidebar-link :href="route('admin.overview')" :active="request()->routeIs('admin.overview')">
                             <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg></x-slot:icon>
-                            Cash Reconciliation
+                            Cash Overview
+                        </x-sidebar-link>
+
+                        {{-- Advances issued on trips that were then cancelled:
+                             what is still outstanding, and the written
+                             explanation for everything already settled.  The
+                             owner's audit of where that cash went. --}}
+                        <x-sidebar-link :href="route('admin.petty-cash.reconciliation')" :active="request()->routeIs('admin.petty-cash.reconciliation')">
+                            <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" x2="12" y1="9" y2="13"/><line x1="12" x2="12.01" y1="17" y2="17"/></svg></x-slot:icon>
+                            Reconciliation Queries
                         </x-sidebar-link>
                         @endif
 

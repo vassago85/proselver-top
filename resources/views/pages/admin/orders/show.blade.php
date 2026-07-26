@@ -1676,7 +1676,7 @@ new #[Layout('components.layouts.app')] class extends Component {
     public function openClearIssuedCancellation(): void
     {
         $u = auth()->user();
-        if (!$u || (!$u->isAccounts() && !$u->isOwner() && !$u->isDeveloper())) {
+        if (!$u || !$u->canClearReconciliationQuery()) {
             abort(403);
         }
         $this->clearIssuedCancellationNote = '';
@@ -1692,7 +1692,7 @@ new #[Layout('components.layouts.app')] class extends Component {
     public function clearIssuedCancellationQuery(): void
     {
         $u = auth()->user();
-        if (!$u || (!$u->isAccounts() && !$u->isOwner() && !$u->isDeveloper())) {
+        if (!$u || !$u->canClearReconciliationQuery()) {
             abort(403);
         }
 
@@ -2074,10 +2074,11 @@ new #[Layout('components.layouts.app')] class extends Component {
          Issued-on-cancelled reconciliation query
 
          Surfaces whenever the trip is cancelled AND an advance was
-         already issued (cash out of the till). Accounts/Owner must
-         attach a written explanation — driver returned cash, applied
-         to swap trip, deducted from next slip, etc. — before this
-         row clears from the owner dashboard.
+         already issued (cash out of the till). Accounts, ops or the
+         owner must attach a written explanation — driver returned cash,
+         advance moved to another vehicle, applied to a swap trip,
+         deducted from the next slip — before this row clears from the
+         owner dashboard and the reconciliation report.
          ────────────────────────────────────────────────────────────── --}}
     @if($job->hasOpenIssuedCancellationQuery() && auth()->user()?->isInternal())
         <div class="mb-4 rounded-xl border-2 border-rose-300 bg-rose-50 px-4 py-3">
@@ -2094,13 +2095,13 @@ new #[Layout('components.layouts.app')] class extends Component {
                         @if($job->advanceIssuedBy)
                             by <strong>{{ $job->advanceIssuedBy->name }}</strong>
                         @endif
-                        and the trip was then cancelled. Accounts/Owner needs to record how the cash was reconciled before the dashboard query clears.
+                        and the trip was then cancelled. Accounts or ops needs to record how the cash was reconciled before the dashboard query clears.
                     </div>
                     @if($job->cancellation_reason)
                         <div class="mt-1 text-sm text-rose-900/80"><strong>Cancellation reason:</strong> {{ $job->cancellation_reason }}</div>
                     @endif
                 </div>
-                @if(auth()->user()?->isAccounts() || auth()->user()?->isOwner() || auth()->user()?->isDeveloper())
+                @if(auth()->user()?->canClearReconciliationQuery())
                     <div class="flex items-center gap-2 shrink-0">
                         <button wire:click="openClearIssuedCancellation" type="button"
                             class="rounded-lg bg-rose-600 hover:bg-rose-500 px-4 py-2 text-xs font-semibold text-white transition-colors">
@@ -2108,7 +2109,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                         </button>
                     </div>
                 @else
-                    <span class="text-[11px] text-rose-700/80 italic shrink-0">Waiting on Accounts (owner fallback).</span>
+                    <span class="text-[11px] text-rose-700/80 italic shrink-0">Waiting on accounts or ops.</span>
                 @endif
             </div>
         </div>
@@ -3444,7 +3445,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             </div>
             <div class="px-6 py-5 space-y-4">
                 <div class="rounded-lg bg-rose-50 border border-rose-200 p-3 text-sm text-rose-900">
-                    Describe how the cash was reconciled (driver returned cash, applied to swap trip <em>NNNNN</em>, deducted from next slip, written off, etc.). This explanation is permanent and shows on the audit log.
+                    Describe how the cash was reconciled (advance moved to another vehicle, driver returned cash, applied to swap trip <em>NNNNN</em>, deducted from next slip, written off, etc.). This explanation is permanent and shows on the audit log.
                 </div>
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1.5">Explanation</label>
