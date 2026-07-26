@@ -136,6 +136,16 @@ test('window totals come from a DB aggregate and match the underlying filter', f
     tfrProselverJob(['company_id' => $oem->id, 'delivered_at' => now(), 'invoice_amount' => 800.00, 'invoicing_completed_at' => now()]);
     tfrProselverJob(['company_id' => $oem->id, 'delivered_at' => now(), 'invoice_amount' => 500.00, 'invoicing_excluded_at' => now()]);
 
+    // Log every query the render fires so we can prove below that the
+    // aggregate SELECT has no ORDER BY clause -- Postgres refuses that
+    // when the projection is only aggregates + no GROUP BY, and SQLite
+    // silently allows it.  Test-env is SQLite so we can't reproduce the
+    // 42803 by running the query; we assert on the shape instead.
+    $queries = [];
+    \Illuminate\Support\Facades\DB::listen(function ($q) use (&$queries) {
+        $queries[] = $q->sql;
+    });
+
     $this->actingAs($accounts);
 
     $c = Volt::test('admin.invoices.index')
@@ -143,6 +153,14 @@ test('window totals come from a DB aggregate and match the underlying filter', f
         ->set('dateFrom', now()->subDays(1)->toDateString())
         ->set('dateTo', now()->addDay()->toDateString())
         ->set('completion', 'all');
+
+    $aggregateSelects = collect($queries)->filter(fn ($sql) =>
+        str_contains($sql, 'invoice_sum') || str_contains($sql, 'total_count')
+    );
+    expect($aggregateSelects)->not->toBeEmpty();
+    foreach ($aggregateSelects as $sql) {
+        expect($sql)->not->toContain('order by');
+    }
 
     $totals = $c->viewData('totals');
     expect($totals['window_total'])->toBe(3)

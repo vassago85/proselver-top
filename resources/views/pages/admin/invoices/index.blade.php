@@ -486,7 +486,13 @@ new #[Layout('components.layouts.app')] class extends Component {
         // Filter-scoped totals (respect the completion selector) --
         // computed on the DB so pagination doesn't lie about "invoice
         // total = R x" once the user is on page 2 of 5.
+        //
+        // reorder() strips baseQuery()'s ORDER BY delivered_at -- Postgres
+        // refuses an ORDER BY on a non-aggregated column when the SELECT
+        // has no GROUP BY and only aggregates (SQLite lets it through,
+        // which is why the test suite missed this on the first pass).
         $filterAgg = (clone $this->baseQuery())
+            ->reorder()
             ->selectRaw('COUNT(*) AS row_count')
             ->selectRaw('COALESCE(SUM(invoice_amount), 0) AS invoice_sum')
             ->selectRaw('COALESCE(SUM(extras_amount), 0) AS extras_sum')
