@@ -9,6 +9,41 @@
  * routes/web.php).
  */
 
+if (!function_exists('resolveInternalDashboardRoute')) {
+    /**
+     * Which of the three internal dashboards a user belongs on.
+     *
+     * The internal dashboard is split three ways -- Operations (live
+     * pipeline), Finance (invoicing / petty cash / driver pay) and the
+     * Owner roll-up.  Each internal role has one natural home:
+     *
+     *   accounts                     -> Finance
+     *   owner / super_admin / dev    -> Owner roll-up (links to both)
+     *   ops controller / dispatcher  -> Operations
+     *
+     * This is the single source of truth: both the post-login redirect
+     * and the /admin/dashboard compatibility route call it, so they can
+     * never disagree.  Returns a route NAME, not a URL, so callers can
+     * decide between route() and redirect()->route().
+     */
+    function resolveInternalDashboardRoute($user): string
+    {
+        // Developer is checked first and separately from hasRole() because
+        // developers can role-switch in the dev toolbar; when they've
+        // switched we want the switched role's dashboard, but an unswitched
+        // developer should see the owner roll-up rather than raw ops.
+        if ($user->isAccounts()) {
+            return 'admin.dashboard.finance';
+        }
+
+        if ($user->isOwner() || $user->isSuperAdmin() || $user->isDeveloper()) {
+            return 'admin.dashboard.owner';
+        }
+
+        return 'admin.dashboard.ops';
+    }
+}
+
 if (!function_exists('resolveUserHomePath')) {
     /**
      * Return the post-login home URL for a given user based on their role.
@@ -20,7 +55,7 @@ if (!function_exists('resolveUserHomePath')) {
         }
 
         if ($user->isInternal() || $user->isDeveloper()) {
-            return route('admin.dashboard');
+            return route(resolveInternalDashboardRoute($user));
         }
         // Body-builder tenants land on their dedicated portal regardless
         // of the underlying customer-tier role they hold (BB owner / BB

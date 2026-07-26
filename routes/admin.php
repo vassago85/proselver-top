@@ -3,11 +3,44 @@
 use Illuminate\Support\Facades\Route;
 use Livewire\Volt\Volt;
 
-// /admin/dashboard now renders the Executive Overview (vehicle movement
-// command centre driven by Inventory + Jobs + Invoices). Owners / ops
-// controllers land here on sign-in. Previous revenue-focused dashboard
-// has been retired in favour of this consolidated view.
-Volt::route('dashboard', 'admin.dashboard')->name('dashboard');
+// ─── Internal dashboards ────────────────────────────────────────────
+// Split three ways so each internal role opens on work it can act on
+// instead of one page carrying everybody's concerns:
+//
+//   Operations  live movement pipeline, exceptions, dispatch health
+//   Finance     invoicing progress, petty cash recon, driver pay
+//   Owner       thin roll-up of both, everything links through
+//
+// /admin/dashboard is kept as a redirect rather than a page so the many
+// existing route('admin.dashboard') call sites, old bookmarks and the
+// post-login redirect all keep resolving.  resolveInternalDashboardRoute()
+// (app/helpers.php) is the single source of truth for who lands where --
+// it must stay in an autoloaded file because this closure gets serialised
+// by route:cache.
+Route::get('dashboard', function () {
+    $user = auth()->user();
+
+    // The auth middleware on this group makes a null user unreachable, but
+    // this is the entry point every internal sign-in passes through -- a
+    // fatal here is a white screen on login, so we don't lean on that.
+    if (!$user) {
+        return redirect()->route('login');
+    }
+
+    return redirect()->route(resolveInternalDashboardRoute($user));
+})->name('dashboard');
+
+// The Operations dashboard is the original command centre, unchanged and
+// still open to every internal role.
+Volt::route('dashboard/operations', 'admin.dashboard')->name('dashboard.ops');
+
+// Finance dashboard -- accounts, owner, developer, super admin and the
+// operations controller (who owns petty-cash issuing).  The component's
+// mount() is the source of truth; everyone else 403s.
+Volt::route('dashboard/finance', 'admin.dashboard.finance')->name('dashboard.finance');
+
+// Owner roll-up -- owner, developer, super admin only.
+Volt::route('dashboard/owner', 'admin.dashboard.owner')->name('dashboard.owner');
 
 // Petty-cash overview dashboard. Owner, developer, accounts and the
 // operations controller can land here -- the component's mount() is

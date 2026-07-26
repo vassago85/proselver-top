@@ -643,6 +643,8 @@ new #[Layout('components.layouts.app')] class extends Component
         </x-slot:actions>
     </x-page-header>
 
+    @include('pages.admin._partials.dashboard-tabs')
+
     {{-- Filter strip --}}
     <x-dash.filter-bar>
         <x-dash.filter-date label="From" wire:model.live="dateFrom" minWidth="160px" />

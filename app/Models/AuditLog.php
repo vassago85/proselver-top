@@ -35,7 +35,13 @@ class AuditLog extends Model
     protected static function booted(): void
     {
         static::creating(function (AuditLog $log) {
-            $log->created_at = now();
+            // Stamp only when the caller hasn't supplied a time. Overwriting
+            // unconditionally made it impossible to backfill or import history
+            // (created_at is fillable, so passing it was clearly meant to
+            // work), and left the date filtering on the audit-log page
+            // untestable. Immutability is still enforced by the hooks below --
+            // the time can be set once, at insert, and never changed after.
+            $log->created_at ??= now();
         });
 
         // Prevent updates and deletes - audit logs are immutable

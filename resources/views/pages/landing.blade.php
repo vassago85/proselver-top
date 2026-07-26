@@ -60,8 +60,15 @@
                 <a href="#workflow" class="hover:text-slate-900 transition-colors">OEM workflow</a>
                 <a href="#proof" class="hover:text-slate-900 transition-colors">Proof</a>
             </nav>
-            <div class="flex items-center gap-3">
-                <a href="{{ route('login') }}" class="text-sm font-medium text-slate-700 hover:text-slate-900 transition-colors">Sign in</a>
+            <div class="flex items-center gap-2 sm:gap-3">
+                {{-- Sign in is a real button rather than a text link so it reads
+                     as an action on a phone, where it sits next to the
+                     hamburger and the hero CTAs are below the fold.  This is
+                     the only always-visible way into the app on mobile, so it
+                     must not look like body copy. --}}
+                <a href="{{ route('login') }}" class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-sm font-semibold text-slate-800 transition-colors hover:border-slate-400 hover:bg-slate-50 md:border-transparent md:bg-transparent md:px-0 md:py-0 md:font-medium md:text-slate-700 md:hover:bg-transparent md:hover:text-slate-900">
+                    Sign in
+                </a>
                 <a href="#contact" class="hidden sm:inline-flex items-center gap-1.5 text-sm font-semibold text-white bg-slate-900 hover:bg-slate-800 px-3.5 py-2 rounded-lg transition-colors">
                     Book a walkthrough
                     <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
@@ -101,6 +108,14 @@
                     Book a walkthrough
                     <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
                 </a>
+                {{-- Existing customers open the menu looking for the way in, so
+                     sign-in belongs here too -- not only in the header bar.
+                     No data-mobile-nav: this navigates away rather than
+                     jumping to an anchor, so there's no menu to close. --}}
+                <a href="{{ route('login') }}" class="mt-1 inline-flex items-center justify-center gap-1.5 rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm font-semibold text-slate-800 transition-colors hover:bg-slate-50">
+                    Sign in to Trident
+                    <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" x2="3" y1="12" y2="12"/></svg>
+                </a>
             </nav>
         </div>
     </header>
@@ -114,38 +129,47 @@
         <div class="absolute inset-0 grid-bg pointer-events-none"></div>
         <div class="absolute inset-x-0 top-0 h-[520px] hero-glow pointer-events-none"></div>
 
-        <div class="relative mx-auto max-w-7xl px-6 lg:px-8 pt-20 lg:pt-28 pb-20 lg:pb-28">
+        {{-- Mobile spacing is deliberately much tighter than desktop.  At the
+             old sizes the logo alone was 160px and the stack pushed both CTAs
+             off the bottom of a phone screen, so the only way to reach "Sign
+             in to Trident" was to scroll.  Everything below scales back up
+             from sm: — desktop is unchanged. --}}
+        <div class="relative mx-auto max-w-7xl px-6 lg:px-8 pt-8 sm:pt-16 lg:pt-28 pb-16 sm:pb-20 lg:pb-28">
             <div class="mx-auto max-w-3xl text-center">
                 <div class="flex justify-center">
-                    <img src="/logo.png?v=2" alt="TRIDENT — Control &amp; Dispatch Center" class="h-40 sm:h-48 lg:h-56 w-auto object-contain drop-shadow-sm" />
+                    <img src="/logo.png?v=2" alt="TRIDENT — Control &amp; Dispatch Center" class="h-24 sm:h-40 lg:h-56 w-auto object-contain drop-shadow-sm" />
                 </div>
-                <div class="mt-8 inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white/60 backdrop-blur px-3 py-1 text-xs font-medium text-slate-600 shadow-sm">
+                <div class="mt-4 sm:mt-8 inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white/60 backdrop-blur px-3 py-1 text-xs font-medium text-slate-600 shadow-sm">
                     <span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
                     Built for OEM-linked movement operations
                 </div>
-                <h1 class="mt-6 text-3xl sm:text-4xl lg:text-5xl font-semibold tracking-tight text-slate-900 leading-[1.1]">
+                <h1 class="mt-4 sm:mt-6 text-[26px] sm:text-4xl lg:text-5xl font-semibold tracking-tight text-slate-900 leading-[1.15] sm:leading-[1.1]">
                     The command center for
                     <span class="relative inline-block">
                         <span class="relative z-10 bg-gradient-to-r from-slate-900 via-blue-700 to-slate-900 bg-clip-text text-transparent">vehicle movement.</span>
                     </span>
                 </h1>
-                <p class="mt-6 text-lg text-slate-600 leading-relaxed">
-                    TRIDENT is the Control &amp; Dispatch Center for driving new vehicles from manufacturing plants to dealerships — and on to end customers — with verified dispatch, live execution, and document trails you can prove.
+                {{-- The full positioning line is a lot of words on a 375px
+                     screen.  Phones get the short version and everything from
+                     sm: up gets the complete sentence. --}}
+                <p class="mt-3 sm:mt-6 text-base sm:text-lg text-slate-600 leading-relaxed">
+                    <span class="sm:hidden">Verified dispatch, live execution and document trails you can prove — from plant to dealership to end customer.</span>
+                    <span class="hidden sm:inline">TRIDENT is the Control &amp; Dispatch Center for driving new vehicles from manufacturing plants to dealerships — and on to end customers — with verified dispatch, live execution, and document trails you can prove.</span>
                 </p>
-                <div class="mt-9 flex flex-col sm:flex-row items-center justify-center gap-3">
-                    <a href="#contact" class="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-5 py-3 text-sm font-semibold text-white shadow-sm hover:bg-blue-500 transition-colors">
+                <div class="mt-6 sm:mt-9 flex flex-col sm:flex-row items-stretch sm:items-center justify-center gap-3">
+                    <a href="#contact" class="inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-5 py-3 text-sm font-semibold text-white shadow-sm hover:bg-blue-500 transition-colors">
                         Request a live demo
                         <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
                     </a>
-                    <a href="{{ route('login') }}" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-5 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-colors">
+                    <a href="{{ route('login') }}" class="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-5 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-colors">
                         Sign in to Trident
                     </a>
                 </div>
-                <p class="mt-6 text-xs text-slate-500">No credit card. Built for dispatch teams, operations controllers and customer coordinators.</p>
+                <p class="mt-5 sm:mt-6 text-xs text-slate-500">No credit card. Built for dispatch teams, operations controllers and customer coordinators.</p>
             </div>
 
             {{-- HERO VISUAL: stylised operations graph --}}
-            <div class="relative mx-auto mt-16 max-w-5xl">
+            <div class="relative mx-auto mt-10 sm:mt-16 max-w-5xl">
                 <div class="rounded-2xl border border-slate-200 bg-white shadow-xl shadow-slate-900/5 overflow-hidden">
                     <div class="flex items-center gap-1.5 border-b border-slate-100 bg-slate-50/50 px-4 py-2.5">
                         <span class="h-2.5 w-2.5 rounded-full bg-rose-300"></span>
@@ -240,7 +264,7 @@
             </div>
 
             {{-- Customer row --}}
-            <div class="mt-14 flex flex-wrap items-center justify-center gap-x-10 gap-y-4 text-slate-400">
+            <div class="mt-10 sm:mt-14 flex flex-wrap items-center justify-center gap-x-6 sm:gap-x-10 gap-y-3 sm:gap-y-4 text-slate-400">
                 <span class="text-[10px] font-semibold tracking-[0.2em] uppercase">Built for</span>
                 <span class="text-sm font-semibold text-slate-500 tracking-tight">OEM plants</span>
                 <span class="text-sm font-semibold text-slate-500 tracking-tight">Dealer groups</span>
@@ -307,8 +331,8 @@
     {{-- ============================================================== --}}
     <section class="border-t border-slate-100">
         <div class="mx-auto max-w-7xl px-6 lg:px-8 py-20 lg:py-28">
-            <div class="grid lg:grid-cols-12 gap-12 lg:gap-16">
-                <div class="lg:col-span-5">
+            <div class="grid grid-cols-1 lg:grid-cols-12 gap-12 lg:gap-16">
+                <div class="lg:col-span-5 min-w-0">
                     <p class="text-xs font-semibold tracking-[0.2em] uppercase text-blue-700">Why it matters</p>
                     <h2 class="mt-3 text-3xl sm:text-4xl font-semibold tracking-tight text-slate-900">Fewer missed calls. Cleaner handovers. Verified delivery.</h2>
                     <p class="mt-5 text-base text-slate-600 leading-relaxed">
@@ -319,7 +343,7 @@
                         <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
                     </a>
                 </div>
-                <div class="lg:col-span-7 grid sm:grid-cols-2 gap-4">
+                <div class="lg:col-span-7 min-w-0 grid grid-cols-1 sm:grid-cols-2 gap-4">
                     @php
                         $values = [
                             ['t' => 'Real operational control', 'd' => 'Every order, confirmation, assignment and document is auditable against a movement — not a person.'],
@@ -425,8 +449,16 @@
     {{-- ============================================================== --}}
     <section id="workflow" class="relative border-t border-slate-100 bg-gradient-to-b from-white to-slate-50">
         <div class="mx-auto max-w-7xl px-6 lg:px-8 py-20 lg:py-28">
-            <div class="grid lg:grid-cols-12 gap-12 lg:gap-16 items-center">
-                <div class="lg:col-span-5">
+            {{-- grid-cols-1 and min-w-0 are both load-bearing on mobile.  With
+                 only lg:grid-cols-12 declared, the implicit single column below
+                 lg is an `auto` track, which sizes to max-content -- and the
+                 status-chip rows further down are ~650px unwrapped, so the
+                 whole page inherited a 676px width and scrolled sideways on
+                 every phone.  grid-cols-1 caps the track at minmax(0,1fr) and
+                 min-w-0 stops the items overriding that, which lets the chip
+                 rows use their own overflow-x-auto as intended. --}}
+            <div class="grid grid-cols-1 lg:grid-cols-12 gap-12 lg:gap-16 items-center">
+                <div class="lg:col-span-5 min-w-0">
                     <p class="text-xs font-semibold tracking-[0.2em] uppercase text-blue-700">Customer workflows</p>
                     <h2 class="mt-3 text-3xl sm:text-4xl font-semibold tracking-tight text-slate-900">Different OEMs. Different rules. Same platform.</h2>
                     <p class="mt-5 text-slate-600 leading-relaxed">
@@ -440,7 +472,7 @@
                     </ul>
                 </div>
 
-                <div class="lg:col-span-7">
+                <div class="lg:col-span-7 min-w-0">
                     <div class="rounded-2xl border border-slate-200 bg-white overflow-hidden shadow-sm">
                         {{-- Standard flow --}}
                         <div class="p-6 border-b border-slate-100">
@@ -496,8 +528,8 @@
     {{-- ============================================================== --}}
     <section id="proof" class="border-t border-slate-100">
         <div class="mx-auto max-w-7xl px-6 lg:px-8 py-20 lg:py-28">
-            <div class="grid lg:grid-cols-12 gap-12 lg:gap-16 items-center">
-                <div class="lg:col-span-5 lg:order-2">
+            <div class="grid grid-cols-1 lg:grid-cols-12 gap-12 lg:gap-16 items-center">
+                <div class="lg:col-span-5 lg:order-2 min-w-0">
                     <p class="text-xs font-semibold tracking-[0.2em] uppercase text-blue-700">Proof, not promises</p>
                     <h2 class="mt-3 text-3xl sm:text-4xl font-semibold tracking-tight text-slate-900">Every movement leaves a verifiable trail.</h2>
                     <p class="mt-5 text-slate-600 leading-relaxed">
@@ -535,7 +567,7 @@
                 </div>
 
                 {{-- Sample collection note mock --}}
-                <div class="lg:col-span-7 lg:order-1">
+                <div class="lg:col-span-7 lg:order-1 min-w-0">
                     <div class="relative">
                         <div class="absolute -inset-4 bg-gradient-to-br from-blue-100/60 to-slate-100 rounded-3xl -z-10"></div>
                         <div class="rounded-2xl border border-slate-200 bg-white shadow-xl shadow-slate-900/5 overflow-hidden">
@@ -549,8 +581,12 @@
                                     <p class="text-xs font-medium mt-0.5">16 Apr 2026 · 09:42</p>
                                 </div>
                             </div>
-                            <div class="p-6 grid grid-cols-5 gap-6">
-                                <div class="col-span-3 space-y-4 text-sm">
+                            {{-- Stacks below sm: five columns leaves the QR cell
+                                 narrower than the QR's fixed 7rem, so on a
+                                 phone the code was cropped by the card's
+                                 overflow-hidden. --}}
+                            <div class="p-5 sm:p-6 grid grid-cols-1 sm:grid-cols-5 gap-5 sm:gap-6">
+                                <div class="sm:col-span-3 space-y-4 text-sm">
                                     <div>
                                         <p class="text-[10px] font-semibold uppercase tracking-widest text-slate-400">Driver</p>
                                         <p class="text-slate-900 font-medium mt-1">Thabo Molefe</p>
@@ -574,7 +610,7 @@
                                         </div>
                                     </div>
                                 </div>
-                                <div class="col-span-2 flex flex-col items-end">
+                                <div class="sm:col-span-2 flex flex-col items-start sm:items-end">
                                     {{-- QR mock --}}
                                     <div class="h-28 w-28 bg-white border border-slate-200 rounded-lg p-2">
                                         <svg viewBox="0 0 40 40" class="h-full w-full" fill="#0f172a">
@@ -587,7 +623,7 @@
                                             <rect x="14" y="30" width="2" height="4"/><rect x="18" y="30" width="4" height="2"/><rect x="24" y="32" width="2" height="4"/><rect x="28" y="30" width="4" height="2"/><rect x="34" y="34" width="2" height="4"/>
                                         </svg>
                                     </div>
-                                    <p class="mt-3 text-[10px] text-slate-500 text-right leading-tight">Scan to verify<br><span class="font-mono text-slate-400">tcdc.co.za/verify</span></p>
+                                    <p class="mt-3 text-[10px] text-slate-500 text-left sm:text-right leading-tight">Scan to verify<br><span class="font-mono text-slate-400">tcdc.co.za/verify</span></p>
                                 </div>
                             </div>
                             <div class="border-t border-slate-100 px-6 py-3 bg-slate-50/70 flex items-center justify-between">

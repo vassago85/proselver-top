@@ -95,13 +95,31 @@
 
     <div class="min-h-full {{ session('impersonating_from') ? 'pt-10' : '' }}"
          x-data="{ sidebarOpen: false, userMenu: false }"
-         @open-mobile-sidebar.window="sidebarOpen = true">
+         @open-mobile-sidebar.window="sidebarOpen = true"
+         {{-- Lock the page behind the drawer while it's open, so a swipe on
+              the menu scrolls the menu instead of the page underneath it. --}}
+         x-effect="document.body.classList.toggle('overflow-hidden', sidebarOpen)">
 
         {{-- Mobile sidebar overlay --}}
         <div x-show="sidebarOpen" x-cloak x-transition:enter="transition-opacity ease-linear duration-200" x-transition:enter-start="opacity-0" x-transition:enter-end="opacity-100" x-transition:leave="transition-opacity ease-linear duration-200" x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0" class="fixed inset-0 z-40 bg-slate-900/40 backdrop-blur-sm lg:hidden" @click="sidebarOpen = false"></div>
 
         {{-- Mobile sidebar --}}
-        <div x-show="sidebarOpen" x-cloak x-transition:enter="transition ease-out duration-200" x-transition:enter-start="-translate-x-full" x-transition:enter-end="translate-x-0" x-transition:leave="transition ease-in duration-150" x-transition:leave-start="translate-x-0" x-transition:leave-end="-translate-x-full" class="fixed inset-y-0 left-0 z-50 w-72 lg:hidden {{ session('impersonating_from') ? 'top-10' : '' }}">
+        {{-- `flex flex-col` is load-bearing, not decoration: <x-sidebar />'s
+             root is `flex grow ... overflow-y-auto`, and `grow` only resolves
+             against a flex parent.  Without it the sidebar sizes to its own
+             content instead of to this fixed-height drawer, so overflow-y-auto
+             never has anything to scroll and the lower nav groups sit off
+             screen with no way to reach them.  The desktop wrapper below has
+             always had lg:flex lg:flex-col, which is why this only ever broke
+             on phones. --}}
+        <div x-show="sidebarOpen" x-cloak x-transition:enter="transition ease-out duration-200" x-transition:enter-start="-translate-x-full" x-transition:enter-end="translate-x-0" x-transition:leave="transition ease-in duration-150" x-transition:leave-start="translate-x-0" x-transition:leave-end="-translate-x-full" class="fixed inset-y-0 left-0 z-50 flex w-72 flex-col lg:hidden {{ session('impersonating_from') ? 'top-10' : '' }}">
+            {{-- Explicit close affordance. Tapping the overlay also works, but
+                 with a scrollable menu the overlay is often off screen. --}}
+            <button type="button" @click="sidebarOpen = false"
+                    class="absolute right-2 top-4 z-10 rounded-lg p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-900"
+                    aria-label="Close navigation">
+                <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+            </button>
             <x-sidebar />
         </div>
 

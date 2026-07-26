@@ -16,6 +16,20 @@
     $isOwner = $user->isOwner();
     $isAccounts = $user->isAccounts();
 
+    // Internal nav is grouped by function: the three dashboards, then the
+    // operational sections (booking / dispatch / fleet), then finance, then
+    // the setup areas.  These flags mirror each destination page's own
+    // mount() gate so the sidebar never offers a link that 403s -- if you
+    // change a page's gate, change the matching flag here.
+    $canSeeFinanceDash = $isAccounts || $isOwner || $isDeveloper || $isSuperAdmin || $isOpsController;
+    $canSeeOwnerDash = $isOwner || $isDeveloper || $isSuperAdmin;
+    // Customer invoicing, the petty-cash Overview and the driver pay report
+    // each have a different audience, so they're gated individually rather
+    // than behind one "finance" flag.
+    $canSeeInvoicing = $isAccounts || $isOwner || $isDeveloper;
+    $canSeePettyCashOverview = $isOwner || $isDeveloper || $isAccounts || $isOpsController;
+    $canSeeDriverPay = $isOwner || $isDeveloper || $isAccounts;
+
     // OEMs hold customer-tier roles for tenanting, so $isCustomer is true.
     // Treat the company type as the source of truth for the *portal* label
     // we present so an FAW or Isuzu operator sees "OEM" branding even
@@ -44,7 +58,11 @@
     };
 @endphp
 
-<div class="flex grow flex-col gap-y-4 overflow-y-auto bg-white border-r border-slate-200 pb-4">
+{{-- overscroll-contain stops a swipe that reaches the end of the menu from
+     scrolling the page behind it.  pwa-standalone-pad reserves room for the
+     installed-app bottom nav, which is fixed at z-85 and would otherwise
+     cover the last nav entry when the drawer is open. --}}
+<div class="flex grow flex-col gap-y-4 overflow-y-auto overscroll-contain bg-white border-r border-slate-200 pb-4 pwa-standalone-pad">
     {{-- Brand --}}
     <div class="flex shrink-0 items-center gap-3 px-5 pt-5">
         <a href="{{ route('home') }}" class="flex items-center gap-3 group">
@@ -69,18 +87,43 @@
             @if($isInternal)
 
                 {{-- OVERVIEW --}}
+                {{-- Three dashboards, one per audience: Operations (live
+                     pipeline), Finance (billing / petty cash / driver pay)
+                     and the Owner roll-up.  Everyone gets Operations; the
+                     other two appear only for the roles that can open them.
+                     /admin/dashboard is a redirect that resolves to whichever
+                     of these the signed-in role belongs on. --}}
                 <li>
+                    <p class="mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">Overview</p>
                     <ul role="list" class="space-y-0.5">
-                        <x-sidebar-link :href="route('admin.dashboard')" :active="request()->routeIs('admin.dashboard')">
+                        <x-sidebar-link :href="route('admin.dashboard.ops')" :active="request()->routeIs('admin.dashboard.ops')">
                             <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg></x-slot:icon>
-                            Dashboard
+                            Operations
                         </x-sidebar-link>
+
+                        @if($canSeeFinanceDash)
+                        <x-sidebar-link :href="route('admin.dashboard.finance')" :active="request()->routeIs('admin.dashboard.finance')">
+                            <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></x-slot:icon>
+                            Finance
+                        </x-sidebar-link>
+                        @endif
+
+                        @if($canSeeOwnerDash)
+                        <x-sidebar-link :href="route('admin.dashboard.owner')" :active="request()->routeIs('admin.dashboard.owner')">
+                            <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="m2 4 3 12h14l3-12-6 7-4-7-4 7Z"/><path d="M5 20h14"/></svg></x-slot:icon>
+                            Owner
+                        </x-sidebar-link>
+                        @endif
                     </ul>
                 </li>
 
-                {{-- BOOKING --}}
+                {{-- OPS · BOOKING --}}
+                {{-- Order intake and the paperwork attached to it.  The
+                     finance pages that used to live in this group (Petty
+                     Cash, Customer Invoicing, Platform Licence) moved to
+                     the Finance group below -- they were never booking. --}}
                 <li>
-                    <p class="mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">Booking</p>
+                    <p class="mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">Ops &middot; Booking</p>
                     <ul role="list" class="space-y-0.5">
                         <x-sidebar-link :href="route('admin.orders.index')" :active="request()->routeIs('admin.orders.index') || request()->routeIs('admin.orders.show')">
                             <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4"/><path d="M12 16h4"/><path d="M8 11h.01"/><path d="M8 16h.01"/></svg></x-slot:icon>
@@ -102,51 +145,13 @@
                             <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></svg></x-slot:icon>
                             Documents
                         </x-sidebar-link>
-
-                        {{-- Petty cash review queue. Driver-submitted slip
-                             approvals + reimbursement tracking. Internal
-                             staff + platform-owner only — gated by route
-                             middleware AND PettyCashEntryPolicy at the
-                             page level. --}}
-                        {{-- One Petty Cash entry covers three pages:
-                             the slip review queue + Plans · Sign-off +
-                             (owner-only) Overview.  The pages share a
-                             top tab strip so all three are reachable
-                             from any one of them.  Active highlight
-                             stays lit on whichever sub-page you're on. --}}
-                        <x-sidebar-link
-                            :href="route('admin.petty-cash.index')"
-                            :active="request()->routeIs('admin.petty-cash.*') || request()->routeIs('admin.overview')">
-                            <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="14" x="2" y="5" rx="2"/><line x1="2" x2="22" y1="10" y2="10"/></svg></x-slot:icon>
-                            Petty Cash
-                        </x-sidebar-link>
-
-                        {{-- Accounts-side: customer-invoicing capture +
-                             OEM-shaped Excel export.  Owner / accounts /
-                             developer only -- gated server-side in the
-                             page mount() as well. --}}
-                        @if($isAccounts || $isOwner || $isDeveloper)
-                            <x-sidebar-link :href="route('admin.invoices.index')" :active="request()->routeIs('admin.invoices.*') || request()->routeIs('admin.reports.invoicing')">
-                                <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" x2="16" y1="13" y2="13"/><line x1="8" x2="16" y1="17" y2="17"/></svg></x-slot:icon>
-                                Customer Invoicing
-                            </x-sidebar-link>
-                        @endif
-
-                        {{-- ProSelver SaaS licence meter — owner + developer
-                             only. Soft-hide via SystemSetting if needed. --}}
-                        @if(($isOwner || $isDeveloper) && \App\Models\SystemSetting::get(\App\Services\ProselverLicenceBilling::SETTING_ENABLED, true))
-                            <x-sidebar-link :href="route('admin.billing')" :active="request()->routeIs('admin.billing')">
-                                <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></x-slot:icon>
-                                Platform Licence
-                            </x-sidebar-link>
-                        @endif
                     </ul>
                 </li>
 
-                {{-- DISPATCH --}}
+                {{-- OPS · DISPATCH --}}
                 @if($isDeveloper || $isSuperAdmin || $isOpsController || $isDispatcher || $isOwner)
                 <li>
-                    <p class="mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">Dispatch</p>
+                    <p class="mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">Ops &middot; Dispatch</p>
                     <ul role="list" class="space-y-0.5">
                         @if($isDeveloper || $isSuperAdmin || $isOpsController || $isOwner)
                         <x-sidebar-link :href="route('admin.planning')" :active="request()->routeIs('admin.planning')">
@@ -205,9 +210,9 @@
                 </li>
                 @endif
 
-                {{-- FLEET --}}
+                {{-- OPS · FLEET --}}
                 <li>
-                    <p class="mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">Fleet</p>
+                    <p class="mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">Ops &middot; Fleet</p>
                     <ul role="list" class="space-y-0.5">
                         <x-sidebar-link :href="route('admin.vehicles.index')" :active="request()->routeIs('admin.vehicles.*')">
                             <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M14 16H9m10 0h3v-3.15a1 1 0 0 0-.84-.99L16 11l-2.7-3.6a1 1 0 0 0-.8-.4H5.24a2 2 0 0 0-1.8 1.1l-.8 1.63A6 6 0 0 0 2 12.42V16h2"/><circle cx="6.5" cy="16.5" r="2.5"/><circle cx="16.5" cy="16.5" r="2.5"/></svg></x-slot:icon>
@@ -221,6 +226,78 @@
                             <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg></x-slot:icon>
                             Damage Reports
                         </x-sidebar-link>
+                    </ul>
+                </li>
+
+                {{-- FINANCE --}}
+                {{-- Every money page in one place.  Previously these were
+                     scattered: invoicing / petty cash / licence sat under
+                     "Booking", while the petty-cash Overview and the driver
+                     pay report had no sidebar entry at all and were only
+                     reachable as tabs inside Petty Cash -- so accounts and
+                     the owner had to know they existed.  They're surfaced
+                     here now.
+
+                     No group-level gate: the Petty Cash slip queue is open
+                     to every internal role (the page's own policy decides
+                     what they may do there), so the header always has at
+                     least one visible child.  The rest are gated per item
+                     to match their pages exactly. --}}
+                <li>
+                    <p class="mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">Finance</p>
+                    <ul role="list" class="space-y-0.5">
+                        {{-- Accounts-side: customer-invoicing capture +
+                             OEM-shaped Excel export.  Owner / accounts /
+                             developer only -- gated server-side in the
+                             page mount() as well. --}}
+                        @if($canSeeInvoicing)
+                        <x-sidebar-link :href="route('admin.invoices.index')" :active="request()->routeIs('admin.invoices.*') || request()->routeIs('admin.reports.invoicing')">
+                            <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" x2="16" y1="13" y2="13"/><line x1="8" x2="16" y1="17" y2="17"/></svg></x-slot:icon>
+                            Customer Invoicing
+                        </x-sidebar-link>
+                        @endif
+
+                        {{-- Driver-submitted slip approvals + reimbursement
+                             tracking.  Open to all internal staff; the
+                             PettyCashEntryPolicy decides who may approve.
+                             Covers both the slip queue and Plans · Sign-off,
+                             which share a tab strip -- so the highlight
+                             stays lit across petty-cash.* but NOT on the
+                             Overview / Driver pay routes, which now have
+                             their own entries below. --}}
+                        <x-sidebar-link
+                            :href="route('admin.petty-cash.index')"
+                            :active="request()->routeIs('admin.petty-cash.*')">
+                            <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="14" x="2" y="5" rx="2"/><line x1="2" x2="22" y1="10" y2="10"/></svg></x-slot:icon>
+                            Petty Cash
+                        </x-sidebar-link>
+
+                        {{-- Issued vs spent vs reconciled, with variance and
+                             the needs-attention queue.  Accounts uses it for
+                             month-end; the ops controller for driver spend. --}}
+                        @if($canSeePettyCashOverview)
+                        <x-sidebar-link :href="route('admin.overview')" :active="request()->routeIs('admin.overview')">
+                            <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg></x-slot:icon>
+                            Cash Reconciliation
+                        </x-sidebar-link>
+                        @endif
+
+                        {{-- Month-end per-driver movements × rate. --}}
+                        @if($canSeeDriverPay)
+                        <x-sidebar-link :href="route('admin.drivers.pay')" :active="request()->routeIs('admin.drivers.pay')">
+                            <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/><path d="M22 11h-4"/><path d="M20 9v4"/></svg></x-slot:icon>
+                            Driver Pay
+                        </x-sidebar-link>
+                        @endif
+
+                        {{-- ProSelver SaaS licence meter — owner + developer
+                             only. Soft-hide via SystemSetting if needed. --}}
+                        @if(($isOwner || $isDeveloper) && \App\Models\SystemSetting::get(\App\Services\ProselverLicenceBilling::SETTING_ENABLED, true))
+                        <x-sidebar-link :href="route('admin.billing')" :active="request()->routeIs('admin.billing')">
+                            <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></x-slot:icon>
+                            Platform Licence
+                        </x-sidebar-link>
+                        @endif
                     </ul>
                 </li>
 
