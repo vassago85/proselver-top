@@ -73,12 +73,14 @@ new #[Layout('components.layouts.app')] class extends Component {
         );
     }
 
-    /** The platform licence figure is owner/developer business only. */
+    /**
+     * The platform licence figure is owner/developer business only — see
+     * User::canViewPlatformLicence(). Accounts and ops can read every other
+     * number on this page but not what Trident itself costs.
+     */
     public function canSeeLicence(): bool
     {
-        $u = auth()->user();
-
-        return $u && ($u->isOwner() || $u->isDeveloper() || $u->isSuperAdmin());
+        return (bool) auth()->user()?->canViewPlatformLicence();
     }
 
     public function stepMonth(int $delta): void

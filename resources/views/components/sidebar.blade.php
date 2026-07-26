@@ -304,8 +304,9 @@
                         @endif
 
                         {{-- ProSelver SaaS licence meter — owner + developer
-                             only. Soft-hide via SystemSetting if needed. --}}
-                        @if(($isOwner || $isDeveloper) && \App\Models\SystemSetting::get(\App\Services\ProselverLicenceBilling::SETTING_ENABLED, true))
+                             only, not accounts, ops or super_admin.  Soft-hide
+                             via SystemSetting if needed. --}}
+                        @if($user->canViewPlatformLicence() && \App\Models\SystemSetting::get(\App\Services\ProselverLicenceBilling::SETTING_ENABLED, true))
                         <x-sidebar-link :href="route('admin.billing')" :active="request()->routeIs('admin.billing')">
                             <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></x-slot:icon>
                             Platform Licence

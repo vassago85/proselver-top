@@ -250,11 +250,15 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         $variance = round($spent - $issued, 2);
 
-        // Platform licence for the month.
+        // Platform licence for the month. Gated even here: this page is open to
+        // super_admin as well as the owner and developer, and super_admin is
+        // not entitled to the licence figure (the billing page 403s them, so
+        // showing the number would have been both a leak and a dead link).
         $licenceService = app(ProselverLicenceBilling::class);
         $licence = null;
+        $canSeeLicence = (bool) auth()->user()?->canViewPlatformLicence();
 
-        if ($licenceService->isEnabled()) {
+        if ($canSeeLicence && $licenceService->isEnabled()) {
             $moves = (int) Job::query()
                 ->where('executor_type', Job::EXECUTOR_PROSELVER)
                 ->whereIn('status', [Job::STATUS_DELIVERED, Job::STATUS_COMPLETED])
@@ -362,6 +366,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             'invoicedValue' => (float) ($billing->invoiced_sum ?? 0),
             'variance' => $variance,
             'licence' => $licence,
+            'canSeeLicence' => $canSeeLicence,
 
             'attention' => $attention,
 
@@ -637,28 +642,34 @@ new #[Layout('components.layouts.app')] class extends Component {
                 </x-slot:icon>
             </x-dash.kpi>
 
-            @if($licence)
-                <x-dash.kpi
-                    label="Platform licence"
-                    :value="$money($licence['total_incl_vat'])"
-                    color="indigo"
-                    :href="route('admin.billing')"
-                    :helper="$num($licence['moves']) . ' billable moves incl. VAT'">
-                    <x-slot:icon>
-                        <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
-                    </x-slot:icon>
-                </x-dash.kpi>
-            @else
-                <x-dash.kpi
-                    label="Platform licence"
-                    value="Off"
-                    color="slate"
-                    :href="route('admin.billing')"
-                    helper="Licence metering is currently disabled">
-                    <x-slot:icon>
-                        <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
-                    </x-slot:icon>
-                </x-dash.kpi>
+            {{-- Three states, not two: a viewer who isn't entitled to the
+                 licence figure gets no card at all, rather than an "Off" card
+                 that links somewhere they'd be 403'd. The strip drops to three
+                 KPIs for them, which the grid handles. --}}
+            @if($canSeeLicence)
+                @if($licence)
+                    <x-dash.kpi
+                        label="Platform licence"
+                        :value="$money($licence['total_incl_vat'])"
+                        color="indigo"
+                        :href="route('admin.billing')"
+                        :helper="$num($licence['moves']) . ' billable moves incl. VAT'">
+                        <x-slot:icon>
+                            <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+                        </x-slot:icon>
+                    </x-dash.kpi>
+                @else
+                    <x-dash.kpi
+                        label="Platform licence"
+                        value="Off"
+                        color="slate"
+                        :href="route('admin.billing')"
+                        helper="Licence metering is currently disabled">
+                        <x-slot:icon>
+                            <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+                        </x-slot:icon>
+                    </x-dash.kpi>
+                @endif
             @endif
         </div>
     </div>

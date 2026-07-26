@@ -201,6 +201,20 @@ trait HasRoles
     }
 
     /**
+     * May see what Trident costs the business — the ProSelver platform licence
+     * meter and every figure derived from it.
+     *
+     * Owner and developer only, deliberately narrower than any other finance
+     * gate. This is the shareholders' cost of running the platform, not an
+     * operating expense accounts reconciles or ops plans against, so it is
+     * withheld from accounts, ops AND super_admin. Keep this list to two.
+     */
+    public function canViewPlatformLicence(): bool
+    {
+        return $this->isOwner() || $this->isDeveloper();
+    }
+
+    /**
      * May reach the petty-cash oversight pages: the Overview dashboard and the
      * reconciliation report. Accounts owns month-end recon, ops needs driver
      * spend per movement, and the owner signs off. Previously this list was

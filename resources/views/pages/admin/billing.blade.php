@@ -23,9 +23,8 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     public function mount(): void
     {
-        $u = auth()->user();
-        if (! $u || (! $u->isOwner() && ! $u->isDeveloper())) {
-            abort(403);
+        if (! auth()->user()?->canViewPlatformLicence()) {
+            abort(403, 'The platform licence is restricted to the owner and developer.');
         }
 
         // Soft-hide via SystemSetting if needed (default enabled).
@@ -43,8 +42,7 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     public function saveRates(): void
     {
-        $u = auth()->user();
-        if (! $u || (! $u->isOwner() && ! $u->isDeveloper())) {
+        if (! auth()->user()?->canViewPlatformLicence()) {
             abort(403);
         }
 

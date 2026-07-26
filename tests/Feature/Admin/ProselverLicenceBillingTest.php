@@ -14,11 +14,25 @@ use Livewire\Volt\Volt;
 uses(RefreshDatabase::class);
 
 beforeEach(function () {
-    Role::firstOrCreate(['slug' => 'owner'], ['name' => 'Owner', 'tier' => 'internal']);
-    Role::firstOrCreate(['slug' => 'developer'], ['name' => 'Developer', 'tier' => 'internal']);
-    Role::firstOrCreate(['slug' => 'accounts'], ['name' => 'Accounts', 'tier' => 'internal']);
-    Role::firstOrCreate(['slug' => 'super_admin'], ['name' => 'Super Admin', 'tier' => 'internal']);
+    foreach ([
+        'owner' => 'Owner',
+        'developer' => 'Developer',
+        'accounts' => 'Accounts',
+        'super_admin' => 'Super Admin',
+        'operations_controller' => 'Ops Controller',
+        'dispatcher' => 'Dispatcher',
+    ] as $slug => $name) {
+        Role::firstOrCreate(['slug' => $slug], ['name' => $name, 'tier' => 'internal']);
+    }
 });
+
+function billingUser(string $slug): User
+{
+    $u = User::factory()->create(['is_active' => true]);
+    $u->assignRole($slug);
+
+    return $u;
+}
 
 function billingOwner(): User
 {
@@ -99,6 +113,72 @@ test('owner and developer can open the billing page by default; accounts and sup
     $this->actingAs($sa)
         ->get(route('admin.billing'))
         ->assertForbidden();
+});
+
+// -----------------------------------------------------------------
+// What Trident costs the business is owner + developer only.  Not a
+// number accounts reconciles or ops plans against, and deliberately
+// withheld from super_admin too -- it is the shareholders' cost of
+// running the platform.
+// -----------------------------------------------------------------
+
+test('only the owner and developer are entitled to the platform licence', function (string $slug) {
+    expect(billingUser($slug)->canViewPlatformLicence())->toBeTrue();
+})->with(['owner', 'developer']);
+
+test('accounts, ops, super admin and dispatchers are not', function (string $slug) {
+    expect(billingUser($slug)->canViewPlatformLicence())->toBeFalse();
+})->with(['accounts', 'operations_controller', 'super_admin', 'dispatcher']);
+
+test('the finance dashboard withholds the licence figure from accounts and ops', function (string $slug) {
+    billingProselverJob();
+
+    $component = Volt::actingAs(billingUser($slug))->test('admin.dashboard.finance');
+
+    expect($component->instance()->canSeeLicence())->toBeFalse();
+    expect($component->viewData('licence'))->toBeNull();
+    $component->assertDontSee('Platform licence');
+})->with(['accounts', 'operations_controller']);
+
+test('the finance dashboard still shows it to the owner', function () {
+    billingProselverJob();
+
+    $component = Volt::actingAs(billingOwner())->test('admin.dashboard.finance');
+
+    expect($component->viewData('licence'))->not->toBeNull();
+    $component->assertSee('Platform licence');
+});
+
+test('the owner dashboard withholds the licence figure from super admin', function () {
+    // super_admin can open the owner roll-up but is not entitled to this
+    // number -- and the billing page 403s them, so the card would have been
+    // a dead link as well as a leak.
+    billingProselverJob();
+
+    $component = Volt::actingAs(billingUser('super_admin'))->test('admin.dashboard.owner');
+
+    expect($component->viewData('canSeeLicence'))->toBeFalse();
+    expect($component->viewData('licence'))->toBeNull();
+    $component->assertDontSee('Platform licence');
+});
+
+test('the owner dashboard still shows it to the owner and developer', function (string $slug) {
+    billingProselverJob();
+
+    $component = Volt::actingAs(billingUser($slug))->test('admin.dashboard.owner');
+
+    expect($component->viewData('canSeeLicence'))->toBeTrue();
+    $component->assertSee('Platform licence');
+})->with(['owner', 'developer']);
+
+test('the sidebar offers the licence link to the owner but not to accounts', function () {
+    $this->actingAs(billingOwner())
+        ->get(route('admin.dashboard.owner'))
+        ->assertSee(route('admin.billing'), false);
+
+    $this->actingAs(billingUser('accounts'))
+        ->get(route('admin.dashboard.finance'))
+        ->assertDontSee(route('admin.billing'), false);
 });
 
 test('summarise counts only ProSelver-executed delivered/completed jobs at R150 + VAT', function () {
