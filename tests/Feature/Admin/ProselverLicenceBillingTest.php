@@ -181,6 +181,30 @@ test('the sidebar offers the licence link to the owner but not to accounts', fun
         ->assertDontSee(route('admin.billing'), false);
 });
 
+test('a developer testing as another role loses the licence with it', function (string $slug) {
+    $developer = billingDeveloper();
+
+    session(['dev_role_override' => $slug]);
+
+    expect($developer->canViewPlatformLicence())->toBeFalse();
+
+    $this->actingAs($developer)
+        ->get(route('admin.billing'))
+        ->assertForbidden();
+})->with(['accounts', 'operations_controller', 'super_admin']);
+
+test('a developer testing as the owner keeps it', function () {
+    $developer = billingDeveloper();
+
+    session(['dev_role_override' => 'owner']);
+
+    expect($developer->canViewPlatformLicence())->toBeTrue();
+
+    $this->actingAs($developer)
+        ->get(route('admin.billing'))
+        ->assertOk();
+});
+
 test('summarise counts only ProSelver-executed delivered/completed jobs at R150 + VAT', function () {
     billingProselverJob(['delivered_at' => now()]);
     billingProselverJob(['delivered_at' => now(), 'status' => Job::STATUS_COMPLETED]);

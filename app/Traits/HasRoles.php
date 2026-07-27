@@ -208,10 +208,15 @@ trait HasRoles
      * gate. This is the shareholders' cost of running the platform, not an
      * operating expense accounts reconciles or ops plans against, so it is
      * withheld from accounts, ops AND super_admin. Keep this list to two.
+     *
+     * Goes through hasAnyRole rather than isOwner()/isDeveloper() so that a
+     * developer who has switched roles to test as someone else loses the
+     * figure too -- isDeveloper() reads the real roles and would otherwise
+     * keep the fee on screen while they are pretending to be accounts.
      */
     public function canViewPlatformLicence(): bool
     {
-        return $this->isOwner() || $this->isDeveloper();
+        return $this->hasAnyRole(['owner', 'developer']);
     }
 
     /**
