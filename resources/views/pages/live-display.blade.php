@@ -650,10 +650,11 @@ new #[Layout('components.layouts.display')] class extends Component {
         <span>Wallboard mode — cards advance every <span x-text="(stepMs/1000)+'s'">—</span> per lane · auto-refresh 30 s</span>
         <span class="tabular-nums">Last loaded {{ $lastUpdatedAt->format('H:i:s') }}</span>
     </footer>
-</div>
 
 {{-- =================================================================
-     Wallboard Alpine component + styles
+     Wallboard Alpine component + styles.  These sit INSIDE the root
+     element on purpose: Livewire allows a component exactly one root
+     node, and anything trailing it is a second root.
      ================================================================= --}}
 <style>
     /* Card alert glow.  Three intensities so the most severe alert
@@ -1062,3 +1063,4 @@ new #[Layout('components.layouts.display')] class extends Component {
         }));
     });
 </script>
+</div>
