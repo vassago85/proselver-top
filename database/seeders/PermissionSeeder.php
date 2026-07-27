@@ -145,13 +145,21 @@ class PermissionSeeder extends Seeder
         // their stock.  Default the new perm onto every dealer role
         // that already approves BB requests today, so the existing
         // role mappings stay self-consistent.
+        //
+        // customer_owner and oem_admin must stay in this list to hold the
+        // legacy → modern parity asserted above: without them a legacy
+        // dealer_principal could approve a BB movement while the modern
+        // customer_owner that replaces it could not, and the lesser
+        // customer_admin would outrank its own owner.
         foreach ([
             'dealer_principal',
             'sales_manager_new',
             'sales_manager_used',
             'stock_controller',
+            'customer_owner',
             'customer_admin',
             'customer_dispatcher',
+            'oem_admin',
         ] as $dealerRole) {
             if (isset($rolePermissions[$dealerRole])) {
                 $rolePermissions[$dealerRole] = array_unique(array_merge($rolePermissions[$dealerRole], ['owner_approve_movement']));
