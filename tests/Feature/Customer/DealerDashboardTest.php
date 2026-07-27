@@ -59,20 +59,40 @@ test('countPremises returns the number of stock rows at premises', function () {
     expect(Volt::test('customer.dashboard')->get('countBodyBuilder'))->toBe(1);
 });
 
-test('countOnDemo and countRecentlyDelivered use the status column', function () {
+test('countOnDemo keys off the demo status', function () {
     [$dealer, $user] = makeDealerWithUser();
     seedStock($dealer, 'DEMO1', DealerStock::LOCATION_ON_DEMO, DealerStock::STATUS_DEMO);
-    seedStock($dealer, 'SOLD1', DealerStock::LOCATION_DELIVERED, DealerStock::STATUS_SOLD, [
-        'sold_at' => now()->subDays(2),
-    ]);
-    seedStock($dealer, 'SOLD2', DealerStock::LOCATION_DELIVERED, DealerStock::STATUS_SOLD, [
-        'sold_at' => now()->subDays(60),   // outside the window
-    ]);
+    seedStock($dealer, 'PREM01', DealerStock::LOCATION_PREMISES);
 
     $this->actingAs($user);
 
     expect(Volt::test('customer.dashboard')->get('countOnDemo'))->toBe(1);
+});
+
+test('countRecentlyDelivered keys off delivered_at and reaches across the archive boundary', function () {
+    [$dealer, $user] = makeDealerWithUser();
+
+    // Marking a unit delivered archives it, so counting these at all
+    // proves the card bypasses the active() scope.
+    seedStock($dealer, 'DEL01', DealerStock::LOCATION_DELIVERED, DealerStock::STATUS_ARCHIVED, [
+        'sold_at' => now()->subDays(4),
+        'delivered_at' => now()->subDays(2),
+        'archived_at' => now()->subDays(2),
+    ]);
+    seedStock($dealer, 'DEL02', DealerStock::LOCATION_DELIVERED, DealerStock::STATUS_ARCHIVED, [
+        'sold_at' => now()->subDays(70),
+        'delivered_at' => now()->subDays(60),   // older than RECENT_DELIVERED_DAYS
+        'archived_at' => now()->subDays(60),
+    ]);
+    // Sold but not yet handed over — belongs on "Recently sold" instead.
+    seedStock($dealer, 'SOLD1', DealerStock::LOCATION_PREMISES, DealerStock::STATUS_SOLD, [
+        'sold_at' => now()->subDays(3),
+    ]);
+
+    $this->actingAs($user);
+
     expect(Volt::test('customer.dashboard')->get('countRecentlyDelivered'))->toBe(1);
+    expect(Volt::test('customer.dashboard')->get('countRecentlySold'))->toBe(1);
 });
 
 test('selectBucket sets the filter and re-tapping clears it', function () {

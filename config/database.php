@@ -2,6 +2,19 @@
 
 use Illuminate\Support\Str;
 
+// PHP 8.5 deprecated the PDO::MYSQL_ATTR_* constants in favour of the Pdo\Mysql
+// class, which only exists from 8.4. Production runs 8.3 while local dev is on
+// 8.5, so resolve whichever the running interpreter accepts.
+$mysqlOptions = static function (): array {
+    if (! extension_loaded('pdo_mysql')) {
+        return [];
+    }
+
+    $sslCa = PHP_VERSION_ID >= 80400 ? \Pdo\Mysql::ATTR_SSL_CA : \PDO::MYSQL_ATTR_SSL_CA;
+
+    return array_filter([$sslCa => env('MYSQL_ATTR_SSL_CA')]);
+};
+
 return [
 
     /*
@@ -57,9 +70,7 @@ return [
             'prefix_indexes' => true,
             'strict' => true,
             'engine' => null,
-            'options' => extension_loaded('pdo_mysql') ? array_filter([
-                PDO::MYSQL_ATTR_SSL_CA => env('MYSQL_ATTR_SSL_CA'),
-            ]) : [],
+            'options' => $mysqlOptions(),
         ],
 
         'mariadb' => [
@@ -77,9 +88,7 @@ return [
             'prefix_indexes' => true,
             'strict' => true,
             'engine' => null,
-            'options' => extension_loaded('pdo_mysql') ? array_filter([
-                PDO::MYSQL_ATTR_SSL_CA => env('MYSQL_ATTR_SSL_CA'),
-            ]) : [],
+            'options' => $mysqlOptions(),
         ],
 
         'pgsql' => [
