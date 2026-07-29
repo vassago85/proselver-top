@@ -877,14 +877,17 @@ new #[Layout('components.layouts.app')] class extends Component {
                     </div>
                     <div>
                         <dt class="text-gray-500">VIN</dt>
-                        <dd class="font-medium text-gray-900">{{ $job->vin ?: '—' }}</dd>
+                        <dd class="font-medium text-gray-900 font-mono">
+                            {{ $job->vin ?: '—' }}
+                            @if(!$job->vin && $job->registration)
+                                <span class="ml-1 text-xs font-sans font-normal text-amber-700">VIN not captured</span>
+                            @endif
+                        </dd>
                     </div>
-                    @if($job->registration)
                     <div>
                         <dt class="text-gray-500">Registration</dt>
-                        <dd class="font-medium text-gray-900">{{ $job->registration }}</dd>
+                        <dd class="font-medium text-gray-900 font-mono">{{ $job->registration ?: '—' }}</dd>
                     </div>
-                    @endif
                     <div>
                         <dt class="text-gray-500">Scheduled Date</dt>
                         <dd class="font-medium text-gray-900">{{ $job->scheduled_date?->format('d M Y') ?? '—' }}</dd>

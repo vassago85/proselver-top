@@ -211,7 +211,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                         <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">Order #</th>
                         <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">Customer</th>
                         <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">Make / Model</th>
-                        <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">VIN</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">VIN / Reg</th>
                         <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">Route</th>
                         <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">Driver</th>
                         <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">Status</th>
@@ -224,7 +224,9 @@ new #[Layout('components.layouts.app')] class extends Component {
                         <td class="px-4 py-3 text-sm font-medium text-blue-600">{{ $job->job_number ?? '—' }}</td>
                         <td class="px-4 py-3 text-sm text-slate-900">{{ $job->company?->name ?? '—' }}</td>
                         <td class="px-4 py-3 text-sm text-slate-900">{{ $job->brand?->name }} {{ $job->model_name }}</td>
-                        <td class="px-4 py-3 text-sm font-mono text-slate-600 uppercase">{{ $job->vin ? strtoupper($job->vin) : '—' }}</td>
+                        <td class="px-4 py-3 text-sm text-slate-600 uppercase">
+                            <x-vehicle-identifier :model="$job" layout="stacked" />
+                        </td>
                         <td class="px-4 py-3 text-sm text-slate-500">
                             {{ $job->pickupLocation?->company_name ?? '—' }}
                             <span class="text-slate-300">→</span>

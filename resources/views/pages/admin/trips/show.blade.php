@@ -394,7 +394,7 @@ class extends Component
                 <ul class="max-h-[640px] divide-y divide-slate-100 overflow-y-auto">
                     @forelse($attachableJobs as $job)
                         <li class="px-5 py-3 hover:bg-slate-50/70">
-                            <div class="text-sm font-semibold text-slate-900">{{ $job->vin ?? ('JOB-' . $job->id) }}</div>
+                            <div class="text-sm font-semibold text-slate-900">{{ $job->vin ?: ($job->registration ?: ('JOB-' . $job->id)) }}</div>
                             <div class="text-xs text-slate-500">{{ $job->brand?->name }} {{ $job->model_name }} · {{ $job->vehicleClass?->name }}</div>
                             <div class="mt-1 text-[11px] text-slate-500">
                                 <span class="font-medium text-slate-700">{{ $job->pickupLocation?->company_name }}</span>

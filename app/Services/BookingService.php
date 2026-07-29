@@ -79,6 +79,7 @@ class BookingService
         $ownerFields = $this->resolveOwnerApprovalFields(
             customerCompanyId: (int) ($data['company_id'] ?? 0),
             vin: (string) ($data['vin'] ?? ''),
+            registration: (string) ($data['registration'] ?? ''),
             explicitOwnerCompanyId: $data['owner_company_id'] ?? null,
         );
 
@@ -108,7 +109,12 @@ class BookingService
             'vehicle_class_id' => $data['vehicle_class_id'],
             'brand_id' => $data['brand_id'] ?? null,
             'model_name' => $data['model_name'] ?? null,
-            'vin' => $data['vin'],
+            // Either identifier is now sufficient -- capture forms
+            // and the bulk importer are responsible for making sure
+            // at least one is present.  A registration-only booking
+            // is a valid state; downstream code (linker, stock
+            // lookup, dedup) matches on either column.
+            'vin' => $data['vin'] ?? null,
             'registration' => $data['registration'] ?? null,
             'scheduled_date' => $data['scheduled_date'] ?? now()->toDateString(),
             'scheduled_ready_time' => $data['scheduled_ready_time'] ?? null,
@@ -275,13 +281,25 @@ class BookingService
     protected function resolveOwnerApprovalFields(
         int $customerCompanyId,
         string $vin,
+        string $registration = '',
         ?int $explicitOwnerCompanyId = null,
     ): array {
         $ownerCompanyId = $explicitOwnerCompanyId;
 
+        // Match on EITHER identifier so a reg-only booking still
+        // trips the gate.  We try VIN first (it's the canonical
+        // matching key on dealer_stock and its unique index makes
+        // the lookup cheapest), then fall back to registration.
         if ($ownerCompanyId === null && $vin !== '') {
             $ownerCompanyId = DealerStock::query()
                 ->whereRaw('UPPER(vin) = ?', [strtoupper(trim($vin))])
+                ->whereNotNull('dealer_company_id')
+                ->whereNull('archived_at')
+                ->value('dealer_company_id');
+        }
+        if ($ownerCompanyId === null && $registration !== '') {
+            $ownerCompanyId = DealerStock::query()
+                ->whereRaw('UPPER(COALESCE(registration, \'\')) = ?', [strtoupper(trim($registration))])
                 ->whereNotNull('dealer_company_id')
                 ->whereNull('archived_at')
                 ->value('dealer_company_id');

@@ -28,6 +28,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             $query->where(function ($q) {
                 $q->where('job_number', 'ilike', "%{$this->search}%")
                     ->orWhere('vin', 'ilike', "%{$this->search}%")
+                    ->orWhere('registration', 'ilike', "%{$this->search}%")
                     ->orWhereHas('company', fn($q) => $q->where('name', 'ilike', "%{$this->search}%"))
                     ->orWhereHas('driver', fn($q) => $q->where('name', 'ilike', "%{$this->search}%"));
             });

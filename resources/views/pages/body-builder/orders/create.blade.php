@@ -7,6 +7,7 @@ use App\Models\Location;
 use App\Models\VehicleClass;
 use App\Models\VehicleModel;
 use App\Services\BookingService;
+use App\Support\VehicleIdentifier;
 use Livewire\Attributes\Layout;
 use Livewire\Volt\Component;
 
@@ -30,8 +31,12 @@ new #[Layout('components.layouts.body-builder')] class extends Component
 {
     public ?int $pickupLocationId = null;
     public ?int $deliveryLocationId = null;
-    public string $vin = '';
-    public string $registration = '';
+    // Smart "VIN OR registration" primary input.  See
+    // App\Support\VehicleIdentifier for the classifier + rationale.
+    public string $vehicleId = '';
+    public string $identifierType = VehicleIdentifier::TYPE_VIN;
+    public string $secondaryIdentifier = '';
+    public bool $identifierTypeManuallySet = false;
     public ?int $brandId = null;
     public string $modelName = '';
     public ?int $vehicleClassId = null;
@@ -40,7 +45,7 @@ new #[Layout('components.layouts.body-builder')] class extends Component
     public string $notes = '';
 
     public ?array $matchedStock = null;
-    public bool $vinChecked = false;
+    public bool $vehicleIdChecked = false;
 
     public function mount(): void
     {
@@ -53,9 +58,11 @@ new #[Layout('components.layouts.body-builder')] class extends Component
 
         // Pre-fill from query string -- e.g. a deep link from the
         // yard show page ("Send for crane fitment") can drop the user
-        // straight onto a half-filled form.
-        if (request()->filled('vin')) {
-            $this->vin = (string) request('vin');
+        // straight onto a half-filled form.  Accept either `vin=` or
+        // `registration=` -- the input is agnostic now.
+        $deepId = request()->input('vin') ?: request()->input('registration');
+        if ($deepId) {
+            $this->vehicleId = (string) $deepId;
         }
         if (request()->filled('pickup_location_id')) {
             $id = (int) request('pickup_location_id');
@@ -73,34 +80,53 @@ new #[Layout('components.layouts.body-builder')] class extends Component
             $this->vehicleClassId = (int) request('vehicle_class_id');
         }
 
-        if ($this->vin !== '') {
-            $this->updatedVin();
+        if ($this->vehicleId !== '') {
+            $this->identifierType = VehicleIdentifier::classify($this->vehicleId);
+            $this->updatedVehicleId();
         }
     }
 
-    /**
-     * VIN typeahead lookup against the global stock ledger.  Unlike
-     * the dealer-side form (which scopes to visibleTo()), a BB needs
-     * to see ownership for ANY dealer because they might be shipping
-     * a build that originated from outside their normal dealer list.
-     *
-     * The lookup is read-only -- it just tells the BB "this VIN
-     * belongs to X, dealer X will get an approval ping".
-     */
-    public function updatedVin(): void
+    public function switchIdentifierType(): void
     {
-        $this->matchedStock = null;
-        $this->vinChecked = false;
+        $this->identifierType = $this->identifierType === VehicleIdentifier::TYPE_VIN
+            ? VehicleIdentifier::TYPE_REGISTRATION
+            : VehicleIdentifier::TYPE_VIN;
+        $this->identifierTypeManuallySet = true;
+    }
 
-        $needle = strtoupper(trim($this->vin));
+    /**
+     * Vehicle-identifier typeahead lookup against the GLOBAL stock
+     * ledger.  Unlike the dealer-side form (which scopes to
+     * visibleTo()), a BB needs to see ownership for ANY dealer
+     * because they might be shipping a build that originated
+     * outside their normal dealer list.  Matches on either VIN or
+     * registration so a plate-only booking still finds the owner
+     * and triggers the approval gate.
+     *
+     * The lookup is read-only -- it just tells the BB "this VIN /
+     * plate belongs to X, dealer X will get an approval ping".
+     */
+    public function updatedVehicleId(): void
+    {
+        if (!$this->identifierTypeManuallySet) {
+            $this->identifierType = VehicleIdentifier::classify($this->vehicleId);
+        }
+
+        $this->matchedStock = null;
+        $this->vehicleIdChecked = false;
+
+        $needle = VehicleIdentifier::normalise($this->vehicleId);
         if (strlen($needle) < 5) {
             return;
         }
 
-        $this->vinChecked = true;
+        $this->vehicleIdChecked = true;
 
         $stock = DealerStock::query()
-            ->whereRaw('UPPER(vin) = ?', [$needle])
+            ->where(function ($q) use ($needle) {
+                $q->whereRaw('UPPER(vin) = ?', [$needle])
+                  ->orWhereRaw('UPPER(COALESCE(registration, \'\')) = ?', [$needle]);
+            })
             ->whereNotNull('dealer_company_id')
             ->where('status', '!=', DealerStock::STATUS_ARCHIVED)
             ->with(['brand:id,name', 'dealerCompany:id,name'])
@@ -112,8 +138,15 @@ new #[Layout('components.layouts.body-builder')] class extends Component
 
         $this->brandId = $stock->brand_id;
         $this->modelName = (string) ($stock->model_name ?? '');
-        if ($stock->registration) {
-            $this->registration = $stock->registration;
+
+        if ($this->identifierType === VehicleIdentifier::TYPE_REGISTRATION) {
+            if ($stock->vin && $this->secondaryIdentifier === '') {
+                $this->secondaryIdentifier = $stock->vin;
+            }
+        } else {
+            if ($stock->registration && $this->secondaryIdentifier === '') {
+                $this->secondaryIdentifier = $stock->registration;
+            }
         }
 
         $this->matchedStock = [
@@ -121,6 +154,7 @@ new #[Layout('components.layouts.body-builder')] class extends Component
             'model' => $stock->model_name,
             'colour' => $stock->colour,
             'registration' => $stock->registration,
+            'vin' => $stock->vin,
             'dealer_name' => $stock->dealerCompany?->name,
             'dealer_id' => $stock->dealer_company_id,
         ];
@@ -131,15 +165,29 @@ new #[Layout('components.layouts.body-builder')] class extends Component
         $this->validate([
             'pickupLocationId' => 'required|exists:locations,id',
             'deliveryLocationId' => 'required|exists:locations,id|different:pickupLocationId',
-            'vin' => 'required|string|max:50',
+            'vehicleId' => 'required|string|max:50',
+            'identifierType' => 'required|in:vin,registration',
+            'secondaryIdentifier' => 'nullable|string|max:50',
             'brandId' => 'nullable|exists:brands,id',
             'modelName' => 'nullable|string|max:255',
-            'registration' => 'nullable|string|max:20',
             'vehicleClassId' => 'required|exists:vehicle_classes,id',
             'scheduledDate' => 'required|date|after_or_equal:today',
             'scheduledReadyTime' => 'nullable|date_format:H:i',
             'notes' => 'nullable|string|max:2000',
         ]);
+
+        $primary = VehicleIdentifier::normalise($this->vehicleId);
+        $secondary = VehicleIdentifier::normalise($this->secondaryIdentifier);
+        if ($this->identifierType === VehicleIdentifier::TYPE_VIN) {
+            $vinToSave = $primary ?: null;
+            $regToSave = $secondary ?: null;
+        } else {
+            $vinToSave = $secondary ?: null;
+            $regToSave = $primary ?: null;
+        }
+        if ($regToSave !== null) {
+            $regToSave = substr($regToSave, 0, 20);
+        }
 
         $company = auth()->user()->company();
 
@@ -150,8 +198,8 @@ new #[Layout('components.layouts.body-builder')] class extends Component
             'vehicle_class_id'     => $this->vehicleClassId,
             'brand_id'             => $this->brandId,
             'model_name'           => $this->modelName ?: null,
-            'vin'                  => $this->vin,
-            'registration'         => $this->registration ?: null,
+            'vin'                  => $vinToSave,
+            'registration'         => $regToSave,
             'scheduled_date'       => $this->scheduledDate,
             'scheduled_ready_time' => $this->scheduledReadyTime
                 ? $this->scheduledDate . ' ' . $this->scheduledReadyTime
@@ -231,30 +279,57 @@ new #[Layout('components.layouts.body-builder')] class extends Component
 
     <form wire:submit.prevent="submit" class="space-y-5">
 
-        {{-- VIN + live lookup --}}
+        {{-- VIN / Registration + live lookup --}}
+        @php
+            $isVin = $identifierType === \App\Support\VehicleIdentifier::TYPE_VIN;
+            $ambiguous = \App\Support\VehicleIdentifier::isAmbiguous($vehicleId);
+        @endphp
         <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-            <label class="block text-xs font-semibold uppercase tracking-wide text-slate-600">VIN</label>
-            <input wire:model.live.debounce.400ms="vin" type="text"
-                placeholder="VIN / chassis number"
+            <label class="block text-xs font-semibold uppercase tracking-wide text-slate-600">VIN / Registration</label>
+            <input wire:model.live.debounce.400ms="vehicleId" type="text" maxlength="50"
+                placeholder="VIN, chassis or registration"
                 class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-3 text-base font-mono uppercase focus:border-blue-500 focus:ring-blue-500">
-            @error('vin') <p class="mt-1 text-xs text-rose-600">{{ $message }}</p> @enderror
+            @error('vehicleId') <p class="mt-1 text-xs text-rose-600">{{ $message }}</p> @enderror
 
-            @if($vinChecked && $matchedStock)
+            @if($vehicleId !== '')
+                <div class="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                    <span @class([
+                        'inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-medium',
+                        'bg-blue-100 text-blue-800' => $isVin && !$ambiguous,
+                        'bg-amber-100 text-amber-800' => $ambiguous,
+                        'bg-slate-200 text-slate-800' => !$isVin && !$ambiguous,
+                    ])>
+                        @if($ambiguous)
+                            Looks like a VIN — confirm?
+                        @else
+                            Detected: {{ $isVin ? 'VIN / Chassis' : 'Registration' }}
+                        @endif
+                    </span>
+                    <button type="button" wire:click="switchIdentifierType"
+                        class="text-blue-600 hover:text-blue-800 underline underline-offset-2">
+                        Not right? Switch to {{ $isVin ? 'Registration' : 'VIN' }}
+                    </button>
+                </div>
+            @endif
+
+            @if($vehicleIdChecked && $matchedStock)
                 <div class="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm">
                     <div class="font-semibold text-amber-900">
                         Vehicle belongs to {{ $matchedStock['dealer_name'] }}
                     </div>
                     <div class="text-xs text-amber-800 mt-0.5">
                         {{ $matchedStock['brand'] }} {{ $matchedStock['model'] }}{{ $matchedStock['colour'] ? ' · ' . $matchedStock['colour'] : '' }}
+                        @if($matchedStock['vin']) · VIN {{ $matchedStock['vin'] }}@endif
+                        @if($matchedStock['registration']) · Reg {{ $matchedStock['registration'] }}@endif
                     </div>
                     <p class="mt-2 text-xs text-amber-700">
                         When you submit, {{ $matchedStock['dealer_name'] }} will be notified and must approve the
                         movement before Proselver dispatches. They won't see the price.
                     </p>
                 </div>
-            @elseif($vinChecked && !$matchedStock && strlen($vin) >= 5)
+            @elseif($vehicleIdChecked && !$matchedStock && strlen($vehicleId) >= 5)
                 <div class="mt-2 text-xs text-slate-500">
-                    No dealer on the platform owns this VIN -- the order goes straight through without an
+                    No dealer on the platform owns this vehicle -- the order goes straight through without an
                     owner-approval step.
                 </div>
             @endif
@@ -299,10 +374,17 @@ new #[Layout('components.layouts.body-builder')] class extends Component
             </div>
 
             <div>
-                <label class="block text-xs font-medium text-slate-600">Registration <span class="text-slate-400 font-normal">(optional)</span></label>
-                <input wire:model="registration" type="text"
+                @php
+                    $secondaryLabel = $isVin ? 'Registration' : 'VIN / Chassis';
+                    $secondaryPlaceholder = $isVin ? 'ABC 123 GP' : 'Chassis / VIN';
+                @endphp
+                <label class="block text-xs font-medium text-slate-600">
+                    {{ $secondaryLabel }} <span class="text-slate-400 font-normal">(optional)</span>
+                </label>
+                <input wire:model="secondaryIdentifier" type="text" maxlength="50"
                     class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm font-mono uppercase focus:border-blue-500 focus:ring-blue-500"
-                    placeholder="ABC 123 GP">
+                    placeholder="{{ $secondaryPlaceholder }}">
+                @error('secondaryIdentifier') <p class="mt-1 text-xs text-rose-600">{{ $message }}</p> @enderror
             </div>
         </div>
 

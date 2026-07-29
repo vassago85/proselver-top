@@ -584,6 +584,45 @@ class Job extends Model
         );
     }
 
+    /**
+     * "Whatever identifies this vehicle right now" -- prefer the VIN
+     * (canonical) and fall back to the registration when a booking
+     * was captured plate-only.  Used by the shared display component
+     * and by anywhere the UI just wants a single string per row.
+     */
+    protected function vehicleIdentifier(): Attribute
+    {
+        return Attribute::make(
+            get: fn() => $this->vin ?: $this->registration ?: null,
+        );
+    }
+
+    /**
+     * Search helper: match `$needle` against either identifier column.
+     * Used by list views that used to do `orWhere('vin', 'ilike', ...)`
+     * -- since a booking may now legitimately have only a registration
+     * captured, searching by VIN alone would hide those rows.
+     */
+    public function scopeSearchVehicleId(Builder $query, string $needle): Builder
+    {
+        $needle = trim($needle);
+        if ($needle === '') {
+            return $query;
+        }
+
+        $like = '%' . $needle . '%';
+        // ilike on Postgres, like on SQLite/MySQL -- match whatever
+        // the surrounding scopes use.  All callers already normalise
+        // for case elsewhere, so a plain LIKE is fine here.
+        $driver = $query->getConnection()->getDriverName();
+        $op = $driver === 'pgsql' ? 'ilike' : 'like';
+
+        return $query->where(function (Builder $q) use ($op, $like) {
+            $q->where('vin', $op, $like)
+              ->orWhere('registration', $op, $like);
+        });
+    }
+
     public function canTransitionTo(string $newStatus): bool
     {
         $allowed = self::ALLOWED_TRANSITIONS[$this->status]

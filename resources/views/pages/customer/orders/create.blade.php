@@ -10,6 +10,7 @@ use App\Models\User;
 use App\Models\VehicleClass;
 use App\Models\VehicleModel;
 use App\Services\BookingService;
+use App\Support\VehicleIdentifier;
 use Livewire\Volt\Component;
 use Livewire\Attributes\Layout;
 use Livewire\WithFileUploads;
@@ -28,15 +29,23 @@ new #[Layout('components.layouts.app')] class extends Component {
     public ?string $destinationType = \App\Models\Job::DESTINATION_DEALER;
     public ?int $brandId = null;
     public string $modelName = '';
-    public string $vin = '';
-    public string $registration = '';
+
+    // Single "smart" vehicle-identifier input.  The user types a VIN
+    // OR a registration; the classifier picks which column it goes to
+    // at submit time so we stop polluting `vin` with plates (see
+    // App\Support\VehicleIdentifier).  `$secondaryIdentifier` is the
+    // optional "the other one, if you know it" field that appears
+    // once we've decided what the primary is.
+    public string $vehicleId = '';
+    public string $identifierType = VehicleIdentifier::TYPE_VIN;
+    public string $secondaryIdentifier = '';
     public ?int $vehicleClassId = null;
 
-    // VIN-against-stock lookup. When a dealer types a VIN that matches a
+    // Stock lookup. When a dealer types an identifier that matches a
     // unit on their (group-visible) books, we pre-fill the vehicle and
     // show a confirmation; no match just lets them capture a new vehicle.
     public ?array $matchedStock = null;
-    public bool $vinChecked = false;
+    public bool $vehicleIdChecked = false;
     public string $scheduledDate = '';
     // HH:MM, optional. Captures "the truck will be ready for collection
     // at this time on the requested date" — required for same-day bookings
@@ -88,8 +97,14 @@ new #[Layout('components.layouts.app')] class extends Component {
                 $this->pickupLocationId = $id;
             }
         }
-        if (request()->filled('vin')) {
-            $this->vin = (string) request('vin');
+        // Deep-link identifier: the stock page "Book return" button
+        // still sends `?vin=` (the stock ledger's VIN is authoritative),
+        // but a friend page could just as easily hand us `?registration=`
+        // for a plate-only vehicle -- classify whichever arrived so the
+        // primary input renders with the right detected type.
+        $deepId = request()->input('vin') ?: request()->input('registration');
+        if ($deepId) {
+            $this->vehicleId = (string) $deepId;
         }
         if (request()->filled('brand_id')) {
             $this->brandId = (int) request('brand_id');
@@ -101,41 +116,74 @@ new #[Layout('components.layouts.app')] class extends Component {
             $this->vehicleClassId = (int) request('vehicle_class_id');
         }
 
-        // A deep-linked VIN (e.g. "Book return" from the stock page) is
-        // an on-hand unit — run the lookup so the confirmation shows.
-        if ($this->vin !== '') {
-            $this->updatedVin();
+        // A deep-linked identifier (e.g. "Book return" from the stock
+        // page) is an on-hand unit — classify and run the lookup so
+        // the detected-type badge and stock confirmation both show.
+        if ($this->vehicleId !== '') {
+            $this->identifierType = VehicleIdentifier::classify($this->vehicleId);
+            $this->updatedVehicleId();
         }
     }
 
     /**
-     * As the VIN is typed, look it up against the dealer's own (and any
-     * group-visible) stock.  A hit pre-fills the make/model/registration
-     * and confirms what's on hand; a miss just flags it so the user knows
-     * they're capturing a new vehicle.  Only runs for dealers — other
+     * Live re-classification as the user types.  Fires from the
+     * `wire:model.live.debounce` binding so the "Detected: VIN /
+     * Registration" badge updates without a full form round-trip.
+     * If the operator has already overridden the type via the switch
+     * link we DON'T stomp it -- their choice wins.
+     */
+    public bool $identifierTypeManuallySet = false;
+
+    public function switchIdentifierType(): void
+    {
+        $this->identifierType = $this->identifierType === VehicleIdentifier::TYPE_VIN
+            ? VehicleIdentifier::TYPE_REGISTRATION
+            : VehicleIdentifier::TYPE_VIN;
+        $this->identifierTypeManuallySet = true;
+    }
+
+    /**
+     * As the vehicle identifier is typed, (1) auto-classify it into
+     * VIN vs registration so the UI badge stays live, and (2) look
+     * it up against the dealer's own (and any group-visible) stock
+     * on EITHER column so a plate-only booking still hits the ledger.
+     * A hit pre-fills the make/model + the other identifier and
+     * confirms what's on hand; a miss just flags it so the user knows
+     * they're capturing a new vehicle.  Only runs for dealers -- other
      * tenants have no stock ledger.
      */
-    public function updatedVin(): void
+    public function updatedVehicleId(): void
     {
+        // Re-classify on each keystroke UNLESS the operator has
+        // manually switched -- their choice must survive further
+        // typing (e.g. they picked "Registration" for a 12-char plate
+        // and we mustn't flip it back to VIN when they add a letter).
+        if (!$this->identifierTypeManuallySet) {
+            $this->identifierType = VehicleIdentifier::classify($this->vehicleId);
+        }
+
         $this->matchedStock = null;
-        $this->vinChecked = false;
+        $this->vehicleIdChecked = false;
 
         if (!$this->company?->isDealer()) {
             return;
         }
 
-        $needle = strtoupper(trim($this->vin));
-        // Wait until there's enough to be a real VIN/chassis fragment so
-        // we're not querying on the first keystroke.
+        $needle = VehicleIdentifier::normalise($this->vehicleId);
+        // Wait until there's enough to be a real VIN/chassis or plate
+        // fragment so we're not querying on the first keystroke.
         if (strlen($needle) < 5) {
             return;
         }
 
-        $this->vinChecked = true;
+        $this->vehicleIdChecked = true;
 
         $stock = DealerStock::query()
             ->visibleTo(auth()->user())
-            ->whereRaw('UPPER(vin) = ?', [$needle])
+            ->where(function ($q) use ($needle) {
+                $q->whereRaw('UPPER(vin) = ?', [$needle])
+                  ->orWhereRaw('UPPER(COALESCE(registration, \'\')) = ?', [$needle]);
+            })
             ->where('status', '!=', DealerStock::STATUS_ARCHIVED)
             ->with('brand:id,name')
             ->first();
@@ -145,11 +193,24 @@ new #[Layout('components.layouts.app')] class extends Component {
         }
 
         // Pre-fill from the stock record.  brandId drives the model
-        // suggestion list too, so set it first.
+        // suggestion list too, so set it first.  The stock row's VIN
+        // is authoritative, so if the user booked by registration we
+        // silently pin the VIN into the secondary field.
         $this->brandId = $stock->brand_id;
         $this->modelName = (string) ($stock->model_name ?? '');
-        if ($stock->registration) {
-            $this->registration = $stock->registration;
+
+        if ($this->identifierType === VehicleIdentifier::TYPE_REGISTRATION) {
+            // Primary field is a reg; put the ledger's VIN in the
+            // secondary so the resulting job has both.
+            if ($stock->vin) {
+                $this->secondaryIdentifier = $stock->vin;
+            }
+        } else {
+            // Primary field is a VIN; put the ledger's registration
+            // in the secondary so we don't lose it.
+            if ($stock->registration && $this->secondaryIdentifier === '') {
+                $this->secondaryIdentifier = $stock->registration;
+            }
         }
 
         $this->matchedStock = [
@@ -157,6 +218,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             'model' => $stock->model_name,
             'colour' => $stock->colour,
             'registration' => $stock->registration,
+            'vin' => $stock->vin,
             'where' => self::STOCK_LOCATION_LABELS[$stock->current_location_type] ?? $stock->current_location_type,
             'status' => ucfirst((string) $stock->status),
         ];
@@ -205,8 +267,14 @@ new #[Layout('components.layouts.app')] class extends Component {
             ]),
             'brandId' => 'nullable|exists:brands,id',
             'modelName' => 'nullable|string|max:255',
-            'vin' => 'required|string|max:50',
-            'registration' => 'nullable|string|max:20',
+            // The primary "VIN or registration" field is required;
+            // the secondary is optional.  Length caps match the DB
+            // columns (`vin string(50)`, `registration string(20)`)
+            // so we don't have to guess which column will receive
+            // the value until after classification below.
+            'vehicleId' => 'required|string|max:50',
+            'identifierType' => 'required|in:vin,registration',
+            'secondaryIdentifier' => 'nullable|string|max:50',
             'vehicleClassId' => 'required|exists:vehicle_classes,id',
             // after_or_equal so dealers / OEM customers can book same-day
             // when a vehicle is ready right now (e.g. dealer collection
@@ -254,6 +322,27 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         $this->validate($rules);
 
+        // Route the "smart" input into the correct column.  If the
+        // user detected/confirmed VIN, the secondary field is a plate;
+        // if they detected registration, the secondary field is a VIN.
+        // Either column may end up null -- BookingService accepts that
+        // now, so a plate-only booking is allowed through.
+        $primary = VehicleIdentifier::normalise($this->vehicleId);
+        $secondary = VehicleIdentifier::normalise($this->secondaryIdentifier);
+        if ($this->identifierType === VehicleIdentifier::TYPE_VIN) {
+            $vinToSave = $primary ?: null;
+            $regToSave = $secondary ?: null;
+        } else {
+            $vinToSave = $secondary ?: null;
+            $regToSave = $primary ?: null;
+        }
+        // Registration column is only 20 chars; the smart input allows
+        // up to 50 for VINs, so if the operator flipped a long value
+        // into the "reg" side we cap it here rather than exploding.
+        if ($regToSave !== null) {
+            $regToSave = substr($regToSave, 0, 20);
+        }
+
         $service = app(BookingService::class);
 
         $job = $service->createTransportBooking([
@@ -263,8 +352,8 @@ new #[Layout('components.layouts.app')] class extends Component {
             'vehicle_class_id' => $this->vehicleClassId,
             'brand_id' => $this->brandId,
             'model_name' => $this->modelName ?: null,
-            'vin' => $this->vin,
-            'registration' => $this->registration ?: null,
+            'vin' => $vinToSave,
+            'registration' => $regToSave,
             'scheduled_date' => $this->scheduledDate,
             'scheduled_ready_time' => $this->scheduledReadyTime
                 ? $this->scheduledDate . ' ' . $this->scheduledReadyTime
@@ -682,32 +771,65 @@ new #[Layout('components.layouts.app')] class extends Component {
                         @error('modelName') <p class="mt-1 text-xs text-red-600">{{ $message }}</p> @enderror
                     </div>
                     <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">VIN / Chassis Number <span class="text-red-500">*</span></label>
-                        <input wire:model.live.debounce.500ms="vin" type="text" required
+                        @php
+                            $isVin = $identifierType === \App\Support\VehicleIdentifier::TYPE_VIN;
+                            $ambiguous = \App\Support\VehicleIdentifier::isAmbiguous($vehicleId);
+                            $primaryLabel = 'VIN / Registration';
+                            $secondaryLabel = $isVin ? 'Registration (if known)' : 'VIN / Chassis (if known)';
+                            $secondaryPlaceholder = $isVin ? 'Optional — enter number plate' : 'Optional — enter chassis / VIN';
+                        @endphp
+                        <label class="block text-sm font-medium text-gray-700 mb-1">
+                            {{ $primaryLabel }} <span class="text-red-500">*</span>
+                        </label>
+                        <input wire:model.live.debounce.500ms="vehicleId" type="text" required maxlength="50"
                             class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm font-mono uppercase focus:border-blue-500 focus:ring-blue-500"
-                            placeholder="Enter VIN or chassis number">
-                        @error('vin') <p class="mt-1 text-xs text-red-600">{{ $message }}</p> @enderror
+                            placeholder="Enter VIN, chassis or registration">
+                        @error('vehicleId') <p class="mt-1 text-xs text-red-600">{{ $message }}</p> @enderror
+
+                        {{-- Detected-type badge with a one-click override.  We
+                             deliberately show this even when the field is
+                             empty so operators know the feature exists. --}}
+                        @if($vehicleId !== '')
+                            <div class="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                                <span @class([
+                                    'inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-medium',
+                                    'bg-blue-100 text-blue-800' => $isVin && !$ambiguous,
+                                    'bg-amber-100 text-amber-800' => $ambiguous,
+                                    'bg-slate-200 text-slate-800' => !$isVin && !$ambiguous,
+                                ])>
+                                    @if($ambiguous)
+                                        Looks like a VIN — confirm?
+                                    @else
+                                        Detected: {{ $isVin ? 'VIN / Chassis' : 'Registration' }}
+                                    @endif
+                                </span>
+                                <button type="button" wire:click="switchIdentifierType"
+                                    class="text-blue-600 hover:text-blue-800 underline underline-offset-2">
+                                    Not right? Switch to {{ $isVin ? 'Registration' : 'VIN' }}
+                                </button>
+                            </div>
+                        @endif
 
                         @if($matchedStock)
                             <div class="mt-2 flex items-start gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
                                 <svg class="h-4 w-4 mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"/></svg>
                                 <span>
                                     <strong>Found in your stock.</strong>
-                                    {{ trim(($matchedStock['brand'] ?? '') . ' ' . ($matchedStock['model'] ?? '')) ?: 'Vehicle' }}@if($matchedStock['colour']) · {{ $matchedStock['colour'] }}@endif@if($matchedStock['registration']) · {{ $matchedStock['registration'] }}@endif
+                                    {{ trim(($matchedStock['brand'] ?? '') . ' ' . ($matchedStock['model'] ?? '')) ?: 'Vehicle' }}@if($matchedStock['colour']) · {{ $matchedStock['colour'] }}@endif@if($matchedStock['registration']) · Reg {{ $matchedStock['registration'] }}@endif@if($matchedStock['vin']) · VIN {{ $matchedStock['vin'] }}@endif
                                     <span class="text-emerald-700">— currently {{ $matchedStock['where'] }}.</span>
                                     Details filled in below.
                                 </span>
                             </div>
-                        @elseif($vinChecked && $company?->isDealer())
+                        @elseif($vehicleIdChecked && $company?->isDealer())
                             <p class="mt-2 text-xs text-slate-500">Not in your stock — capturing as a new vehicle.</p>
                         @endif
                     </div>
                     <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">Registration</label>
-                        <input wire:model="registration" type="text"
-                            class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm uppercase focus:border-blue-500 focus:ring-blue-500"
-                            placeholder="Optional">
-                        @error('registration') <p class="mt-1 text-xs text-red-600">{{ $message }}</p> @enderror
+                        <label class="block text-sm font-medium text-gray-700 mb-1">{{ $secondaryLabel }}</label>
+                        <input wire:model="secondaryIdentifier" type="text" maxlength="50"
+                            class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm font-mono uppercase focus:border-blue-500 focus:ring-blue-500"
+                            placeholder="{{ $secondaryPlaceholder }}">
+                        @error('secondaryIdentifier') <p class="mt-1 text-xs text-red-600">{{ $message }}</p> @enderror
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1">Vehicle Class <span class="text-red-500">*</span></label>

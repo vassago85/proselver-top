@@ -52,6 +52,7 @@ new #[Layout('components.layouts.app')] class extends Component {
      */
     public bool $editingBookingDetails = false;
     public string $newVin = '';
+    public string $newRegistration = '';
     public ?int $newPickupLocationId = null;
     public ?int $newDeliveryLocationId = null;
     public string $bookingEditReason = '';
@@ -454,6 +455,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             abort(403);
         }
         $this->newVin = $this->job->vin ?? '';
+        $this->newRegistration = $this->job->registration ?? '';
         $this->newPickupLocationId = $this->job->pickup_location_id;
         $this->newDeliveryLocationId = $this->job->delivery_location_id;
         $this->bookingEditReason = '';
@@ -464,6 +466,7 @@ new #[Layout('components.layouts.app')] class extends Component {
     {
         $this->editingBookingDetails = false;
         $this->newVin = '';
+        $this->newRegistration = '';
         $this->newPickupLocationId = null;
         $this->newDeliveryLocationId = null;
         $this->bookingEditReason = '';
@@ -485,6 +488,7 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         $rules = [
             'newVin' => ['nullable', 'string', 'max:64'],
+            'newRegistration' => ['nullable', 'string', 'max:20'],
             'bookingEditReason' => ['required', 'string', 'min:5', 'max:2000'],
         ];
 
@@ -502,20 +506,35 @@ new #[Layout('components.layouts.app')] class extends Component {
             'newDeliveryLocationId.different' => 'Pickup and delivery must be different locations.',
         ]);
 
+        // At-least-one guard: a corrected booking must still have some
+        // way to identify the vehicle, or downstream systems (stock
+        // linker, owner-approval gate, dedup) can't do their job.  We
+        // don't enforce this via a rule because the values live in two
+        // separate inputs and Laravel's `required_without` message
+        // reads awkwardly on the form.
+        $newVinTrim = trim($this->newVin);
+        $newRegTrim = trim($this->newRegistration);
+        if ($newVinTrim === '' && $newRegTrim === '') {
+            $this->addError('newVin', 'Enter at least one of VIN / chassis or Registration -- a job needs some way to identify the vehicle.');
+            return;
+        }
+
         $before = [
             'vin' => $this->job->vin,
+            'registration' => $this->job->registration,
             'pickup_location_id' => $this->job->pickup_location_id,
             'delivery_location_id' => $this->job->delivery_location_id,
         ];
 
-        $newVin = trim($this->newVin);
-        $newVin = $newVin === '' ? null : strtoupper($newVin);
+        $newVin = $newVinTrim === '' ? null : strtoupper($newVinTrim);
+        $newRegistration = $newRegTrim === '' ? null : strtoupper($newRegTrim);
 
         $vinChanged = $newVin !== ($this->job->vin ?? null);
+        $registrationChanged = $newRegistration !== ($this->job->registration ?? null);
         $pickupChanged = !$locationsLocked && ((int) $this->newPickupLocationId !== (int) $this->job->pickup_location_id);
         $deliveryChanged = !$locationsLocked && ((int) $this->newDeliveryLocationId !== (int) $this->job->delivery_location_id);
 
-        if (!$vinChanged && !$pickupChanged && !$deliveryChanged) {
+        if (!$vinChanged && !$registrationChanged && !$pickupChanged && !$deliveryChanged) {
             session()->flash('error', 'Nothing to save -- the values are unchanged.');
             $this->cancelEditBookingDetails();
             return;
@@ -534,6 +553,10 @@ new #[Layout('components.layouts.app')] class extends Component {
             $this->job->vin = $newVin;
             $this->job->vehicle_reassigned_at = now();
             $this->job->vehicle_reassigned_by = auth()->id();
+        }
+
+        if ($registrationChanged) {
+            $this->job->registration = $newRegistration;
         }
 
         // Old pair cached under the OLD ids -- capture before write.
@@ -574,6 +597,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             'before' => $before,
             'after'  => [
                 'vin' => $this->job->vin,
+                'registration' => $this->job->registration,
                 'pickup_location_id' => $this->job->pickup_location_id,
                 'delivery_location_id' => $this->job->delivery_location_id,
             ],
@@ -587,6 +611,7 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         $notes = [];
         if ($vinChanged) { $notes[] = 'VIN'; }
+        if ($registrationChanged) { $notes[] = 'registration'; }
         if ($pickupChanged) { $notes[] = 'pickup'; }
         if ($deliveryChanged) { $notes[] = 'delivery'; }
 
@@ -2829,10 +2854,19 @@ new #[Layout('components.layouts.app')] class extends Component {
                     @if($job->model_name)
                     <div><dt class="text-gray-500">Model</dt><dd class="font-medium">{{ $job->model_name }}</dd></div>
                     @endif
-                    <div><dt class="text-gray-500">VIN</dt><dd class="font-medium">{{ $job->vin ?: '—' }}</dd></div>
-                    @if($job->registration)
-                    <div><dt class="text-gray-500">Registration</dt><dd class="font-medium">{{ $job->registration }}</dd></div>
-                    @endif
+                    <div>
+                        <dt class="text-gray-500">VIN</dt>
+                        <dd class="font-medium font-mono">
+                            {{ $job->vin ?: '—' }}
+                            @if(!$job->vin && $job->registration)
+                                <span class="ml-2 text-xs font-sans font-normal text-amber-700">VIN not captured — booked by registration</span>
+                            @endif
+                        </dd>
+                    </div>
+                    <div>
+                        <dt class="text-gray-500">Registration</dt>
+                        <dd class="font-medium font-mono">{{ $job->registration ?: '—' }}</dd>
+                    </div>
                     <div>
                         <dt class="text-gray-500">Scheduled Date</dt>
                         <dd class="font-medium">
@@ -2891,7 +2925,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                         <div class="flex items-center justify-between gap-3 flex-wrap">
                             <div class="min-w-0">
                                 <h4 class="text-sm font-semibold text-slate-800">Booking details</h4>
-                                <p class="text-xs text-slate-500">VIN, pickup or destination captured wrong? Fix it here — the change is logged with a reason.</p>
+                                <p class="text-xs text-slate-500">VIN, registration, pickup or destination captured wrong? Fix it here — the change is logged with a reason.</p>
                             </div>
                             <button type="button" wire:click="openEditBookingDetails"
                                 class="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50">
@@ -2913,15 +2947,24 @@ new #[Layout('components.layouts.app')] class extends Component {
                                 <button type="button" wire:click="cancelEditBookingDetails"
                                     class="text-xs text-slate-500 hover:text-slate-700">Cancel</button>
                             </div>
-                            <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                            <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
                                 <div>
                                     <label class="text-[10px] font-semibold uppercase tracking-wider text-slate-500">VIN / Chassis</label>
                                     <input wire:model="newVin" type="text" maxlength="64"
-                                        class="mt-1 w-full rounded-md border-slate-300 px-2.5 py-1.5 text-sm font-mono uppercase focus:border-blue-500 focus:ring-blue-500">
+                                        class="mt-1 w-full rounded-md border-slate-300 px-2.5 py-1.5 text-sm font-mono uppercase focus:border-blue-500 focus:ring-blue-500"
+                                        placeholder="Leave blank if unknown">
                                     @error('newVin')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
                                     @if($job->original_vin && $job->original_vin !== $job->vin)
                                         <p class="mt-1 text-[10px] text-slate-500">Original VIN: <span class="font-mono">{{ $job->original_vin }}</span></p>
                                     @endif
+                                </div>
+                                <div>
+                                    <label class="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Registration</label>
+                                    <input wire:model="newRegistration" type="text" maxlength="20"
+                                        class="mt-1 w-full rounded-md border-slate-300 px-2.5 py-1.5 text-sm font-mono uppercase focus:border-blue-500 focus:ring-blue-500"
+                                        placeholder="Leave blank if unknown">
+                                    @error('newRegistration')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
+                                    <p class="mt-1 text-[10px] text-slate-500">At least one of VIN or Registration is required.</p>
                                 </div>
                                 <div>
                                     <label class="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Pickup</label>

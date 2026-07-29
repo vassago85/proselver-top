@@ -741,11 +741,14 @@ test('new order form pre-fills the vehicle from a matching VIN in stock', functi
         'status'                => DealerStock::STATUS_AVAILABLE,
     ]);
 
+    // The primary input is now `vehicleId` (smart VIN / registration
+    // field); stock lookup pre-fills the OTHER identifier into the
+    // `secondaryIdentifier` slot, so we assert against that.
     $component = \Livewire\Volt\Volt::test('customer.orders.create')
-        ->set('vin', 'LOOKUPVIN0001')
+        ->set('vehicleId', 'LOOKUPVIN0001')
         ->assertSet('brandId', $opel->id)
         ->assertSet('modelName', 'Mokka')
-        ->assertSet('registration', 'CA123456');
+        ->assertSet('secondaryIdentifier', 'CA123456');
 
     expect($component->get('matchedStock'))->not->toBeNull();
     expect($component->get('matchedStock')['model'])->toBe('Mokka');
@@ -757,9 +760,9 @@ test('new order form flags an unknown VIN as a new vehicle', function () {
     $this->actingAs($user);
 
     \Livewire\Volt\Volt::test('customer.orders.create')
-        ->set('vin', 'UNKNOWNVIN99')
+        ->set('vehicleId', 'UNKNOWNVIN99')
         ->assertSet('matchedStock', null)
-        ->assertSet('vinChecked', true);
+        ->assertSet('vehicleIdChecked', true);
 });
 
 // ----- Reserve workflow --------------------------------------------

@@ -579,7 +579,9 @@ new #[Layout('components.layouts.app')] class extends Component {
                             <tr class="hover:bg-slate-50 cursor-pointer" onclick="window.location='{{ route($detailRoute, $job) }}'">
                                 <td class="px-4 py-2.5 font-semibold text-blue-600 whitespace-nowrap">{{ $job->job_number ?? '—' }}</td>
                                 <td class="px-4 py-2.5 text-slate-900 whitespace-nowrap">{{ $job->brand?->name }} {{ $job->model_name }}</td>
-                                <td class="px-4 py-2.5 font-mono text-xs text-slate-600">{{ $job->vin ?: '—' }}</td>
+                                <td class="px-4 py-2.5 font-mono text-xs text-slate-600">
+                                    {{ $job->vin ?: '—' }}
+                                </td>
                                 <td class="px-4 py-2.5">
                                     @if($job->registration)
                                         <span class="inline-flex rounded bg-yellow-100 border border-yellow-300 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-yellow-900">{{ $job->registration }}</span>

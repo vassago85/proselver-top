@@ -547,9 +547,12 @@ it('preview() flags duplicate VINs within the same spreadsheet', function () {
     $vehicleClass = VehicleClass::create(['name' => 'Truck Class 4']);
 
     $importer = app(JobBulkImporter::class);
+    // Use a realistic 17-char VIN so the classifier doesn't
+    // reclassify it as a registration (which would demote the
+    // duplicate-in-file test from 'ready' to 'warning').
     $rows = [
-        ['_sheet' => 'X', '_row' => 2, 'Chassis No.' => 'AAA', 'Model' => 'J5N 28.290FL', 'From' => 'PE Plant', 'To' => 'GB Bodies', 'Movement Order Date' => now()->addDay()->format('d-m-Y')],
-        ['_sheet' => 'X', '_row' => 5, 'Chassis No.' => 'AAA', 'Model' => 'J5N 28.290FL', 'From' => 'PE Plant', 'To' => 'GB Bodies', 'Movement Order Date' => now()->addDay()->format('d-m-Y')],
+        ['_sheet' => 'X', '_row' => 2, 'Chassis No.' => 'LFWSRXPH3M1B00001', 'Model' => 'J5N 28.290FL', 'From' => 'PE Plant', 'To' => 'GB Bodies', 'Movement Order Date' => now()->addDay()->format('d-m-Y')],
+        ['_sheet' => 'X', '_row' => 5, 'Chassis No.' => 'LFWSRXPH3M1B00001', 'Model' => 'J5N 28.290FL', 'From' => 'PE Plant', 'To' => 'GB Bodies', 'Movement Order Date' => now()->addDay()->format('d-m-Y')],
     ];
     $mapping = $importer->detectMapping(['Chassis No.', 'Model', 'From', 'To', 'Movement Order Date']);
     $preview = $importer->preview($company, $rows, $mapping, [
@@ -586,14 +589,17 @@ it('preview() flags VINs on an active job as duplicates requiring an override be
         'delivery_location_id' => $company->locations()->skip(1)->first()->id,
         'vehicle_class_id' => $vehicleClass->id,
         'brand_id' => $brand->id,
-        'vin' => 'IN-FLIGHT-VIN',
+        // Realistic 17-char VIN so the classifier keeps it as a VIN;
+        // otherwise the auto-reclassify demotes the row to 'warning'
+        // before the duplicate gate can fire.
+        'vin' => 'LFWSRXPH3M1B00777',
         'scheduled_date' => now()->addDay()->toDateString(),
     ]);
 
     $importer = app(JobBulkImporter::class);
     $rows = [[
         '_sheet' => 'X', '_row' => 2,
-        'Chassis No.' => 'in-flight-vin',  // case-insensitive match
+        'Chassis No.' => 'lfwsrxph3m1b00777',  // case-insensitive match
         'Model' => 'J5N 28.290FL',
         'From' => 'PE Plant', 'To' => 'GB Bodies',
         'Movement Order Date' => now()->addDay()->format('d-m-Y'),

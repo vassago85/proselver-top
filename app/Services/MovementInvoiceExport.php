@@ -89,7 +89,10 @@ class MovementInvoiceExport
             $sheet->fromArray([
                 $this->fmtDate($job->created_at),
                 (string) ($job->model_name ?? ''),
-                (string) ($job->vin ?? ''),
+                // Fall back to registration when VIN wasn't captured
+                // -- the customer's invoice sheet still needs SOME
+                // vehicle identifier per line.
+                (string) ($job->vin ?: ($job->registration ?? '')),
                 (string) ($job->pickupLocation?->company_name ?? ''),
                 (string) ($job->deliveryLocation?->company_name ?? ''),
                 $this->fmtDate($job->collected_at),

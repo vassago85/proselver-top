@@ -61,6 +61,7 @@ class JobBulkImporter
      */
     public const FIELDS = [
         'vin'             => 'VIN / chassis number',
+        'registration'    => 'Registration / number plate',
         'model'           => 'Model description',
         'pickup'          => 'Pickup location (origin)',
         'delivery'        => 'Delivery location (destination)',
@@ -81,8 +82,11 @@ class JobBulkImporter
 
     /**
      * Fields that MUST resolve to a value for a row to be committable.
+     * Note: VIN OR registration is enforced separately in preview()
+     * because "one of two columns" isn't expressible as a per-field
+     * flag -- either identifier is a valid vehicle reference.
      */
-    public const REQUIRED_FIELDS = ['vin', 'pickup', 'delivery'];
+    public const REQUIRED_FIELDS = ['pickup', 'delivery'];
 
     /**
      * Heuristic header → field guesses. We lower-case + collapse whitespace
@@ -91,6 +95,9 @@ class JobBulkImporter
      */
     private const HEADER_HINTS = [
         'vin'             => ['vin', 'chassis', 'chassis no', 'chassis number'],
+        // Aliases mirror DealerStockImporter so a single template
+        // works across both flows.
+        'registration'    => ['registration', 'regno', 'reg no', 'reg', 'regnumber', 'reg number', 'licenseplate', 'license plate', 'licenseno', 'numberplate', 'number plate', 'plate'],
         'model'           => ['model', 'model description', 'vehicle model'],
         'pickup'          => ['from', 'departure', 'origin', 'pickup', 'collection from'],
         'delivery'        => ['to', 'destination', 'delivery', 'deliver to', 'collection to'],
@@ -371,27 +378,35 @@ class JobBulkImporter
         // customer's own record rather than a shared one.
         $locations = $ownLocations->concat($sharedLocations)->unique('id')->values();
 
-        // VIN dedup: pull every in-flight job for this customer keyed by
-        // VIN so we can warn operators about re-imports without
-        // round-tripping per row.  "In-flight" means anything that
-        // hasn't finished its lifecycle — a delivered/completed/cancelled
-        // VIN is fair game to re-book (it's the next movement for the
-        // same physical vehicle, e.g. coming back from storage or a
-        // body builder).  We carry the existing job_number + status
-        // forward so the per-row warning is informative ("already on
-        // FAW-12345, in_transit") rather than just a vague "duplicate".
-        $existingVins = Job::query()
+        // Dedup: pull every in-flight job for this customer keyed by
+        // BOTH VIN and registration so we can warn operators about
+        // re-imports without round-tripping per row.  "In-flight"
+        // means anything that hasn't finished its lifecycle -- a
+        // delivered/completed/cancelled vehicle is fair game to
+        // re-book (it's the next movement for the same physical
+        // vehicle, e.g. coming back from storage or a body builder).
+        // We index on either identifier because a plate-only booking
+        // must still trip the "already on order" guard when re-imported.
+        $existingJobs = Job::query()
             ->where('company_id', $company->id)
-            ->whereNotNull('vin')
+            ->where(function ($q) {
+                $q->whereNotNull('vin')->orWhereNotNull('registration');
+            })
             ->whereNotIn('status', [Job::STATUS_COMPLETED, Job::STATUS_CANCELLED, Job::STATUS_DELIVERED])
-            ->orderByDesc('id') // newest match wins if a VIN somehow has multiple in-flight rows
-            ->get(['vin', 'job_number', 'status'])
+            ->orderByDesc('id') // newest match wins if an identifier somehow has multiple in-flight rows
+            ->get(['vin', 'registration', 'job_number', 'status']);
+        $existingByVin = $existingJobs
+            ->filter(fn ($j) => $j->vin)
             ->keyBy(fn ($j) => strtoupper(trim((string) $j->vin)));
+        $existingByReg = $existingJobs
+            ->filter(fn ($j) => $j->registration)
+            ->keyBy(fn ($j) => strtoupper(trim((string) $j->registration)));
 
         $today = now()->startOfDay();
 
         $preview = [];
-        $seenInFile = []; // VIN → first row index that used it
+        $seenVinsInFile = []; // VIN → first row index that used it
+        $seenRegsInFile = []; // Registration → first row index that used it
 
         foreach ($rows as $row) {
             $entry = $this->buildPreviewRow($row, $mapping, $locations, $autoCreate, $defaultExecutor, $driverIndex);
@@ -423,52 +438,73 @@ class JobBulkImporter
                 }
             }
 
-            // VIN dedup. Three different shapes here:
-            //   - Same VIN listed twice in this upload → hard ERROR
-            //     (an operator typo, importing both would create a
-            //     guaranteed duplicate booking).
-            //   - VIN matches an ACTIVE job on the customer's account
-            //     → BLOCKED until the operator ticks the override
-            //     checkbox (status='duplicate').  A vehicle that's
-            //     genuinely on its next leg (returning from storage,
-            //     body builder to dealer, etc.) needs to be importable
-            //     but it must be a deliberate choice, never an
-            //     accident — the bulk path used to silently re-import.
-            //   - VIN matches a delivered/completed/cancelled job →
-            //     no flag at all; that's a clean re-book.
+            // Vehicle-identifier dedup.  Three different shapes here:
+            //   - Same identifier listed twice in this upload → hard
+            //     ERROR (an operator typo, importing both would create
+            //     a guaranteed duplicate booking).
+            //   - Identifier matches an ACTIVE job on the customer's
+            //     account → BLOCKED until the operator ticks the
+            //     override checkbox.  A vehicle that's genuinely on
+            //     its next leg (returning from storage, body builder
+            //     to dealer, etc.) needs to be importable but must
+            //     be a deliberate choice, never an accident.
+            //   - Identifier matches a delivered/completed/cancelled
+            //     job → no flag at all; that's a clean re-book.
+            // We check VIN and registration independently so a
+            // reg-only re-import still trips the guard.
             $vin = $entry['parsed']['vin'] ?? null;
+            $registration = $entry['parsed']['registration'] ?? null;
             $entry['requires_override'] = false;
             $entry['override_acknowledged'] = false;
             $entry['duplicate_of'] = null;
+
+            $matchedExisting = null;
+            $matchedByLabel = null;
+
             if ($vin) {
                 $vinKey = strtoupper(trim($vin));
-
-                if (isset($seenInFile[$vinKey])) {
-                    $entry['errors'][] = 'Duplicate VIN in this file — already listed on row ' . $seenInFile[$vinKey];
+                if (isset($seenVinsInFile[$vinKey])) {
+                    $entry['errors'][] = 'Duplicate VIN in this file — already listed on row ' . $seenVinsInFile[$vinKey];
                 } else {
-                    $seenInFile[$vinKey] = $entry['source_row'];
+                    $seenVinsInFile[$vinKey] = $entry['source_row'];
                 }
-
-                if ($existingVins->has($vinKey)) {
-                    $existing = $existingVins->get($vinKey);
-                    $statusLabel = ucfirst(str_replace('_', ' ', $existing->status));
-                    $jobNo = $existing->job_number ?: '#?';
-
-                    $entry['requires_override'] = true;
-                    $entry['duplicate_of'] = [
-                        'job_number'   => $jobNo,
-                        'status'       => $existing->status,
-                        'status_label' => $statusLabel,
-                    ];
-                    // Single, loud warning line that doubles as the
-                    // tooltip / inline explanation next to the override
-                    // checkbox.  We deliberately emphasise ACTIVE so an
-                    // operator skimming the preview can't mistake it
-                    // for a past order.
-                    $entry['warnings'][] = 'DUPLICATE OF ACTIVE ORDER ' . $jobNo
-                        . ' (' . $statusLabel . ') — this VIN is already on an open job for this account.'
-                        . ' Tick the override box if you really want to create a second movement.';
+                if ($existingByVin->has($vinKey)) {
+                    $matchedExisting = $existingByVin->get($vinKey);
+                    $matchedByLabel = 'VIN';
                 }
+            }
+
+            if ($registration) {
+                $regKey = strtoupper(trim($registration));
+                if (isset($seenRegsInFile[$regKey])) {
+                    $entry['errors'][] = 'Duplicate registration in this file — already listed on row ' . $seenRegsInFile[$regKey];
+                } else {
+                    $seenRegsInFile[$regKey] = $entry['source_row'];
+                }
+                if (!$matchedExisting && $existingByReg->has($regKey)) {
+                    $matchedExisting = $existingByReg->get($regKey);
+                    $matchedByLabel = 'Registration';
+                }
+            }
+
+            if ($matchedExisting) {
+                $statusLabel = ucfirst(str_replace('_', ' ', $matchedExisting->status));
+                $jobNo = $matchedExisting->job_number ?: '#?';
+
+                $entry['requires_override'] = true;
+                $entry['duplicate_of'] = [
+                    'job_number'   => $jobNo,
+                    'status'       => $matchedExisting->status,
+                    'status_label' => $statusLabel,
+                ];
+                // Single, loud warning line that doubles as the
+                // tooltip / inline explanation next to the override
+                // checkbox.  We deliberately emphasise ACTIVE so an
+                // operator skimming the preview can't mistake it
+                // for a past order.
+                $entry['warnings'][] = 'DUPLICATE OF ACTIVE ORDER ' . $jobNo
+                    . ' (' . $statusLabel . ') — this ' . strtolower($matchedByLabel) . ' is already on an open job for this account.'
+                    . ' Tick the override box if you really want to create a second movement.';
             }
 
             // "Urgent" flag from the comments column. We carry this onto
@@ -820,7 +856,8 @@ class JobBulkImporter
                         'vehicle_class_id' => $vehicleClassId,
                         'brand_id' => $defaultBrandId,
                         'model_name' => $row['parsed']['model'] ?? null,
-                        'vin' => $row['parsed']['vin'],
+                        'vin' => $row['parsed']['vin'] ?? null,
+                        'registration' => $row['parsed']['registration'] ?? null,
                         'scheduled_date' => $row['parsed']['scheduled_date'],
                         'customer_notes' => $this->buildNotes($row['parsed']),
                         'is_emergency' => $isUrgent,
@@ -915,6 +952,7 @@ class JobBulkImporter
         ?\Illuminate\Support\Collection $driverIndex = null,
     ): array {
         $vin = $this->stringValue($row, $mapping['vin'] ?? null);
+        $registration = $this->stringValue($row, $mapping['registration'] ?? null);
         $model = $this->stringValue($row, $mapping['model'] ?? null);
         $pickup = $this->stringValue($row, $mapping['pickup'] ?? null);
         $delivery = $this->stringValue($row, $mapping['delivery'] ?? null);
@@ -963,16 +1001,34 @@ class JobBulkImporter
             $warnings[] = 'Self-collect row has no collector name — set it on the booking after import';
         }
 
-        // Required fields
+        // Auto-reclassify: if the mapped VIN cell actually looks like
+        // a registration and the reg column was empty, move the value
+        // across.  This is the whole point of the smart classifier --
+        // operators regularly enter a plate in the "VIN" column and
+        // then everything downstream keyed on VIN silently breaks.
+        // We flag it as a warning so it's visible on the preview.
+        if ($vin && !$registration
+            && \App\Support\VehicleIdentifier::classify($vin) === \App\Support\VehicleIdentifier::TYPE_REGISTRATION
+        ) {
+            $registration = $vin;
+            $vin = null;
+            $warnings[] = "Value in VIN column (“{$registration}”) looks like a registration — imported as registration instead.";
+        }
+
+        // Required fields (pickup + delivery).  VIN OR registration
+        // is enforced separately below because it's a "one of two
+        // columns" constraint.
         foreach (self::REQUIRED_FIELDS as $required) {
             $value = match ($required) {
-                'vin' => $vin,
                 'pickup' => $pickup,
                 'delivery' => $delivery,
             };
             if ($value === null || $value === '') {
                 $errors[] = ucfirst($required) . ' is missing';
             }
+        }
+        if (($vin === null || $vin === '') && ($registration === null || $registration === '')) {
+            $errors[] = 'VIN / chassis or Registration is required';
         }
 
         // Date parsing
@@ -1017,6 +1073,7 @@ class JobBulkImporter
             'warnings' => $warnings,
             'parsed' => [
                 'vin' => $vin ? strtoupper(trim($vin)) : null,
+                'registration' => $registration ? strtoupper(trim($registration)) : null,
                 'model' => $model,
                 'pickup_raw' => $pickup,
                 'delivery_raw' => $delivery,

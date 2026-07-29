@@ -138,6 +138,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         $query->where(function ($q) use ($s) {
             $q->where('job_number', 'ilike', "%{$s}%")
                 ->orWhere('vin', 'ilike', "%{$s}%")
+                ->orWhere('registration', 'ilike', "%{$s}%")
                 ->orWhere('model_name', 'ilike', "%{$s}%")
                 ->orWhereHas('brand', fn ($c) => $c->where('name', 'ilike', "%{$s}%"))
                 ->orWhereHas('company', fn ($c) => $c->where('name', 'ilike', "%{$s}%"))
@@ -477,7 +478,9 @@ new #[Layout('components.layouts.app')] class extends Component {
                             </td>
                             <td class="px-6 py-4 text-sm text-gray-900">{{ $job->company?->name ?? '—' }}</td>
                             <td class="px-6 py-4 text-sm text-gray-900">{{ $job->brand?->name }} {{ $job->model_name }}</td>
-                            <td class="px-6 py-4 text-sm font-mono text-gray-600">{{ $job->vin ?: '—' }}</td>
+                            <td class="px-6 py-4 text-sm text-gray-600">
+                                <x-vehicle-identifier :model="$job" layout="stacked" />
+                            </td>
                             <td class="px-6 py-4 text-sm text-gray-500">{{ $job->pickupLocation?->company_name ?? '—' }}</td>
                             <td class="px-6 py-4 text-sm text-gray-500">{{ $job->deliveryLocation?->company_name ?? '—' }}</td>
                             <td class="px-6 py-4 text-sm text-gray-500">{{ $job->scheduled_date?->format('d M Y') ?? '—' }}</td>
@@ -562,7 +565,9 @@ new #[Layout('components.layouts.app')] class extends Component {
                             </td>
                             <td class="px-6 py-4 text-sm text-gray-900">{{ $job->company?->name ?? '—' }}</td>
                             <td class="px-6 py-4 text-sm text-gray-900">{{ $job->brand?->name }} {{ $job->model_name }}</td>
-                            <td class="px-6 py-4 text-sm font-mono text-gray-600">{{ $job->vin ?: '—' }}</td>
+                            <td class="px-6 py-4 text-sm text-gray-600">
+                                <x-vehicle-identifier :model="$job" layout="stacked" />
+                            </td>
                             <td class="px-6 py-4 text-sm text-gray-500">{{ $job->pickupLocation?->company_name ?? '—' }}</td>
                             <td class="px-6 py-4 text-sm text-gray-500">{{ $job->deliveryLocation?->company_name ?? '—' }}</td>
                             <td class="px-6 py-4 text-sm text-gray-500">{{ $job->scheduled_date?->format('d M Y') ?? '—' }}</td>

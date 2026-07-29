@@ -194,7 +194,15 @@ new #[Layout('components.layouts.body-builder')] class extends Component
 
     {{-- Vehicle hero --}}
     <div class="rounded-xl border border-slate-200 bg-white p-4">
-        <div class="text-xs font-mono text-slate-500">{{ $job->vin ?: '— no VIN —' }}</div>
+        <div class="text-xs text-slate-500">
+            @if($job->vin)
+                <span class="font-mono">{{ $job->vin }}</span>
+            @elseif($job->registration)
+                <span class="uppercase tracking-wide mr-1">Reg</span><span class="font-mono">{{ $job->registration }}</span>
+            @else
+                — no VIN —
+            @endif
+        </div>
         <div class="mt-1 text-xl font-semibold text-slate-900">{{ $job->brand?->name }} {{ $job->model_name }}</div>
         <div class="text-sm text-slate-600">{{ $job->company?->name }}</div>
         <div class="mt-2 inline-flex items-center gap-1.5 rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-800">

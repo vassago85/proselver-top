@@ -57,7 +57,7 @@ class DealerStockMovementLinker
 
     public function updated(Job $job): void
     {
-        if (!$job->wasChanged(['status', 'destination_type', 'delivery_location_id', 'archived_at', 'vin', 'company_id'])) {
+        if (!$job->wasChanged(['status', 'destination_type', 'delivery_location_id', 'archived_at', 'vin', 'registration', 'company_id'])) {
             return;
         }
         $this->reconcile($job);
@@ -109,22 +109,42 @@ class DealerStockMovementLinker
     /**
      * Look up the dealer_stock row that owns this job's vehicle.
      * Match strategy: identical dealer_company_id AND identical VIN
-     * (after uppercase + trim).  Returns null when no row matches --
-     * the linker is a no-op for non-dealer movements.
+     * OR registration (after uppercase + trim).  Returns null when
+     * no row matches -- the linker is a no-op for non-dealer
+     * movements.  VIN is preferred over registration because it's
+     * the ledger's unique key and registrations can change over a
+     * vehicle's life (temp trader plate → permanent plate); we only
+     * fall back to reg when VIN wasn't captured or didn't hit.
      */
     protected function resolveStock(Job $job): ?DealerStock
     {
         $vin = $job->vin ? strtoupper(trim($job->vin)) : null;
-        if (!$vin || !$job->company_id) {
+        $reg = $job->registration ? strtoupper(trim($job->registration)) : null;
+        if ((!$vin && !$reg) || !$job->company_id) {
             return null;
         }
 
-        // Primary match: dealer's own row for this VIN.
-        $stock = DealerStock::where('dealer_company_id', $job->company_id)
-            ->where('vin', $vin)
-            ->first();
-        if ($stock) {
-            return $stock;
+        // Primary match: dealer's own row for this VIN (canonical).
+        if ($vin) {
+            $stock = DealerStock::where('dealer_company_id', $job->company_id)
+                ->where('vin', $vin)
+                ->first();
+            if ($stock) {
+                return $stock;
+            }
+        }
+
+        // Reg-only match: booking captured no VIN, but the ledger
+        // knows this plate.  This is the whole point of the VIN /
+        // Registration rework -- a dealer booking against just the
+        // plate should still hit their own stock ledger.
+        if ($reg) {
+            $stock = DealerStock::where('dealer_company_id', $job->company_id)
+                ->whereRaw('UPPER(COALESCE(registration, \'\')) = ?', [$reg])
+                ->first();
+            if ($stock) {
+                return $stock;
+            }
         }
 
         // Fallback: an unassigned arrival (OEM-direct chassis sitting
@@ -138,17 +158,19 @@ class DealerStockMovementLinker
         // duplicate record, could be a VIN typo).  Bailing avoids
         // accidentally re-assigning a vehicle that's already on a
         // different dealer's books.
-        $unclaimed = DealerStock::whereNull('dealer_company_id')
-            ->where('vin', $vin)
-            ->first();
-        if ($unclaimed) {
-            $anyOtherDealerOwnsVin = DealerStock::whereNotNull('dealer_company_id')
+        if ($vin) {
+            $unclaimed = DealerStock::whereNull('dealer_company_id')
                 ->where('vin', $vin)
-                ->exists();
-            if (!$anyOtherDealerOwnsVin) {
-                $unclaimed->dealer_company_id = $job->company_id;
-                $unclaimed->save();
-                return $unclaimed->fresh();
+                ->first();
+            if ($unclaimed) {
+                $anyOtherDealerOwnsVin = DealerStock::whereNotNull('dealer_company_id')
+                    ->where('vin', $vin)
+                    ->exists();
+                if (!$anyOtherDealerOwnsVin) {
+                    $unclaimed->dealer_company_id = $job->company_id;
+                    $unclaimed->save();
+                    return $unclaimed->fresh();
+                }
             }
         }
 

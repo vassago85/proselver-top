@@ -161,14 +161,19 @@ new #[Layout('components.layouts.app')] class extends Component {
      */
     public function buildPreview(JobBulkImporter $importer): void
     {
+        // VIN OR registration must be mapped (either can identify
+        // the vehicle).  Enforced with `required_without` so the
+        // error surfaces on whichever field the operator didn't fill.
         $this->validate([
-            'mapping.vin' => 'required|string',
+            'mapping.vin' => 'required_without:mapping.registration|nullable|string',
+            'mapping.registration' => 'required_without:mapping.vin|nullable|string',
             'mapping.pickup' => 'required|string',
             'mapping.delivery' => 'required|string',
             'defaultVehicleClassId' => 'nullable|integer|exists:vehicle_classes,id',
             'defaultBrandId' => 'nullable|integer|exists:brands,id',
         ], [
-            'mapping.vin.required' => 'You must map the chassis / VIN column.',
+            'mapping.vin.required_without' => 'Map the chassis / VIN column, or map the Registration column instead.',
+            'mapping.registration.required_without' => 'Map the Registration column, or map the chassis / VIN column instead.',
             'mapping.pickup.required' => 'You must map the pickup / origin column.',
             'mapping.delivery.required' => 'You must map the delivery / destination column.',
         ]);
@@ -300,22 +305,28 @@ new #[Layout('components.layouts.app')] class extends Component {
         );
 
         // Auto-verify any FAW rows that the importer placed at
-        // PENDING_VERIFICATION — match by the VINs we just imported so
-        // we never touch unrelated jobs.
-        $importedVins = collect($this->previewRows)
-            ->filter(fn ($row) => in_array($row['status'] ?? null, ['ready', 'warning'], true))
-            ->pluck('parsed.vin')
-            ->filter()
-            ->map(fn ($v) => strtoupper(trim((string) $v)))
-            ->unique()
-            ->values()
-            ->all();
+        // PENDING_VERIFICATION — match by the identifiers we just
+        // imported so we never touch unrelated jobs.  Match on both
+        // VIN and registration so a plate-only row is also auto-verified.
+        $committedRows = collect($this->previewRows)
+            ->filter(fn ($row) => in_array($row['status'] ?? null, ['ready', 'warning'], true));
+        $importedVins = $committedRows->pluck('parsed.vin')->filter()
+            ->map(fn ($v) => strtoupper(trim((string) $v)))->unique()->values()->all();
+        $importedRegs = $committedRows->pluck('parsed.registration')->filter()
+            ->map(fn ($v) => strtoupper(trim((string) $v)))->unique()->values()->all();
 
-        if (!empty($importedVins)) {
+        if (!empty($importedVins) || !empty($importedRegs)) {
             Job::query()
                 ->where('company_id', $this->company->id)
-                ->whereIn('vin', $importedVins)
                 ->where('status', Job::STATUS_PENDING_VERIFICATION)
+                ->where(function ($q) use ($importedVins, $importedRegs) {
+                    if (!empty($importedVins)) {
+                        $q->whereIn('vin', $importedVins);
+                    }
+                    if (!empty($importedRegs)) {
+                        $q->orWhereIn('registration', $importedRegs);
+                    }
+                })
                 ->update([
                     'status' => Job::STATUS_RECEIVED,
                     'po_verified' => true,
@@ -447,8 +458,10 @@ new #[Layout('components.layouts.app')] class extends Component {
                     <div>
                         <label class="block text-sm font-medium text-slate-700">
                             {{ $label }}
-                            @if(in_array($key, ['vin', 'pickup', 'delivery']))
+                            @if(in_array($key, ['pickup', 'delivery']))
                                 <span class="text-red-500">*</span>
+                            @elseif(in_array($key, ['vin', 'registration']))
+                                <span class="text-slate-400 text-xs font-normal">(VIN or Registration required)</span>
                             @endif
                         </label>
                         <select wire:model="mapping.{{ $key }}" class="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
@@ -720,7 +733,16 @@ new #[Layout('components.layouts.app')] class extends Component {
                                         {{ $row['source_sheet'] ?? '—' }} · row {{ $row['source_row'] ?? '?' }}
                                     </td>
                                     <td class="px-3 py-2 text-xs font-mono text-slate-700">
-                                        {{ $row['parsed']['vin'] ?? '—' }}
+                                        @if(!empty($row['parsed']['vin']))
+                                            {{ $row['parsed']['vin'] }}
+                                            @if(!empty($row['parsed']['registration']))
+                                                <span class="block text-[10px] text-slate-500">Reg {{ $row['parsed']['registration'] }}</span>
+                                            @endif
+                                        @elseif(!empty($row['parsed']['registration']))
+                                            <span class="text-slate-500 uppercase text-[10px] mr-1">Reg</span>{{ $row['parsed']['registration'] }}
+                                        @else
+                                            —
+                                        @endif
                                         @if(!empty($row['parsed']['is_urgent']))
                                             <span class="ml-1 inline-flex items-center rounded-full bg-rose-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-rose-700">URGENT</span>
                                         @endif

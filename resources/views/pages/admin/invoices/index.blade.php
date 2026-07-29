@@ -662,7 +662,9 @@ new #[Layout('components.layouts.app')] class extends Component {
                                 </td>
                                 <td class="px-3 py-1.5 text-slate-500">{{ optional($job->created_at)->format('d-m-Y') }}</td>
                                 <td class="px-3 py-1.5 text-slate-700">{{ $job->model_name ?: '—' }}</td>
-                                <td class="px-3 py-1.5 font-mono text-slate-700">{{ $job->vin ?: '—' }}</td>
+                                <td class="px-3 py-1.5 text-slate-700">
+                                    <x-vehicle-identifier :model="$job" layout="stacked" />
+                                </td>
                                 <td class="px-3 py-1.5 text-slate-600 truncate max-w-[260px]" title="{{ ($job->pickupLocation?->company_name ?? '') . ' → ' . ($job->deliveryLocation?->company_name ?? '') }}">
                                     {{ $job->pickupLocation?->company_name ?? '—' }} → {{ $job->deliveryLocation?->company_name ?? '—' }}
                                 </td>

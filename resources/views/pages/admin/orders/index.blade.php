@@ -76,6 +76,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             $query->where(function ($q) {
                 $q->where('job_number', 'ilike', "%{$this->search}%")
                     ->orWhere('vin', 'ilike', "%{$this->search}%")
+                    ->orWhere('registration', 'ilike', "%{$this->search}%")
                     ->orWhere('model_name', 'ilike', "%{$this->search}%")
                     ->orWhereHas('brand', fn($q) => $q->where('name', 'ilike', "%{$this->search}%"))
                     ->orWhereHas('company', fn($q) => $q->where('name', 'ilike', "%{$this->search}%"))
@@ -288,7 +289,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                         <th class="px-4 py-3 text-left text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-500">Job number</th>
                         <th class="px-4 py-3 text-left text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-500">Customer</th>
                         <th class="px-4 py-3 text-left text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-500">Make / Model</th>
-                        <th class="px-4 py-3 text-left text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-500">VIN</th>
+                        <th class="px-4 py-3 text-left text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-500">VIN / Reg</th>
                         <th class="px-4 py-3 text-left text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-500">Route</th>
                         <th class="px-4 py-3 text-left text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-500">Status</th>
                         <th class="px-4 py-3 text-left text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-500" title="Petty cash workflow state">Petty Cash</th>
@@ -312,7 +313,9 @@ new #[Layout('components.layouts.app')] class extends Component {
                             </div>
                         </td>
                         <td class="px-4 py-3.5 text-sm text-slate-700">{{ trim(($job->brand?->name ?? '') . ' ' . ($job->model_name ?? '')) ?: '—' }}</td>
-                        <td class="px-4 py-3.5 text-xs text-slate-500">{{ $job->vin ?: '—' }}</td>
+                        <td class="px-4 py-3.5 text-xs text-slate-500">
+                            <x-vehicle-identifier :model="$job" layout="stacked" />
+                        </td>
                         <td class="px-4 py-3.5 text-xs text-slate-600 align-top">
                             <div class="space-y-2 max-w-[260px]">
                                 <div class="flex gap-1.5">

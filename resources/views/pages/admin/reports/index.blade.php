@@ -88,7 +88,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             $out = fopen('php://output', 'w');
             fputcsv($out, [
                 'Delivered Date', 'Customer', 'Job Number', 'Executor', 'Brand', 'Model',
-                'VIN', 'Vehicle Class', 'Pickup (Collection)', 'Pickup City',
+                'VIN', 'Registration', 'Vehicle Class', 'Pickup (Collection)', 'Pickup City',
                 'Pickup Province', 'Delivery (Drop Off)', 'Delivery City',
                 'Delivery Province', 'Destination Type', 'Driver / Carrier', 'Archived',
             ]);
@@ -108,6 +108,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                         $j->brand?->name ?? '',
                         $j->model_name ?? '',
                         $j->vin ?? '',
+                        $j->registration ?? '',
                         $j->vehicleClass?->name ?? '',
                         $j->pickupLocation?->company_name ?? '',
                         $j->pickupLocation?->city ?? '',

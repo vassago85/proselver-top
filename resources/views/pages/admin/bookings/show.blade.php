@@ -149,7 +149,8 @@ new #[Layout('components.layouts.app')] class extends Component {
                         <div><dt class="text-gray-500">Delivery</dt><dd class="font-medium">{{ $job->deliveryLocation?->company_name }}</dd></div>
                         <div><dt class="text-gray-500">Brand</dt><dd class="font-medium">{{ $job->brand?->name }}</dd></div>
                         <div><dt class="text-gray-500">Model</dt><dd class="font-medium">{{ $job->model_name ?? '—' }}</dd></div>
-                        <div><dt class="text-gray-500">VIN</dt><dd class="font-medium">{{ $job->vin ?: '—' }}</dd></div>
+                        <div><dt class="text-gray-500">VIN</dt><dd class="font-medium font-mono">{{ $job->vin ?: '—' }}</dd></div>
+                        <div><dt class="text-gray-500">Registration</dt><dd class="font-medium font-mono">{{ $job->registration ?: '—' }}</dd></div>
                         <div><dt class="text-gray-500">Ready Time</dt><dd class="font-medium">{{ $job->scheduled_ready_time?->format('H:i') ?? '—' }}</dd></div>
                         <div><dt class="text-gray-500">Collection Date</dt><dd class="font-medium">{{ $job->scheduled_date?->format('d M Y') ?? '—' }}</dd></div>
                         <div><dt class="text-gray-500">Collection Time</dt><dd class="font-medium">{{ $job->scheduled_ready_time?->format('H:i') ?? '—' }}</dd></div>

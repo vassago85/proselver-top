@@ -97,8 +97,17 @@ class MovementRequestService
                 'vehicle_class_id'     => $req->vehicle_class_id,
                 'brand_id'             => $req->brand_id,
                 'model_name'           => $req->model_name,
-                'vin'                  => $req->vin ?: $req->sourceJob?->vin ?: 'BB-' . $req->uuid,
-                'registration'         => $req->registration ?: $req->sourceJob?->registration,
+                // Prefer whatever the request already carries; fall
+                // back to the source job's identifiers.  We used to
+                // manufacture a fake VIN of the form 'BB-{uuid}' when
+                // neither was present, which polluted `vin` with junk
+                // that then broke stock matching and dedup.  Now that
+                // BookingService accepts null, we let both columns
+                // stay null in that (rare) edge case -- ops will see
+                // "no vehicle identifier captured" on the resulting
+                // job and know to correct it.
+                'vin'                  => $req->vin ?: $req->sourceJob?->vin ?: null,
+                'registration'         => $req->registration ?: $req->sourceJob?->registration ?: null,
                 'scheduled_date'       => optional($req->requested_date)->toDateString() ?: now()->toDateString(),
                 'company_id'           => $req->target_company_id,
                 'created_by_user_id'   => $decider->id,

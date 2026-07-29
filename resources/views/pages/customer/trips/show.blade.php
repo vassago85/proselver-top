@@ -488,7 +488,7 @@ class extends Component
                     @forelse($attachableJobs as $job)
                         <li class="px-5 py-3 hover:bg-slate-50/70">
                             <div class="text-sm font-semibold text-slate-900">
-                                {{ $job->vin ?? ('JOB-' . $job->id) }}
+                                {{ $job->vin ?: ($job->registration ?: ('JOB-' . $job->id)) }}
                             </div>
                             <div class="text-xs text-slate-500">
                                 {{ $job->brand?->name }} {{ $job->model_name }} · {{ $job->vehicleClass?->name }}
