@@ -123,7 +123,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         }
 
         if ($this->statusFilter) {
-            $query->where('status', $this->statusFilter);
+            $query->whereIn('status', \App\Models\Job::expandStatusFilter($this->statusFilter));
         }
 
         if ($this->ownerPendingOnly) {
@@ -209,7 +209,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         </div>
         <select wire:model.live="statusFilter" class="rounded-lg border border-gray-300 px-4 py-2.5 text-sm focus:border-blue-500 focus:ring-blue-500">
             <option value="">All Statuses</option>
-            @foreach(\App\Models\Job::PHASE1_STATUS_LABELS as $value => $label)
+            @foreach(\App\Models\Job::phase1FilterOptions() as $value => $label)
                 <option value="{{ $value }}">{{ $label }}</option>
             @endforeach
         </select>

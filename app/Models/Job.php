@@ -167,6 +167,39 @@ class Job extends Model
         self::STATUS_CANCELLED => 'Cancelled',
     ];
 
+    /**
+     * Status-filter <option> set for the Phase-1 dropdowns, deduplicated by
+     * label. STATUS_CONFIRMED and the legacy STATUS_READY_FOR_COLLECTION both
+     * render as "Collection Confirmed"; array_unique keeps the first key so
+     * the dropdown shows a single option instead of two identical ones. Pair
+     * with expandStatusFilter() so the surviving option still matches both
+     * underlying statuses when filtering.
+     */
+    public static function phase1FilterOptions(): array
+    {
+        return array_unique(self::PHASE1_STATUS_LABELS);
+    }
+
+    /**
+     * Expand a status-filter value to every status that shares its display
+     * label, so the collapsed "Collection Confirmed" option keeps matching
+     * both STATUS_CONFIRMED and STATUS_READY_FOR_COLLECTION. Empty input
+     * yields an empty set (no narrowing); unknown values pass through.
+     */
+    public static function expandStatusFilter(?string $value): array
+    {
+        if ($value === null || $value === '') {
+            return [];
+        }
+
+        $label = self::PHASE1_STATUS_LABELS[$value] ?? null;
+        if ($label === null) {
+            return [$value];
+        }
+
+        return array_keys(self::PHASE1_STATUS_LABELS, $label, true);
+    }
+
     // Where the vehicle is going. Dealer + body_builder are both "delivered"
     // outcomes from an inventory perspective (see InventoryLifecycleService);
     // yard is a transit stop, other is a catch-all.

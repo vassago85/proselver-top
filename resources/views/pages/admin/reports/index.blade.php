@@ -204,15 +204,49 @@ new #[Layout('components.layouts.app')] class extends Component {
         // that actually have deliveries in the (unfiltered) date range
         // so the dropdowns stay relevant for the window the operator is
         // looking at.
-        $companyOptions = Company::query()
+        $companies = Company::query()
             ->whereIn('id', Job::query()
                 ->whereIn('status', [Job::STATUS_DELIVERED, Job::STATUS_COMPLETED])
                 ->whereBetween('delivered_at', [$from, $to])
                 ->select('company_id'))
             ->orderBy('name')
-            ->get(['id', 'name'])
-            ->map(fn ($c) => ['value' => $c->id, 'label' => $c->name])
-            ->all();
+            ->get(['id', 'name']);
+
+        $brands = \App\Models\Brand::query()->orderBy('name')->get(['id', 'name']);
+        $classes = \App\Models\VehicleClass::query()->ordered()->get(['id', 'name']);
+
+        $destinationLabels = [
+            Job::DESTINATION_DEALER       => 'Delivery',
+            Job::DESTINATION_BODY_BUILDER => 'Body Builder or Fitment',
+            Job::DESTINATION_ROUND_TRIP   => 'Round Trip',
+            Job::DESTINATION_YARD         => 'Other Storage Facility',
+            // Legacy bucket — kept so ops can still filter old rows.
+            Job::DESTINATION_OTHER        => 'Other (legacy)',
+        ];
+
+        // Each dropdown leads with an explicit "All …" reset row so a user
+        // can clear that one filter by re-selecting it, instead of hunting
+        // for the corner X or the global "Clear filters" link.
+        $companyOptions = array_merge(
+            [['value' => '', 'label' => 'All customers']],
+            $companies->map(fn ($c) => ['value' => (string) $c->id, 'label' => $c->name])->all(),
+        );
+        $brandOptions = array_merge(
+            [['value' => '', 'label' => 'All brands']],
+            $brands->map(fn ($b) => ['value' => (string) $b->id, 'label' => $b->name])->all(),
+        );
+        $classOptions = array_merge(
+            [['value' => '', 'label' => 'All classes']],
+            $classes->map(fn ($v) => ['value' => (string) $v->id, 'label' => $v->name])->all(),
+        );
+        $executorOptions = array_merge(
+            [['value' => '', 'label' => 'All executors']],
+            collect(Job::EXECUTOR_LABELS)->map(fn ($label, $value) => ['value' => (string) $value, 'label' => $label])->values()->all(),
+        );
+        $destinationOptions = array_merge(
+            [['value' => '', 'label' => 'All destinations']],
+            collect($destinationLabels)->map(fn ($label, $value) => ['value' => (string) $value, 'label' => $label])->values()->all(),
+        );
 
         return [
             'jobs'              => $jobs,
@@ -220,24 +254,21 @@ new #[Layout('components.layouts.app')] class extends Component {
             'uniqueCustomers'   => $uniqueCustomers,
             'uniqueModels'      => $uniqueModels,
             'customerBreakdown' => $customerBreakdown,
-            'companyOptions'    => $companyOptions,
-            'brandOptions'      => \App\Models\Brand::query()
-                ->orderBy('name')->get(['id', 'name'])
-                ->map(fn ($b) => ['value' => $b->id, 'label' => $b->name])->all(),
-            'classOptions'      => \App\Models\VehicleClass::query()
-                ->ordered()->get(['id', 'name'])
-                ->map(fn ($v) => ['value' => $v->id, 'label' => $v->name])->all(),
-            'executorOptions'   => collect(Job::EXECUTOR_LABELS)
-                ->map(fn ($label, $value) => ['value' => $value, 'label' => $label])
-                ->values()->all(),
-            'destinationOptions' => collect([
-                Job::DESTINATION_DEALER       => 'Delivery',
-                Job::DESTINATION_BODY_BUILDER => 'Body Builder or Fitment',
-                Job::DESTINATION_ROUND_TRIP   => 'Round Trip',
-                Job::DESTINATION_YARD         => 'Other Storage Facility',
-                // Legacy bucket — kept so ops can still filter old rows.
-                Job::DESTINATION_OTHER        => 'Other (legacy)',
-            ])->map(fn ($label, $value) => ['value' => $value, 'label' => $label])->values()->all(),
+            'companyOptions'     => $companyOptions,
+            'brandOptions'       => $brandOptions,
+            'classOptions'       => $classOptions,
+            'executorOptions'    => $executorOptions,
+            'destinationOptions' => $destinationOptions,
+            // Server-resolved labels so a deep-linked (?companyId=1) or
+            // just-applied filter shows its selection on first paint, before
+            // the dropdown's Alpine state has read the value back from
+            // Livewire. Resolved independently of the window-scoped option
+            // lists so a selection outside the current window still names it.
+            'companyLabel'      => $this->companyId ? Company::find($this->companyId)?->name : null,
+            'brandLabel'        => $this->brandId ? \App\Models\Brand::find($this->brandId)?->name : null,
+            'classLabel'        => $this->vehicleClassId ? \App\Models\VehicleClass::find($this->vehicleClassId)?->name : null,
+            'executorLabel'     => $this->executorType ? (Job::EXECUTOR_LABELS[$this->executorType] ?? null) : null,
+            'destinationLabel'  => $this->destinationType ? ($destinationLabels[$this->destinationType] ?? null) : null,
         ];
     }
 };
@@ -282,6 +313,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <x-searchable-select
                     wire:model.live="companyId"
                     :options="$companyOptions"
+                    :selected-label="$companyLabel"
                     placeholder="All customers"
                 />
             </div>
@@ -290,6 +322,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <x-searchable-select
                     wire:model.live="executorType"
                     :options="$executorOptions"
+                    :selected-label="$executorLabel"
                     placeholder="All executors"
                 />
             </div>
@@ -298,6 +331,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <x-searchable-select
                     wire:model.live="destinationType"
                     :options="$destinationOptions"
+                    :selected-label="$destinationLabel"
                     placeholder="All destinations"
                 />
             </div>
@@ -306,6 +340,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <x-searchable-select
                     wire:model.live="brandId"
                     :options="$brandOptions"
+                    :selected-label="$brandLabel"
                     placeholder="All brands"
                 />
             </div>
@@ -314,6 +349,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <x-searchable-select
                     wire:model.live="vehicleClassId"
                     :options="$classOptions"
+                    :selected-label="$classLabel"
                     placeholder="All classes"
                 />
             </div>

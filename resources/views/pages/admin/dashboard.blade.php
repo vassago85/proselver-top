@@ -137,7 +137,7 @@ new #[Layout('components.layouts.app')] class extends Component
             });
         }
         if ($applyStatusFilter && $this->status) {
-            $q->where('status', $this->status);
+            $q->whereIn('status', Job::expandStatusFilter($this->status));
         }
         return $q;
     }
@@ -534,8 +534,15 @@ new #[Layout('components.layouts.app')] class extends Component
         $regionOptions = Location::query()
             ->whereNotNull('province')->where('province', '!=', '')
             ->distinct()->orderBy('province')->pluck('province');
-        // Status filter — only Phase 1 statuses that are still in play.
-        $statusOptions = self::ACTIVE_PHASE1;
+        // Status filter — only Phase 1 statuses that are still in play,
+        // deduplicated by label so STATUS_CONFIRMED and the legacy
+        // STATUS_READY_FOR_COLLECTION (both "Collection Confirmed") collapse
+        // to one option. Keyed value => label; expandStatusFilter() maps the
+        // surviving key back to both statuses when the query runs.
+        $statusOptions = collect(self::ACTIVE_PHASE1)
+            ->mapWithKeys(fn ($s) => [$s => Job::PHASE1_STATUS_LABELS[$s] ?? ucwords(str_replace('_', ' ', $s))])
+            ->unique()
+            ->all();
 
         return compact(
             'from', 'to', 'span', 'kpis',
@@ -675,8 +682,8 @@ new #[Layout('components.layouts.app')] class extends Component
         </x-dash.filter-select>
         <x-dash.filter-select label="Stage" wire:model.live="status" minWidth="180px">
             <option value="">Any</option>
-            @foreach($statusOptions as $s)
-                <option value="{{ $s }}">{{ \App\Models\Job::PHASE1_STATUS_LABELS[$s] ?? ucwords(str_replace('_', ' ', $s)) }}</option>
+            @foreach($statusOptions as $value => $label)
+                <option value="{{ $value }}">{{ $label }}</option>
             @endforeach
         </x-dash.filter-select>
         <x-dash.filter-reset wire:click="resetFilters" />
@@ -1082,7 +1089,7 @@ new #[Layout('components.layouts.app')] class extends Component
                     <span class="h-1.5 w-1.5 rounded-full bg-amber-500 node-pulse"></span>
                     <div class="flex-1 min-w-0">
                         <p class="text-sm font-medium text-slate-900">Awaiting invoicing</p>
-                        <p class="text-[11px] text-slate-500 tabular-nums">{{ $num($awaitingInv->c ?? 0) }} jobs delivered / completed</p>
+                        <p class="text-[11px] text-slate-500 tabular-nums">{{ $num($awaitingInv->c ?? 0) }} jobs delivered / completed &middot; all time</p>
                     </div>
                     <span class="text-sm font-semibold text-amber-700 tabular-nums shrink-0">{{ $money($awaitingInv->v ?? 0) }}</span>
                 </li>

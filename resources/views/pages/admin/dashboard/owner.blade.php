@@ -614,7 +614,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                 :value="$money($unbilledValue)"
                 :color="$openInvoicing > 0 ? 'orange' : 'green'"
                 :href="route('admin.dashboard.finance')"
-                :helper="$num($openInvoicing) . ' delivered movements not yet captured'">
+                :helper="$num($openInvoicing) . ' delivered movements this month not yet captured'">
                 <x-slot:icon>
                     <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
                 </x-slot:icon>

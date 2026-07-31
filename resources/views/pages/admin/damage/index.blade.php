@@ -17,14 +17,19 @@ use Livewire\WithPagination;
 new #[Layout('components.layouts.app')] class extends Component {
     use WithPagination;
 
+    // Default to all-time / all-status so the page never reads "No damage
+    // reported" while damage photos exist on older or already-completed
+    // jobs. Damage is routinely discovered on delivered/completed vehicles,
+    // and a 30-day + open-only default hid exactly those rows. Ops can still
+    // narrow with the range pills and bucket tabs.
     #[Url]
-    public string $range = 'last_30_days';
+    public string $range = 'all';
 
     #[Url]
     public string $search = '';
 
     #[Url]
-    public string $bucket = 'open';
+    public string $bucket = 'all';
 
     public const ALLOWED_RANGES  = ['last_7_days', 'last_30_days', 'this_month', 'all'];
     public const ALLOWED_BUCKETS = ['open', 'pending_release', 'all'];
@@ -34,10 +39,10 @@ new #[Layout('components.layouts.app')] class extends Component {
         $this->authorize('viewAny', Job::class);
 
         if (!in_array($this->range, self::ALLOWED_RANGES, true)) {
-            $this->range = 'last_30_days';
+            $this->range = 'all';
         }
         if (!in_array($this->bucket, self::ALLOWED_BUCKETS, true)) {
-            $this->bucket = 'open';
+            $this->bucket = 'all';
         }
     }
 

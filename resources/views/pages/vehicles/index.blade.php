@@ -156,7 +156,7 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         // === Specific status (narrower than bucket) ===
         if ($this->statusFilter !== '') {
-            $base->where('status', $this->statusFilter);
+            $base->whereIn('status', Job::expandStatusFilter($this->statusFilter));
         }
 
         if ($this->brandFilter !== '') {
@@ -264,7 +264,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             'cancelledCount'  => $cancelledCount,
             'liveStatusCounts' => $liveStatusCounts,
             'liveTileLabels'  => $liveTileLabels,
-            'statusLabels'    => Job::PHASE1_STATUS_LABELS,
+            'statusLabels'    => Job::phase1FilterOptions(),
             'detailRoute'     => $detailRoute,
             'canFilterCompany' => $user->isInternal() || $user->belongsToPlatformOwner(),
         ];

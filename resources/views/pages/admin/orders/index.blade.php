@@ -54,7 +54,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             ->orderByDesc('created_at');
 
         if ($this->statusFilter) {
-            $query->where('status', $this->statusFilter);
+            $query->whereIn('status', Job::expandStatusFilter($this->statusFilter));
         }
 
         // Apply the executor filter only when the operator is browsing
@@ -131,9 +131,16 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         return [
             'jobs' => $query->paginate(20),
-            'statuses' => Job::PHASE1_STATUS_LABELS,
+            'statuses' => Job::phase1FilterOptions(),
             'statusCounts' => $statusCounts,
             'totalCount' => array_sum($statusCounts),
+            // "Active" = still in flight: everything in the Phase 1 lifecycle
+            // except the terminal Completed / Cancelled states. The old header
+            // called the full total "active bookings", which read as misleading
+            // once the list filled up with finished work.
+            'activeCount' => array_sum($statusCounts)
+                - ($statusCounts[Job::STATUS_COMPLETED] ?? 0)
+                - ($statusCounts[Job::STATUS_CANCELLED] ?? 0),
             'hiddenExternalCount' => $hiddenExternalCount,
             'driverOptions' => $driverOptions,
             'driverLabel' => $driverLabel,
@@ -201,7 +208,7 @@ new #[Layout('components.layouts.app')] class extends Component {
     <x-page-header
         eyebrow="Booking"
         title="Orders"
-        :subtitle="number_format($totalCount) . ' active bookings in the Phase 1 lifecycle'">
+        :subtitle="number_format($activeCount) . ' active · ' . number_format($totalCount) . ' total in the Phase 1 lifecycle'">
         <x-slot:actions>
             @if($search || $statusFilter || $driverId)
                 <x-button variant="ghost" size="sm" wire:click="clearFilters">
