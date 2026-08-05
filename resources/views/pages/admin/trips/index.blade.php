@@ -110,7 +110,11 @@ class extends Component
                 ->selectRaw('COUNT(*) AS moves, COALESCE(SUM(total_cost), 0) AS cost_sum')
                 ->first();
 
+            // excludingTransferredAdvances drops the receiving side of a
+            // vehicle-to-vehicle transfer so the same cash isn't summed
+            // against the driver twice.
             $advQ = Job::query()
+                ->excludingTransferredAdvances()
                 ->where('driver_user_id', (int) $this->driverFilter)
                 ->whereNotNull('advance_assigned_at');
             if ($from) $advQ->where('advance_assigned_at', '>=', $from);

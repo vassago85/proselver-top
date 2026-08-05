@@ -96,7 +96,11 @@ new #[Layout('components.layouts.app')] class extends Component {
         // advance_assigned_at (not delivered_at) so an advance issued
         // in July for a trip that only lands in August still counts
         // against July's cash-out.
+        // excludingTransferredAdvances drops the receiving side of a
+        // vehicle-to-vehicle transfer so the same physical cash-out is
+        // only counted against the driver once.
         $advAgg = Job::query()
+            ->excludingTransferredAdvances()
             ->whereIn('driver_user_id', $driverIds ?: [0])
             ->whereNotNull('advance_assigned_at')
             ->whereBetween('advance_assigned_at', [$from, $to])

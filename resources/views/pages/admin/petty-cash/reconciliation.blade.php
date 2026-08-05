@@ -2,6 +2,7 @@
 
 use App\Models\Job;
 use App\Services\AuditService;
+use App\Services\PettyCashTransferService;
 use Illuminate\Database\Eloquent\Builder;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\Url;
@@ -52,6 +53,15 @@ new #[Layout('components.layouts.app')] class extends Component {
     public string $clearQueryNote = '';
     public bool $showClearQueryModal = false;
 
+    // Transfer-to-vehicle modal. Ops picks the replacement order, adds an
+    // optional note, and the service copies the advance + receipts across
+    // in one transaction and auto-clears the source query.
+    public ?int $transferSourceJobId = null;
+    public ?int $transferTargetJobId = null;
+    public string $transferSearch = '';
+    public string $transferNote = '';
+    public bool $showTransferModal = false;
+
     public function mount(): void
     {
         if (!auth()->user()?->canViewPettyCashOverview()) {
@@ -60,6 +70,19 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         if (!array_key_exists($this->range, self::RANGES)) {
             $this->range = 'this_month';
+        }
+
+        // Deep-link from the order-show cancellation banner:
+        //   /admin/petty-cash/reconciliation?openTransfer=123
+        // opens the Transfer modal already pointed at job 123, so ops
+        // lands one click away from picking the replacement vehicle
+        // instead of having to hunt for the row in the open-queries
+        // table. We only honour the param when the current user is
+        // actually allowed to run a transfer; otherwise the modal
+        // silently doesn't open and the user sees the normal list.
+        $requestedTransferJob = (int) request()->query('openTransfer', 0);
+        if ($requestedTransferJob > 0 && auth()->user()?->canClearReconciliationQuery()) {
+            $this->openTransfer($requestedTransferJob);
         }
     }
 
@@ -97,6 +120,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         'driver:id,name',
         'advanceIssuedBy:id,name',
         'issuedCancellationClearedBy:id,name',
+        'advanceTransferredToJob:id,job_number,vin,registration',
     ];
 
     /** Cash still unaccounted for, oldest first — the work queue. */
@@ -196,6 +220,129 @@ new #[Layout('components.layouts.app')] class extends Component {
         $this->cancelClearQuery();
     }
 
+    // ── Transfer to another vehicle ────────────────────────────────────
+    //
+    // Same permission gate as the note-clear, because a transfer IS a
+    // clearance -- the source query is auto-closed as part of the write.
+    // The service call is wrapped so its structured "target invalid" /
+    // "no advance to move" errors surface as flash messages instead of
+    // 500s.
+
+    public function openTransfer(int $jobId): void
+    {
+        if (!auth()->user()?->canClearReconciliationQuery()) {
+            abort(403);
+        }
+
+        $this->transferSourceJobId = $jobId;
+        $this->transferTargetJobId = null;
+        $this->transferSearch = '';
+        $this->transferNote = '';
+        $this->showTransferModal = true;
+    }
+
+    public function cancelTransfer(): void
+    {
+        $this->transferSourceJobId = null;
+        $this->transferTargetJobId = null;
+        $this->transferSearch = '';
+        $this->transferNote = '';
+        $this->showTransferModal = false;
+    }
+
+    public function selectTransferTarget(int $jobId): void
+    {
+        $this->transferTargetJobId = $jobId;
+    }
+
+    /**
+     * Candidate replacements matching the operator's typed term against
+     * job number, VIN or registration. Kept short (12 rows) so the UI
+     * stays on-screen without a scroller; the operator narrows the
+     * search rather than pages through the list.
+     */
+    public function transferCandidates(): \Illuminate\Support\Collection
+    {
+        $term = trim($this->transferSearch);
+        if ($term === '' || $this->transferSourceJobId === null) {
+            return collect();
+        }
+
+        $query = Job::query()
+            ->where('id', '!=', $this->transferSourceJobId)
+            ->whereNull('advance_total')
+            ->whereNull('archived_at')
+            ->whereNotNull('driver_user_id')
+            ->whereNotIn('status', [
+                Job::STATUS_CANCELLED,
+                Job::STATUS_COMPLETED,
+                Job::STATUS_DELIVERED,
+                Job::STATUS_READY_FOR_INVOICING,
+                Job::STATUS_INVOICED,
+            ])
+            ->with(['driver:id,name']);
+
+        // A pure job-number match, plus VIN / registration via the
+        // existing helper on the model, joined into one OR clause so
+        // "26070" narrows by number and "AAK35" narrows by chassis.
+        $driver = $query->getConnection()->getDriverName();
+        $op = $driver === 'pgsql' ? 'ilike' : 'like';
+        $like = '%' . $term . '%';
+
+        return $query
+            ->where(function (Builder $q) use ($op, $like, $term) {
+                $q->where('job_number', $op, $like)
+                    ->orWhere('vin', $op, $like)
+                    ->orWhere('registration', $op, $like);
+            })
+            ->orderByDesc('id')
+            ->limit(12)
+            ->get();
+    }
+
+    public function submitTransfer(PettyCashTransferService $transfers): void
+    {
+        $u = auth()->user();
+
+        if (!$u || !$u->canClearReconciliationQuery()) {
+            abort(403);
+        }
+
+        $this->validate([
+            'transferSourceJobId' => 'required|integer|exists:transport_jobs,id',
+            'transferTargetJobId' => 'required|integer|exists:transport_jobs,id|different:transferSourceJobId',
+            'transferNote' => 'nullable|string|max:2000',
+        ], [
+            'transferTargetJobId.required' => 'Pick the replacement vehicle before transferring.',
+            'transferTargetJobId.different' => 'The replacement has to be a different order.',
+        ]);
+
+        $source = Job::find($this->transferSourceJobId);
+        $target = Job::find($this->transferTargetJobId);
+
+        if (!$source || !$target) {
+            session()->flash('error', 'One of the orders is no longer available.');
+            $this->cancelTransfer();
+            return;
+        }
+
+        try {
+            $transfers->transfer($source, $target, $u, $this->transferNote);
+        } catch (\RuntimeException $e) {
+            // The service throws with human-readable messages -- surface
+            // them verbatim so ops knows what to fix (usually "no driver
+            // on the replacement" or "already has an advance").
+            session()->flash('error', $e->getMessage());
+            return;
+        }
+
+        session()->flash(
+            'success',
+            "Advance transferred from {$source->job_number} to {$target->job_number}."
+        );
+        $this->cancelTransfer();
+    }
+
     // ── Export ─────────────────────────────────────────────────────────
 
     /**
@@ -226,6 +373,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             fputcsv($out, [
                 'Status', 'Job number', 'Customer', 'Driver', 'Issued (R)', 'Issued by',
                 'Cancelled', 'Cancellation reason', 'Days open', 'Cleared', 'Cleared by', 'Explanation',
+                'Transferred to',
             ]);
 
             foreach ([['Open', $open], ['Settled', $settled]] as [$status, $rows]) {
@@ -243,6 +391,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                         optional($job->issued_cancellation_cleared_at)->format('Y-m-d H:i'),
                         $job->issuedCancellationClearedBy?->name ?? '',
                         $job->issued_cancellation_cleared_note ?? '',
+                        $job->advanceTransferredToJob?->job_number ?? '',
                     ]);
                 }
             }
@@ -415,10 +564,16 @@ new #[Layout('components.layouts.app')] class extends Component {
                                 </td>
                                 <td class="px-4 py-2.5 text-right">
                                     @if($canClear)
-                                        <button type="button" wire:click="openClearQuery({{ $job->id }})"
-                                            class="rounded-lg bg-rose-600 px-3 py-1.5 text-[11px] font-semibold text-white transition-colors hover:bg-rose-500">
-                                            Clear with note
-                                        </button>
+                                        <div class="inline-flex items-center gap-1.5">
+                                            <button type="button" wire:click="openTransfer({{ $job->id }})"
+                                                class="rounded-lg border border-blue-300 bg-white px-3 py-1.5 text-[11px] font-semibold text-blue-700 transition-colors hover:bg-blue-50">
+                                                Transfer to vehicle
+                                            </button>
+                                            <button type="button" wire:click="openClearQuery({{ $job->id }})"
+                                                class="rounded-lg bg-rose-600 px-3 py-1.5 text-[11px] font-semibold text-white transition-colors hover:bg-rose-500">
+                                                Clear with note
+                                            </button>
+                                        </div>
                                     @else
                                         <span class="text-[10px] italic text-rose-700/70">Waiting on accounts or ops</span>
                                     @endif
@@ -466,10 +621,16 @@ new #[Layout('components.layouts.app')] class extends Component {
                         </dl>
 
                         @if($canClear)
-                            <button type="button" wire:click="openClearQuery({{ $job->id }})"
-                                class="mt-3 w-full rounded-lg bg-rose-600 px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-rose-500">
-                                Clear with note
-                            </button>
+                            <div class="mt-3 grid grid-cols-2 gap-2">
+                                <button type="button" wire:click="openTransfer({{ $job->id }})"
+                                    class="rounded-lg border border-blue-300 bg-white px-3 py-2 text-xs font-semibold text-blue-700 transition-colors hover:bg-blue-50">
+                                    Transfer to vehicle
+                                </button>
+                                <button type="button" wire:click="openClearQuery({{ $job->id }})"
+                                    class="rounded-lg bg-rose-600 px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-rose-500">
+                                    Clear with note
+                                </button>
+                            </div>
                         @endif
                     </li>
                 @endforeach
@@ -517,7 +678,11 @@ new #[Layout('components.layouts.app')] class extends Component {
                             <div class="min-w-0">
                                 <div class="flex flex-wrap items-center gap-2">
                                     <a href="{{ route('admin.orders.show', $job->id) }}" class="text-sm font-semibold text-blue-700 hover:underline">{{ $job->job_number ?? 'JOB-' . $job->id }}</a>
-                                    <x-badge color="green" size="sm" dot>Settled</x-badge>
+                                    @if($job->advanceTransferredToJob)
+                                        <x-badge color="blue" size="sm" dot>Transferred</x-badge>
+                                    @else
+                                        <x-badge color="green" size="sm" dot>Settled</x-badge>
+                                    @endif
                                     @if($days !== null)
                                         <span class="text-[11px] text-slate-400">{{ $days }} {{ \Illuminate\Support\Str::plural('day', $days) }} to settle</span>
                                     @endif
@@ -532,14 +697,34 @@ new #[Layout('components.layouts.app')] class extends Component {
                         </div>
 
                         {{-- The explanation is the whole point of the report, so it
-                             is shown in full rather than truncated. --}}
-                        <div class="mt-2 rounded-lg border border-emerald-200 bg-emerald-50/60 px-3 py-2">
-                            <p class="text-xs text-emerald-900">{{ $job->issued_cancellation_cleared_note ?: 'No explanation recorded.' }}</p>
-                            <p class="mt-1 text-[11px] text-emerald-800/70">
-                                {{ $job->issuedCancellationClearedBy?->name ?? 'Unknown' }}
-                                &middot; {{ optional($job->issued_cancellation_cleared_at)->format('d M Y · H:i') }}
-                            </p>
-                        </div>
+                             is shown in full rather than truncated. Rows that
+                             were resolved by a transfer get a distinct blue
+                             panel so ops can tell at a glance from a wall of
+                             "moved to VIN xxx" free-text clears. --}}
+                        @if($job->advanceTransferredToJob)
+                            @php $target = $job->advanceTransferredToJob; @endphp
+                            <div class="mt-2 rounded-lg border border-blue-200 bg-blue-50/60 px-3 py-2">
+                                <p class="text-xs text-blue-900">
+                                    Advance transferred to
+                                    <a href="{{ route('admin.orders.show', $target->id) }}" class="font-semibold underline">{{ $target->job_number ?? 'JOB-' . $target->id }}</a>@if($target->vehicle_identifier) &middot; VIN {{ $target->vehicle_identifier }}@endif.
+                                    @if($job->issued_cancellation_cleared_note)
+                                        <span class="block mt-0.5 text-blue-900/80">{{ $job->issued_cancellation_cleared_note }}</span>
+                                    @endif
+                                </p>
+                                <p class="mt-1 text-[11px] text-blue-800/70">
+                                    {{ $job->issuedCancellationClearedBy?->name ?? 'Unknown' }}
+                                    &middot; {{ optional($job->issued_cancellation_cleared_at)->format('d M Y · H:i') }}
+                                </p>
+                            </div>
+                        @else
+                            <div class="mt-2 rounded-lg border border-emerald-200 bg-emerald-50/60 px-3 py-2">
+                                <p class="text-xs text-emerald-900">{{ $job->issued_cancellation_cleared_note ?: 'No explanation recorded.' }}</p>
+                                <p class="mt-1 text-[11px] text-emerald-800/70">
+                                    {{ $job->issuedCancellationClearedBy?->name ?? 'Unknown' }}
+                                    &middot; {{ optional($job->issued_cancellation_cleared_at)->format('d M Y · H:i') }}
+                                </p>
+                            </div>
+                        @endif
                     </li>
                 @endforeach
             </ul>
@@ -577,6 +762,92 @@ new #[Layout('components.layouts.app')] class extends Component {
                     </button>
                     <button type="button" wire:click="submitClearQuery" class="rounded-lg bg-rose-600 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-rose-500">
                         Clear query
+                    </button>
+                </div>
+            </div>
+        </div>
+    @endif
+
+    {{-- Transfer-to-vehicle modal.
+         Ops searches for the replacement order by job number, VIN or plate;
+         we short-list live jobs with a driver and no existing advance so a
+         wrong pick can't clobber another vehicle's cash. Confirming runs
+         PettyCashTransferService which moves the advance, receipts and
+         auto-clears the source query in one transaction. --}}
+    @if($showTransferModal)
+        @php
+            $transferSource = $transferSourceJobId ? $open->firstWhere('id', $transferSourceJobId) : null;
+            $candidates = $this->transferCandidates();
+            $selectedTarget = $transferTargetJobId
+                ? $candidates->firstWhere('id', $transferTargetJobId)
+                : null;
+        @endphp
+        <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" wire:click.self="cancelTransfer">
+            <div class="relative w-full max-w-lg overflow-hidden rounded-2xl bg-white shadow-2xl">
+                <div class="border-b border-slate-200 px-6 py-4">
+                    <h3 class="text-lg font-semibold text-slate-900">Transfer advance to another vehicle</h3>
+                    @if($transferSource)
+                        <p class="mt-0.5 text-sm text-slate-500">
+                            From {{ $transferSource->job_number ?? 'JOB-' . $transferSource->id }} &middot; {{ $money($transferSource->advance_total) }} issued
+                        </p>
+                    @endif
+                </div>
+                <div class="space-y-4 px-6 py-5">
+                    <div class="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">
+                        Moves the advance breakdown, issued timestamp and any receipts already logged onto the replacement order. The source query is closed automatically with a link to the target.
+                    </div>
+
+                    <div>
+                        <label class="mb-1.5 block text-sm font-medium text-slate-700">Find replacement</label>
+                        <input type="text" wire:model.live.debounce.300ms="transferSearch"
+                            placeholder="Job number, VIN or registration…"
+                            class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
+                        @error('transferTargetJobId') <p class="mt-1 text-xs text-rose-600">{{ $message }}</p> @enderror
+                    </div>
+
+                    @if(trim($transferSearch) !== '')
+                        <div class="max-h-56 overflow-y-auto rounded-lg border border-slate-200">
+                            @forelse($candidates as $candidate)
+                                <button type="button" wire:click="selectTransferTarget({{ $candidate->id }})"
+                                    class="w-full border-b border-slate-100 px-3 py-2 text-left text-xs transition-colors last:border-b-0
+                                    {{ $transferTargetJobId === $candidate->id ? 'bg-blue-50' : 'hover:bg-slate-50' }}">
+                                    <div class="flex items-center justify-between gap-3">
+                                        <div class="min-w-0">
+                                            <p class="font-semibold text-slate-900">{{ $candidate->job_number ?? 'JOB-' . $candidate->id }}</p>
+                                            <p class="truncate text-[11px] text-slate-500">
+                                                @if($candidate->vehicle_identifier) VIN {{ $candidate->vehicle_identifier }} @endif
+                                                @if($candidate->driver) &middot; {{ $candidate->driver->name }} @endif
+                                            </p>
+                                        </div>
+                                        @if($transferTargetJobId === $candidate->id)
+                                            <span class="shrink-0 rounded-full bg-blue-600 px-2 py-0.5 text-[10px] font-semibold text-white">Selected</span>
+                                        @endif
+                                    </div>
+                                </button>
+                            @empty
+                                <p class="px-3 py-4 text-center text-xs text-slate-500">
+                                    No live trip with a driver and no existing advance matches "{{ $transferSearch }}".
+                                </p>
+                            @endforelse
+                        </div>
+                    @endif
+
+                    <div>
+                        <label class="mb-1.5 block text-sm font-medium text-slate-700">Note (optional)</label>
+                        <textarea wire:model="transferNote" rows="3"
+                            placeholder="Anything ops needs on the audit trail (e.g. 'driver kept the same cash, swap approved by Cassius')."
+                            class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500"></textarea>
+                        @error('transferNote') <p class="mt-1 text-xs text-rose-600">{{ $message }}</p> @enderror
+                    </div>
+                </div>
+                <div class="flex items-center justify-end gap-3 border-t border-slate-200 bg-slate-50 px-6 py-4">
+                    <button type="button" wire:click="cancelTransfer" class="rounded-lg px-4 py-2.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-100">
+                        Cancel
+                    </button>
+                    <button type="button" wire:click="submitTransfer"
+                        @disabled($transferTargetJobId === null)
+                        class="rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-blue-500 disabled:cursor-not-allowed disabled:bg-slate-300">
+                        Transfer advance
                     </button>
                 </div>
             </div>

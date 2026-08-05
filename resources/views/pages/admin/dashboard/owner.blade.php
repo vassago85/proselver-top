@@ -235,6 +235,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         // Petty cash issued vs spent for the month -- same definitions as
         // the Petty Cash Overview so the variance figures agree.
         $issued = (float) Job::query()
+            ->excludingTransferredAdvances()
             ->whereNotNull('advance_assigned_at')
             ->whereBetween('advance_assigned_at', [$monthFrom, $monthTo])
             ->sum('advance_total');

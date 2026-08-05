@@ -237,7 +237,10 @@ new #[Layout('components.layouts.app')] class extends Component {
     /** Sum advances issued in a window. */
     private function issuedInWindow(?Carbon $from, ?Carbon $to): float
     {
-        $q = Job::query()->whereNotNull('advance_assigned_at');
+        // excludingTransferredAdvances drops the receiving side of a
+        // vehicle-to-vehicle transfer so an advance that physically
+        // left the till once is not summed twice.
+        $q = Job::query()->excludingTransferredAdvances()->whereNotNull('advance_assigned_at');
         if ($from) $q->where('advance_assigned_at', '>=', $from);
         if ($to) $q->where('advance_assigned_at', '<=', $to);
         return (float) $q->sum('advance_total');
@@ -252,8 +255,9 @@ new #[Layout('components.layouts.app')] class extends Component {
         if ($win['from']) $slipsQ->where('created_at', '>=', $win['from']);
         $slipsQ->where('created_at', '<=', $win['to']);
 
-        // Advances slice (window).
-        $advanceQ = Job::query()->whereNotNull('advance_assigned_at');
+        // Advances slice (window). Excludes the receiving side of a
+        // transferred advance so the money is only counted once.
+        $advanceQ = Job::query()->excludingTransferredAdvances()->whereNotNull('advance_assigned_at');
         if ($win['from']) $advanceQ->where('advance_assigned_at', '>=', $win['from']);
         $advanceQ->where('advance_assigned_at', '<=', $win['to']);
 

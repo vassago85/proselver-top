@@ -459,6 +459,14 @@ class Job extends Model
         'issued_cancellation_cleared_at',
         'issued_cancellation_cleared_by_user_id',
         'issued_cancellation_cleared_note',
+        // Structured advance transfer between vehicles (see the
+        // add_advance_transfer_to_transport_jobs migration for the
+        // whole rationale). Populated on both sides of the pair by
+        // App\Services\PettyCashTransferService.
+        'advance_transferred_to_job_id',
+        'advance_transferred_from_job_id',
+        'advance_transferred_at',
+        'advance_transferred_by_user_id',
         'customer_confirmed_at',
         'customer_confirmed_by',
         'planned_at',
@@ -565,6 +573,7 @@ class Job extends Model
             'advance_removal_pending' => 'boolean',
             'advance_removal_requested_at' => 'datetime',
             'issued_cancellation_cleared_at' => 'datetime',
+            'advance_transferred_at' => 'datetime',
             'customer_confirmed_at' => 'datetime',
             'planned_at' => 'datetime',
             'ready_for_collection_at' => 'datetime',
@@ -1123,6 +1132,27 @@ class Job extends Model
     }
 
     /**
+     * Transfer counterparts. On a cancelled source `advanceTransferredToJob`
+     * points at the replacement vehicle that absorbed the cash; on that
+     * replacement `advanceTransferredFromJob` points back at the source.
+     * See App\Services\PettyCashTransferService for the write path.
+     */
+    public function advanceTransferredToJob(): BelongsTo
+    {
+        return $this->belongsTo(Job::class, 'advance_transferred_to_job_id');
+    }
+
+    public function advanceTransferredFromJob(): BelongsTo
+    {
+        return $this->belongsTo(Job::class, 'advance_transferred_from_job_id');
+    }
+
+    public function advanceTransferredBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'advance_transferred_by_user_id');
+    }
+
+    /**
      * Cancelled trips where the advance had already been issued
      * (i.e. cash is out of the till) and Accounts/Owner has not yet
      * signed off an explanation. Drives the "Open queries" dashboard
@@ -1140,6 +1170,51 @@ class Job extends Model
         return $this->status === self::STATUS_CANCELLED
             && !is_null($this->advance_issued_at)
             && is_null($this->issued_cancellation_cleared_at);
+    }
+
+    /**
+     * A candidate to receive a transferred advance. Ops has to have picked
+     * a replacement that (a) is still live -- not cancelled, delivered,
+     * completed or archived; (b) does not already have an advance of its
+     * own to avoid clobbering an existing amount; and (c) has a driver
+     * assigned, because the transferred advance carries "issued" state and
+     * the driver is the recipient of record.
+     */
+    public function canReceiveTransferredAdvance(): bool
+    {
+        if ($this->archived_at !== null) {
+            return false;
+        }
+
+        $terminal = [
+            self::STATUS_CANCELLED,
+            self::STATUS_COMPLETED,
+            self::STATUS_DELIVERED,
+            self::STATUS_READY_FOR_INVOICING,
+            self::STATUS_INVOICED,
+        ];
+
+        if (in_array($this->status, $terminal, true)) {
+            return false;
+        }
+
+        if ($this->advance_total !== null) {
+            return false;
+        }
+
+        return !is_null($this->driver_user_id);
+    }
+
+    /**
+     * Money-report scope: drop the receiving side of a transfer so an
+     * advance that physically left the till once is not summed twice.
+     * The source (cancelled) row keeps its `advance_total`, and the
+     * replacement row (with `advance_transferred_from_job_id` set) is
+     * excluded from any "issued in this window" total.
+     */
+    public function scopeExcludingTransferredAdvances(Builder $query): Builder
+    {
+        return $query->whereNull('advance_transferred_from_job_id');
     }
 
     public function trip(): BelongsTo

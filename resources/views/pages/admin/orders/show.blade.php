@@ -19,6 +19,14 @@ new #[Layout('components.layouts.app')] class extends Component {
     public string $cancelReason = '';
     public bool $showCancelModal = false;
 
+    // Post-cancellation nudge. When ops cancels a movement that had
+    // petty cash issued, we pop a one-shot modal explaining the
+    // transfer-to-replacement-vehicle option so they don't have to
+    // discover it on the reconciliation report. Set by cancelOrder(),
+    // cleared by the close button on the modal.
+    public bool $showPostCancelTransferHint = false;
+    public float $postCancelAdvanceAmount = 0.0;
+
     // Urgent collection toggle.  Either ops (any internal user) or
     // the booking customer can mark a job urgent with an optional
     // reason. See JobPolicy::markUrgent for the auth rules.
@@ -1681,10 +1689,23 @@ new #[Layout('components.layouts.app')] class extends Component {
                 'advance_issued_at' => $this->job->advance_issued_at?->toIso8601String(),
                 'cancellation_reason' => $this->cancelReason,
             ]);
+
+            // Only pop the transfer hint for users who can actually
+            // run a transfer -- there's no point telling a viewer they
+            // can do something the server would 403 them out of.
+            if (auth()->user()?->canClearReconciliationQuery()) {
+                $this->postCancelAdvanceAmount = (float) $this->job->advance_total;
+                $this->showPostCancelTransferHint = true;
+            }
         }
 
         $this->showCancelModal = false;
         session()->flash('success', "Order {$this->job->job_number} cancelled.");
+    }
+
+    public function closePostCancelTransferHint(): void
+    {
+        $this->showPostCancelTransferHint = false;
     }
 
     /**
@@ -2137,23 +2158,94 @@ new #[Layout('components.layouts.app')] class extends Component {
                     <span class="text-[11px] text-rose-700/80 italic shrink-0">Waiting on accounts or ops.</span>
                 @endif
             </div>
+
+            {{-- Transfer path: the cash + any receipts can be moved onto
+                 the replacement vehicle rather than treated as a full
+                 return-and-reissue. This CTA is here (not just on the
+                 reconciliation report) because ops naturally lands on
+                 the cancelled order first when troubleshooting. --}}
+            @if(auth()->user()?->canClearReconciliationQuery())
+                <div class="mt-3 border-t border-rose-200 pt-3">
+                    <div class="flex items-start gap-3 flex-wrap">
+                        <svg class="h-4 w-4 mt-0.5 shrink-0 text-rose-700/80" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 7 7 17"/><path d="M7 7h10v10"/></svg>
+                        <div class="min-w-0 flex-1 text-xs text-rose-900/90">
+                            <strong>Going onto a replacement vehicle?</strong>
+                            You can transfer the full R {{ number_format((float) $job->advance_total, 2) }} advance (and any receipts the driver has already uploaded) to the new order &mdash; the money isn't re-issued, the existing issuance is re-linked. This clears the reconciliation query automatically.
+                        </div>
+                        <a href="{{ route('admin.petty-cash.reconciliation', ['openTransfer' => $job->id]) }}"
+                           class="shrink-0 inline-flex items-center gap-1.5 rounded-lg border border-blue-300 bg-white px-3 py-1.5 text-[11px] font-semibold text-blue-700 hover:bg-blue-50 transition-colors">
+                            Transfer to replacement vehicle
+                            <svg class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+                        </a>
+                    </div>
+                </div>
+            @endif
         </div>
     @endif
 
     {{-- Cleared note (audit trail, sticks around forever once signed off). --}}
     @if($job->issued_cancellation_cleared_at && auth()->user()?->isInternal())
-        <div class="mb-4 rounded-xl border border-emerald-200 bg-emerald-50/60 px-4 py-2.5">
+        @if($job->advance_transferred_to_job_id)
+            {{-- Transferred to another vehicle. Distinct blue banner with a
+                 link to the receiving order, so the paper trail is visual
+                 rather than buried in the free-text note. --}}
+            @php $transferTarget = $job->advanceTransferredToJob; @endphp
+            <div class="mb-4 rounded-xl border border-blue-200 bg-blue-50/60 px-4 py-2.5">
+                <div class="flex items-start gap-2.5">
+                    <svg class="h-4 w-4 mt-0.5 shrink-0 text-blue-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17 17 7"/><path d="M7 7h10v10"/></svg>
+                    <div class="min-w-0 flex-1 text-xs text-blue-900/90">
+                        <span class="font-semibold">Advance transferred</span>
+                        to
+                        @if($transferTarget)
+                            <a href="{{ route('admin.orders.show', $transferTarget->id) }}" class="font-semibold underline">{{ $transferTarget->job_number ?? 'JOB-' . $transferTarget->id }}</a>@if($transferTarget->vehicle_identifier) &middot; VIN {{ $transferTarget->vehicle_identifier }}@endif
+                        @else
+                            another vehicle
+                        @endif
+                        @if($job->advanceTransferredBy) by <strong>{{ $job->advanceTransferredBy->name }}</strong> @endif
+                        @if($job->advance_transferred_at) {{ $job->advance_transferred_at->diffForHumans() }}. @endif
+                        @if($job->issued_cancellation_cleared_note)
+                            <div class="mt-0.5 text-blue-900/80"><strong>Note:</strong> {{ $job->issued_cancellation_cleared_note }}</div>
+                        @endif
+                    </div>
+                </div>
+            </div>
+        @else
+            <div class="mb-4 rounded-xl border border-emerald-200 bg-emerald-50/60 px-4 py-2.5">
+                <div class="flex items-start gap-2.5">
+                    <svg class="h-4 w-4 mt-0.5 shrink-0 text-emerald-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                    <div class="min-w-0 flex-1 text-xs text-emerald-900/90">
+                        <span class="font-semibold">Reconciliation cleared</span>
+                        @if($job->issuedCancellationClearedBy)
+                            by <strong>{{ $job->issuedCancellationClearedBy->name }}</strong>
+                        @endif
+                        {{ $job->issued_cancellation_cleared_at->diffForHumans() }}.
+                        @if($job->issued_cancellation_cleared_note)
+                            <div class="mt-0.5 text-emerald-900/80"><strong>Note:</strong> {{ $job->issued_cancellation_cleared_note }}</div>
+                        @endif
+                    </div>
+                </div>
+            </div>
+        @endif
+    @endif
+
+    {{-- The receiving side of a transfer. This order got its advance moved
+         onto it from a cancelled trip, so ops opening the order sees at a
+         glance that the cash came from somewhere else and the "issued"
+         stamp is inherited rather than freshly done. --}}
+    @if($job->advance_transferred_from_job_id && auth()->user()?->isInternal())
+        @php $transferSource = $job->advanceTransferredFromJob; @endphp
+        <div class="mb-4 rounded-xl border border-blue-200 bg-blue-50/60 px-4 py-2.5">
             <div class="flex items-start gap-2.5">
-                <svg class="h-4 w-4 mt-0.5 shrink-0 text-emerald-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-                <div class="min-w-0 flex-1 text-xs text-emerald-900/90">
-                    <span class="font-semibold">Reconciliation cleared</span>
-                    @if($job->issuedCancellationClearedBy)
-                        by <strong>{{ $job->issuedCancellationClearedBy->name }}</strong>
+                <svg class="h-4 w-4 mt-0.5 shrink-0 text-blue-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17 7 7 17"/><path d="M17 17H7V7"/></svg>
+                <div class="min-w-0 flex-1 text-xs text-blue-900/90">
+                    <span class="font-semibold">Advance transferred in</span>
+                    from
+                    @if($transferSource)
+                        <a href="{{ route('admin.orders.show', $transferSource->id) }}" class="font-semibold underline">{{ $transferSource->job_number ?? 'JOB-' . $transferSource->id }}</a>@if($transferSource->vehicle_identifier) &middot; VIN {{ $transferSource->vehicle_identifier }}@endif.
+                    @else
+                        a cancelled trip.
                     @endif
-                    {{ $job->issued_cancellation_cleared_at->diffForHumans() }}.
-                    @if($job->issued_cancellation_cleared_note)
-                        <div class="mt-0.5 text-emerald-900/80"><strong>Note:</strong> {{ $job->issued_cancellation_cleared_note }}</div>
-                    @endif
+                    The cash was not issued fresh against this order.
                 </div>
             </div>
         </div>
@@ -3522,6 +3614,15 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <div class="rounded-lg bg-red-50 border border-red-200 p-4 text-sm text-red-800">
                     This action cannot be undone. The order will be permanently cancelled.
                 </div>
+                {{-- Heads-up when the movement has an issued advance so
+                     ops isn't surprised by the reconciliation query
+                     landing on their dashboard after they click through. --}}
+                @if(!is_null($job->advance_issued_at) && (float) ($job->advance_total ?? 0) > 0)
+                    <div class="rounded-lg bg-blue-50 border border-blue-200 p-4 text-xs text-blue-900">
+                        <p class="font-semibold text-sm mb-1">Petty cash of R {{ number_format((float) $job->advance_total, 2) }} was issued for this movement.</p>
+                        <p>Once you cancel, we'll open a reconciliation query on the owner dashboard. If the same trip is going to run on a replacement vehicle, you can transfer the full advance (and any receipts the driver has already uploaded) onto the new order &mdash; no cash returned, no cash reissued. We'll show you where to do that immediately after cancellation.</p>
+                    </div>
+                @endif
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1.5">Cancellation Reason</label>
                     <textarea wire:model="cancelReason" rows="3" placeholder="Reason for cancellation..."
@@ -3536,6 +3637,68 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <button wire:click="cancelOrder" class="rounded-lg bg-red-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-red-500 transition-colors">
                     Cancel Order
                 </button>
+            </div>
+        </div>
+    </div>
+    @endif
+
+    {{-- Post-cancellation transfer hint.
+
+         Fires the moment ops cancels a movement that had petty cash
+         issued. Explains the transfer-to-replacement-vehicle option
+         and provides a one-click path to the reconciliation report
+         with the transfer modal already open on this order. --}}
+    @if($showPostCancelTransferHint)
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60" wire:click.self="closePostCancelTransferHint">
+        <div class="relative w-full max-w-lg mx-4 bg-white rounded-2xl shadow-2xl overflow-hidden">
+            <div class="border-b border-blue-200 bg-blue-50/70 px-6 py-4">
+                <div class="flex items-start gap-3">
+                    <span class="mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-100">
+                        <svg class="h-5 w-5 text-blue-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 7 7 17"/><path d="M7 7h10v10"/></svg>
+                    </span>
+                    <div class="min-w-0 flex-1">
+                        <h3 class="text-base font-semibold text-blue-900">Move the petty cash to the replacement vehicle?</h3>
+                        <p class="text-xs text-blue-800/80 mt-0.5">
+                            R {{ number_format($postCancelAdvanceAmount, 2) }} was already issued for this movement.
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="px-6 py-5 space-y-4 text-sm text-gray-700">
+                <p>
+                    This movement is cancelled, but the cash has already left the till. You have two paths from here:
+                </p>
+
+                <div class="rounded-lg border border-blue-200 bg-blue-50/40 px-4 py-3">
+                    <p class="text-xs font-semibold uppercase tracking-wide text-blue-800 mb-1.5">Recommended — transfer to a replacement</p>
+                    <p class="text-xs text-blue-900/80 leading-relaxed">
+                        If the same trip is going to run on another vehicle, transfer the advance onto that new order. The cash isn't returned and re-issued &mdash; we simply re-link the issuance. Any receipts the driver has already uploaded follow the money. The reconciliation query clears automatically.
+                    </p>
+                    <p class="text-xs text-blue-900/80 mt-2 leading-relaxed">
+                        <strong>How:</strong> click <em>Transfer to replacement vehicle</em> below, search for the new order by job number, driver or VIN, and confirm.
+                    </p>
+                </div>
+
+                <div class="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+                    <p class="text-xs font-semibold uppercase tracking-wide text-slate-700 mb-1.5">Alternative — clear with an explanation</p>
+                    <p class="text-xs text-slate-600 leading-relaxed">
+                        If the driver returned the cash, deposited it, or the money was written off, use <em>Clear with explanation</em> on this page's red banner and record how the cash was reconciled.
+                    </p>
+                </div>
+            </div>
+
+            <div class="border-t border-gray-200 px-6 py-4 flex items-center justify-between gap-3 bg-gray-50">
+                <button wire:click="closePostCancelTransferHint"
+                        type="button"
+                        class="rounded-lg px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-100 transition-colors">
+                    I'll decide later
+                </button>
+                <a href="{{ route('admin.petty-cash.reconciliation', ['openTransfer' => $job->id]) }}"
+                   class="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-blue-500 transition-colors">
+                    Transfer to replacement vehicle
+                    <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+                </a>
             </div>
         </div>
     </div>

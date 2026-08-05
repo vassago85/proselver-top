@@ -136,6 +136,7 @@ new #[Layout('components.layouts.app')] class extends Component {
     private function pettyCash(Carbon $from, Carbon $to): array
     {
         $issued = (float) Job::query()
+            ->excludingTransferredAdvances()
             ->whereNotNull('advance_assigned_at')
             ->whereBetween('advance_assigned_at', [$from, $to])
             ->sum('advance_total');
