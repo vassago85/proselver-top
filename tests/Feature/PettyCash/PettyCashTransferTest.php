@@ -486,6 +486,116 @@ test('cancelling a movement WITHOUT issued petty cash does not raise the hint', 
     expect($component->get('showPostCancelTransferHint'))->toBeFalse();
 });
 
+test('a user who has clicked don\'t-show-again does not see the transfer hint modal on later cancellations', function () {
+    // "Don't show again" writes a row into user_dismissed_hints, and
+    // subsequent cancel-with-petty-cash operations on the same account
+    // must skip the modal. Verifies the whole loop end-to-end: click
+    // the button, cancel a fresh movement, expect the modal to stay
+    // down.
+    $ops = transferUser('operations_controller');
+    $company = Company::factory()->create(['type' => Company::TYPE_OEM]);
+    $driver = transferDriver();
+    $pickup = Location::create(['company_id' => null, 'company_name' => 'Plant', 'address' => 'Plant', 'is_active' => true]);
+    $delivery = Location::create(['company_id' => null, 'company_name' => 'Dealer', 'address' => 'Dealer', 'is_active' => true]);
+
+    $makeCancellableJob = function (string $jn) use ($ops, $company, $driver, $pickup, $delivery): Job {
+        return Job::create([
+            'uuid' => (string) \Illuminate\Support\Str::uuid(),
+            'job_number' => $jn,
+            'job_type' => 'transport',
+            'status' => Job::STATUS_DRIVER_ASSIGNED,
+            'company_id' => $company->id,
+            'created_by_user_id' => $ops->id,
+            'driver_user_id' => $driver->id,
+            'executor_type' => Job::EXECUTOR_PROSELVER,
+            'vin' => 'VIN' . \Illuminate\Support\Str::upper(\Illuminate\Support\Str::random(6)),
+            'pickup_location_id' => $pickup->id,
+            'delivery_location_id' => $delivery->id,
+            'scheduled_date' => now()->toDateString(),
+            'advance_tolls' => 100.00,
+            'advance_total' => 100.00,
+            'advance_assigned_at' => now()->subDay(),
+            'advance_issued_at' => now()->subHours(6),
+        ]);
+    };
+
+    $first = $makeCancellableJob('JOB-FIRST-01');
+    $second = $makeCancellableJob('JOB-SECOND-01');
+
+    $this->actingAs($ops);
+
+    // First cancellation: modal appears, user clicks "Don't show again".
+    Volt::test('admin.orders.show', ['job' => $first])
+        ->set('cancelReason', 'First cancellation')
+        ->call('cancelOrder')
+        ->assertSet('showPostCancelTransferHint', true)
+        ->call('dismissPostCancelTransferHint')
+        ->assertSet('showPostCancelTransferHint', false);
+
+    // Preference must be persisted -- rehydrate the user from the DB
+    // to make sure we're not just reading in-memory state.
+    expect($ops->fresh()->hasDismissedHint('post_cancel_transfer'))->toBeTrue();
+
+    // Second cancellation on the SAME account: modal must stay down.
+    Volt::test('admin.orders.show', ['job' => $second])
+        ->set('cancelReason', 'Second cancellation')
+        ->call('cancelOrder')
+        ->assertSet('showPostCancelTransferHint', false);
+});
+
+test('closing without dismissing still shows the modal on the next cancellation', function () {
+    // The soft close ("I'll decide later") is deliberately not a
+    // dismissal -- clicking it hides the current modal but keeps the
+    // education loop live for future cancellations, which is what
+    // separates it from "Don't show again".
+    $ops = transferUser('operations_controller');
+    $company = Company::factory()->create(['type' => Company::TYPE_OEM]);
+    $driver = transferDriver();
+    $pickup = Location::create(['company_id' => null, 'company_name' => 'Plant', 'address' => 'Plant', 'is_active' => true]);
+    $delivery = Location::create(['company_id' => null, 'company_name' => 'Dealer', 'address' => 'Dealer', 'is_active' => true]);
+
+    $makeCancellableJob = function (string $jn) use ($ops, $company, $driver, $pickup, $delivery): Job {
+        return Job::create([
+            'uuid' => (string) \Illuminate\Support\Str::uuid(),
+            'job_number' => $jn,
+            'job_type' => 'transport',
+            'status' => Job::STATUS_DRIVER_ASSIGNED,
+            'company_id' => $company->id,
+            'created_by_user_id' => $ops->id,
+            'driver_user_id' => $driver->id,
+            'executor_type' => Job::EXECUTOR_PROSELVER,
+            'vin' => 'VIN' . \Illuminate\Support\Str::upper(\Illuminate\Support\Str::random(6)),
+            'pickup_location_id' => $pickup->id,
+            'delivery_location_id' => $delivery->id,
+            'scheduled_date' => now()->toDateString(),
+            'advance_food' => 50.00,
+            'advance_total' => 50.00,
+            'advance_assigned_at' => now()->subDay(),
+            'advance_issued_at' => now()->subHours(6),
+        ]);
+    };
+
+    $first = $makeCancellableJob('JOB-SOFT-01');
+    $second = $makeCancellableJob('JOB-SOFT-02');
+
+    $this->actingAs($ops);
+
+    Volt::test('admin.orders.show', ['job' => $first])
+        ->set('cancelReason', 'First cancellation for soft close')
+        ->call('cancelOrder')
+        ->assertSet('showPostCancelTransferHint', true)
+        ->call('closePostCancelTransferHint')
+        ->assertSet('showPostCancelTransferHint', false);
+
+    // Not persisted -- the user was polite, not permanent.
+    expect($ops->fresh()->hasDismissedHint('post_cancel_transfer'))->toBeFalse();
+
+    Volt::test('admin.orders.show', ['job' => $second])
+        ->set('cancelReason', 'Second cancellation for soft close')
+        ->call('cancelOrder')
+        ->assertSet('showPostCancelTransferHint', true);
+});
+
 test('the reconciliation page auto-opens the transfer modal when linked with openTransfer', function () {
     // The order-show CTA and the post-cancel modal both link to
     //   /admin/petty-cash/reconciliation?openTransfer=<id>

@@ -234,6 +234,43 @@ class User extends Authenticatable
     }
 
     /* ----------------------------------------------------------------
+     | Dismissible in-app hints
+     |
+     | Backed by the user_dismissed_hints table. Callers use a
+     | namespaced string key (e.g. 'post_cancel_transfer') and can
+     | permanently silence a hint per user without touching UI state.
+     |-----------------------------------------------------------------*/
+
+    public function dismissedHints(): HasMany
+    {
+        return $this->hasMany(UserDismissedHint::class);
+    }
+
+    /**
+     * Cheap boolean check for the hot path (mount() on any page that
+     * conditionally renders a hint). Uses exists() so we don't inflate
+     * the row into memory just to read a timestamp.
+     */
+    public function hasDismissedHint(string $key): bool
+    {
+        return $this->dismissedHints()->where('hint_key', $key)->exists();
+    }
+
+    /**
+     * Idempotent -- clicking "don't show again" twice does not throw
+     * on the unique constraint. Timestamped so we can trace when the
+     * user last saw the hint if we ever need to audit an educational
+     * campaign.
+     */
+    public function dismissHint(string $key): void
+    {
+        $this->dismissedHints()->updateOrCreate(
+            ['hint_key' => $key],
+            ['dismissed_at' => now()],
+        );
+    }
+
+    /* ----------------------------------------------------------------
      | Driver-pool scopes — used by the order-show driver dropdowns
      | (admin + customer) and the new dealer-drivers CRUD page. Two
      | distinct pools intentionally: ProSelver-executed jobs draw from

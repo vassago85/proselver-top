@@ -23,7 +23,10 @@ new #[Layout('components.layouts.app')] class extends Component {
     // petty cash issued, we pop a one-shot modal explaining the
     // transfer-to-replacement-vehicle option so they don't have to
     // discover it on the reconciliation report. Set by cancelOrder(),
-    // cleared by the close button on the modal.
+    // cleared by the close button on the modal, permanently silenced
+    // by the "don't show again" button which writes a row into
+    // user_dismissed_hints.
+    public const HINT_POST_CANCEL_TRANSFER = 'post_cancel_transfer';
     public bool $showPostCancelTransferHint = false;
     public float $postCancelAdvanceAmount = 0.0;
 
@@ -1693,7 +1696,11 @@ new #[Layout('components.layouts.app')] class extends Component {
             // Only pop the transfer hint for users who can actually
             // run a transfer -- there's no point telling a viewer they
             // can do something the server would 403 them out of.
-            if (auth()->user()?->canClearReconciliationQuery()) {
+            // Also respect a prior "don't show again" click -- silent
+            // dismissal is stored per-user in user_dismissed_hints.
+            $actor = auth()->user();
+            if ($actor?->canClearReconciliationQuery()
+                && !$actor->hasDismissedHint(self::HINT_POST_CANCEL_TRANSFER)) {
                 $this->postCancelAdvanceAmount = (float) $this->job->advance_total;
                 $this->showPostCancelTransferHint = true;
             }
@@ -1705,6 +1712,20 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     public function closePostCancelTransferHint(): void
     {
+        $this->showPostCancelTransferHint = false;
+    }
+
+    /**
+     * Permanent dismissal. Writes a row into user_dismissed_hints so
+     * the next cancel-with-petty-cash on this account skips straight
+     * past the modal. Reversible only by deleting the row -- there is
+     * no UI to un-dismiss, deliberately, because the surface for
+     * educating a new hire is to walk them through it once, not to
+     * re-arm modals for veterans who already know.
+     */
+    public function dismissPostCancelTransferHint(): void
+    {
+        auth()->user()?->dismissHint(self::HINT_POST_CANCEL_TRANSFER);
         $this->showPostCancelTransferHint = false;
     }
 
@@ -3688,12 +3709,24 @@ new #[Layout('components.layouts.app')] class extends Component {
                 </div>
             </div>
 
-            <div class="border-t border-gray-200 px-6 py-4 flex items-center justify-between gap-3 bg-gray-50">
-                <button wire:click="closePostCancelTransferHint"
-                        type="button"
-                        class="rounded-lg px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-100 transition-colors">
-                    I'll decide later
-                </button>
+            <div class="border-t border-gray-200 px-6 py-4 flex flex-wrap items-center justify-between gap-3 bg-gray-50">
+                <div class="flex items-center gap-2">
+                    <button wire:click="closePostCancelTransferHint"
+                            type="button"
+                            class="rounded-lg px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-100 transition-colors">
+                        I'll decide later
+                    </button>
+                    {{-- Permanent per-user dismissal. Sits next to the
+                         "decide later" close so a veteran can silence
+                         the hint in one click without accidentally
+                         confirming a transfer. --}}
+                    <button wire:click="dismissPostCancelTransferHint"
+                            type="button"
+                            title="Never show this again on your account"
+                            class="rounded-lg px-3 py-2.5 text-xs font-medium text-gray-500 hover:text-gray-700 hover:bg-gray-100 transition-colors">
+                        Don't show again
+                    </button>
+                </div>
                 <a href="{{ route('admin.petty-cash.reconciliation', ['openTransfer' => $job->id]) }}"
                    class="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-blue-500 transition-colors">
                     Transfer to replacement vehicle
