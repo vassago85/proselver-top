@@ -2,8 +2,10 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Support\Str;
 
 class DriverProfile extends Model
 {
@@ -71,6 +73,42 @@ class DriverProfile extends Model
     }
 
     /**
+     * Base location is stored as a plain string (see the
+     * DriverBaseLocation reference table) but historical rows are still
+     * a stew of casings and stray whitespace. Trim + title-case on read
+     * so every surface -- edit form, card view, table view, ops
+     * dashboard filter -- shows the same string even before an admin
+     * runs a cleanup pass.
+     *
+     * We do NOT force-canonicalise on write here; the migration handled
+     * the historical data, the picker constrains new writes, and
+     * leaving raw writes alone means an admin who deliberately types a
+     * weird value (say, a new depot name that isn't in the picker
+     * yet) sees exactly what they typed.
+     */
+    protected function baseLocation(): Attribute
+    {
+        return Attribute::make(
+            get: function ($value) {
+                if ($value === null) {
+                    return null;
+                }
+                $trimmed = preg_replace('/\s+/', ' ', trim((string) $value));
+                if ($trimmed === '') {
+                    return null;
+                }
+                // Title-case only if the value looks all-caps or all-
+                // lowercase; a mixed-case value the user typed
+                // deliberately (e.g. "Cape Town CBD") is preserved.
+                if ($trimmed === Str::upper($trimmed) || $trimmed === Str::lower($trimmed)) {
+                    return Str::title($trimmed);
+                }
+                return $trimmed;
+            },
+        );
+    }
+
+    /**
      * Rate per completed movement, in rand.  Null when unset.
      * Used by the month-end pay report and the driver edit form.
      */
@@ -100,6 +138,48 @@ class DriverProfile extends Model
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
+    }
+
+    /**
+     * Classify a credential expiry date against a "how soon is soon"
+     * window. Returns [pillVariant, pillLabel, isAtRisk].
+     *
+     *   - null             -> ['slate', 'Missing',              false]
+     *   - past             -> ['red',   'Expired · d M Y',      true]
+     *   - within $soonDays -> ['amber', 'Due d M Y',            true]
+     *   - later than that  -> ['green', 'd M Y',                false]
+     *
+     * Lives on the model rather than inside the operations blade
+     * because two audit fixes depend on the third element:
+     *
+     *   - the Compliance Risks table on Driver Operations only
+     *     colours the at-risk column so a row that appears because
+     *     ONE credential is near expiry isn't drowned by two green
+     *     pills for the other two;
+     *   - unit tests can exercise the classification without having
+     *     to render the ops dashboard (which uses Postgres-only
+     *     aggregate SQL and cannot run under SQLite).
+     */
+    public static function expiryBadge(?\Illuminate\Support\Carbon $date, int $soonDays): array
+    {
+        if ($date === null) {
+            return ['slate', 'Missing', false];
+        }
+        if ($date->isPast()) {
+            return ['red', 'Expired · ' . $date->format('d M Y'), true];
+        }
+        // Carbon 3's diffInDays is signed by default, so for future
+        // dates it returns a NEGATIVE float and "<= $soonDays" was
+        // silently true for every date beyond today. That's what the
+        // audit observed: a licence dated 2030 rendered as amber
+        // "Due 15 Dec 2030" alongside a genuinely-near trade plate,
+        // diluting the risk signal. Compute the horizon as an actual
+        // date so the comparison is unambiguous and version-safe.
+        $horizon = now()->startOfDay()->addDays($soonDays)->endOfDay();
+        if ($date->lessThanOrEqualTo($horizon)) {
+            return ['amber', 'Due ' . $date->format('d M Y'), true];
+        }
+        return ['green', $date->format('d M Y'), false];
     }
 
     /**

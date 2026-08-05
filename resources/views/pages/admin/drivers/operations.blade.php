@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\Company;
+use App\Models\DriverBaseLocation;
 use App\Models\DriverProfile;
 use App\Models\Job;
 use App\Models\SystemSetting;
@@ -284,7 +285,11 @@ new #[Layout('components.layouts.app')] class extends Component
                 'value' => $expiringDocs,
                 'color' => $expiringDocs > 0 ? 'red' : 'slate',
                 'icon'  => '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
-                'helper'=> "License / PDP / trade plate within {$this->expirySoonDays}d",
+                // Same "expiring within N days" wording used on the
+                // roster's Action Required banner and the Compliance
+                // Risks panel below -- so the operator reading these
+                // three surfaces sees one threshold, not three.
+                'helper'=> "License / PDP / trade plate expiring within {$this->expirySoonDays} days",
             ],
         ];
 
@@ -354,10 +359,12 @@ new #[Layout('components.layouts.app')] class extends Component
         // Filter option lists
         $companyOptions = Company::where('type', Company::TYPE_TRANSPORTER)
             ->where('is_active', true)->orderBy('name')->get(['id', 'name']);
-        $baseOptions = DriverProfile::query()
-            ->whereNotNull('base_location')
-            ->where('base_location', '!=', '')
-            ->distinct()->orderBy('base_location')->pluck('base_location');
+        // Base-location filter now sources from the controlled reference
+        // table (see DriverBaseLocation). Historical free-text values
+        // were collapsed onto canonical rows by the accompanying data
+        // migration, so this list is stable and rename-able from one
+        // place instead of scattered across driver_profiles.
+        $baseOptions = DriverBaseLocation::pickerOptions();
 
         return compact(
             'from', 'to',
@@ -389,13 +396,21 @@ new #[Layout('components.layouts.app')] class extends Component
         return $h . 'h ' . $m . 'm';
     };
 
-    /** Expiry badge: red=expired, amber=soon, green=ok, slate=missing. */
-    $expiryBadge = function (?\Illuminate\Support\Carbon $date, int $soonDays) {
-        if (!$date) { return ['slate', 'Missing']; }
-        if ($date->isPast())                       { return ['red',   'Expired · ' . $date->format('d M Y')]; }
-        if ($date->diffInDays(now()) <= $soonDays) { return ['amber', 'Due ' . $date->format('d M Y')]; }
-        return ['green', $date->format('d M Y')];
-    };
+    /**
+     * Expiry badge: [variant, label, isAtRisk].
+     *
+     * The third element -- isAtRisk -- lets the compliance-risks table
+     * mute non-at-risk columns instead of colouring them green. A row
+     * lands in that table because ONE credential is close to (or past)
+     * its expiry; the other two are still current and their green
+     * pills were dominating the visual, drowning the actual warning.
+     *
+     * Delegates to DriverProfile::expiryBadge() so the classification
+     * is unit-testable without rendering this whole dashboard (which
+     * uses Postgres-only aggregate SQL and cannot run under SQLite).
+     */
+    $expiryBadge = fn (?\Illuminate\Support\Carbon $date, int $soonDays)
+        => \App\Models\DriverProfile::expiryBadge($date, $soonDays);
 @endphp
 
 <div class="space-y-6">
@@ -735,17 +750,38 @@ new #[Layout('components.layouts.app')] class extends Component
                         <tbody class="divide-y divide-slate-100">
                             @foreach($complianceDrivers as $p)
                                 @php
-                                    [$licCol, $licTxt] = $expiryBadge($p->license_expiry, $expirySoonDays);
-                                    [$pdpCol, $pdpTxt] = $expiryBadge($p->prdp_expiry, $expirySoonDays);
-                                    [$tpCol,  $tpTxt]  = $expiryBadge($p->trade_plate_expiry, $expirySoonDays);
+                                    [$licCol, $licTxt, $licAtRisk] = $expiryBadge($p->license_expiry, $expirySoonDays);
+                                    [$pdpCol, $pdpTxt, $pdpAtRisk] = $expiryBadge($p->prdp_expiry, $expirySoonDays);
+                                    [$tpCol,  $tpTxt,  $tpAtRisk]  = $expiryBadge($p->trade_plate_expiry, $expirySoonDays);
                                 @endphp
                                 <tr class="hover:bg-slate-50/60 transition-colors">
                                     <td class="px-4 py-2.5">
                                         <a href="{{ route('admin.drivers.edit', $p->user) }}" class="font-medium text-slate-900 hover:text-blue-700">{{ $p->user?->name ?? '—' }}</a>
                                     </td>
-                                    <td class="px-4 py-2.5"><x-dash.pill :variant="$licCol">{{ $licTxt }}</x-dash.pill></td>
-                                    <td class="px-4 py-2.5"><x-dash.pill :variant="$pdpCol">{{ $pdpTxt }}</x-dash.pill></td>
-                                    <td class="px-4 py-2.5"><x-dash.pill :variant="$tpCol">{{ $tpTxt }}</x-dash.pill></td>
+                                    {{-- Only the at-risk credential gets a coloured pill; the
+                                         other two render as muted text so the eye lands on
+                                         what actually needs attention. --}}
+                                    <td class="px-4 py-2.5">
+                                        @if($licAtRisk)
+                                            <x-dash.pill :variant="$licCol">{{ $licTxt }}</x-dash.pill>
+                                        @else
+                                            <span class="text-xs text-slate-400">{{ $p->license_expiry ? $p->license_expiry->format('d M Y') : '—' }}</span>
+                                        @endif
+                                    </td>
+                                    <td class="px-4 py-2.5">
+                                        @if($pdpAtRisk)
+                                            <x-dash.pill :variant="$pdpCol">{{ $pdpTxt }}</x-dash.pill>
+                                        @else
+                                            <span class="text-xs text-slate-400">{{ $p->prdp_expiry ? $p->prdp_expiry->format('d M Y') : '—' }}</span>
+                                        @endif
+                                    </td>
+                                    <td class="px-4 py-2.5">
+                                        @if($tpAtRisk)
+                                            <x-dash.pill :variant="$tpCol">{{ $tpTxt }}</x-dash.pill>
+                                        @else
+                                            <span class="text-xs text-slate-400">{{ $p->trade_plate_expiry ? $p->trade_plate_expiry->format('d M Y') : '—' }}</span>
+                                        @endif
+                                    </td>
                                 </tr>
                             @endforeach
                         </tbody>

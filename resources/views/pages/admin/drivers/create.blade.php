@@ -1,5 +1,6 @@
 <?php
 use App\Models\Company;
+use App\Models\DriverBaseLocation;
 use App\Models\User;
 use App\Models\DriverProfile;
 use Livewire\Volt\Component;
@@ -7,6 +8,7 @@ use Livewire\Attributes\Layout;
 use Livewire\WithFileUploads;
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Validation\Rule;
 
 new #[Layout('components.layouts.app')] class extends Component {
     use WithFileUploads;
@@ -61,8 +63,24 @@ new #[Layout('components.layouts.app')] class extends Component {
         $this->password = $this->generatePassword ? Str::random(12) : '';
     }
 
+    /**
+     * Options for the Base Location picker. Sourced from the
+     * driver_base_locations reference table so the value the operator
+     * chooses matches what the ops-dashboard filter dropdown expects.
+     */
+    public function with(): array
+    {
+        return [
+            'baseLocationOptions' => DriverBaseLocation::pickerOptions(),
+        ];
+    }
+
     public function save(): void
     {
+        // Base Location is validated against the reference table so a
+        // crafted Livewire payload can't reintroduce free-text drift
+        // (empty is still allowed -- not every driver has a fixed
+        // depot).
         $this->validate([
             'name' => 'required|string|max:255',
             'username' => 'required|string|max:50|unique:users,username',
@@ -71,7 +89,10 @@ new #[Layout('components.layouts.app')] class extends Component {
             'password' => 'required|string|min:8',
             'idNumber' => 'nullable|string|max:20',
             'cellphone' => 'nullable|string|max:20',
-            'baseLocation' => 'nullable|string|max:255',
+            'baseLocation' => [
+                'nullable', 'string', 'max:255',
+                Rule::in(DriverBaseLocation::pickerOptions()->all()),
+            ],
             'tradePlate' => 'nullable|string|max:20',
             'tradePlateExpiry' => 'nullable|date',
             'licenseCode' => 'nullable|string|max:20',
@@ -216,7 +237,13 @@ new #[Layout('components.layouts.app')] class extends Component {
                 </div>
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">Base Location</label>
-                    <input wire:model="baseLocation" type="text" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:ring-blue-500" placeholder="e.g. Johannesburg">
+                    <select wire:model="baseLocation" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:ring-blue-500">
+                        <option value="">— Select a base location —</option>
+                        @foreach($baseLocationOptions as $option)
+                            <option value="{{ $option }}">{{ $option }}</option>
+                        @endforeach
+                    </select>
+                    <p class="mt-1 text-xs text-gray-400">Controlled list. Ask an admin to add a new depot if it isn't here.</p>
                     @error('baseLocation')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
                 </div>
                 <div>

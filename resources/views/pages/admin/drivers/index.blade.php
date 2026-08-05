@@ -136,7 +136,12 @@ new #[Layout('components.layouts.app')] class extends Component {
     {
         $licenseWarnMonths = (int) SystemSetting::get('driver_license_expiry_warn_months', 3);
         $pdpWarnMonths = (int) SystemSetting::get('driver_pdp_expiry_warn_months', 3);
-        $tradePlateWarnDays = 60;
+        // Shared "how soon is soon" threshold. Same key the Driver
+        // Operations dashboard reads so the two surfaces can't drift
+        // apart and produce contradictory-looking counts. Trade-plate
+        // rows still fall inside this window; per-row pill colouring
+        // (below) still uses the per-credential warn-months settings.
+        $tradePlateWarnDays = (int) SystemSetting::get('drivers.expiry_soon_days', 30);
 
         $query = User::whereHas('roles', fn($q) => $q->where('slug', 'driver'))
             ->with('driverProfile')
@@ -222,7 +227,12 @@ new #[Layout('components.layouts.app')] class extends Component {
         // show). Lives here because this is *the* drivers page and it's
         // where ops actually come to act on expiring credentials.
         $today = now()->startOfDay();
-        $windowEnd = $today->copy()->addDays(60)->endOfDay();
+        // The Action-Required window uses the same setting as the ops
+        // dashboard so a driver "expiring soon" here is the same driver
+        // "expiring soon" on the compliance-risks table -- no more
+        // "roster says 5, ops says 2" confusion.
+        $expiryWarnDays = (int) SystemSetting::get('drivers.expiry_soon_days', 30);
+        $windowEnd = $today->copy()->addDays($expiryWarnDays)->endOfDay();
 
         $totalActiveDrivers = User::whereHas('roles', fn($q) => $q->where('slug', 'driver'))
             ->where('is_active', true)
@@ -276,6 +286,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             'attentionExpiredCount' => $attentionExpiredCount,
             'attentionExpiringCount' => $attentionExpiringCount,
             'attentionOverflow' => $attentionOverflow,
+            'expiryWarnDays' => $expiryWarnDays,
         ];
     }
 };
@@ -296,7 +307,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             $attnSummary = trim(
                 ($attentionExpiredCount > 0 ? $attentionExpiredCount . ' expired' : '')
                 . ($attentionExpiredCount > 0 && $attentionExpiringCount > 0 ? ' · ' : '')
-                . ($attentionExpiringCount > 0 ? $attentionExpiringCount . ' expiring <60d' : '')
+                . ($attentionExpiringCount > 0 ? $attentionExpiringCount . ' expiring within ' . $expiryWarnDays . 'd' : '')
             );
         @endphp
         {{-- Dismissible on the client only. The user asked for this banner
@@ -336,7 +347,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                         <span class="text-[11px] text-slate-500 tabular-nums truncate">
                             @if($attentionExpiredCount > 0){{ $attentionExpiredCount }} expired @endif
                             @if($attentionExpiredCount > 0 && $attentionExpiringCount > 0) · @endif
-                            @if($attentionExpiringCount > 0){{ $attentionExpiringCount }} expiring &lt;60d @endif
+                            @if($attentionExpiringCount > 0){{ $attentionExpiringCount }} expiring within {{ $expiryWarnDays }}d @endif
                         </span>
                     </div>
                     <div class="flex items-center gap-3 text-[11px] text-slate-500 tabular-nums">

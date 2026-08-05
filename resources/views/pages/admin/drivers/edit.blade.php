@@ -1,5 +1,6 @@
 <?php
 use App\Models\User;
+use App\Models\DriverBaseLocation;
 use App\Models\DriverProfile;
 use App\Services\DriverOffboardingService;
 use Livewire\Volt\Component;
@@ -8,6 +9,7 @@ use Livewire\WithFileUploads;
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Validation\Rule;
 
 new #[Layout('components.layouts.app')] class extends Component {
     use WithFileUploads;
@@ -130,7 +132,17 @@ new #[Layout('components.layouts.app')] class extends Component {
             'phone' => 'nullable|string|max:20',
             'idNumber' => 'nullable|string|max:20',
             'cellphone' => 'nullable|string|max:20',
-            'baseLocation' => 'nullable|string|max:255',
+            // Base Location comes from the controlled list; the existing
+            // value is grandfathered in via `in` because a driver whose
+            // depot has since been retired must still save without a
+            // forced re-pick (they'll be prompted separately).
+            'baseLocation' => [
+                'nullable', 'string', 'max:255',
+                Rule::in(array_values(array_unique(array_filter(array_merge(
+                    DriverBaseLocation::pickerOptions()->all(),
+                    [$this->baseLocation],
+                ))))),
+            ],
             'tradePlate' => 'nullable|string|max:20',
             'tradePlateExpiry' => 'nullable|date',
             'licenseCode' => 'nullable|string|max:20',
@@ -314,6 +326,16 @@ new #[Layout('components.layouts.app')] class extends Component {
             ->values()
             ->all();
 
+        // Base Location options come from the controlled reference
+        // list. If the driver's stored value has since been removed
+        // from the picker (unlikely but possible if an admin deactivates
+        // a depot), we prepend it so the select still shows the current
+        // value rather than silently dropping to blank.
+        $baseLocationOptions = DriverBaseLocation::pickerOptions();
+        if ($this->baseLocation !== '' && !$baseLocationOptions->contains($this->baseLocation)) {
+            $baseLocationOptions = collect([$this->baseLocation])->concat($baseLocationOptions);
+        }
+
         return [
             'canManage' => (bool) Auth::user()?->canManageUsers(),
             'activeJobCount' => $service->activeJobCount($this->user),
@@ -324,6 +346,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             'offRosterActor' => $profile?->off_roster_by_user_id
                 ? User::find($profile->off_roster_by_user_id)?->name
                 : null,
+            'baseLocationOptions' => $baseLocationOptions,
         ];
     }
 };
@@ -390,7 +413,13 @@ new #[Layout('components.layouts.app')] class extends Component {
                 </div>
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">Base Location</label>
-                    <input wire:model="baseLocation" type="text" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:ring-blue-500" placeholder="e.g. Johannesburg">
+                    <select wire:model="baseLocation" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:ring-blue-500">
+                        <option value="">— Select a base location —</option>
+                        @foreach($baseLocationOptions as $option)
+                            <option value="{{ $option }}">{{ $option }}</option>
+                        @endforeach
+                    </select>
+                    <p class="mt-1 text-xs text-gray-400">Controlled list. Ask an admin to add a new depot if it isn't here.</p>
                     @error('baseLocation')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
                 </div>
                 <div>
