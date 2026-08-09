@@ -44,6 +44,11 @@
 </head>
 <body class="bg-white text-slate-900 antialiased selection:bg-blue-600 selection:text-white">
 
+    {{-- Skip link: first focusable element so keyboard/AT users can jump
+         straight past the fixed header into the page content. Visually
+         hidden until focused. --}}
+    <a href="#top" class="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50 focus:rounded-lg focus:bg-white focus:px-4 focus:py-2 focus:text-sm focus:font-semibold focus:text-slate-900 focus:shadow-lg focus:ring-2 focus:ring-blue-500">Skip to content</a>
+
     {{-- ============================================================== --}}
     {{-- NAV                                                             --}}
     {{-- ============================================================== --}}
@@ -53,12 +58,12 @@
                 <img src="/logo.png?v=2" alt="TRIDENT" class="h-10 w-auto object-contain" />
                 <span class="sr-only">TRIDENT Control &amp; Dispatch Center</span>
             </a>
-            <nav class="hidden md:flex items-center gap-8 text-sm text-slate-600">
-                <a href="#pillars" class="hover:text-slate-900 transition-colors">Platform</a>
-                <a href="#features" class="hover:text-slate-900 transition-colors">Features</a>
-                <a href="#how" class="hover:text-slate-900 transition-colors">How it works</a>
-                <a href="#workflow" class="hover:text-slate-900 transition-colors">OEM workflow</a>
-                <a href="#proof" class="hover:text-slate-900 transition-colors">Proof</a>
+            <nav class="hidden md:flex items-center gap-4 lg:gap-6 text-sm text-slate-600">
+                <a href="#pillars" class="inline-flex items-center px-2 py-2 rounded-md hover:text-slate-900 hover:bg-slate-100/70 transition-colors">Platform</a>
+                <a href="#features" class="inline-flex items-center px-2 py-2 rounded-md hover:text-slate-900 hover:bg-slate-100/70 transition-colors">Features</a>
+                <a href="#how" class="inline-flex items-center px-2 py-2 rounded-md hover:text-slate-900 hover:bg-slate-100/70 transition-colors">How it works</a>
+                <a href="#workflow" class="inline-flex items-center px-2 py-2 rounded-md hover:text-slate-900 hover:bg-slate-100/70 transition-colors">OEM workflow</a>
+                <a href="#proof" class="inline-flex items-center px-2 py-2 rounded-md hover:text-slate-900 hover:bg-slate-100/70 transition-colors">Proof</a>
             </nav>
             <div class="flex items-center gap-2 sm:gap-3">
                 {{-- Sign in is a real button rather than a text link so it reads
