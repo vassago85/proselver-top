@@ -660,7 +660,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                                 @if(!empty($v['CustomerName'])) · {{ $v['CustomerName'] }} @endif
                                 @if(!empty($v['Brand']) || !empty($v['Model'])) · {{ trim(($v['Brand'] ?? '').' '.($v['Model'] ?? '')) }} @endif
                                 @if(!empty($v['VIN'])) · VIN {{ $v['VIN'] }} @endif
-                                · {{ $v['TankSize'] ?? '?' }} L tank
+                                @if(!empty($v['TankSize'])) · {{ $v['TankSize'] }} L tank @else · tank size unknown @endif
                             </option>
                         @endforeach
                     </select>
@@ -677,7 +677,22 @@ new #[Layout('components.layouts.app')] class extends Component {
                 </div>
 
                 <div>
-                    <label class="mb-1 block text-xs font-medium text-slate-700">Litres</label>
+                    <label class="mb-1 block text-xs font-medium text-slate-700">
+                        Litres
+                        @php
+                            // Show a tank-size hint next to the input when
+                            // we actually know it. Customer trucks off the
+                            // plant often have no tank spec on the delivery
+                            // note -- in that case we don't guess.
+                            $selectedVehicle = collect($vehicles)->firstWhere('Registration', $orderRegistration);
+                            $knownTank = $selectedVehicle['TankSize'] ?? null;
+                        @endphp
+                        @if($knownTank)
+                            <span class="text-[10px] font-normal text-slate-400">· tank {{ $knownTank }} L</span>
+                        @elseif($orderRegistration)
+                            <span class="text-[10px] font-normal text-slate-400">· tank size unknown &mdash; confirm with the driver</span>
+                        @endif
+                    </label>
                     <input wire:model.live.debounce.300ms="orderLitres" type="number" min="1" max="2000" step="1" placeholder="e.g. 400" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm tabular-nums focus:border-blue-500 focus:ring-1 focus:ring-blue-500" />
                     @php
                         // Estimate uses (in priority order):
@@ -972,7 +987,13 @@ new #[Layout('components.layouts.app')] class extends Component {
                                 @endif
                             </td>
                             <td class="px-4 py-3 font-mono text-[11px] text-slate-500">{{ $row['job_number'] ?: '—' }}</td>
-                            <td class="px-4 py-3 text-right text-xs tabular-nums text-slate-600">{{ $row['tank_size'] ? $row['tank_size'].' L' : '—' }}</td>
+                            <td class="px-4 py-3 text-right">
+                                @if($row['tank_size'])
+                                    <span class="text-xs tabular-nums text-slate-600">{{ $row['tank_size'] }} L</span>
+                                @else
+                                    <span class="inline-flex items-center rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500 ring-1 ring-inset ring-slate-200" title="Tank size not on the plant delivery note — the driver confirms at the pump.">unknown</span>
+                                @endif
+                            </td>
                             <td class="px-4 py-3 text-sm font-mono text-slate-700">{{ $row['card_number'] ?: '— no active card —' }}</td>
                             <td class="px-4 py-3 text-xs {{ $expiryClass }}">
                                 @if($expiresAt)

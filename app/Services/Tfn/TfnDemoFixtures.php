@@ -149,13 +149,18 @@ class TfnDemoFixtures
      */
     public function vehicles(): array
     {
+        // TankSize deliberately null on ~half the units. In real
+        // life the plant delivery note doesn't always spec the tank
+        // and ops shouldn't be forced to guess -- the "Order fuel"
+        // flow just accepts a litre value the operator agrees with
+        // the driver at the pump.
         return [
-            ['VIN' => 'LFAGH1245P0234567', 'Registration' => 'ND 123 GP', 'CustomerName' => 'FAW',       'Brand' => 'FAW',       'Model' => 'J5 28.290FT',      'TankSize' => 400, 'Status' => 3, 'ExternalNumber' => 'JOB-2026-8801'],
-            ['VIN' => 'JAANKR85LP0456789', 'Registration' => 'BX 987 GP', 'CustomerName' => 'Isuzu',     'Brand' => 'Isuzu',     'Model' => 'FVR 900 AMT',      'TankSize' => 400, 'Status' => 3, 'ExternalNumber' => 'JOB-2026-8802'],
-            ['VIN' => 'LGWEF67M4P0567890', 'Registration' => 'CA 552 GP', 'CustomerName' => 'Powerstar', 'Brand' => 'Powerstar', 'Model' => 'FT7 6x4 tractor',  'TankSize' => 500, 'Status' => 3, 'ExternalNumber' => 'JOB-2026-8803'],
-            ['VIN' => 'LFAJH6360P0234789', 'Registration' => 'HP 774 GP', 'CustomerName' => 'FAW',       'Brand' => 'FAW',       'Model' => 'JH6 P360 6x4',     'TankSize' => 500, 'Status' => 3, 'ExternalNumber' => 'JOB-2026-8804'],
-            ['VIN' => 'JAAFTR85LP0789012', 'Registration' => 'JX 302 GP', 'CustomerName' => 'Isuzu',     'Brand' => 'Isuzu',     'Model' => 'FTR 850 AMT',      'TankSize' => 600, 'Status' => 3, 'ExternalNumber' => 'JOB-2026-8805'],
-            ['VIN' => 'LGWEF95L4P0567234', 'Registration' => 'MT 118 GP', 'CustomerName' => 'Powerstar', 'Brand' => 'Powerstar', 'Model' => 'FT9 8x4 rigid',    'TankSize' => 400, 'Status' => 3, 'ExternalNumber' => 'JOB-2026-8806'],
+            ['VIN' => 'LFAGH1245P0234567', 'Registration' => 'ND 123 GP', 'CustomerName' => 'FAW',       'Brand' => 'FAW',       'Model' => 'J5 28.290FT',      'TankSize' => 400,  'Status' => 3, 'ExternalNumber' => 'JOB-2026-8801'],
+            ['VIN' => 'JAANKR85LP0456789', 'Registration' => 'BX 987 GP', 'CustomerName' => 'Isuzu',     'Brand' => 'Isuzu',     'Model' => 'FVR 900 AMT',      'TankSize' => null, 'Status' => 3, 'ExternalNumber' => 'JOB-2026-8802'],
+            ['VIN' => 'LGWEF67M4P0567890', 'Registration' => 'CA 552 GP', 'CustomerName' => 'Powerstar', 'Brand' => 'Powerstar', 'Model' => 'FT7 6x4 tractor',  'TankSize' => 500,  'Status' => 3, 'ExternalNumber' => 'JOB-2026-8803'],
+            ['VIN' => 'LFAJH6360P0234789', 'Registration' => 'HP 774 GP', 'CustomerName' => 'FAW',       'Brand' => 'FAW',       'Model' => 'JH6 P360 6x4',     'TankSize' => null, 'Status' => 3, 'ExternalNumber' => 'JOB-2026-8804'],
+            ['VIN' => 'JAAFTR85LP0789012', 'Registration' => 'JX 302 GP', 'CustomerName' => 'Isuzu',     'Brand' => 'Isuzu',     'Model' => 'FTR 850 AMT',      'TankSize' => 600,  'Status' => 3, 'ExternalNumber' => 'JOB-2026-8805'],
+            ['VIN' => 'LGWEF95L4P0567234', 'Registration' => 'MT 118 GP', 'CustomerName' => 'Powerstar', 'Brand' => 'Powerstar', 'Model' => 'FT9 8x4 rigid',    'TankSize' => null, 'Status' => 3, 'ExternalNumber' => 'JOB-2026-8806'],
         ];
     }
 
