@@ -407,7 +407,11 @@ new #[Layout('components.layouts.app')] class extends Component {
             $lastTx = $lastTxByVehicle->get($reg)?->sortByDesc('CapturedDate')->first();
             return [
                 'registration' => $reg,
-                'fleet_number' => $v['FleetNumber'] ?? null,
+                'vin'          => $v['VIN'] ?? null,
+                'customer'     => $v['CustomerName'] ?? null,
+                'brand'        => $v['Brand'] ?? null,
+                'model'        => $v['Model'] ?? null,
+                'job_number'   => $v['ExternalNumber'] ?? null,
                 'tank_size'    => $v['TankSize'] ?? null,
                 'status_code'  => $v['Status'] ?? null,
                 'card_number'  => $card['VirtualCardNumber'] ?? null,
@@ -647,15 +651,20 @@ new #[Layout('components.layouts.app')] class extends Component {
 
             <form wire:submit="placeOrder" class="grid grid-cols-1 gap-4 p-4 sm:grid-cols-2">
                 <div class="sm:col-span-2">
-                    <label class="mb-1 block text-xs font-medium text-slate-700">Vehicle registration</label>
+                    <label class="mb-1 block text-xs font-medium text-slate-700">Vehicle in transit</label>
                     <select wire:model="orderRegistration" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500">
                         <option value="">— Select a vehicle —</option>
                         @foreach($vehicles as $v)
                             <option value="{{ $v['Registration'] }}">
-                                {{ $v['Registration'] }} @if(!empty($v['FleetNumber'])) · {{ $v['FleetNumber'] }} @endif · {{ $v['TankSize'] ?? '?' }} L tank
+                                {{ $v['Registration'] ?: 'no reg' }}
+                                @if(!empty($v['CustomerName'])) · {{ $v['CustomerName'] }} @endif
+                                @if(!empty($v['Brand']) || !empty($v['Model'])) · {{ trim(($v['Brand'] ?? '').' '.($v['Model'] ?? '')) }} @endif
+                                @if(!empty($v['VIN'])) · VIN {{ $v['VIN'] }} @endif
+                                · {{ $v['TankSize'] ?? '?' }} L tank
                             </option>
                         @endforeach
                     </select>
+                    <p class="mt-1 text-[10px] text-slate-500">Each customer trip has its own TFN virtual card &mdash; the order authorises fuel against that trip only.</p>
                 </div>
 
                 <div>
@@ -745,7 +754,9 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <thead class="bg-slate-50">
                     <tr>
                         <th class="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Order #</th>
-                        <th class="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Vehicle</th>
+                        <th class="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Customer</th>
+                        <th class="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">VIN</th>
+                        <th class="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Reg</th>
                         <th class="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Product</th>
                         <th class="px-4 py-2.5 text-right text-[11px] font-semibold uppercase tracking-wider text-slate-500">Litres</th>
                         @if($canSeeFinance)
@@ -754,15 +765,37 @@ new #[Layout('components.layouts.app')] class extends Component {
                         <th class="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Depot</th>
                         <th class="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Placed</th>
                         <th class="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Expires</th>
-                        <th class="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Reference</th>
+                        <th class="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Job #</th>
                         <th class="px-4 py-2.5 text-right text-[11px] font-semibold uppercase tracking-wider text-slate-500">Actions</th>
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-slate-100">
                     @forelse($openOrders as $o)
+                        @php
+                            $customerChip = match(strtolower($o['CustomerName'] ?? '')) {
+                                'faw'       => 'bg-red-50 text-red-700 ring-red-600/20',
+                                'isuzu'     => 'bg-sky-50 text-sky-700 ring-sky-600/20',
+                                'powerstar' => 'bg-indigo-50 text-indigo-700 ring-indigo-600/20',
+                                default     => 'bg-slate-100 text-slate-700 ring-slate-300',
+                            };
+                        @endphp
                         <tr class="hover:bg-slate-50/50">
                             <td class="px-4 py-3 text-sm font-mono text-slate-900">{{ $o['OrderNumber'] ?? '—' }}</td>
-                            <td class="px-4 py-3 text-sm font-medium text-slate-900">{{ $o['VehicleRegistration'] ?? '—' }}</td>
+                            <td class="px-4 py-3">
+                                @if(!empty($o['CustomerName']))
+                                    <span class="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ring-1 ring-inset {{ $customerChip }}">{{ $o['CustomerName'] }}</span>
+                                @else
+                                    <span class="text-slate-400 text-xs">—</span>
+                                @endif
+                            </td>
+                            <td class="px-4 py-3 font-mono text-[11px] text-slate-600">{{ $o['VIN'] ?? '—' }}</td>
+                            <td class="px-4 py-3">
+                                @if(!empty($o['VehicleRegistration']))
+                                    <span class="inline-flex rounded bg-yellow-100 border border-yellow-300 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-yellow-900">{{ $o['VehicleRegistration'] }}</span>
+                                @else
+                                    <span class="text-slate-400 text-xs">—</span>
+                                @endif
+                            </td>
                             <td class="px-4 py-3 text-sm text-slate-700">{{ $o['ProductCode'] ?? '—' }} <span class="text-xs text-slate-400">· {{ $productLabels[$o['ProductCode'] ?? ''] ?? '' }}</span></td>
                             <td class="px-4 py-3 text-right text-sm tabular-nums text-slate-900">{{ number_format((float) ($o['Litres'] ?? 0)) }} L</td>
                             @if($canSeeFinance)
@@ -780,7 +813,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                             </td>
                         </tr>
                     @empty
-                        <tr><td colspan="{{ $canSeeFinance ? 10 : 9 }}" class="px-4 py-8 text-center text-sm text-slate-500">No open pre-authorisations. Use the form above to place one.</td></tr>
+                        <tr><td colspan="{{ $canSeeFinance ? 13 : 12 }}" class="px-4 py-8 text-center text-sm text-slate-500">No open pre-authorisations. Use the form above to place one.</td></tr>
                     @endforelse
                 </tbody>
             </table>
@@ -806,7 +839,10 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <thead class="bg-slate-50">
                     <tr>
                         <th class="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Time</th>
-                        <th class="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Vehicle</th>
+                        <th class="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Customer</th>
+                        <th class="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">VIN</th>
+                        <th class="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Reg</th>
+                        <th class="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Job #</th>
                         <th class="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Depot</th>
                         <th class="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Product</th>
                         <th class="px-4 py-2.5 text-right text-[11px] font-semibold uppercase tracking-wider text-slate-500">Litres</th>
@@ -819,14 +855,32 @@ new #[Layout('components.layouts.app')] class extends Component {
                 </thead>
                 <tbody class="divide-y divide-slate-100">
                     @forelse($transactions as $t)
+                        @php
+                            $customerChip = match(strtolower($t['CustomerName'] ?? '')) {
+                                'faw'       => 'bg-red-50 text-red-700 ring-red-600/20',
+                                'isuzu'     => 'bg-sky-50 text-sky-700 ring-sky-600/20',
+                                'powerstar' => 'bg-indigo-50 text-indigo-700 ring-indigo-600/20',
+                                default     => 'bg-slate-100 text-slate-700 ring-slate-300',
+                            };
+                        @endphp
                         <tr class="hover:bg-slate-50/50">
                             <td class="px-4 py-2.5 text-xs text-slate-500">{{ \Illuminate\Support\Carbon::parse($t['CapturedDate'] ?? $t['TransactionDate'] ?? now())->format('d M · H:i') }}</td>
-                            <td class="px-4 py-2.5 text-sm font-medium text-slate-900">
-                                {{ $t['VehicleRegistration'] ?? '—' }}
-                                @if(!empty($t['VehicleFleetNumber']))
-                                    <span class="ml-1 text-xs text-slate-400">· {{ $t['VehicleFleetNumber'] }}</span>
+                            <td class="px-4 py-2.5">
+                                @if(!empty($t['CustomerName']))
+                                    <span class="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ring-1 ring-inset {{ $customerChip }}">{{ $t['CustomerName'] }}</span>
+                                @else
+                                    <span class="text-slate-400 text-xs">—</span>
                                 @endif
                             </td>
+                            <td class="px-4 py-2.5 font-mono text-[11px] text-slate-600">{{ $t['VIN'] ?? '—' }}</td>
+                            <td class="px-4 py-2.5">
+                                @if(!empty($t['VehicleRegistration']))
+                                    <span class="inline-flex rounded bg-yellow-100 border border-yellow-300 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-yellow-900">{{ $t['VehicleRegistration'] }}</span>
+                                @else
+                                    <span class="text-slate-400 text-xs">—</span>
+                                @endif
+                            </td>
+                            <td class="px-4 py-2.5 font-mono text-[11px] text-slate-500">{{ $t['VehicleFleetNumber'] ?: '—' }}</td>
                             <td class="px-4 py-2.5 text-sm text-slate-700">{{ $t['SupplierName'] ?? '—' }}</td>
                             <td class="px-4 py-2.5 text-sm">
                                 <span class="inline-flex items-center rounded-md bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">{{ $t['ProductCode'] ?? '—' }}</span>
@@ -840,7 +894,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                             <td class="px-4 py-2.5 text-xs font-mono text-slate-500">{{ $t['TransactionReference'] ?? '—' }}</td>
                         </tr>
                     @empty
-                        <tr><td colspan="{{ $canSeeFinance ? 8 : 7 }}" class="px-4 py-8 text-center text-sm text-slate-500">No transactions in this window.</td></tr>
+                        <tr><td colspan="{{ $canSeeFinance ? 11 : 10 }}" class="px-4 py-8 text-center text-sm text-slate-500">No transactions in this window.</td></tr>
                     @endforelse
                 </tbody>
             </table>
@@ -851,18 +905,21 @@ new #[Layout('components.layouts.app')] class extends Component {
     <div class="rounded-xl border border-slate-200 bg-white shadow-sm">
         <div class="flex items-center justify-between border-b border-slate-100 p-4">
             <div>
-                <h2 class="text-sm font-semibold text-slate-900">Fleet · virtual cards</h2>
-                <p class="mt-0.5 text-xs text-slate-500">Each vehicle draws fuel using a rotating virtual card. Cards expire on the schedule TFN configures — reissue via TFN's ops if a card is compromised.</p>
+                <h2 class="text-sm font-semibold text-slate-900">In-transit vehicles &middot; virtual cards</h2>
+                <p class="mt-0.5 text-xs text-slate-500">One row per customer vehicle currently being moved drive-away. TFN issues a virtual card for the trip &mdash; card retires when the driver hands the keys over at the dealership.</p>
             </div>
-            <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700">{{ count($fleet) }} vehicles</span>
+            <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700">{{ count($fleet) }} in transit</span>
         </div>
 
         <div class="overflow-x-auto">
             <table class="min-w-full divide-y divide-slate-200">
                 <thead class="bg-slate-50">
                     <tr>
-                        <th class="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Registration</th>
-                        <th class="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Fleet #</th>
+                        <th class="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Customer</th>
+                        <th class="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Vehicle</th>
+                        <th class="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">VIN</th>
+                        <th class="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Reg</th>
+                        <th class="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Job #</th>
                         <th class="px-4 py-2.5 text-right text-[11px] font-semibold uppercase tracking-wider text-slate-500">Tank</th>
                         <th class="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Card #</th>
                         <th class="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Card expires</th>
@@ -880,19 +937,41 @@ new #[Layout('components.layouts.app')] class extends Component {
                             $expiryClass = match(true) {
                                 $daysToExpiry === null => 'text-slate-400',
                                 $daysToExpiry < 0      => 'text-rose-600 font-semibold',
-                                $daysToExpiry <= 7     => 'text-amber-600 font-semibold',
+                                $daysToExpiry <= 1     => 'text-amber-600 font-semibold',
                                 default                => 'text-slate-500',
                             };
                             $statusMap = [0 => 'WrittenOff', 1 => 'Dormant', 2 => 'Unused', 3 => 'Active', 4 => 'Stolen', 5 => 'Moved', 6 => 'Sold'];
                             $statusLabel = $statusMap[$row['status_code']] ?? '—';
                             $statusClass = $row['status_code'] === 3 ? 'bg-emerald-50 text-emerald-700 ring-emerald-600/20' : 'bg-slate-100 text-slate-600 ring-slate-200';
+                            // Customer chip colour so Isuzu / FAW / Powerstar are visually distinct at a glance.
+                            $customerChip = match(strtolower($row['customer'] ?? '')) {
+                                'faw'       => 'bg-red-50 text-red-700 ring-red-600/20',
+                                'isuzu'     => 'bg-sky-50 text-sky-700 ring-sky-600/20',
+                                'powerstar' => 'bg-indigo-50 text-indigo-700 ring-indigo-600/20',
+                                default     => 'bg-slate-100 text-slate-700 ring-slate-300',
+                            };
                         @endphp
                         <tr class="hover:bg-slate-50/50">
-                            <td class="px-4 py-3 text-sm font-medium text-slate-900">
-                                {{ $row['registration'] }}
-                                <span class="ml-1 inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium ring-1 ring-inset {{ $statusClass }}">{{ $statusLabel }}</span>
+                            <td class="px-4 py-3">
+                                @if($row['customer'])
+                                    <span class="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ring-1 ring-inset {{ $customerChip }}">{{ $row['customer'] }}</span>
+                                @else
+                                    <span class="text-slate-400 text-xs">—</span>
+                                @endif
                             </td>
-                            <td class="px-4 py-3 text-xs text-slate-500">{{ $row['fleet_number'] ?: '—' }}</td>
+                            <td class="px-4 py-3 text-xs text-slate-700">
+                                <p class="font-medium text-slate-900">{{ $row['brand'] }} {{ $row['model'] }}</p>
+                                <span class="inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium ring-1 ring-inset {{ $statusClass }} mt-0.5">{{ $statusLabel }}</span>
+                            </td>
+                            <td class="px-4 py-3 font-mono text-[11px] text-slate-600">{{ $row['vin'] ?: '—' }}</td>
+                            <td class="px-4 py-3">
+                                @if($row['registration'])
+                                    <span class="inline-flex rounded bg-yellow-100 border border-yellow-300 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-yellow-900">{{ $row['registration'] }}</span>
+                                @else
+                                    <span class="text-slate-400 text-xs">—</span>
+                                @endif
+                            </td>
+                            <td class="px-4 py-3 font-mono text-[11px] text-slate-500">{{ $row['job_number'] ?: '—' }}</td>
                             <td class="px-4 py-3 text-right text-xs tabular-nums text-slate-600">{{ $row['tank_size'] ? $row['tank_size'].' L' : '—' }}</td>
                             <td class="px-4 py-3 text-sm font-mono text-slate-700">{{ $row['card_number'] ?: '— no active card —' }}</td>
                             <td class="px-4 py-3 text-xs {{ $expiryClass }}">
