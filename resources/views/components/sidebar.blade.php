@@ -226,6 +226,17 @@
                             <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg></x-slot:icon>
                             Damage Reports
                         </x-sidebar-link>
+                        {{-- TFN Fuel Operations — balances, live pricing, place
+                             diesel pre-auth orders, per-vehicle virtual card
+                             status, recent transactions.  Page's mount() is the
+                             source of truth on gating (internal + developer);
+                             we surface the link to every internal role so no
+                             one has to know the URL. Safe pre-go-live: page
+                             renders demo fixtures until TFN_ENABLED=true. --}}
+                        <x-sidebar-link :href="route('admin.fuel')" :active="request()->routeIs('admin.fuel')">
+                            <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 22V4a1 1 0 0 1 1-1h9a1 1 0 0 1 1 1v18"/><path d="M14 12h2a2 2 0 0 1 2 2v4a2 2 0 0 0 4 0V9l-3-3"/><path d="M3 22h11"/><path d="M6 14h5"/><path d="M6 18h5"/><path d="M6 10h5"/><path d="M6 6h5"/></svg></x-slot:icon>
+                            Fuel &middot; TFN
+                        </x-sidebar-link>
                     </ul>
                 </li>
 

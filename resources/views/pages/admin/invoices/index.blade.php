@@ -4,6 +4,7 @@ use App\Models\Company;
 use App\Models\Job;
 use App\Services\AuditService;
 use App\Services\MovementInvoiceExport;
+use App\Services\Tfn\TfnFuelReconciliationService;
 use Illuminate\Support\Carbon;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\Url;
@@ -59,6 +60,17 @@ new #[Layout('components.layouts.app')] class extends Component {
      */
     public array $rows = [];
 
+    /**
+     * Per-job "where did this litres/rand number come from" hint,
+     * populated when the operator runs an auto-fill against TFN.
+     * Not persisted -- it's a UX affordance to make it obvious which
+     * rows were touched by the last auto-fill so the operator can
+     * eyeball them before saving.
+     *
+     * Shape:  [$jobId => ['source' => 'tfn'|'demo'|'no_registration'|'no_matches', 'count' => N]]
+     */
+    public array $fuelHints = [];
+
     public function mount(): void
     {
         $u = auth()->user();
@@ -84,6 +96,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         if (in_array($field, ['companyId', 'dateFrom', 'dateTo', 'completion'], true)) {
             $this->resetPage();
             $this->rows = [];
+            $this->fuelHints = [];
         }
     }
 
@@ -101,6 +114,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         $this->completion = $completion;
         $this->resetPage();
         $this->rows = [];
+        $this->fuelHints = [];
     }
 
     /**
@@ -130,7 +144,116 @@ new #[Layout('components.layouts.app')] class extends Component {
         $this->dateFrom = $from->toDateString();
         $this->dateTo   = $to->toDateString();
         $this->rows = []; // force re-hydrate from DB
+        $this->fuelHints = [];
         $this->resetPage();
+    }
+
+    /**
+     * Auto-fill the fuel litres + amount for a single job from TFN.
+     * Populates the visible form inputs -- doesn't persist -- so the
+     * operator still needs to hit Save.  Attaches a small hint next
+     * to the row so it's clear which rows were touched.
+     */
+    public function autofillFuelFromTfn(int $jobId, TfnFuelReconciliationService $svc): void
+    {
+        $u = auth()->user();
+        if (!$u || (!$u->isAccounts() && !$u->isOwner() && !$u->isDeveloper())) {
+            abort(403);
+        }
+
+        $job = $this->baseQuery()->whereKey($jobId)->first();
+        if (!$job) {
+            session()->flash('error', 'Movement not found on this page.');
+            return;
+        }
+        if ($job->invoicing_excluded_at) {
+            session()->flash('error', 'This movement is marked "not required" -- un-exclude it first.');
+            return;
+        }
+
+        $result = $svc->reconcileOne($job);
+        $this->fuelHints[$job->id] = ['source' => $result['source'], 'count' => $result['matched_count']];
+
+        if ($result['matched_count'] === 0) {
+            session()->flash('error', match ($result['source']) {
+                'no_registration' => "No registration captured on {$job->job_number} -- cannot match TFN transactions by VIN alone.",
+                default           => "No TFN diesel transactions found for {$job->registration} in the trip window.",
+            });
+            return;
+        }
+
+        $this->rows[$job->id]['fuel_litres'] = $result['litres'];
+        $this->rows[$job->id]['fuel_amount'] = $result['amount'];
+
+        session()->flash('success', sprintf(
+            'Populated %s: %s L / R %s from %d TFN transaction%s. Review, then Save.',
+            $job->job_number,
+            number_format((float) $result['litres'], 2),
+            number_format((float) $result['amount'], 2),
+            $result['matched_count'],
+            $result['matched_count'] === 1 ? '' : 's',
+        ));
+    }
+
+    /**
+     * Bulk auto-fill every visible row on this page.  One TFN API call
+     * spans the whole window rather than one per job, which is the
+     * point of the batched service.
+     */
+    public function autofillFuelFromTfnAll(TfnFuelReconciliationService $svc): void
+    {
+        $u = auth()->user();
+        if (!$u || (!$u->isAccounts() && !$u->isOwner() && !$u->isDeveloper())) {
+            abort(403);
+        }
+
+        $rowIds = array_keys($this->rows);
+        if (empty($rowIds)) {
+            session()->flash('error', 'Nothing on this page to auto-fill.');
+            return;
+        }
+
+        $jobs = $this->baseQuery()
+            ->whereIn('id', $rowIds)
+            ->whereNull('invoicing_excluded_at')
+            ->get();
+
+        $results = $svc->reconcile($jobs);
+
+        $populated = 0;
+        $noReg = 0;
+        $noMatches = 0;
+
+        foreach ($jobs as $job) {
+            $result = $results[$job->id] ?? null;
+            if (!$result) continue;
+
+            $this->fuelHints[$job->id] = [
+                'source' => $result['source'],
+                'count'  => $result['matched_count'],
+            ];
+
+            if ($result['matched_count'] > 0) {
+                $this->rows[$job->id]['fuel_litres'] = $result['litres'];
+                $this->rows[$job->id]['fuel_amount'] = $result['amount'];
+                $populated++;
+            } elseif ($result['source'] === 'no_registration') {
+                $noReg++;
+            } else {
+                $noMatches++;
+            }
+        }
+
+        $parts = ["Populated {$populated} row" . ($populated === 1 ? '' : 's') . ' from TFN'];
+        if ($noReg > 0) {
+            $parts[] = "{$noReg} skipped (no registration on job)";
+        }
+        if ($noMatches > 0) {
+            $parts[] = "{$noMatches} without matching transactions";
+        }
+        $parts[] = 'Review, then Save.';
+
+        session()->flash($populated > 0 ? 'success' : 'error', implode(' · ', $parts));
     }
 
     /**
@@ -571,6 +694,15 @@ new #[Layout('components.layouts.app')] class extends Component {
                 </div>
 
                 <div class="flex flex-col items-end">
+                    <button wire:click="autofillFuelFromTfnAll" wire:loading.attr="disabled" wire:target="autofillFuelFromTfnAll"
+                        class="inline-flex items-center gap-1.5 rounded-md border border-indigo-300 bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 disabled:opacity-50">
+                        <svg wire:loading.remove wire:target="autofillFuelFromTfnAll" class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M18.7 8 12 14.7 8 10.7 3 15.7"/></svg>
+                        <svg wire:loading wire:target="autofillFuelFromTfnAll" class="h-3.5 w-3.5 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-6.2-8.55"/></svg>
+                        Auto-fill fuel from TFN
+                    </button>
+                    <span class="mt-0.5 text-[10px] text-slate-500">Populates litres + rand for visible rows. You still Save.</span>
+                </div>
+                <div class="flex flex-col items-end">
                     <button wire:click="save"
                         class="inline-flex items-center gap-1.5 rounded-md bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-500">
                         Save finance details
@@ -641,7 +773,12 @@ new #[Layout('components.layouts.app')] class extends Component {
                             <th class="px-3 py-2 text-left">Invoice #</th>
                             <th class="px-3 py-2 text-right">Invoice amt (incl VAT)</th>
                             <th class="px-3 py-2 text-right">Extras (incl VAT)</th>
-                            <th class="px-3 py-2 text-right">Litres</th>
+                            <th class="px-3 py-2 text-right">
+                                <div class="inline-flex items-center gap-1">
+                                    Litres
+                                    <span title="Click the TFN icon next to a row to auto-fill from TFN transactions." class="inline-flex h-3.5 w-3.5 items-center justify-center rounded-full bg-indigo-100 text-[9px] font-bold text-indigo-700">i</span>
+                                </div>
+                            </th>
                             <th class="px-3 py-2 text-right">Fuel (excl VAT)</th>
                             <th class="px-3 py-2 text-center">Complete</th>
                         </tr>
@@ -688,17 +825,47 @@ new #[Layout('components.layouts.app')] class extends Component {
                                         class="w-24 rounded border border-slate-300 px-2 py-1 text-xs text-right tabular-nums disabled:bg-slate-100 disabled:text-slate-400"
                                         placeholder="0.00">
                                 </td>
+                                @php
+                                    $hint = $fuelHints[$job->id] ?? null;
+                                    $hintPill = null;
+                                    if ($hint) {
+                                        $hintPill = match ($hint['source']) {
+                                            'tfn'             => ['label' => 'TFN · ' . $hint['count'] . ' txn' . ($hint['count'] === 1 ? '' : 's'), 'class' => 'bg-indigo-50 text-indigo-700 ring-indigo-200'],
+                                            'demo'            => ['label' => 'Demo · ' . $hint['count'] . ' txn' . ($hint['count'] === 1 ? '' : 's'), 'class' => 'bg-amber-50 text-amber-700 ring-amber-200'],
+                                            'no_registration' => ['label' => 'no reg on job',   'class' => 'bg-rose-50 text-rose-700 ring-rose-200'],
+                                            default           => ['label' => 'no TFN matches',  'class' => 'bg-slate-50 text-slate-600 ring-slate-200'],
+                                        };
+                                    }
+                                @endphp
                                 <td class="px-3 py-1.5 text-right">
-                                    <input type="number" step="0.01" min="0" wire:model="rows.{{ $job->id }}.fuel_litres"
-                                        @disabled($isExcluded)
-                                        class="w-20 rounded border border-slate-300 px-2 py-1 text-xs text-right tabular-nums disabled:bg-slate-100 disabled:text-slate-400"
-                                        placeholder="0">
+                                    <div class="flex items-center justify-end gap-1">
+                                        <input type="number" step="0.01" min="0" wire:model="rows.{{ $job->id }}.fuel_litres"
+                                            @disabled($isExcluded)
+                                            class="w-20 rounded border border-slate-300 px-2 py-1 text-xs text-right tabular-nums disabled:bg-slate-100 disabled:text-slate-400"
+                                            placeholder="0">
+                                        @unless($isExcluded)
+                                            <button type="button"
+                                                wire:click="autofillFuelFromTfn({{ $job->id }})"
+                                                wire:loading.attr="disabled"
+                                                wire:target="autofillFuelFromTfn({{ $job->id }}),autofillFuelFromTfnAll"
+                                                title="Auto-fill litres and rand from TFN transactions for this vehicle's trip window."
+                                                class="inline-flex h-6 w-6 items-center justify-center rounded border border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 disabled:opacity-50">
+                                                <svg wire:loading.remove wire:target="autofillFuelFromTfn({{ $job->id }})" class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M18.7 8 12 14.7 8 10.7 3 15.7"/></svg>
+                                                <svg wire:loading wire:target="autofillFuelFromTfn({{ $job->id }})" class="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-6.2-8.55"/></svg>
+                                            </button>
+                                        @endunless
+                                    </div>
                                 </td>
                                 <td class="px-3 py-1.5 text-right">
                                     <input type="number" step="0.01" min="0" wire:model="rows.{{ $job->id }}.fuel_amount"
                                         @disabled($isExcluded)
                                         class="w-24 rounded border border-slate-300 px-2 py-1 text-xs text-right tabular-nums disabled:bg-slate-100 disabled:text-slate-400"
                                         placeholder="0.00">
+                                    @if($hintPill)
+                                        <div class="mt-0.5 flex justify-end">
+                                            <span class="inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium ring-1 ring-inset {{ $hintPill['class'] }}">{{ $hintPill['label'] }}</span>
+                                        </div>
+                                    @endif
                                 </td>
                                 <td class="px-3 py-1.5 text-center">
                                     <div class="inline-flex flex-col gap-1 items-stretch">

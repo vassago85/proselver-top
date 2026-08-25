@@ -95,6 +95,15 @@ Volt::route('petty-cash/plans', 'admin.petty-cash.plans')->name('petty-cash.plan
 // Overview (canViewPettyCashOverview), enforced in the component's mount().
 Volt::route('petty-cash/reconciliation', 'admin.petty-cash.reconciliation')->name('petty-cash.reconciliation');
 Volt::route('vehicles', 'vehicles.index')->name('vehicles.index');
+
+// TFN fuel operations — single-screen view for our Truckfuelnet
+// integration: live sub-account balance & credit, live diesel product
+// pricing, place / cancel pre-authorisation orders, recent
+// transactions from the pump, per-vehicle virtual card status.
+// Component's mount() enforces internal-only (+ developer) access; the
+// page runs in demo mode until TFN credentials are populated in .env
+// so it is safe to expose ahead of go-live.
+Volt::route('fuel', 'admin.fuel')->name('fuel');
 Volt::route('documents', 'admin.documents.index')->name('documents.index');
 // Companies (formerly "Customers" — the model has always been Company,
 // the menu just used to call it Customers).  Old /admin/customers and

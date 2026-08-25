@@ -267,6 +267,15 @@ new #[Layout('components.layouts.app')] class extends Component {
             'statusLabels'    => Job::phase1FilterOptions(),
             'detailRoute'     => $detailRoute,
             'canFilterCompany' => $user->isInternal() || $user->belongsToPlatformOwner(),
+            // Only internal ops/owner/dev see the "Order fuel" quick
+            // action -- external OEM/dealer users must never see it.
+            // Statuses that qualify for a fuel pre-auth are the same
+            // LIVE_STATUSES the dispatch board tracks: driver has (or
+            // is about to have) keys.  We include DELIVERED because
+            // dispatch commonly needs to fuel the return trip before
+            // ops closes the job out.
+            'canOrderFuel'    => $user->isInternal() || $user->isDeveloper(),
+            'fuelableStatuses' => self::LIVE_STATUSES,
         ];
     }
 };
@@ -469,7 +478,25 @@ new #[Layout('components.layouts.app')] class extends Component {
                         App\Models\Job::STATUS_IN_TRANSIT,
                         App\Models\Job::STATUS_IN_PROGRESS,
                     ], true);
+                    // "Order fuel" is available for any live-status job
+                    // that has a registration -- we route the TFN pre-
+                    // auth by reg, so no reg means no order.
+                    $showFuelAction = $canOrderFuel
+                        && $job->registration
+                        && in_array($job->status, $fuelableStatuses, true);
                 @endphp
+                <div class="relative">
+                @if($showFuelAction)
+                    {{-- Sits OUTSIDE the card <a> (nested anchors are
+                         invalid HTML5) so both links stay clickable and
+                         a11y trees stay clean. --}}
+                    <a href="{{ route('admin.fuel', ['vehicle' => $job->registration, 'ref' => $job->job_number]) }}"
+                       title="Place a TFN diesel pre-authorisation for {{ $job->registration }}"
+                       class="absolute top-2 right-2 z-10 inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-white/95 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 shadow-sm ring-1 ring-emerald-100 hover:bg-emerald-50 hover:border-emerald-300 backdrop-blur">
+                        <svg viewBox="0 0 24 24" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="M3 22V4a1 1 0 0 1 1-1h9a1 1 0 0 1 1 1v18"/><path d="M14 12h2a2 2 0 0 1 2 2v4a2 2 0 0 0 4 0V9l-3-3"/><path d="M3 22h11"/></svg>
+                        Fuel
+                    </a>
+                @endif
                 <a href="{{ route($detailRoute, $job) }}"
                    class="group relative block rounded-xl border border-slate-200 bg-white shadow-sm hover:shadow-md hover:-translate-y-0.5 transition-all duration-150 border-l-4 {{ $accent['border'] }} overflow-hidden">
 
@@ -550,6 +577,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                         @endif
                     </div>
                 </a>
+                </div>
             @endforeach
         </div>
 
@@ -571,11 +599,19 @@ new #[Layout('components.layouts.app')] class extends Component {
                             <th class="px-4 py-2.5 text-left font-semibold">Driver</th>
                             <th class="px-4 py-2.5 text-left font-semibold">Status</th>
                             <th class="px-4 py-2.5 text-right font-semibold">Created</th>
+                            @if($canOrderFuel)
+                                <th class="px-4 py-2.5 text-right font-semibold">Fuel</th>
+                            @endif
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-slate-100 bg-white text-sm">
                         @foreach($jobs as $job)
-                            @php $accent = $statusAccent[$job->status] ?? $defaultAccent; @endphp
+                            @php
+                                $accent = $statusAccent[$job->status] ?? $defaultAccent;
+                                $showFuelAction = $canOrderFuel
+                                    && $job->registration
+                                    && in_array($job->status, $fuelableStatuses, true);
+                            @endphp
                             <tr class="hover:bg-slate-50 cursor-pointer" onclick="window.location='{{ route($detailRoute, $job) }}'">
                                 <td class="px-4 py-2.5 font-semibold text-blue-600 whitespace-nowrap">{{ $job->job_number ?? '—' }}</td>
                                 <td class="px-4 py-2.5 text-slate-900 whitespace-nowrap">{{ $job->brand?->name }} {{ $job->model_name }}</td>
@@ -608,6 +644,25 @@ new #[Layout('components.layouts.app')] class extends Component {
                                 <td class="px-4 py-2.5 text-right text-[11px] tabular-nums text-slate-500 whitespace-nowrap" title="{{ $job->created_at?->toDayDateTimeString() }}">
                                     {{ $job->created_at?->diffForHumans(null, true) }}
                                 </td>
+                                @if($canOrderFuel)
+                                    <td class="px-4 py-2.5 text-right whitespace-nowrap">
+                                        @if($showFuelAction)
+                                            {{-- stopPropagation so clicking the pill
+                                                 doesn't also fire the row's onclick
+                                                 which would navigate to the detail
+                                                 page instead of the fuel form. --}}
+                                            <a href="{{ route('admin.fuel', ['vehicle' => $job->registration, 'ref' => $job->job_number]) }}"
+                                               onclick="event.stopPropagation()"
+                                               title="Place TFN diesel order for {{ $job->registration }}"
+                                               class="inline-flex items-center gap-1 rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-[11px] font-semibold text-emerald-700 hover:bg-emerald-100 hover:border-emerald-300 transition">
+                                                <svg viewBox="0 0 24 24" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="M3 22V4a1 1 0 0 1 1-1h9a1 1 0 0 1 1 1v18"/><path d="M14 12h2a2 2 0 0 1 2 2v4a2 2 0 0 0 4 0V9l-3-3"/><path d="M3 22h11"/></svg>
+                                                Order
+                                            </a>
+                                        @else
+                                            <span class="text-[11px] text-slate-300">—</span>
+                                        @endif
+                                    </td>
+                                @endif
                             </tr>
                         @endforeach
                     </tbody>
