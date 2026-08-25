@@ -804,18 +804,31 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <tbody class="divide-y divide-slate-100">
                     @forelse($openOrders as $o)
                         @php
-                            $customerChip = match(strtolower($o['CustomerName'] ?? '')) {
-                                'faw'       => 'bg-red-50 text-red-700 ring-red-600/20',
-                                'isuzu'     => 'bg-sky-50 text-sky-700 ring-sky-600/20',
-                                'powerstar' => 'bg-indigo-50 text-indigo-700 ring-indigo-600/20',
-                                default     => 'bg-slate-100 text-slate-700 ring-slate-300',
+                            // Substring match so full OEM names (e.g.
+                            // "Isuzu Motors SA", "FAW South Africa")
+                            // still colour-code correctly.
+                            $customer = strtolower($o['CustomerName'] ?? '');
+                            $customerChip = match(true) {
+                                str_contains($customer, 'faw')       => 'bg-red-50 text-red-700 ring-red-600/20',
+                                str_contains($customer, 'isuzu')     => 'bg-sky-50 text-sky-700 ring-sky-600/20',
+                                str_contains($customer, 'powerstar') => 'bg-indigo-50 text-indigo-700 ring-indigo-600/20',
+                                default                              => 'bg-slate-100 text-slate-700 ring-slate-300',
+                            };
+                            // Short label so "FAW South Africa" fits
+                            // the small chip; full name goes in the
+                            // tooltip.
+                            $customerShort = match(true) {
+                                str_contains($customer, 'faw')       => 'FAW',
+                                str_contains($customer, 'isuzu')     => 'Isuzu',
+                                str_contains($customer, 'powerstar') => 'Powerstar',
+                                default                              => $o['CustomerName'] ?? '',
                             };
                         @endphp
                         <tr class="hover:bg-slate-50/50">
                             <td class="px-4 py-3 text-sm font-mono text-slate-900">{{ $o['OrderNumber'] ?? '—' }}</td>
                             <td class="px-4 py-3">
                                 @if(!empty($o['CustomerName']))
-                                    <span class="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ring-1 ring-inset {{ $customerChip }}">{{ $o['CustomerName'] }}</span>
+                                    <span class="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ring-1 ring-inset {{ $customerChip }}" title="{{ $o['CustomerName'] }}">{{ $customerShort }}</span>
                                 @else
                                     <span class="text-slate-400 text-xs">—</span>
                                 @endif
@@ -888,18 +901,25 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <tbody class="divide-y divide-slate-100">
                     @forelse($transactions as $t)
                         @php
-                            $customerChip = match(strtolower($t['CustomerName'] ?? '')) {
-                                'faw'       => 'bg-red-50 text-red-700 ring-red-600/20',
-                                'isuzu'     => 'bg-sky-50 text-sky-700 ring-sky-600/20',
-                                'powerstar' => 'bg-indigo-50 text-indigo-700 ring-indigo-600/20',
-                                default     => 'bg-slate-100 text-slate-700 ring-slate-300',
+                            $customer = strtolower($t['CustomerName'] ?? '');
+                            $customerChip = match(true) {
+                                str_contains($customer, 'faw')       => 'bg-red-50 text-red-700 ring-red-600/20',
+                                str_contains($customer, 'isuzu')     => 'bg-sky-50 text-sky-700 ring-sky-600/20',
+                                str_contains($customer, 'powerstar') => 'bg-indigo-50 text-indigo-700 ring-indigo-600/20',
+                                default                              => 'bg-slate-100 text-slate-700 ring-slate-300',
+                            };
+                            $customerShort = match(true) {
+                                str_contains($customer, 'faw')       => 'FAW',
+                                str_contains($customer, 'isuzu')     => 'Isuzu',
+                                str_contains($customer, 'powerstar') => 'Powerstar',
+                                default                              => $t['CustomerName'] ?? '',
                             };
                         @endphp
                         <tr class="hover:bg-slate-50/50">
                             <td class="px-4 py-2.5 text-xs text-slate-500">{{ \Illuminate\Support\Carbon::parse($t['CapturedDate'] ?? $t['TransactionDate'] ?? now())->format('d M · H:i') }}</td>
                             <td class="px-4 py-2.5">
                                 @if(!empty($t['CustomerName']))
-                                    <span class="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ring-1 ring-inset {{ $customerChip }}">{{ $t['CustomerName'] }}</span>
+                                    <span class="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ring-1 ring-inset {{ $customerChip }}" title="{{ $t['CustomerName'] }}">{{ $customerShort }}</span>
                                 @else
                                     <span class="text-slate-400 text-xs">—</span>
                                 @endif
@@ -976,17 +996,24 @@ new #[Layout('components.layouts.app')] class extends Component {
                             $statusLabel = $statusMap[$row['status_code']] ?? '—';
                             $statusClass = $row['status_code'] === 3 ? 'bg-emerald-50 text-emerald-700 ring-emerald-600/20' : 'bg-slate-100 text-slate-600 ring-slate-200';
                             // Customer chip colour so Isuzu / FAW / Powerstar are visually distinct at a glance.
-                            $customerChip = match(strtolower($row['customer'] ?? '')) {
-                                'faw'       => 'bg-red-50 text-red-700 ring-red-600/20',
-                                'isuzu'     => 'bg-sky-50 text-sky-700 ring-sky-600/20',
-                                'powerstar' => 'bg-indigo-50 text-indigo-700 ring-indigo-600/20',
-                                default     => 'bg-slate-100 text-slate-700 ring-slate-300',
+                            $customer = strtolower($row['customer'] ?? '');
+                            $customerChip = match(true) {
+                                str_contains($customer, 'faw')       => 'bg-red-50 text-red-700 ring-red-600/20',
+                                str_contains($customer, 'isuzu')     => 'bg-sky-50 text-sky-700 ring-sky-600/20',
+                                str_contains($customer, 'powerstar') => 'bg-indigo-50 text-indigo-700 ring-indigo-600/20',
+                                default                              => 'bg-slate-100 text-slate-700 ring-slate-300',
+                            };
+                            $customerShort = match(true) {
+                                str_contains($customer, 'faw')       => 'FAW',
+                                str_contains($customer, 'isuzu')     => 'Isuzu',
+                                str_contains($customer, 'powerstar') => 'Powerstar',
+                                default                              => $row['customer'] ?? '',
                             };
                         @endphp
                         <tr class="hover:bg-slate-50/50">
                             <td class="px-4 py-3">
                                 @if($row['customer'])
-                                    <span class="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ring-1 ring-inset {{ $customerChip }}">{{ $row['customer'] }}</span>
+                                    <span class="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ring-1 ring-inset {{ $customerChip }}" title="{{ $row['customer'] }}">{{ $customerShort }}</span>
                                 @else
                                     <span class="text-slate-400 text-xs">—</span>
                                 @endif

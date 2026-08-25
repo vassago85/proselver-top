@@ -47,7 +47,7 @@ class TfnDemoFixtures
         return [
             [
                 'SubAccountNumber' => '10021/FAW',
-                'SubAccountName'   => 'FAW — drive-away trips',
+                'SubAccountName'   => 'FAW South Africa — drive-away trips',
                 'ProductCode'      => 'D0',
                 'Litres'           => 12_480,
                 'PeriodStart'      => $monthStart->toIso8601String(),
@@ -55,7 +55,7 @@ class TfnDemoFixtures
             ],
             [
                 'SubAccountNumber' => '10021/ISU',
-                'SubAccountName'   => 'Isuzu — drive-away trips',
+                'SubAccountName'   => 'Isuzu Motors SA — drive-away trips',
                 'ProductCode'      => 'D0',
                 'Litres'           => 7_312,
                 'PeriodStart'      => $monthStart->toIso8601String(),
@@ -162,13 +162,31 @@ class TfnDemoFixtures
      */
     public function vehicles(): array
     {
+        // VIN / model / customer / job-number formats mirror what
+        // TRIDENT already stores today (see /admin/vehicles) so the
+        // TFN screen reads as a natural extension of the same feed:
+        //   - Isuzu Motors SA (medium/heavy trucks + D-MAX bakkies)
+        //   - FAW South Africa (FL series -- 6.130, 8.140, 15.180,
+        //     15.220 etc)
+        //   - Powerstar
+        // Job numbers use the YYMMDDnn form (e.g. 26082501 = 2026-08-25
+        // trip #01). VIN strings match the Isuzu ACVxxx / FAW AKxxxx
+        // patterns the fleet actually carries.
         return [
-            ['VIN' => 'LFAGH1245P0234567', 'Registration' => null,         'CustomerName' => 'FAW',       'Brand' => 'FAW',       'Model' => 'J5 28.290FT',     'TankSize' => 400,  'Status' => 3, 'ExternalNumber' => 'JOB-2026-8801'],
-            ['VIN' => 'JAANKR85LP0456789', 'Registration' => 'TP-JHB-11',  'CustomerName' => 'Isuzu',     'Brand' => 'Isuzu',     'Model' => 'FVR 900 AMT',     'TankSize' => null, 'Status' => 3, 'ExternalNumber' => 'JOB-2026-8802'],
-            ['VIN' => 'LGWEF67M4P0567890', 'Registration' => null,         'CustomerName' => 'Powerstar', 'Brand' => 'Powerstar', 'Model' => 'FT7 6x4 tractor', 'TankSize' => 500,  'Status' => 3, 'ExternalNumber' => 'JOB-2026-8803'],
-            ['VIN' => 'LFAJH6360P0234789', 'Registration' => null,         'CustomerName' => 'FAW',       'Brand' => 'FAW',       'Model' => 'JH6 P360 6x4',    'TankSize' => null, 'Status' => 3, 'ExternalNumber' => 'JOB-2026-8804'],
-            ['VIN' => 'JAAFTR85LP0789012', 'Registration' => 'TP-DBN-07',  'CustomerName' => 'Isuzu',     'Brand' => 'Isuzu',     'Model' => 'FTR 850 AMT',     'TankSize' => 600,  'Status' => 3, 'ExternalNumber' => 'JOB-2026-8805'],
-            ['VIN' => 'LGWEF95L4P0567234', 'Registration' => null,         'CustomerName' => 'Powerstar', 'Brand' => 'Powerstar', 'Model' => 'FT9 8x4 rigid',   'TankSize' => null, 'Status' => 3, 'ExternalNumber' => 'JOB-2026-8806'],
+            // Isuzu Motors SA -- NQR500 series is a popular mid-duty
+            ['VIN' => 'ACVWR75LTG213611',  'Registration' => null,        'CustomerName' => 'Isuzu Motors SA',  'Brand' => 'Isuzu',     'Model' => 'NQR500AC',        'TankSize' => 200,  'Status' => 3, 'ExternalNumber' => '26082501'],
+            // Isuzu Motors SA -- FTR850 heavy rigid
+            ['VIN' => 'ACVFTR84T7N219536', 'Registration' => 'TP-JHB-11', 'CustomerName' => 'Isuzu Motors SA',  'Brand' => 'Isuzu',     'Model' => 'FTR850AMT',       'TankSize' => 200,  'Status' => 3, 'ExternalNumber' => '26082502'],
+            // FAW South Africa -- 15.180FL medium tipper/rigid
+            ['VIN' => 'AK1522FLTB011743',  'Registration' => null,        'CustomerName' => 'FAW South Africa', 'Brand' => 'FAW',       'Model' => '15.180FL',        'TankSize' => null, 'Status' => 3, 'ExternalNumber' => '26082503'],
+            // FAW South Africa -- 15.220FL heavier variant
+            ['VIN' => 'AK1522FLTB011006',  'Registration' => null,        'CustomerName' => 'FAW South Africa', 'Brand' => 'FAW',       'Model' => '15.220FL',        'TankSize' => 300,  'Status' => 3, 'ExternalNumber' => '26082504'],
+            // FAW South Africa -- 8.140FL small commercial
+            ['VIN' => 'AK8140FLTB001884',  'Registration' => 'TP-DBN-07', 'CustomerName' => 'FAW South Africa', 'Brand' => 'FAW',       'Model' => '8.140FL',         'TankSize' => null, 'Status' => 3, 'ExternalNumber' => '26082505'],
+            // Powerstar -- one entry so the customer chip diversity
+            // shows in the demo screenshots. Powerstar's local model
+            // names vary, so use a plausible tractor spec.
+            ['VIN' => 'LGWEF67M4P0567890', 'Registration' => null,        'CustomerName' => 'Powerstar',        'Brand' => 'Powerstar', 'Model' => 'FT7 6x4 tractor','TankSize' => null, 'Status' => 3, 'ExternalNumber' => '26082506'],
         ];
     }
 
@@ -186,12 +204,12 @@ class TfnDemoFixtures
     {
         $now = now();
         return [
-            'LFAGH1245P0234567' => ['VirtualCardNumber' => '5432 09XX XXXX 1234', 'VIN' => 'LFAGH1245P0234567', 'VehicleRegistration' => null,        'StartDate' => $now->copy()->subDay()->toIso8601String(),      'ExpiryDate' => $now->copy()->addDays(2)->toIso8601String(),  'IsOneUse' => false],
-            'JAANKR85LP0456789' => ['VirtualCardNumber' => '5432 09XX XXXX 5642', 'VIN' => 'JAANKR85LP0456789', 'VehicleRegistration' => 'TP-JHB-11', 'StartDate' => $now->copy()->subHours(8)->toIso8601String(),   'ExpiryDate' => $now->copy()->addDays(3)->toIso8601String(),  'IsOneUse' => false],
-            'LGWEF67M4P0567890' => ['VirtualCardNumber' => '5432 09XX XXXX 8891', 'VIN' => 'LGWEF67M4P0567890', 'VehicleRegistration' => null,        'StartDate' => $now->copy()->subDays(2)->toIso8601String(),    'ExpiryDate' => $now->copy()->addDay()->toIso8601String(),    'IsOneUse' => false],
-            'LFAJH6360P0234789' => ['VirtualCardNumber' => '5432 09XX XXXX 2213', 'VIN' => 'LFAJH6360P0234789', 'VehicleRegistration' => null,        'StartDate' => $now->copy()->subDays(3)->toIso8601String(),    'ExpiryDate' => $now->copy()->addHours(6)->toIso8601String(), 'IsOneUse' => false],
-            'JAAFTR85LP0789012' => ['VirtualCardNumber' => '5432 09XX XXXX 7788', 'VIN' => 'JAAFTR85LP0789012', 'VehicleRegistration' => 'TP-DBN-07', 'StartDate' => $now->copy()->subHours(3)->toIso8601String(),   'ExpiryDate' => $now->copy()->addDays(4)->toIso8601String(),  'IsOneUse' => false],
-            'LGWEF95L4P0567234' => ['VirtualCardNumber' => '5432 09XX XXXX 3345', 'VIN' => 'LGWEF95L4P0567234', 'VehicleRegistration' => null,        'StartDate' => $now->copy()->subMinutes(45)->toIso8601String(),'ExpiryDate' => $now->copy()->addDays(3)->toIso8601String(),  'IsOneUse' => false],
+            'ACVWR75LTG213611'  => ['VirtualCardNumber' => '5432 09XX XXXX 1234', 'VIN' => 'ACVWR75LTG213611',  'VehicleRegistration' => null,        'StartDate' => $now->copy()->subDay()->toIso8601String(),      'ExpiryDate' => $now->copy()->addDays(2)->toIso8601String(),  'IsOneUse' => false],
+            'ACVFTR84T7N219536' => ['VirtualCardNumber' => '5432 09XX XXXX 5642', 'VIN' => 'ACVFTR84T7N219536', 'VehicleRegistration' => 'TP-JHB-11', 'StartDate' => $now->copy()->subHours(8)->toIso8601String(),   'ExpiryDate' => $now->copy()->addDays(3)->toIso8601String(),  'IsOneUse' => false],
+            'AK1522FLTB011743'  => ['VirtualCardNumber' => '5432 09XX XXXX 8891', 'VIN' => 'AK1522FLTB011743',  'VehicleRegistration' => null,        'StartDate' => $now->copy()->subDays(2)->toIso8601String(),    'ExpiryDate' => $now->copy()->addDay()->toIso8601String(),    'IsOneUse' => false],
+            'AK1522FLTB011006'  => ['VirtualCardNumber' => '5432 09XX XXXX 2213', 'VIN' => 'AK1522FLTB011006',  'VehicleRegistration' => null,        'StartDate' => $now->copy()->subDays(3)->toIso8601String(),    'ExpiryDate' => $now->copy()->addHours(6)->toIso8601String(), 'IsOneUse' => false],
+            'AK8140FLTB001884'  => ['VirtualCardNumber' => '5432 09XX XXXX 7788', 'VIN' => 'AK8140FLTB001884',  'VehicleRegistration' => 'TP-DBN-07', 'StartDate' => $now->copy()->subHours(3)->toIso8601String(),   'ExpiryDate' => $now->copy()->addDays(4)->toIso8601String(),  'IsOneUse' => false],
+            'LGWEF67M4P0567890' => ['VirtualCardNumber' => '5432 09XX XXXX 3345', 'VIN' => 'LGWEF67M4P0567890', 'VehicleRegistration' => null,        'StartDate' => $now->copy()->subMinutes(45)->toIso8601String(),'ExpiryDate' => $now->copy()->addDays(3)->toIso8601String(),  'IsOneUse' => false],
         ];
     }
 
@@ -287,38 +305,38 @@ class TfnDemoFixtures
         ], $extra);
 
         return [
-            $decorate('LFAGH1245P0234567', [    // FAW · no plate
+            $decorate('ACVWR75LTG213611', [    // Isuzu Motors SA · NQR500AC · no plate
                 'OrderNumber'  => 'ORD-2026-8801',
                 'EntryNumber'  => 'ENT-91201',
-                'Litres'       => 380,
-                'Amount'       => 8607.00,
+                'Litres'       => 180,
+                'Amount'       => 4077.00,
                 'DepotTitle'   => 'Kroonstad Refuel2Save',
                 'PlacedAt'     => $now->copy()->subHours(3)->toIso8601String(),
                 'ExpiresAt'    => $now->copy()->addDay()->toIso8601String(),
                 'Status'       => 'Open',
-                'Reference'    => 'JOB-2026-8801',
+                'Reference'    => '26082501',
             ]),
-            $decorate('JAANKR85LP0456789', [    // Isuzu · trade plate TP-JHB-11
+            $decorate('AK1522FLTB011743', [    // FAW South Africa · 15.180FL · no plate
                 'OrderNumber'  => 'ORD-2026-8800',
                 'EntryNumber'  => 'ENT-91198',
-                'Litres'       => 300,
-                'Amount'       => 6870.00,
+                'Litres'       => 260,
+                'Amount'       => 5954.00,
                 'DepotTitle'   => 'Harrismith Truck Stop',
                 'PlacedAt'     => $now->copy()->subHours(6)->toIso8601String(),
                 'ExpiresAt'    => $now->copy()->addHours(18)->toIso8601String(),
                 'Status'       => 'Open',
-                'Reference'    => 'JOB-2026-8802',
+                'Reference'    => '26082503',
             ]),
-            $decorate('JAAFTR85LP0789012', [    // Isuzu · trade plate TP-DBN-07
+            $decorate('AK8140FLTB001884', [    // FAW South Africa · 8.140FL · trade plate TP-DBN-07
                 'OrderNumber'  => 'ORD-2026-8799',
                 'EntryNumber'  => 'ENT-91190',
-                'Litres'       => 500,
-                'Amount'       => 12425.00,
+                'Litres'       => 220,
+                'Amount'       => 5467.00,
                 'DepotTitle'   => 'Musina Depot',
                 'PlacedAt'     => $now->copy()->subDay()->toIso8601String(),
                 'ExpiresAt'    => $now->copy()->subHours(3)->toIso8601String(),
                 'Status'       => 'Utilised',
-                'Reference'    => 'JOB-2026-8805',
+                'Reference'    => '26082505',
             ]),
         ];
     }
