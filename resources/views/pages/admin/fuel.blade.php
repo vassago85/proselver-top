@@ -377,7 +377,12 @@ new #[Layout('components.layouts.app')] class extends Component {
         $fleet = collect($data['vehicles'])->map(function ($v) use ($data, $lastTxByVehicle) {
             $reg = $v['Registration'] ?? '';
             $card = $data['cards'][$reg] ?? null;
-            $lastTx = optional($lastTxByVehicle->get($reg))->sortByDesc('CapturedDate')->first();
+            // optional() only guards ONE method call -- optional(null)->foo()
+            // returns null, and calling ->bar() on that then blows up.
+            // Vehicles with zero transactions in-window would hit exactly
+            // that path.  Use PHP's null-safe operator so the whole chain
+            // short-circuits to null cleanly.
+            $lastTx = $lastTxByVehicle->get($reg)?->sortByDesc('CapturedDate')->first();
             return [
                 'registration' => $reg,
                 'fleet_number' => $v['FleetNumber'] ?? null,
