@@ -195,14 +195,20 @@ new #[Layout('components.layouts.app')] class extends Component {
         $vehicles = $client->vehicles();
         $out = [];
         foreach ($vehicles as $v) {
+            // Anchor on VIN -- new-from-plant units don't have a
+            // permanent registration yet. When TFN's lookup needs a
+            // registration string (their v3 endpoint currently does)
+            // we fall back to it, otherwise pass VIN.
+            $vin = $v['VIN'] ?? null;
             $reg = $v['Registration'] ?? null;
-            if (!$reg) continue;
+            $key = $vin ?: $reg;
+            if (!$key) continue;
             try {
-                $out[$reg] = $client->virtualCardNumber($reg);
+                $out[$key] = $client->virtualCardNumber($reg ?: $vin);
             } catch (TfnException $e) {
                 // Vehicle exists but no active card -- show a placeholder
                 // so the operator knows to reissue.
-                $out[$reg] = null;
+                $out[$key] = null;
             }
         }
         return $out;
@@ -393,21 +399,23 @@ new #[Layout('components.layouts.app')] class extends Component {
             ->toArray();
 
         // Merge vehicles with their card + last-txn to power a single
-        // fleet table row per vehicle.
-        $lastTxByVehicle = collect($data['transactions'])->groupBy('VehicleRegistration');
+        // fleet table row per vehicle. VIN is the durable identifier
+        // (registration is often null on new-from-plant units), so
+        // we index every lookup by VIN.
+        $lastTxByVehicle = collect($data['transactions'])->groupBy('VIN');
 
         $fleet = collect($data['vehicles'])->map(function ($v) use ($data, $lastTxByVehicle) {
-            $reg = $v['Registration'] ?? '';
-            $card = $data['cards'][$reg] ?? null;
+            $vin = $v['VIN'] ?? '';
+            $card = $data['cards'][$vin] ?? null;
             // optional() only guards ONE method call -- optional(null)->foo()
             // returns null, and calling ->bar() on that then blows up.
             // Vehicles with zero transactions in-window would hit exactly
             // that path.  Use PHP's null-safe operator so the whole chain
             // short-circuits to null cleanly.
-            $lastTx = $lastTxByVehicle->get($reg)?->sortByDesc('CapturedDate')->first();
+            $lastTx = $lastTxByVehicle->get($vin)?->sortByDesc('CapturedDate')->first();
             return [
-                'registration' => $reg,
-                'vin'          => $v['VIN'] ?? null,
+                'vin'          => $vin,
+                'registration' => $v['Registration'] ?? null,
                 'customer'     => $v['CustomerName'] ?? null,
                 'brand'        => $v['Brand'] ?? null,
                 'model'        => $v['Model'] ?? null,
@@ -652,19 +660,24 @@ new #[Layout('components.layouts.app')] class extends Component {
             <form wire:submit="placeOrder" class="grid grid-cols-1 gap-4 p-4 sm:grid-cols-2">
                 <div class="sm:col-span-2">
                     <label class="mb-1 block text-xs font-medium text-slate-700">Vehicle in transit</label>
+                    {{-- Value is the VIN because most new-from-plant
+                         units don't have a permanent plate yet. The
+                         VIN is what TFN's card is bound to on their
+                         side, so this doubles as the vehicle identifier
+                         we pass to /api/Orders. --}}
                     <select wire:model="orderRegistration" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500">
                         <option value="">— Select a vehicle —</option>
                         @foreach($vehicles as $v)
-                            <option value="{{ $v['Registration'] }}">
-                                {{ $v['Registration'] ?: 'no reg' }}
-                                @if(!empty($v['CustomerName'])) · {{ $v['CustomerName'] }} @endif
-                                @if(!empty($v['Brand']) || !empty($v['Model'])) · {{ trim(($v['Brand'] ?? '').' '.($v['Model'] ?? '')) }} @endif
+                            <option value="{{ $v['VIN'] ?: $v['Registration'] }}">
+                                @if(!empty($v['CustomerName'])){{ $v['CustomerName'] }} · @endif{{ trim(($v['Brand'] ?? '').' '.($v['Model'] ?? '')) ?: 'Unknown model' }}
                                 @if(!empty($v['VIN'])) · VIN {{ $v['VIN'] }} @endif
-                                @if(!empty($v['TankSize'])) · {{ $v['TankSize'] }} L tank @else · tank size unknown @endif
+                                @if(!empty($v['Registration'])) · plate {{ $v['Registration'] }} @else · no plate @endif
+                                @if(!empty($v['ExternalNumber'])) · {{ $v['ExternalNumber'] }} @endif
+                                @if(!empty($v['TankSize'])) · {{ $v['TankSize'] }} L tank @endif
                             </option>
                         @endforeach
                     </select>
-                    <p class="mt-1 text-[10px] text-slate-500">Each customer trip has its own TFN virtual card &mdash; the order authorises fuel against that trip only.</p>
+                    <p class="mt-1 text-[10px] text-slate-500">Each customer trip has its own TFN virtual card &mdash; the order authorises fuel against that VIN only.</p>
                 </div>
 
                 <div>
@@ -684,7 +697,11 @@ new #[Layout('components.layouts.app')] class extends Component {
                             // we actually know it. Customer trucks off the
                             // plant often have no tank spec on the delivery
                             // note -- in that case we don't guess.
-                            $selectedVehicle = collect($vehicles)->firstWhere('Registration', $orderRegistration);
+                            // $orderRegistration holds the VIN (see picker
+                            // above); fall back to Registration for older
+                            // rows that still key on plate.
+                            $selectedVehicle = collect($vehicles)->firstWhere('VIN', $orderRegistration)
+                                ?? collect($vehicles)->firstWhere('Registration', $orderRegistration);
                             $knownTank = $selectedVehicle['TankSize'] ?? null;
                         @endphp
                         @if($knownTank)
@@ -808,7 +825,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                                 @if(!empty($o['VehicleRegistration']))
                                     <span class="inline-flex rounded bg-yellow-100 border border-yellow-300 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-yellow-900">{{ $o['VehicleRegistration'] }}</span>
                                 @else
-                                    <span class="text-slate-400 text-xs">—</span>
+                                    <span class="text-[11px] italic text-slate-400">no plate</span>
                                 @endif
                             </td>
                             <td class="px-4 py-3 text-sm text-slate-700">{{ $o['ProductCode'] ?? '—' }} <span class="text-xs text-slate-400">· {{ $productLabels[$o['ProductCode'] ?? ''] ?? '' }}</span></td>
@@ -892,7 +909,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                                 @if(!empty($t['VehicleRegistration']))
                                     <span class="inline-flex rounded bg-yellow-100 border border-yellow-300 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-yellow-900">{{ $t['VehicleRegistration'] }}</span>
                                 @else
-                                    <span class="text-slate-400 text-xs">—</span>
+                                    <span class="text-[11px] italic text-slate-400">no plate</span>
                                 @endif
                             </td>
                             <td class="px-4 py-2.5 font-mono text-[11px] text-slate-500">{{ $t['VehicleFleetNumber'] ?: '—' }}</td>
@@ -981,9 +998,9 @@ new #[Layout('components.layouts.app')] class extends Component {
                             <td class="px-4 py-3 font-mono text-[11px] text-slate-600">{{ $row['vin'] ?: '—' }}</td>
                             <td class="px-4 py-3">
                                 @if($row['registration'])
-                                    <span class="inline-flex rounded bg-yellow-100 border border-yellow-300 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-yellow-900">{{ $row['registration'] }}</span>
+                                    <span class="inline-flex rounded bg-yellow-100 border border-yellow-300 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-yellow-900" title="Trade / dealer plate applied for the drive-away leg">{{ $row['registration'] }}</span>
                                 @else
-                                    <span class="text-slate-400 text-xs">—</span>
+                                    <span class="text-[11px] italic text-slate-400" title="New-off-plant unit — dealer applies a plate after handover">no plate · new build</span>
                                 @endif
                             </td>
                             <td class="px-4 py-3 font-mono text-[11px] text-slate-500">{{ $row['job_number'] ?: '—' }}</td>

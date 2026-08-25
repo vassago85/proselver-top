@@ -147,20 +147,28 @@ class TfnDemoFixtures
      * fleet numbering. Registration is the temp/trade plate applied
      * for the drive-away leg; VIN is the durable identifier.
      */
+    /**
+     * Vehicles are new units en-route from an OEM plant to a dealer:
+     *
+     *   - VIN is the durable, always-present identifier. TFN cards
+     *     are issued against it, and every transaction / order in
+     *     this system anchors on VIN.
+     *   - Registration is OPTIONAL. Most units come off the plant
+     *     without a permanent plate -- the dealer applies one after
+     *     handover. A minority carry a trade plate (e.g. "TP-JHB-11")
+     *     for the drive-away leg; the rest ship without any plate.
+     *   - TankSize is OPTIONAL. Plant delivery notes don't always
+     *     spec the tank, and ops shouldn't guess.
+     */
     public function vehicles(): array
     {
-        // TankSize deliberately null on ~half the units. In real
-        // life the plant delivery note doesn't always spec the tank
-        // and ops shouldn't be forced to guess -- the "Order fuel"
-        // flow just accepts a litre value the operator agrees with
-        // the driver at the pump.
         return [
-            ['VIN' => 'LFAGH1245P0234567', 'Registration' => 'ND 123 GP', 'CustomerName' => 'FAW',       'Brand' => 'FAW',       'Model' => 'J5 28.290FT',      'TankSize' => 400,  'Status' => 3, 'ExternalNumber' => 'JOB-2026-8801'],
-            ['VIN' => 'JAANKR85LP0456789', 'Registration' => 'BX 987 GP', 'CustomerName' => 'Isuzu',     'Brand' => 'Isuzu',     'Model' => 'FVR 900 AMT',      'TankSize' => null, 'Status' => 3, 'ExternalNumber' => 'JOB-2026-8802'],
-            ['VIN' => 'LGWEF67M4P0567890', 'Registration' => 'CA 552 GP', 'CustomerName' => 'Powerstar', 'Brand' => 'Powerstar', 'Model' => 'FT7 6x4 tractor',  'TankSize' => 500,  'Status' => 3, 'ExternalNumber' => 'JOB-2026-8803'],
-            ['VIN' => 'LFAJH6360P0234789', 'Registration' => 'HP 774 GP', 'CustomerName' => 'FAW',       'Brand' => 'FAW',       'Model' => 'JH6 P360 6x4',     'TankSize' => null, 'Status' => 3, 'ExternalNumber' => 'JOB-2026-8804'],
-            ['VIN' => 'JAAFTR85LP0789012', 'Registration' => 'JX 302 GP', 'CustomerName' => 'Isuzu',     'Brand' => 'Isuzu',     'Model' => 'FTR 850 AMT',      'TankSize' => 600,  'Status' => 3, 'ExternalNumber' => 'JOB-2026-8805'],
-            ['VIN' => 'LGWEF95L4P0567234', 'Registration' => 'MT 118 GP', 'CustomerName' => 'Powerstar', 'Brand' => 'Powerstar', 'Model' => 'FT9 8x4 rigid',    'TankSize' => null, 'Status' => 3, 'ExternalNumber' => 'JOB-2026-8806'],
+            ['VIN' => 'LFAGH1245P0234567', 'Registration' => null,         'CustomerName' => 'FAW',       'Brand' => 'FAW',       'Model' => 'J5 28.290FT',     'TankSize' => 400,  'Status' => 3, 'ExternalNumber' => 'JOB-2026-8801'],
+            ['VIN' => 'JAANKR85LP0456789', 'Registration' => 'TP-JHB-11',  'CustomerName' => 'Isuzu',     'Brand' => 'Isuzu',     'Model' => 'FVR 900 AMT',     'TankSize' => null, 'Status' => 3, 'ExternalNumber' => 'JOB-2026-8802'],
+            ['VIN' => 'LGWEF67M4P0567890', 'Registration' => null,         'CustomerName' => 'Powerstar', 'Brand' => 'Powerstar', 'Model' => 'FT7 6x4 tractor', 'TankSize' => 500,  'Status' => 3, 'ExternalNumber' => 'JOB-2026-8803'],
+            ['VIN' => 'LFAJH6360P0234789', 'Registration' => null,         'CustomerName' => 'FAW',       'Brand' => 'FAW',       'Model' => 'JH6 P360 6x4',    'TankSize' => null, 'Status' => 3, 'ExternalNumber' => 'JOB-2026-8804'],
+            ['VIN' => 'JAAFTR85LP0789012', 'Registration' => 'TP-DBN-07',  'CustomerName' => 'Isuzu',     'Brand' => 'Isuzu',     'Model' => 'FTR 850 AMT',     'TankSize' => 600,  'Status' => 3, 'ExternalNumber' => 'JOB-2026-8805'],
+            ['VIN' => 'LGWEF95L4P0567234', 'Registration' => null,         'CustomerName' => 'Powerstar', 'Brand' => 'Powerstar', 'Model' => 'FT9 8x4 rigid',   'TankSize' => null, 'Status' => 3, 'ExternalNumber' => 'JOB-2026-8806'],
         ];
     }
 
@@ -170,17 +178,20 @@ class TfnDemoFixtures
      * than the 30-day rotation you'd see on a permanent fleet card:
      * when the driver hands the keys over at the dealership, the
      * card is retired.
+     *
+     * Keyed by VIN (not registration) because most new-off-plant
+     * units don't have a permanent plate yet.
      */
     public function virtualCards(): array
     {
         $now = now();
         return [
-            'ND 123 GP' => ['VirtualCardNumber' => '5432 09XX XXXX 1234', 'VehicleRegistration' => 'ND 123 GP', 'StartDate' => $now->copy()->subDay()->toIso8601String(),      'ExpiryDate' => $now->copy()->addDays(2)->toIso8601String(),  'IsOneUse' => false],
-            'BX 987 GP' => ['VirtualCardNumber' => '5432 09XX XXXX 5642', 'VehicleRegistration' => 'BX 987 GP', 'StartDate' => $now->copy()->subHours(8)->toIso8601String(),   'ExpiryDate' => $now->copy()->addDays(3)->toIso8601String(),  'IsOneUse' => false],
-            'CA 552 GP' => ['VirtualCardNumber' => '5432 09XX XXXX 8891', 'VehicleRegistration' => 'CA 552 GP', 'StartDate' => $now->copy()->subDays(2)->toIso8601String(),    'ExpiryDate' => $now->copy()->addDay()->toIso8601String(),    'IsOneUse' => false],
-            'HP 774 GP' => ['VirtualCardNumber' => '5432 09XX XXXX 2213', 'VehicleRegistration' => 'HP 774 GP', 'StartDate' => $now->copy()->subDays(3)->toIso8601String(),    'ExpiryDate' => $now->copy()->addHours(6)->toIso8601String(), 'IsOneUse' => false],
-            'JX 302 GP' => ['VirtualCardNumber' => '5432 09XX XXXX 7788', 'VehicleRegistration' => 'JX 302 GP', 'StartDate' => $now->copy()->subHours(3)->toIso8601String(),   'ExpiryDate' => $now->copy()->addDays(4)->toIso8601String(),  'IsOneUse' => false],
-            'MT 118 GP' => ['VirtualCardNumber' => '5432 09XX XXXX 3345', 'VehicleRegistration' => 'MT 118 GP', 'StartDate' => $now->copy()->subMinutes(45)->toIso8601String(),'ExpiryDate' => $now->copy()->addDays(3)->toIso8601String(),  'IsOneUse' => false],
+            'LFAGH1245P0234567' => ['VirtualCardNumber' => '5432 09XX XXXX 1234', 'VIN' => 'LFAGH1245P0234567', 'VehicleRegistration' => null,        'StartDate' => $now->copy()->subDay()->toIso8601String(),      'ExpiryDate' => $now->copy()->addDays(2)->toIso8601String(),  'IsOneUse' => false],
+            'JAANKR85LP0456789' => ['VirtualCardNumber' => '5432 09XX XXXX 5642', 'VIN' => 'JAANKR85LP0456789', 'VehicleRegistration' => 'TP-JHB-11', 'StartDate' => $now->copy()->subHours(8)->toIso8601String(),   'ExpiryDate' => $now->copy()->addDays(3)->toIso8601String(),  'IsOneUse' => false],
+            'LGWEF67M4P0567890' => ['VirtualCardNumber' => '5432 09XX XXXX 8891', 'VIN' => 'LGWEF67M4P0567890', 'VehicleRegistration' => null,        'StartDate' => $now->copy()->subDays(2)->toIso8601String(),    'ExpiryDate' => $now->copy()->addDay()->toIso8601String(),    'IsOneUse' => false],
+            'LFAJH6360P0234789' => ['VirtualCardNumber' => '5432 09XX XXXX 2213', 'VIN' => 'LFAJH6360P0234789', 'VehicleRegistration' => null,        'StartDate' => $now->copy()->subDays(3)->toIso8601String(),    'ExpiryDate' => $now->copy()->addHours(6)->toIso8601String(), 'IsOneUse' => false],
+            'JAAFTR85LP0789012' => ['VirtualCardNumber' => '5432 09XX XXXX 7788', 'VIN' => 'JAAFTR85LP0789012', 'VehicleRegistration' => 'TP-DBN-07', 'StartDate' => $now->copy()->subHours(3)->toIso8601String(),   'ExpiryDate' => $now->copy()->addDays(4)->toIso8601String(),  'IsOneUse' => false],
+            'LGWEF95L4P0567234' => ['VirtualCardNumber' => '5432 09XX XXXX 3345', 'VIN' => 'LGWEF95L4P0567234', 'VehicleRegistration' => null,        'StartDate' => $now->copy()->subMinutes(45)->toIso8601String(),'ExpiryDate' => $now->copy()->addDays(3)->toIso8601String(),  'IsOneUse' => false],
         ];
     }
 
@@ -199,11 +210,11 @@ class TfnDemoFixtures
             'Beitbridge Border'        => 25.10,
         ];
         $depots = array_keys($depotPrices);
-        // Vehicles being moved -- indexed by reg so we can attach VIN
-        // and customer name to each transaction row (drive-away model:
-        // the vehicle refuelling IS the customer's new truck).
-        $inTransit = collect($this->vehicles())->keyBy('Registration')->all();
-        $regs = array_keys($inTransit);
+        // Vehicles being moved -- keyed by VIN so we can pick one
+        // even when the unit has no permanent registration (most
+        // don't -- they're new off the plant en-route to a dealer).
+        $inTransit = collect($this->vehicles())->keyBy('VIN')->all();
+        $vins = array_keys($inTransit);
         // Mostly 50ppm because that's Proselver's policy; sprinkle in
         // an OS (overnight stay) and W (truck wash) so the screen
         // shows what non-fuel spend looks like on the same feed.
@@ -214,8 +225,9 @@ class TfnDemoFixtures
         for ($i = 0; $i < 14; $i++) {
             $product = $products[array_rand($products)];
             $depot = $depots[array_rand($depots)];
-            $reg = $regs[array_rand($regs)];
-            $veh = $inTransit[$reg] ?? [];
+            $vin = $vins[array_rand($vins)];
+            $veh = $inTransit[$vin] ?? [];
+            $reg = $veh['Registration'] ?? '';
             // Fuel = per-litre @ that depot's rate; non-fuel = flat.
             $isFuel = in_array($product, ['D0', 'D1', 'D3'], true);
             // New in-transit trucks are large, low-odometer -- most
@@ -260,20 +272,22 @@ class TfnDemoFixtures
      * the fuel authorisation straight back to the customer trip in
      * TRIDENT (this is exactly what the "Order fuel" quick-action
      * on the vehicles page pre-fills when ops clicks through).
+     *
+     * Anchor is VIN because most units have no permanent plate.
      */
     public function orders(): array
     {
         $now = now();
-        $veh = collect($this->vehicles())->keyBy('Registration')->all();
-        $decorate = fn (string $reg, array $extra) => array_merge([
-            'VehicleRegistration' => $reg,
-            'VIN'                 => $veh[$reg]['VIN'] ?? '',
-            'CustomerName'        => $veh[$reg]['CustomerName'] ?? '',
+        $veh = collect($this->vehicles())->keyBy('VIN')->all();
+        $decorate = fn (string $vin, array $extra) => array_merge([
+            'VIN'                 => $vin,
+            'VehicleRegistration' => $veh[$vin]['Registration'] ?? null,
+            'CustomerName'        => $veh[$vin]['CustomerName'] ?? '',
             'ProductCode'         => 'D0',
         ], $extra);
 
         return [
-            $decorate('ND 123 GP', [
+            $decorate('LFAGH1245P0234567', [    // FAW · no plate
                 'OrderNumber'  => 'ORD-2026-8801',
                 'EntryNumber'  => 'ENT-91201',
                 'Litres'       => 380,
@@ -284,7 +298,7 @@ class TfnDemoFixtures
                 'Status'       => 'Open',
                 'Reference'    => 'JOB-2026-8801',
             ]),
-            $decorate('BX 987 GP', [
+            $decorate('JAANKR85LP0456789', [    // Isuzu · trade plate TP-JHB-11
                 'OrderNumber'  => 'ORD-2026-8800',
                 'EntryNumber'  => 'ENT-91198',
                 'Litres'       => 300,
@@ -295,7 +309,7 @@ class TfnDemoFixtures
                 'Status'       => 'Open',
                 'Reference'    => 'JOB-2026-8802',
             ]),
-            $decorate('JX 302 GP', [
+            $decorate('JAAFTR85LP0789012', [    // Isuzu · trade plate TP-DBN-07
                 'OrderNumber'  => 'ORD-2026-8799',
                 'EntryNumber'  => 'ENT-91190',
                 'Litres'       => 500,
