@@ -146,25 +146,47 @@ new #[Layout('components.layouts.app')] class extends Component {
     }
 
     /**
-     * TFN's /api/Pricing only accepts one product code per call, so
-     * fan out to the ones we care about (diesel grades).
+     * TFN's /api/Pricing accepts one product code per call and returns
+     * per-depot pricing across the network (diesel is not a single
+     * national price -- see https://tfn.co.za/our-network/).  We fan
+     * out over the products we care about and flatten to a single
+     * list of rows keyed by product + depot so the "Live pricing"
+     * panel can show the whole spread.
+     *
+     * The endpoint's response shape varies: sometimes it comes back
+     * as an object per row (with DepotID / DepotTitle / PricePerLitre)
+     * and sometimes as a bare array. Normalise to one flat list.
      */
     private function pricingBundle(TfnClient $client): array
     {
         $out = [];
         foreach (config('tfn.orderable_products', []) as $code => $label) {
             try {
-                $row = $client->pricing($code);
-                $out[] = [
-                    'ProductCode'   => $code,
-                    'Label'         => $label,
-                    'PricePerLitre' => (float) ($row['PricePerLitre'] ?? $row['Price'] ?? 0),
-                    'AsOf'          => $row['AsOf'] ?? now()->toIso8601String(),
-                ];
+                $response = $client->pricing($code);
+                // Tolerate both { rows: [...] }, [...] and { ...single }.
+                $rows = match (true) {
+                    isset($response[0])                          => $response,
+                    isset($response['rows'])                     => $response['rows'],
+                    isset($response['PricePerLitre'])            => [$response],
+                    default                                      => [],
+                };
+                foreach ($rows as $row) {
+                    $out[] = [
+                        'ProductCode'   => $code,
+                        'Label'         => $label,
+                        'DepotID'       => $row['DepotID'] ?? null,
+                        'DepotTitle'    => $row['DepotTitle'] ?? $row['SupplierName'] ?? '—',
+                        'PricePerLitre' => (float) ($row['PricePerLitre'] ?? $row['Price'] ?? 0),
+                        'AsOf'          => $row['AsOf'] ?? now()->toIso8601String(),
+                    ];
+                }
             } catch (TfnException $e) {
                 // Skip this product -- others will still render.
             }
         }
+        // Cheapest first: guides the planner to the best-priced depot
+        // when they read the panel top-down.
+        usort($out, fn ($a, $b) => $a['PricePerLitre'] <=> $b['PricePerLitre']);
         return $out;
     }
 
@@ -544,23 +566,69 @@ new #[Layout('components.layouts.app')] class extends Component {
     </div>
 
     {{-- ────────── Live pricing + Place order ────────── --}}
+    @php
+        // Group per-product so we can print a range headline for
+        // each diesel grade. Today Proselver runs D0 only, but the
+        // structure supports more grades if that policy relaxes.
+        $pricingByProduct = collect($pricing)->groupBy('ProductCode');
+        // Per-depot lookup keyed by title so the order-form estimate
+        // can grab the exact R/L when a depot is selected.
+        $priceByDepotProduct = [];
+        foreach ($pricing as $p) {
+            $priceByDepotProduct[($p['DepotTitle'] ?? '').'|'.$p['ProductCode']] = (float) ($p['PricePerLitre'] ?? 0);
+        }
+    @endphp
     <div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <div class="rounded-xl border border-slate-200 bg-white shadow-sm lg:col-span-1">
             <div class="border-b border-slate-100 p-4">
-                <h2 class="text-sm font-semibold text-slate-900">Live pricing</h2>
-                <p class="mt-0.5 text-xs text-slate-500">Refreshed on every page load; TFN caches for ~60s.</p>
+                <h2 class="text-sm font-semibold text-slate-900">Network pricing</h2>
+                <p class="mt-0.5 text-xs text-slate-500">Diesel price varies by depot &mdash; cheapest first. Use this to route the driver to a better-priced stop when the trip window allows.</p>
             </div>
-            <div class="divide-y divide-slate-100">
-                @forelse($pricing as $row)
-                    <div class="flex items-center justify-between px-4 py-3">
+
+            {{-- Range headline per product code (usually just D0) --}}
+            @foreach($pricingByProduct as $code => $rows)
+                @php
+                    $min = $rows->min('PricePerLitre');
+                    $max = $rows->max('PricePerLitre');
+                    $avg = $rows->avg('PricePerLitre');
+                    $cheapest = $rows->sortBy('PricePerLitre')->first();
+                    $priciest = $rows->sortByDesc('PricePerLitre')->first();
+                @endphp
+                <div class="border-b border-slate-100 bg-slate-50/60 px-4 py-3">
+                    <div class="flex items-baseline justify-between">
                         <div>
-                            <p class="text-sm font-medium text-slate-900">{{ $row['ProductCode'] }}</p>
-                            <p class="text-xs text-slate-500">{{ $row['Label'] ?? ($productLabels[$row['ProductCode']] ?? '') }}</p>
+                            <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">{{ $code }} · {{ $productLabels[$code] ?? '' }}</p>
+                            <p class="mt-1 text-[11px] text-slate-500 tabular-nums">
+                                Range <span class="font-semibold text-emerald-700">R {{ number_format($min, 2) }}</span>
+                                &ndash; <span class="font-semibold text-rose-700">R {{ number_format($max, 2) }}</span>
+                                <span class="text-slate-400">· avg R {{ number_format($avg, 2) }}</span>
+                            </p>
                         </div>
-                        <div class="text-right">
-                            <p class="text-lg font-semibold tabular-nums text-slate-900">R {{ number_format((float) ($row['PricePerLitre'] ?? 0), 2) }}</p>
-                            <p class="text-[10px] uppercase tracking-widest text-slate-400">per litre</p>
+                        <p class="text-[10px] uppercase tracking-widest text-slate-400">{{ count($rows) }} depots</p>
+                    </div>
+                    <p class="mt-1.5 text-[11px] text-slate-500">
+                        Cheapest: <span class="font-medium text-slate-800">{{ $cheapest['DepotTitle'] }}</span>
+                        · Priciest: <span class="font-medium text-slate-800">{{ $priciest['DepotTitle'] }}</span>
+                        · Spread <span class="tabular-nums font-medium text-slate-800">R {{ number_format($max - $min, 2) }}/L</span>
+                    </p>
+                </div>
+            @endforeach
+
+            {{-- Per-depot list. Bounded height so the panel stays
+                 compact but scrollable when the network grows. --}}
+            <div class="max-h-96 overflow-y-auto divide-y divide-slate-100">
+                @forelse($pricing as $row)
+                    @php
+                        $delta = isset($avg) ? ((float) $row['PricePerLitre']) - $avg : 0;
+                        $deltaClass = $delta < 0 ? 'text-emerald-600' : ($delta > 0 ? 'text-rose-600' : 'text-slate-400');
+                        $sign = $delta > 0 ? '+' : '';
+                    @endphp
+                    <div class="flex items-center justify-between px-4 py-2.5">
+                        <div class="min-w-0">
+                            <p class="truncate text-sm font-medium text-slate-900">{{ $row['DepotTitle'] ?? '—' }}</p>
+                            <p class="text-[11px] text-slate-500">{{ $row['ProductCode'] }} · <span class="{{ $deltaClass }} tabular-nums">{{ $sign }}{{ number_format($delta, 2) }}</span> vs avg</p>
                         </div>
+                        <p class="shrink-0 text-sm font-semibold tabular-nums text-slate-900">R {{ number_format((float) ($row['PricePerLitre'] ?? 0), 2) }}</p>
                     </div>
                 @empty
                     <div class="p-4 text-sm text-slate-500">No pricing available.</div>
@@ -603,11 +671,27 @@ new #[Layout('components.layouts.app')] class extends Component {
                     <label class="mb-1 block text-xs font-medium text-slate-700">Litres</label>
                     <input wire:model.live.debounce.300ms="orderLitres" type="number" min="1" max="2000" step="1" placeholder="e.g. 400" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm tabular-nums focus:border-blue-500 focus:ring-1 focus:ring-blue-500" />
                     @php
-                        $selectedPrice = collect($pricing)->firstWhere('ProductCode', $orderProductCode)['PricePerLitre'] ?? 0;
+                        // Estimate uses (in priority order):
+                        //   1. price at the depot the operator has picked
+                        //   2. network average across depots for this product
+                        //   3. zero (no pricing available yet)
+                        // Displaying "at depot X" vs "network avg" is
+                        // important -- it tells the operator whether the
+                        // total they're about to authorise is anchored to
+                        // a specific pump or a rough network estimate.
+                        $productPrices = collect($pricing)->where('ProductCode', $orderProductCode);
+                        $selectedDepot = collect($depots)->firstWhere('DepotID', $orderDepotId);
+                        $selectedDepotTitle = $selectedDepot['Title'] ?? null;
+                        $depotPrice = $selectedDepotTitle
+                            ? ($priceByDepotProduct[$selectedDepotTitle.'|'.$orderProductCode] ?? null)
+                            : null;
+                        $networkAvg = $productPrices->avg('PricePerLitre') ?? 0;
+                        $selectedPrice = $depotPrice ?? $networkAvg;
+                        $priceSource = $depotPrice ? 'at '.$selectedDepotTitle : 'network avg';
                         $estimated = ((float) $orderLitres) * (float) $selectedPrice;
                     @endphp
                     <p class="mt-1 text-xs text-slate-500">
-                        At R {{ number_format((float) $selectedPrice, 2) }}/L, estimated total
+                        At R {{ number_format((float) $selectedPrice, 2) }}/L <span class="text-slate-400">({{ $priceSource }})</span>, estimated total
                         <span class="font-semibold text-slate-800 tabular-nums">R {{ number_format($estimated, 2) }}</span>
                     </p>
                 </div>
@@ -790,7 +874,9 @@ new #[Layout('components.layouts.app')] class extends Component {
                     @foreach($fleet as $row)
                         @php
                             $expiresAt = $row['card_expires'] ? \Illuminate\Support\Carbon::parse($row['card_expires']) : null;
-                            $daysToExpiry = $expiresAt ? now()->diffInDays($expiresAt, false) : null;
+                            // diffInDays() returns a float in newer Carbon -- round to whole
+                            // days so the column doesn't display "26.999998682014d".
+                            $daysToExpiry = $expiresAt ? (int) round(now()->diffInDays($expiresAt, false)) : null;
                             $expiryClass = match(true) {
                                 $daysToExpiry === null => 'text-slate-400',
                                 $daysToExpiry < 0      => 'text-rose-600 font-semibold',

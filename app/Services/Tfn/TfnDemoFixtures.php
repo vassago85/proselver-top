@@ -67,16 +67,59 @@ class TfnDemoFixtures
         ];
     }
 
+    /**
+     * Per-depot diesel pricing across the TFN network. Prices vary by
+     * station -- rural / high-throughput sites (Kroonstad, Harrismith,
+     * Bloemfontein) tend to sit below the metros, while border and
+     * remote depots (Beitbridge, Musina) trend higher because of the
+     * logistics + smaller volume. Public TFN network page:
+     *   https://tfn.co.za/our-network/
+     *
+     * Numbers below are illustrative but hold to a realistic ~R 22.50
+     * to ~R 25.20/L spread for 50ppm at the time of writing.
+     *
+     * Shape is deliberately kept flat and PascalCase to mirror what
+     * we expect from /api/Pricing/{code} once we go live -- the view
+     * only cares about ProductCode, DepotTitle and PricePerLitre.
+     */
     public function pricing(): array
     {
-        // Small jitter so a Refresh cycle actually changes the numbers,
-        // giving the meeting audience something to see. Only 50ppm --
-        // ordering + reconciliation are both scoped to D0.
-        $jitter = fn (float $base) => round($base + (mt_rand(-15, 15) / 100), 2);
+        // Slight per-request jitter so a Refresh cycle actually moves
+        // the numbers -- the meeting audience should see the network
+        // respond to a poll, not a static screenshot.
+        $jitter = fn (float $base) => round($base + (mt_rand(-8, 8) / 100), 2);
+        $asOf = now()->toIso8601String();
 
-        return [
-            ['ProductCode' => 'D0', 'Label' => 'Diesel (50ppm)', 'PricePerLitre' => $jitter(24.60), 'AsOf' => now()->toIso8601String()],
+        $baseByDepot = [
+            // depot title => base R/L for D0 (50ppm)
+            'Kroonstad Refuel2Save'    => 22.65,
+            'Harrismith Truck Stop'    => 22.90,
+            'Bloemfontein Ring'        => 23.15,
+            'Kempton Park — Nimrod'    => 24.20,
+            'Musina Depot'             => 24.85,
+            'Beitbridge Border'        => 25.10,
         ];
+
+        // Depot titles line up with depots() so the view can cross-
+        // reference by title. If you add a depot there, add it here
+        // (or the price list becomes shorter than the depot picker).
+        $rows = [];
+        $depotIndex = 1;
+        foreach ($baseByDepot as $title => $base) {
+            $rows[] = [
+                'ProductCode'   => 'D0',
+                'Label'         => 'Diesel (50ppm)',
+                'DepotID'       => sprintf('11111111-0000-0000-0000-%012d', $depotIndex++),
+                'DepotTitle'    => $title,
+                'PricePerLitre' => $jitter($base),
+                'AsOf'          => $asOf,
+            ];
+        }
+
+        // Sort cheapest-first so the ops screen naturally guides
+        // planners toward the best-priced depot for the trip window.
+        usort($rows, fn ($a, $b) => $a['PricePerLitre'] <=> $b['PricePerLitre']);
+        return $rows;
     }
 
     public function depots(): array
@@ -122,7 +165,19 @@ class TfnDemoFixtures
 
     public function transactions(): array
     {
-        $depots = ['Kroonstad Refuel2Save', 'Harrismith Truck Stop', 'Beitbridge Border', 'Kempton Park — Nimrod', 'Musina Depot', 'Bloemfontein Ring'];
+        // Pair depot => local price so transaction amounts stack up
+        // consistently with the "Live pricing" panel (a driver who
+        // filled up at Kroonstad shows a cheaper R/L than one at
+        // Beitbridge, which matches what the ops screen advertises).
+        $depotPrices = [
+            'Kroonstad Refuel2Save'    => 22.65,
+            'Harrismith Truck Stop'    => 22.90,
+            'Bloemfontein Ring'        => 23.15,
+            'Kempton Park — Nimrod'    => 24.20,
+            'Musina Depot'             => 24.85,
+            'Beitbridge Border'        => 25.10,
+        ];
+        $depots = array_keys($depotPrices);
         $regs = ['ND 123 GP', 'BX 987 GP', 'CA 552 GP', 'HP 774 GP', 'JX 302 GP'];
         // Mostly 50ppm because that's Proselver's policy; sprinkle in
         // an OS (overnight stay) and W (truck wash) so the screen
@@ -133,14 +188,15 @@ class TfnDemoFixtures
         $rows = [];
         for ($i = 0; $i < 14; $i++) {
             $product = $products[array_rand($products)];
-            // Fuel = per-litre; non-fuel purchases are flat amounts.
+            $depot = $depots[array_rand($depots)];
+            // Fuel = per-litre @ that depot's rate; non-fuel = flat.
             $isFuel = in_array($product, ['D0', 'D1', 'D3'], true);
             $litres = $isFuel ? mt_rand(180, 420) : 0;
             $price = match ($product) {
-                'D0'    => 24.60,
+                'D0'    => $depotPrices[$depot],
                 'OS'    => mt_rand(280, 420),
                 'W'     => mt_rand(180, 320),
-                default => 24.60,
+                default => $depotPrices[$depot],
             };
             $amount = $isFuel ? round($litres * $price, 2) : (float) $price;
             $rows[] = [
@@ -150,7 +206,7 @@ class TfnDemoFixtures
                 'TransactionTypeCode'   => '',
                 'TransactionDate'       => $now->copy()->subMinutes(mt_rand(5, 60 * 20))->toIso8601String(),
                 'CapturedDate'          => $now->copy()->subMinutes(mt_rand(5, 60 * 20))->toIso8601String(),
-                'SupplierName'          => $depots[array_rand($depots)],
+                'SupplierName'          => $depot,
                 'VehicleRegistration'   => $regs[array_rand($regs)],
                 'VehicleFleetNumber'    => 'PSL-' . mt_rand(45, 50),
                 'Amount'                => -$amount, // TFN convention: purchases decrease balance
