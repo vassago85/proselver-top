@@ -529,12 +529,31 @@ new #[Layout('components.layouts.app')] class extends Component {
     @endif
 
     {{-- ────────── KPI strip ────────── --}}
-    {{-- Litres month-to-date is operational (dispatch cares about
-         throughput per sub-account) so it's visible to everyone.
-         Balance / credit limit / rand spend are FINANCE data --
+    {{-- Litres month-to-date + "Diesel · network avg" are operational
+         signals visible to everyone -- ops needs the avg pump price
+         to decide when a longer detour to a cheaper depot is worth
+         it. Balance / credit limit / rand spend are FINANCE data --
          hidden from ops / dispatcher, only owner + accounts + dev +
          super_admin see them. See `canSeeFinance()`. --}}
-    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 {{ $canSeeFinance ? 'lg:grid-cols-4' : 'lg:grid-cols-2' }}">
+    @php
+        // Network average / cheapest / priciest for the primary
+        // diesel grade. Proselver is D0-only today but the code
+        // adapts to whatever the first orderable product is.
+        $primaryProduct = array_key_first($orderableProducts) ?: 'D0';
+        $primaryLabel   = $orderableProducts[$primaryProduct] ?? $primaryProduct;
+        $primaryPrices  = collect($pricing)->where('ProductCode', $primaryProduct)->pluck('PricePerLitre');
+        $networkAvg     = $primaryPrices->count() ? (float) $primaryPrices->avg() : 0.0;
+        $networkMin     = $primaryPrices->count() ? (float) $primaryPrices->min() : 0.0;
+        $networkMax     = $primaryPrices->count() ? (float) $primaryPrices->max() : 0.0;
+    @endphp
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 {{ $canSeeFinance ? 'lg:grid-cols-5' : 'lg:grid-cols-3' }}">
+        <x-stat-card
+            label="Diesel · network avg"
+            :value="'R ' . number_format($networkAvg, 2) . '/L'"
+            color="sky"
+            :helper="$primaryLabel . ' · low R ' . number_format($networkMin, 2) . ' · high R ' . number_format($networkMax, 2)"
+            helperColor="sky"
+        />
         @if($canSeeFinance)
             <x-stat-card
                 label="Sub-account balance"
@@ -893,6 +912,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                         <th class="px-4 py-2.5 text-right text-[11px] font-semibold uppercase tracking-wider text-slate-500">Litres</th>
                         @if($canSeeFinance)
                             <th class="px-4 py-2.5 text-right text-[11px] font-semibold uppercase tracking-wider text-slate-500">Amount</th>
+                            <th class="px-4 py-2.5 text-right text-[11px] font-semibold uppercase tracking-wider text-slate-500" title="Cost per litre at this pump — vs network avg">R/L</th>
                         @endif
                         <th class="px-4 py-2.5 text-right text-[11px] font-semibold uppercase tracking-wider text-slate-500">Odometer</th>
                         <th class="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Ref</th>
@@ -941,12 +961,44 @@ new #[Layout('components.layouts.app')] class extends Component {
                             <td class="px-4 py-2.5 text-right text-sm tabular-nums text-slate-900">{{ !empty($t['Litres']) ? number_format((float) $t['Litres']) . ' L' : '—' }}</td>
                             @if($canSeeFinance)
                                 <td class="px-4 py-2.5 text-right text-sm tabular-nums text-slate-900">R {{ number_format(abs((float) ($t['Amount'] ?? 0)), 2) }}</td>
+                                @php
+                                    // Effective R/L for this pump event. Only meaningful for
+                                    // fuel products (D0/D1/D3) where litres > 0. Non-fuel
+                                    // items like WSH / CAN / OS show a dash.
+                                    $txLitres = (float) ($t['Litres'] ?? 0);
+                                    $txAmount = abs((float) ($t['Amount'] ?? 0));
+                                    $txRpl    = $txLitres > 0 ? $txAmount / $txLitres : null;
+                                    // Delta vs network avg -- >2c/L above = warn (red),
+                                    // >2c/L below = win (emerald), else neutral. Cap the
+                                    // sensitivity so day-to-day noise doesn't flag rows.
+                                    $rplTone  = 'text-slate-900';
+                                    $rplHint  = '';
+                                    if ($txRpl && $networkAvg > 0) {
+                                        $delta = $txRpl - $networkAvg;
+                                        if ($delta > 0.02) {
+                                            $rplTone = 'text-red-700';
+                                            $rplHint = '+R ' . number_format($delta, 2) . ' vs network avg';
+                                        } elseif ($delta < -0.02) {
+                                            $rplTone = 'text-emerald-700';
+                                            $rplHint = 'R ' . number_format(abs($delta), 2) . ' cheaper than avg';
+                                        } else {
+                                            $rplHint = 'On network avg';
+                                        }
+                                    }
+                                @endphp
+                                <td class="px-4 py-2.5 text-right text-sm tabular-nums {{ $rplTone }}" @if($rplHint) title="{{ $rplHint }}" @endif>
+                                    @if($txRpl !== null)
+                                        R {{ number_format($txRpl, 2) }}
+                                    @else
+                                        <span class="text-slate-400 text-xs">—</span>
+                                    @endif
+                                </td>
                             @endif
                             <td class="px-4 py-2.5 text-right text-xs tabular-nums text-slate-500">{{ !empty($t['Odometer']) ? number_format((float) $t['Odometer']) . ' km' : '—' }}</td>
                             <td class="px-4 py-2.5 text-xs font-mono text-slate-500">{{ $t['TransactionReference'] ?? '—' }}</td>
                         </tr>
                     @empty
-                        <tr><td colspan="{{ $canSeeFinance ? 11 : 10 }}" class="px-4 py-8 text-center text-sm text-slate-500">No transactions in this window.</td></tr>
+                        <tr><td colspan="{{ $canSeeFinance ? 12 : 10 }}" class="px-4 py-8 text-center text-sm text-slate-500">No transactions in this window.</td></tr>
                     @endforelse
                 </tbody>
             </table>
