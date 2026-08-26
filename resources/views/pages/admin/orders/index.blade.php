@@ -218,6 +218,23 @@ new #[Layout('components.layouts.app')] class extends Component {
                     Clear filters
                 </x-button>
             @endif
+            {{-- Bulk upload lives up here as a page action, not as its own
+                 sidebar entry -- it's a verb (import a batch) attached to
+                 the Orders list, not a separate room.  Same role gate as
+                 the retired sidebar entry: account-wide roles that book
+                 on customers' behalf.  Dispatchers/drivers don't onboard
+                 movement files.  Server-side gate is on the target page's
+                 mount() so this is defence in depth, not the source of
+                 truth. --}}
+            @php $u = auth()->user(); @endphp
+            @if($u && ($u->isDeveloper() || $u->isSuperAdmin() || $u->isOperationsController() || $u->isOwner()))
+                <x-button variant="secondary" size="sm" :href="route('admin.orders.bulk-upload')">
+                    <x-slot:icon>
+                        <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></svg>
+                    </x-slot:icon>
+                    Bulk upload
+                </x-button>
+            @endif
         </x-slot:actions>
     </x-page-header>
 

@@ -294,6 +294,21 @@ new #[Layout('components.layouts.app')] class extends Component {
 <div>
     <x-slot:header>Drivers</x-slot:header>
 
+    {{-- Cross-link to Driver Operations (fleet-control view).  Used to be
+         a second sidebar entry — that treated HR/compliance and ops as
+         two rooms.  They're two lenses on the same roster, so the pair
+         is exposed as a top-right action here (and Driver Ops already
+         has the reverse link).  Same audience as this page; the target
+         page's mount() is the gate.  --}}
+    <div class="mb-4 flex justify-end">
+        <x-button variant="secondary" size="sm" :href="route('admin.drivers.operations')">
+            <x-slot:icon>
+                <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            </x-slot:icon>
+            Driver Ops
+        </x-button>
+    </div>
+
     {{-- Compliance dashboard
          Moved off the admin dashboard and lives here because this is
          where ops come to fix expiring credentials. Shows the
