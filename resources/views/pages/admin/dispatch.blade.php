@@ -125,6 +125,21 @@ new #[Layout('components.layouts.app')] class extends Component {
 <div>
     <x-slot:header>Dispatch Board</x-slot:header>
 
+    {{-- Page-level action strip.  Live Display used to be its own sidebar
+         entry two rows below Dispatch, which was noise: the wall-mounted
+         TV view is a Dispatch action, not a separate destination.  Kept
+         target="_blank" so the dispatcher can drop it on a second monitor
+         without losing their working session (same behaviour the sidebar
+         entry had). --}}
+    <div class="mb-4 flex justify-end">
+        <x-button variant="secondary" size="sm" :href="route('admin.live-display')" target="_blank" rel="noopener">
+            <x-slot:icon>
+                <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+            </x-slot:icon>
+            Live Display
+        </x-button>
+    </div>
+
     @if(session('success'))
     <div class="mb-4 rounded-lg bg-green-50 border border-green-200 p-4 text-sm text-green-800">
         {{ session('success') }}
