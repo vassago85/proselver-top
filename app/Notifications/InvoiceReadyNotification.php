@@ -26,7 +26,7 @@ class InvoiceReadyNotification extends Notification implements ShouldQueue
             ->subject("Invoice Ready: {$this->job->job_number}")
             ->line("Job #{$this->job->job_number} is ready for invoicing.")
             ->line("Company: {$this->job->company->name}")
-            ->action('View Job', url("/admin/bookings/{$this->job->id}"))
+            ->action('View Order', route('admin.orders.show', $this->job))
             ->salutation('TRIDENT Control & Dispatch Center');
 
         NotificationLog::create([

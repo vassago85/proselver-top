@@ -263,7 +263,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         $before = ['status' => $this->job->status];
 
         if (!$this->job->transitionTo(Job::STATUS_RECEIVED)) {
-            session()->flash('error', 'Cannot verify this booking in its current state.');
+            session()->flash('error', 'Cannot verify this order in its current state.');
             return;
         }
 
@@ -275,7 +275,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             'status' => $this->job->status,
             'po_verified' => true,
         ]);
-        session()->flash('success', "Booking {$this->job->job_number} verified.");
+        session()->flash('success', "Order {$this->job->job_number} verified.");
     }
 
     public function sendToCustomer(): void
@@ -631,7 +631,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             $advWarning = ' The saved advance was based on the OLD route -- accounts should re-check the toll math.';
         }
 
-        session()->flash('success', 'Booking details updated (' . implode(', ', $notes) . ').' . $advWarning);
+        session()->flash('success', 'Order details updated (' . implode(', ', $notes) . ').' . $advWarning);
     }
 
     /**
@@ -2456,7 +2456,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <div class="mt-4 flex flex-wrap items-center gap-2">
                     @if($job->status === Job::STATUS_PENDING_VERIFICATION)
                         @can('verify', $job)
-                            <button wire:click="verifyBooking" wire:confirm="Verify this booking?"
+                            <button wire:click="verifyBooking" wire:confirm="Verify this order?"
                                 class="inline-flex items-center gap-2 rounded-lg bg-amber-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-amber-500 shadow-sm transition-colors">
                                 <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2.25" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="m9 11 3 3L22 4"/></svg>
                                 Verify &amp; Release to Queue
@@ -3037,7 +3037,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                     @if(!$editingBookingDetails)
                         <div class="flex items-center justify-between gap-3 flex-wrap">
                             <div class="min-w-0">
-                                <h4 class="text-sm font-semibold text-slate-800">Booking details</h4>
+                                <h4 class="text-sm font-semibold text-slate-800">Order details</h4>
                                 <p class="text-xs text-slate-500">VIN, registration, pickup or destination captured wrong? Fix it here — the change is logged with a reason.</p>
                             </div>
                             <button type="button" wire:click="openEditBookingDetails"

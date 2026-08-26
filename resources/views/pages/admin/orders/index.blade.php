@@ -206,7 +206,7 @@ new #[Layout('components.layouts.app')] class extends Component {
     <x-slot:header>Orders</x-slot:header>
 
     <x-page-header
-        eyebrow="Booking"
+        eyebrow="Ops"
         title="Orders"
         :subtitle="number_format($activeCount) . ' active · ' . number_format($totalCount) . ' total in the Phase 1 lifecycle'">
         <x-slot:actions>
