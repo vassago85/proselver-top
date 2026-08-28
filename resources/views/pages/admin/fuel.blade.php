@@ -117,11 +117,15 @@ new #[Layout('components.layouts.app')] class extends Component {
                 'banner'     => $flag ?? 'TFN not configured — showing demo data. Set TFN_ENABLED=true and populate TFN_USERNAME / TFN_PASSWORD / TFN_CUSTOMER_NUMBER in .env to switch to live QA.',
                 'balance'    => $fixtures->balance(),
                 'aggregate'  => $fixtures->aggregateLitres(),
-                'pricing'    => $fixtures->pricing(),
+                'pricing'    => $this->normalisePricingRows($fixtures->pricing(), 'D0'),
                 'depots'     => $fixtures->depots(),
                 'vehicles'   => $fixtures->vehicles(),
                 'cards'      => $fixtures->virtualCards(),
-                'orders'     => $fixtures->orders(),
+                // Flatten orders in demo mode so the Volt template
+                // consumes a single per-entry shape regardless of
+                // whether the source is TFN's nested API response or
+                // the fixtures.  See flattenOrders() below.
+                'orders'     => $fixtures->ordersFlattened(),
                 'transactions' => $fixtures->transactions(),
             ];
         }
@@ -140,9 +144,57 @@ new #[Layout('components.layouts.app')] class extends Component {
             'depots'       => $safe(fn () => $client->depots(), $fixtures->depots()),
             'vehicles'     => $safe(fn () => $client->vehicles(), $fixtures->vehicles()),
             'cards'        => $safe(fn () => $this->cardsForVehicles($client), $fixtures->virtualCards()),
-            'orders'       => $safe(fn () => $client->orders(), $fixtures->orders()),
+            // TFN's /api/Orders returns a list of Orders with nested
+            // Entries[]; the template renders one row per entry, so we
+            // flatten at the boundary.  Fallback matches the same shape.
+            'orders'       => $safe(fn () => $this->flattenOrders($client->orders()), $fixtures->ordersFlattened()),
             'transactions' => $safe(fn () => $client->transactions($this->txWindowStart()), $fixtures->transactions()),
         ];
+    }
+
+    /**
+     * Turn TFN's nested Order + Entries[] payload into a flat
+     * per-entry list.  Preserves the legacy field aliases the current
+     * Volt template reads (Litres, PlacedAt, ExpiresAt, Status, etc.)
+     * alongside the real TFN keys so the transition is invisible to
+     * downstream code.
+     *
+     * Mirror of TfnDemoFixtures::ordersFlattened() -- both must agree
+     * on the row shape or the fixture and live paths diverge.
+     */
+    private function flattenOrders(array $orders): array
+    {
+        $out = [];
+        foreach ($orders as $order) {
+            foreach ($order['Entries'] ?? [] as $entry) {
+                $status = $order['StatusTitle'] ?? '';
+                $out[] = [
+                    'OrderNumber'               => $order['OrderNumber'] ?? null,
+                    'CustomerNumber'            => $order['CustomerNumber'] ?? null,
+                    'CustomerReference'         => $order['CustomerReference'] ?? null,
+                    'CustomerName'              => $order['CustomerName'] ?? '',
+                    'StatusTitle'               => $status,
+                    'VIN'                       => $order['VIN'] ?? '',
+                    'Position'                  => $entry['Position'] ?? null,
+                    'ProductCode'               => $entry['ProductCode'] ?? null,
+                    'VehicleRegistration'       => $entry['VehicleRegistration'] ?? null,
+                    'CurrentVirtualCardNumber'  => $entry['CurrentVirtualCardNumber'] ?? null,
+                    'MaxAllocation'             => $entry['MaxAllocation'] ?? null,
+                    'ValidDateStart'            => $entry['ValidDateStart'] ?? null,
+                    'ValidDateEnd'              => $entry['ValidDateEnd'] ?? null,
+                    'LinkedTransactions'        => $entry['LinkedTransactions'] ?? [],
+                    // Aliases the existing Volt template reads.
+                    'EntryNumber'               => isset($entry['Position']) ? (string) $entry['Position'] : null,
+                    'Litres'                    => $entry['MaxAllocation'] ?? null,
+                    'PlacedAt'                  => $entry['ValidDateStart'] ?? null,
+                    'ExpiresAt'                 => $entry['ValidDateEnd'] ?? null,
+                    'Status'                    => str_starts_with($status, 'Active') ? 'Open' : $status,
+                    'Reference'                 => $order['CustomerReference'] ?? null,
+                    'DepotTitle'                => null,
+                ];
+            }
+        }
+        return $out;
     }
 
     /**
@@ -167,18 +219,12 @@ new #[Layout('components.layouts.app')] class extends Component {
                 $rows = match (true) {
                     isset($response[0])                          => $response,
                     isset($response['rows'])                     => $response['rows'],
-                    isset($response['PricePerLitre'])            => [$response],
+                    isset($response['PricePerLitre']),
+                    isset($response['PriceIncludingGrid'])       => [$response],
                     default                                      => [],
                 };
-                foreach ($rows as $row) {
-                    $out[] = [
-                        'ProductCode'   => $code,
-                        'Label'         => $label,
-                        'DepotID'       => $row['DepotID'] ?? null,
-                        'DepotTitle'    => $row['DepotTitle'] ?? $row['SupplierName'] ?? '—',
-                        'PricePerLitre' => (float) ($row['PricePerLitre'] ?? $row['Price'] ?? 0),
-                        'AsOf'          => $row['AsOf'] ?? now()->toIso8601String(),
-                    ];
+                foreach ($this->normalisePricingRows($rows, $code, $label) as $row) {
+                    $out[] = $row;
                 }
             } catch (TfnException $e) {
                 // Skip this product -- others will still render.
@@ -187,6 +233,46 @@ new #[Layout('components.layouts.app')] class extends Component {
         // Cheapest first: guides the planner to the best-priced depot
         // when they read the panel top-down.
         usort($out, fn ($a, $b) => $a['PricePerLitre'] <=> $b['PricePerLitre']);
+        return $out;
+    }
+
+    /**
+     * Flatten TFN pricing rows to the SAME shape whether they came
+     * from real v3 (SupplierName / PriceIncludingGrid / Price / ...)
+     * or from a legacy demo fixture (DepotTitle / PricePerLitre / ...).
+     * The view template only cares about `ProductCode`, `DepotTitle`
+     * and `PricePerLitre`, so we resolve those from whichever key set
+     * is present.
+     *
+     * `PriceIncludingGrid` is the DRIVER-PAID R/L and wins over `Price`
+     * (which is the ex-grid product sub-total, not what shows on the
+     * receipt).  Deliberately no fallback to `Price` UNLESS
+     * `PriceIncludingGrid` is missing entirely -- otherwise a stale
+     * fixture with only `Price` set would silently under-price on
+     * screen.
+     */
+    private function normalisePricingRows(array $rows, string $productCode, ?string $label = null): array
+    {
+        $productLabels = config('tfn.product_labels', []);
+        $label = $label ?? ($productLabels[$productCode] ?? $productCode);
+        $out = [];
+        foreach ($rows as $row) {
+            if (!is_array($row)) { continue; }
+            $pricePerLitre = (float) (
+                $row['PriceIncludingGrid']
+                ?? $row['PricePerLitre']
+                ?? $row['Price']
+                ?? 0
+            );
+            $out[] = [
+                'ProductCode'   => $row['ProductCode'] ?? $productCode,
+                'Label'         => $row['Label'] ?? $label,
+                'DepotID'       => $row['DepotID'] ?? null,
+                'DepotTitle'    => $row['DepotTitle'] ?? $row['SupplierName'] ?? '—',
+                'PricePerLitre' => $pricePerLitre,
+                'AsOf'          => $row['AsOf'] ?? now()->toIso8601String(),
+            ];
+        }
         return $out;
     }
 
@@ -301,6 +387,46 @@ new #[Layout('components.layouts.app')] class extends Component {
     }
 
     /**
+     * Look up the POS registration for the selected vehicle.  This is
+     * the string TFN puts on every transaction and rejects when blank
+     * or non-alphanumeric -- so we must never send the VIN (which is
+     * what the picker's option value used to hold).
+     *
+     * Rule per TFN + Sikelela (2026-08-28):
+     *   1. If the vehicle has a permanent plate, use it.
+     *   2. Else use the assigned driver's trade plate for this trip.
+     *   3. Else there is no valid registration -- refuse to submit.
+     *
+     * The picker binds `orderRegistration` to a *vehicle key* (VIN
+     * where present, permanent plate otherwise) rather than the POS
+     * registration directly, because a human can identify the vehicle
+     * by its VIN even when the plate belongs to a driver they don't
+     * remember off the top of their head.
+     */
+    private function posRegistrationFor(string $vehicleKey, array $vehicles): ?string
+    {
+        if ($vehicleKey === '') {
+            return null;
+        }
+        $veh = collect($vehicles)->firstWhere('VIN', $vehicleKey)
+            ?? collect($vehicles)->firstWhere('Registration', $vehicleKey)
+            ?? collect($vehicles)->firstWhere('PosRegistration', $vehicleKey);
+        if (!$veh) {
+            return null;
+        }
+        // Prefer the vehicle's own permanent plate; fall back to the
+        // driver's trade plate.  Both are already normalised (upper /
+        // no spaces) by their models on save, but strip defensively in
+        // case the API surface hands us a raw string from elsewhere.
+        $reg = $veh['Registration'] ?? null;
+        if (!blank($reg)) {
+            return \App\Models\DriverProfile::normalisePlate($reg);
+        }
+        $trade = $veh['DriverTradePlate'] ?? null;
+        return blank($trade) ? null : \App\Models\DriverProfile::normalisePlate($trade);
+    }
+
+    /**
      * Client-side validation only -- TFN does its own business rules
      * server-side and will 400 with a helpful Message field if the
      * order breaches the sub-account's limits.
@@ -326,14 +452,40 @@ new #[Layout('components.layouts.app')] class extends Component {
             return;
         }
 
+        // Resolve the string TFN expects on VehicleRegistration.  VINs
+        // are not accepted (Sikelela 2026-08-28) -- so this must be a
+        // permanent plate or the assigned driver's trade plate.
+        $vehicles = $this->source()['vehicles'] ?? [];
+        $posRegistration = $this->posRegistrationFor($this->orderRegistration, $vehicles);
+
+        if (blank($posRegistration)) {
+            session()->flash(
+                'error',
+                'This vehicle has no permanent plate and no driver trade plate on record. '
+                . 'Assign a driver with a trade plate before placing an order — TFN needs a '
+                . 'registration string on every transaction.'
+            );
+            return;
+        }
+
         $payload = [
             'CustomerNumber'      => config('tfn.customer_number'),
-            'VehicleRegistration' => $this->orderRegistration,
+            'VehicleRegistration' => $posRegistration,
             'ProductCode'         => $this->orderProductCode,
+            // TFN's real GET payload uses MaxAllocation (litre cap) +
+            // ValidDateEnd; the create endpoint uses the same fields.
+            // Legacy `Litres` / `ExpiresAt` kept alongside because the
+            // create endpoint is documented to accept both -- once we
+            // have a confirmed CREATE sample from Sikelela this can
+            // shrink to the canonical shape.
+            'MaxAllocation'       => $litres,
             'Litres'              => $litres,
+            'ValidDateStart'      => Carbon::now()->toIso8601String(),
+            'ValidDateEnd'        => Carbon::parse($this->orderExpiresAt)->toIso8601String(),
             'ExpiresAt'           => Carbon::parse($this->orderExpiresAt)->toIso8601String(),
             'DepotID'             => $this->orderDepotId ?: null,
             'Reference'           => $this->orderReference ?: null,
+            'CustomerReference'   => $this->orderReference ?: null,
         ];
 
         $client = app(TfnClient::class);
@@ -347,7 +499,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                 '(Demo) Order placed: %d L of %s against %s. Expires %s.',
                 (int) $litres,
                 $this->orderProductCode,
-                $this->orderRegistration,
+                $posRegistration,
                 Carbon::parse($this->orderExpiresAt)->format('D d M H:i'),
             ));
             $this->reset(['orderLitres', 'orderReference']);
@@ -356,7 +508,7 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         try {
             $client->createOrder($payload);
-            session()->flash('success', sprintf('Order placed: %d L of %s against %s.', (int) $litres, $this->orderProductCode, $this->orderRegistration));
+            session()->flash('success', sprintf('Order placed: %d L of %s against %s.', (int) $litres, $this->orderProductCode, $posRegistration));
             $this->reset(['orderLitres', 'orderReference']);
         } catch (TfnException $e) {
             session()->flash('error', 'TFN rejected the order: ' . $e->getMessage());
@@ -555,20 +707,37 @@ new #[Layout('components.layouts.app')] class extends Component {
             helperColor="sky"
         />
         @if($canSeeFinance)
+            @php
+                // Balance response shape: TFN's real v3 payload uses
+                // `AccountBalance` + `AccountAvailableBalance`; older
+                // demo fixtures used `Balance` + `AvailableCredit` +
+                // `CreditLimit`.  Accept either -- new keys win, old
+                // keys are the fallback.  AccountBalance is signed:
+                // negative means the sub-account is in arrears.
+                $rawBalance    = $balance['AccountBalance']          ?? $balance['Balance']         ?? 0;
+                $rawAvailable  = $balance['AccountAvailableBalance'] ?? $balance['AvailableCredit'] ?? 0;
+                $rawLimit      = $balance['CreditLimit']             ?? null;  // not in real v3 payload
+                $balanceLabel = $rawBalance < 0
+                    ? 'Sub-account · in arrears'
+                    : 'Sub-account balance';
+                $balanceHelper = 'Available credit R ' . number_format((float) $rawAvailable, 2);
+            @endphp
             <x-stat-card
-                label="Sub-account balance"
-                :value="'R ' . number_format((float) ($balance['Balance'] ?? 0), 2)"
-                color="blue"
-                :helper="'Available credit R ' . number_format((float) ($balance['AvailableCredit'] ?? 0), 2)"
+                :label="$balanceLabel"
+                :value="'R ' . number_format(abs((float) $rawBalance), 2)"
+                :color="$rawBalance < 0 ? 'red' : 'blue'"
+                :helper="$balanceHelper"
                 helperColor="slate"
             />
-            <x-stat-card
-                label="Credit limit"
-                :value="'R ' . number_format((float) ($balance['CreditLimit'] ?? 0), 2)"
-                color="indigo"
-                :helper="'Set by TFN — request change via account manager'"
-                helperColor="slate"
-            />
+            @if($rawLimit !== null)
+                <x-stat-card
+                    label="Credit limit"
+                    :value="'R ' . number_format((float) $rawLimit, 2)"
+                    color="indigo"
+                    :helper="'Set by TFN — request change via account manager'"
+                    helperColor="slate"
+                />
+            @endif
         @endif
         <x-stat-card
             label="Litres · month-to-date"
@@ -679,24 +848,33 @@ new #[Layout('components.layouts.app')] class extends Component {
             <form wire:submit="placeOrder" class="grid grid-cols-1 gap-4 p-4 sm:grid-cols-2">
                 <div class="sm:col-span-2">
                     <label class="mb-1 block text-xs font-medium text-slate-700">Vehicle in transit</label>
-                    {{-- Value is the VIN because most new-from-plant
-                         units don't have a permanent plate yet. The
-                         VIN is what TFN's card is bound to on their
-                         side, so this doubles as the vehicle identifier
-                         we pass to /api/Orders. --}}
+                    {{-- The option value is the VIN (what humans use to
+                         identify the vehicle).  The registration TFN
+                         actually receives is resolved server-side --
+                         permanent plate if the vehicle has one, else
+                         the assigned driver's trade plate, else we
+                         refuse the order.  See posRegistrationFor() /
+                         placeOrder() in the mount. --}}
                     <select wire:model="orderRegistration" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500">
                         <option value="">— Select a vehicle —</option>
                         @foreach($vehicles as $v)
                             <option value="{{ $v['VIN'] ?: $v['Registration'] }}">
                                 @if(!empty($v['CustomerName'])){{ $v['CustomerName'] }} · @endif{{ trim(($v['Brand'] ?? '').' '.($v['Model'] ?? '')) ?: 'Unknown model' }}
                                 @if(!empty($v['VIN'])) · VIN {{ $v['VIN'] }} @endif
-                                @if(!empty($v['Registration'])) · plate {{ $v['Registration'] }} @else · no plate @endif
+                                @if(!empty($v['Registration']))
+                                    · plate {{ $v['Registration'] }}
+                                @elseif(!empty($v['DriverTradePlate']))
+                                    · trade plate {{ $v['DriverTradePlate'] }}
+                                @else
+                                    · no registration
+                                @endif
+                                @if(!empty($v['DriverName'])) · {{ $v['DriverName'] }} @endif
                                 @if(!empty($v['ExternalNumber'])) · {{ $v['ExternalNumber'] }} @endif
                                 @if(!empty($v['TankSize'])) · {{ $v['TankSize'] }} L tank @endif
                             </option>
                         @endforeach
                     </select>
-                    <p class="mt-1 text-[10px] text-slate-500">Each customer trip has its own TFN virtual card &mdash; the order authorises fuel against that VIN only.</p>
+                    <p class="mt-1 text-[10px] text-slate-500">TFN authorises against a registration, not a VIN. When the vehicle has no permanent plate we use the driver's trade plate for the drive-away leg &mdash; if neither is on file, the order is refused before it hits TFN.</p>
                 </div>
 
                 <div>

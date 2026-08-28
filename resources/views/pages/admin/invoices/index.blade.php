@@ -299,6 +299,11 @@ new #[Layout('components.layouts.app')] class extends Component {
             'company:id,name',
             'pickupLocation:id,company_name',
             'deliveryLocation:id,company_name',
+            // Eager-load the driver's trade plate so the fuel
+            // reconciler (which falls back to it when a job has no
+            // permanent plate) doesn't N+1 across the whole page.
+            'driver:id,name',
+            'driver.driverProfile:id,user_id,trade_plate',
         ])->orderBy('delivered_at');
     }
 

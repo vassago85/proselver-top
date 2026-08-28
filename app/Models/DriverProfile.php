@@ -73,6 +73,56 @@ class DriverProfile extends Model
     }
 
     /**
+     * Trade plate normalisation.
+     *
+     * The trade plate is what TFN's POS reads at the pump when the
+     * transported vehicle has no permanent plate of its own (which is
+     * the common case for new-from-plant units).  TFN requires the
+     * VehicleRegistration string on every transaction to be alphanumeric,
+     * uppercase, no spaces (e.g. "TEST123GP") -- and it must exactly
+     * match what was on the order.  Stripping whitespace + upper-casing
+     * on both read and write means:
+     *
+     *   - the admin can type "tp jhb 11" or "TP-JHB-11" or "tpjhb11"
+     *     and every downstream comparison collapses to "TPJHB11"
+     *   - historical rows that predate this normalisation still render
+     *     uppercase on the operations page (get side is safe)
+     *   - the reconciler that matches Job.registration OR trade_plate
+     *     against Transaction.VehicleRegistration doesn't need to know
+     *     about the raw form the driver was captured with
+     *
+     * Mirrors Job.registration() (see Job.php ~line 621).
+     */
+    protected function tradePlate(): Attribute
+    {
+        return Attribute::make(
+            get: fn ($v) => $v === null ? null : self::normalisePlate($v),
+            set: fn ($v) => $v === null ? null : self::normalisePlate($v),
+        );
+    }
+
+    /**
+     * Strip everything that isn't A-Z / 0-9 and upper-case.  A blank
+     * result means "no plate" -- return null so `blank($profile->trade_plate)`
+     * still reads as "unset" for consumers.
+     *
+     * Kept as a public helper so the reconciliation service can use
+     * the same rule on incoming TFN VehicleRegistration strings without
+     * having to instantiate a model.
+     */
+    public static function normalisePlate(?string $raw): ?string
+    {
+        if ($raw === null) {
+            return null;
+        }
+        $stripped = preg_replace('/[^A-Za-z0-9]/', '', $raw) ?? '';
+        if ($stripped === '') {
+            return null;
+        }
+        return strtoupper($stripped);
+    }
+
+    /**
      * Base location is stored as a plain string (see the
      * DriverBaseLocation reference table) but historical rows are still
      * a stew of casings and stray whitespace. Trim + title-case on read
