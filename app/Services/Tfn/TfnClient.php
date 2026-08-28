@@ -99,6 +99,13 @@ class TfnClient
         );
     }
 
+    /**
+     * TFN v3 /api/Vehicle response is thin -- only Registration,
+     * FleetNumber, TankSize, Status, ExternalNumber (per 2026-08-28
+     * QA probe).  No VIN, no CustomerName, no Brand/Model.  Callers
+     * that need those must join TFN's list to our own Job table on
+     * Registration (or, for plateless units, the driver trade plate).
+     */
     public function vehicles(): array
     {
         return Cache::remember(
@@ -121,6 +128,15 @@ class TfnClient
     /**
      * Live product pricing. Cached for a minute so wire:poll doesn't
      * hammer /api/Pricing on every tick.
+     *
+     * TFN v3 /api/Pricing response (per 2026-08-28 QA probe): a flat
+     * array of per-depot rows, each with `SupplierName`, `SupplierNumber`
+     * (zero-padded 4-digit string), `Price` (ex-grid product cost),
+     * `PriceIncludingGrid` (driver-paid R/L, this is the number to
+     * display), `VolumeDiscount`, `PromotionalDiscount`,
+     * `HasSpecificPricing`, `SpecificPricing[]`, `CustomerExternalReference`,
+     * `ParentExternalReference`.  Requires customerNumber even though
+     * pricing is largely network-wide -- omitting it returns 404.
      */
     public function pricing(string $productCode): array
     {
@@ -128,11 +144,21 @@ class TfnClient
             $this->cacheKey('pricing:' . $productCode),
             self::CACHE_PRICING_SECONDS,
             fn () => (array) $this->requireJson($this->get('/api/Pricing', [
-                'productCode' => $productCode,
+                'customerNumber' => $this->customerNumber(),
+                'productCode'    => $productCode,
             ])),
         );
     }
 
+    /**
+     * TFN v3 /api/SubAccountBalance response (per 2026-08-28 QA probe):
+     *
+     *   { CustomerNumber, AccountBalance, AccountAvailableBalance }
+     *
+     * `AccountBalance` is SIGNED -- a negative value means the account
+     * is in arrears.  There is NO `CreditLimit` and NO `AsOf` field in
+     * the real payload.  Consumers must handle their absence.
+     */
     public function subAccountBalance(): array
     {
         return Cache::remember(
@@ -144,6 +170,15 @@ class TfnClient
         );
     }
 
+    /**
+     * @deprecated 2026-08-28 -- QA returns HTTP 404 on both v3 and v4
+     * for /api/SubAccountAggregateLitres and /api/SubAccountAggregatedLitres.
+     * The correct endpoint (or query shape) is unclear; queued as a
+     * follow-up question for Sikelela.  Callers already fall back to
+     * the fixture when TfnException fires, so this stays functional
+     * until the endpoint is confirmed.  Do NOT wire new consumers to
+     * this method until then.
+     */
     public function subAccountAggregateLitres(): array
     {
         return (array) $this->requireJson($this->get('/api/SubAccountAggregateLitres', [
@@ -167,6 +202,29 @@ class TfnClient
         ]));
     }
 
+    /**
+     * List pre-authorisation orders.
+     *
+     * NOTE 2026-08-28: `/api/Orders` on the QA sandbox is currently
+     * unusable for BOTH read and write from our credentials.
+     *
+     *   OPTIONS /api/Orders            allow: GET,POST,PUT,DELETE
+     *                                  api-supported-versions: 2.0, 3.0
+     *   GET  /api/Orders  v3          -> 405 UnsupportedApiVersion
+     *   GET  /api/Orders  v4          -> 400 UnsupportedApiVersion
+     *   GET  /api/Orders  v2          -> 404 not found
+     *   POST /api/Orders  v3          -> 405 UnsupportedApiVersion
+     *   POST /api/Orders  v2          -> 404 not found
+     *   POST /api/Order (singular)    -> 404 not found
+     *   OPTIONS response advertises the versions but individual
+     *   method+version combinations are all rejected.
+     *
+     * Sikelela is out on annual leave until Tuesday 2026-09-01; he
+     * owes us the correct URL / method / version pair AND likely a
+     * scope grant on the sandbox account.  Callers fall back to the
+     * fixture when TfnException fires, so the fuel screen keeps
+     * rendering while this is unresolved.
+     */
     public function orders(?DateTimeInterface $after = null): array
     {
         $after = $after ?? Carbon::now()->subDays(7);
@@ -185,6 +243,15 @@ class TfnClient
      * Place a pre-authorisation ("order") against a vehicle. The order
      * later gets consumed by transactions at the pump, and appears in
      * their UtilisedOrders[] array once fuel is drawn.
+     *
+     * WARNING 2026-08-28: this call currently 405s on the QA sandbox
+     * with either a flat or a nested payload shape (both v2 and v3).
+     * See the note on `orders()` above.  Sikelela is out until Tuesday
+     * -- expect this to be blocked at go-live until he replies.  The
+     * fuel Volt page's placeOrder() catches TfnException from here
+     * and surfaces the message, so an ops controller trying to place
+     * a real order today would see \"TFN rejected the order: ...\"
+     * rather than a 500.
      *
      * @param  array  $order  Shape follows OrderSerializableV2 from the
      *                        swagger. Caller is expected to have run
