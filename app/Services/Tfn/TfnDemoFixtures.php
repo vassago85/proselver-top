@@ -140,54 +140,69 @@ class TfnDemoFixtures
     }
 
     /**
-     * "Vehicles" here are the units Proselver is moving drive-away
+     * "Vehicles" here are the units ProSelver is moving drive-away
      * from plant to dealership -- Isuzu / FAW / Powerstar new trucks
-     * on trip. TFN issues a virtual card per trip, so the customer,
-     * VIN and job number matter more than any Proselver-internal
-     * fleet numbering. Registration is the temp/trade plate applied
-     * for the drive-away leg; VIN is the durable identifier.
-     */
-    /**
-     * Vehicles are new units en-route from an OEM plant to a dealer:
+     * en-route. Each row combines the physical vehicle (VIN / brand /
+     * model / customer) with the trip-level context we need to place
+     * a TFN order:
      *
-     *   - VIN is the durable, always-present identifier. TFN cards
-     *     are issued against it, and every transaction / order in
-     *     this system anchors on VIN.
-     *   - Registration is OPTIONAL. Most units come off the plant
-     *     without a permanent plate -- the dealer applies one after
-     *     handover. A minority carry a trade plate (e.g. "TP-JHB-11")
-     *     for the drive-away leg; the rest ship without any plate.
-     *   - TankSize is OPTIONAL. Plant delivery notes don't always
+     *   - `VIN` is the durable identifier for the vehicle itself and
+     *     is what the fuel page shows to humans in the picker.  TFN's
+     *     ledger does NOT store VIN -- their POS reads a registration
+     *     string only -- but we track it locally to reconcile back to
+     *     the trip.
+     *
+     *   - `Registration` is the vehicle's permanent plate, if it has
+     *     one.  Nullable: most new-from-plant units ship without a
+     *     permanent plate; the dealer applies one after handover.
+     *
+     *   - `DriverName` / `DriverTradePlate` describe the driver on the
+     *     trip.  When the vehicle has no permanent plate, the driver
+     *     applies their trade plate for the drive-away leg and TFN
+     *     receives THAT string as VehicleRegistration on every
+     *     transaction and order.  So a vehicle without a permanent
+     *     plate but with an assigned driver still has a valid POS
+     *     registration -- it's the driver's trade plate.
+     *
+     *   - `PosRegistration` is the derived string TFN actually sees on
+     *     the transaction -- vehicle plate if present, otherwise the
+     *     driver's trade plate.  Kept as a fixed field on the fixture
+     *     so tests can assert against it without recomputing.
+     *
+     *   - `TankSize` is optional: plant delivery notes don't always
      *     spec the tank, and ops shouldn't guess.
      */
     public function vehicles(): array
     {
-        // VIN / model / customer / job-number formats mirror what
-        // TRIDENT already stores today (see /admin/vehicles) so the
-        // TFN screen reads as a natural extension of the same feed:
-        //   - Isuzu Motors SA (medium/heavy trucks + D-MAX bakkies)
-        //   - FAW South Africa (FL series -- 6.130, 8.140, 15.180,
-        //     15.220 etc)
-        //   - Powerstar
-        // Job numbers use the YYMMDDnn form (e.g. 26082501 = 2026-08-25
-        // trip #01). VIN strings match the Isuzu ACVxxx / FAW AKxxxx
-        // patterns the fleet actually carries.
-        return [
-            // Isuzu Motors SA -- NQR500 series is a popular mid-duty
-            ['VIN' => 'ACVWR75LTG213611',  'Registration' => null,        'CustomerName' => 'Isuzu Motors SA',  'Brand' => 'Isuzu',     'Model' => 'NQR500AC',        'TankSize' => 200,  'Status' => 3, 'ExternalNumber' => '26082501'],
-            // Isuzu Motors SA -- FTR850 heavy rigid
-            ['VIN' => 'ACVFTR84T7N219536', 'Registration' => 'TP-JHB-11', 'CustomerName' => 'Isuzu Motors SA',  'Brand' => 'Isuzu',     'Model' => 'FTR850AMT',       'TankSize' => 200,  'Status' => 3, 'ExternalNumber' => '26082502'],
-            // FAW South Africa -- 15.180FL medium tipper/rigid
-            ['VIN' => 'AK1522FLTB011743',  'Registration' => null,        'CustomerName' => 'FAW South Africa', 'Brand' => 'FAW',       'Model' => '15.180FL',        'TankSize' => null, 'Status' => 3, 'ExternalNumber' => '26082503'],
-            // FAW South Africa -- 15.220FL heavier variant
-            ['VIN' => 'AK1522FLTB011006',  'Registration' => null,        'CustomerName' => 'FAW South Africa', 'Brand' => 'FAW',       'Model' => '15.220FL',        'TankSize' => 300,  'Status' => 3, 'ExternalNumber' => '26082504'],
-            // FAW South Africa -- 8.140FL small commercial
-            ['VIN' => 'AK8140FLTB001884',  'Registration' => 'TP-DBN-07', 'CustomerName' => 'FAW South Africa', 'Brand' => 'FAW',       'Model' => '8.140FL',         'TankSize' => null, 'Status' => 3, 'ExternalNumber' => '26082505'],
-            // Powerstar -- one entry so the customer chip diversity
-            // shows in the demo screenshots. Powerstar's local model
-            // names vary, so use a plausible tractor spec.
-            ['VIN' => 'LGWEF67M4P0567890', 'Registration' => null,        'CustomerName' => 'Powerstar',        'Brand' => 'Powerstar', 'Model' => 'FT7 6x4 tractor','TankSize' => null, 'Status' => 3, 'ExternalNumber' => '26082506'],
+        // Every fixture guarantees a POS registration (either the
+        // vehicle's own plate or the driver's trade plate).  A truly
+        // plateless-and-driverless vehicle is not a scenario TFN can
+        // transact against, so we don't model one here -- the fuel
+        // page's order-placement guard is what blocks that case in
+        // production.
+        $rows = [
+            // Isuzu Motors SA -- NQR500 series, no permanent plate,
+            // driver "Sipho Mahlangu" carries trade plate TPJHB011.
+            ['VIN' => 'ACVWR75LTG213611',  'Registration' => null,      'DriverName' => 'Sipho Mahlangu', 'DriverTradePlate' => 'TPJHB011', 'CustomerName' => 'Isuzu Motors SA',  'Brand' => 'Isuzu',     'Model' => 'NQR500AC',       'TankSize' => 200,  'Status' => 3, 'ExternalNumber' => '26082501'],
+            // Isuzu Motors SA -- FTR850, has its own permanent plate.
+            ['VIN' => 'ACVFTR84T7N219536', 'Registration' => 'ND456GP', 'DriverName' => 'Tebogo Ndlovu',  'DriverTradePlate' => 'TPJHB014', 'CustomerName' => 'Isuzu Motors SA',  'Brand' => 'Isuzu',     'Model' => 'FTR850AMT',      'TankSize' => 200,  'Status' => 3, 'ExternalNumber' => '26082502'],
+            // FAW South Africa -- 15.180FL, no plate, trade plate.
+            ['VIN' => 'AK1522FLTB011743',  'Registration' => null,      'DriverName' => 'Kagiso Molefe',  'DriverTradePlate' => 'TPKZN005', 'CustomerName' => 'FAW South Africa', 'Brand' => 'FAW',       'Model' => '15.180FL',       'TankSize' => null, 'Status' => 3, 'ExternalNumber' => '26082503'],
+            // FAW South Africa -- 15.220FL, no plate, trade plate.
+            ['VIN' => 'AK1522FLTB011006',  'Registration' => null,      'DriverName' => 'Andile Zulu',    'DriverTradePlate' => 'TPKZN008', 'CustomerName' => 'FAW South Africa', 'Brand' => 'FAW',       'Model' => '15.220FL',       'TankSize' => 300,  'Status' => 3, 'ExternalNumber' => '26082504'],
+            // FAW South Africa -- 8.140FL, has its own permanent plate.
+            ['VIN' => 'AK8140FLTB001884',  'Registration' => 'SK12NXGP','DriverName' => 'Lerato Sithole', 'DriverTradePlate' => 'TPDBN007', 'CustomerName' => 'FAW South Africa', 'Brand' => 'FAW',       'Model' => '8.140FL',        'TankSize' => null, 'Status' => 3, 'ExternalNumber' => '26082505'],
+            // Powerstar -- no plate, trade plate.
+            ['VIN' => 'LGWEF67M4P0567890', 'Registration' => null,      'DriverName' => 'Mpho Dlamini',   'DriverTradePlate' => 'TPGP0023', 'CustomerName' => 'Powerstar',        'Brand' => 'Powerstar', 'Model' => 'FT7 6x4 tractor', 'TankSize' => null, 'Status' => 3, 'ExternalNumber' => '26082506'],
         ];
+
+        // Derive the POS registration once so consumers don't repeat
+        // the vehicle-plate-or-trade-plate rule.  The value TFN receives
+        // on every order and transaction against this vehicle.
+        return array_map(function (array $row) {
+            $row['PosRegistration'] = $row['Registration'] ?: $row['DriverTradePlate'];
+            return $row;
+        }, $rows);
     }
 
     /**
@@ -197,20 +212,51 @@ class TfnDemoFixtures
      * when the driver hands the keys over at the dealership, the
      * card is retired.
      *
-     * Keyed by VIN (not registration) because most new-off-plant
-     * units don't have a permanent plate yet.
+     * Keyed by VIN so the fuel page can look up the current card for
+     * a given vehicle without knowing which plate/trade-plate is
+     * being used on this trip.  Each card's `VehicleRegistration`
+     * mirrors the POS registration (permanent plate if present,
+     * otherwise the driver's trade plate) -- the same string TFN
+     * writes onto every transaction against this vehicle.
+     *
+     * `CurrentVirtualCardNumber` is a short numeric string in the real
+     * TFN payload (see the sample Sikelela sent — 6 digits, e.g.
+     * "876359").  The old fixture used a masked 16-digit card number;
+     * that was wrong.  Kept both fields on the row for now so any
+     * legacy consumer still finds a card number without a NPE, but
+     * new code should read `CurrentVirtualCardNumber`.
      */
     public function virtualCards(): array
     {
         $now = now();
-        return [
-            'ACVWR75LTG213611'  => ['VirtualCardNumber' => '5432 09XX XXXX 1234', 'VIN' => 'ACVWR75LTG213611',  'VehicleRegistration' => null,        'StartDate' => $now->copy()->subDay()->toIso8601String(),      'ExpiryDate' => $now->copy()->addDays(2)->toIso8601String(),  'IsOneUse' => false],
-            'ACVFTR84T7N219536' => ['VirtualCardNumber' => '5432 09XX XXXX 5642', 'VIN' => 'ACVFTR84T7N219536', 'VehicleRegistration' => 'TP-JHB-11', 'StartDate' => $now->copy()->subHours(8)->toIso8601String(),   'ExpiryDate' => $now->copy()->addDays(3)->toIso8601String(),  'IsOneUse' => false],
-            'AK1522FLTB011743'  => ['VirtualCardNumber' => '5432 09XX XXXX 8891', 'VIN' => 'AK1522FLTB011743',  'VehicleRegistration' => null,        'StartDate' => $now->copy()->subDays(2)->toIso8601String(),    'ExpiryDate' => $now->copy()->addDay()->toIso8601String(),    'IsOneUse' => false],
-            'AK1522FLTB011006'  => ['VirtualCardNumber' => '5432 09XX XXXX 2213', 'VIN' => 'AK1522FLTB011006',  'VehicleRegistration' => null,        'StartDate' => $now->copy()->subDays(3)->toIso8601String(),    'ExpiryDate' => $now->copy()->addHours(6)->toIso8601String(), 'IsOneUse' => false],
-            'AK8140FLTB001884'  => ['VirtualCardNumber' => '5432 09XX XXXX 7788', 'VIN' => 'AK8140FLTB001884',  'VehicleRegistration' => 'TP-DBN-07', 'StartDate' => $now->copy()->subHours(3)->toIso8601String(),   'ExpiryDate' => $now->copy()->addDays(4)->toIso8601String(),  'IsOneUse' => false],
-            'LGWEF67M4P0567890' => ['VirtualCardNumber' => '5432 09XX XXXX 3345', 'VIN' => 'LGWEF67M4P0567890', 'VehicleRegistration' => null,        'StartDate' => $now->copy()->subMinutes(45)->toIso8601String(),'ExpiryDate' => $now->copy()->addDays(3)->toIso8601String(),  'IsOneUse' => false],
+        $cards = [
+            'ACVWR75LTG213611'  => ['card' => '876359', 'start' => $now->copy()->subDay(),      'end' => $now->copy()->addDays(2)],
+            'ACVFTR84T7N219536' => ['card' => '876412', 'start' => $now->copy()->subHours(8),   'end' => $now->copy()->addDays(3)],
+            'AK1522FLTB011743'  => ['card' => '876528', 'start' => $now->copy()->subDays(2),    'end' => $now->copy()->addDay()],
+            'AK1522FLTB011006'  => ['card' => '876601', 'start' => $now->copy()->subDays(3),    'end' => $now->copy()->addHours(6)],
+            'AK8140FLTB001884'  => ['card' => '876714', 'start' => $now->copy()->subHours(3),   'end' => $now->copy()->addDays(4)],
+            'LGWEF67M4P0567890' => ['card' => '876832', 'start' => $now->copy()->subMinutes(45),'end' => $now->copy()->addDays(3)],
         ];
+        $vehicles = collect($this->vehicles())->keyBy('VIN')->all();
+
+        $out = [];
+        foreach ($cards as $vin => $meta) {
+            $v = $vehicles[$vin] ?? null;
+            if (!$v) { continue; }
+            $out[$vin] = [
+                'CurrentVirtualCardNumber' => $meta['card'],
+                // Legacy alias for consumers that still read
+                // VirtualCardNumber; kept identical to the new field
+                // so removing the alias later is a one-line change.
+                'VirtualCardNumber'   => $meta['card'],
+                'VIN'                 => $vin,
+                'VehicleRegistration' => $v['PosRegistration'],
+                'StartDate'           => $meta['start']->toIso8601String(),
+                'ExpiryDate'          => $meta['end']->toIso8601String(),
+                'IsOneUse'            => false,
+            ];
+        }
+        return $out;
     }
 
     public function transactions(): array
@@ -228,12 +274,15 @@ class TfnDemoFixtures
             'Beitbridge Border'        => 25.10,
         ];
         $depots = array_keys($depotPrices);
-        // Vehicles being moved -- keyed by VIN so we can pick one
-        // even when the unit has no permanent registration (most
-        // don't -- they're new off the plant en-route to a dealer).
+        // Vehicles being moved -- keyed by VIN so we can round-trip a
+        // transaction back to its trip locally.  TFN's transaction rows
+        // do NOT carry VIN; we synthesise one on demo rows so the fuel
+        // page's "matched to VIN X" column has something to show, but
+        // in production the reconciler only ever matches on the POS
+        // registration (permanent plate OR driver trade plate).
         $inTransit = collect($this->vehicles())->keyBy('VIN')->all();
         $vins = array_keys($inTransit);
-        // Mostly 50ppm because that's Proselver's policy; sprinkle in
+        // Mostly 50ppm because that's ProSelver's policy; sprinkle in
         // an OS (overnight stay) and W (truck wash) so the screen
         // shows what non-fuel spend looks like on the same feed.
         $products = ['D0', 'D0', 'D0', 'D0', 'D0', 'OS', 'W'];
@@ -245,7 +294,11 @@ class TfnDemoFixtures
             $depot = $depots[array_rand($depots)];
             $vin = $vins[array_rand($vins)];
             $veh = $inTransit[$vin] ?? [];
-            $reg = $veh['Registration'] ?? '';
+            // POS registration = the vehicle's permanent plate, or the
+            // assigned driver's trade plate when the unit ships without
+            // one.  Always populated; TFN rejects a transaction with a
+            // blank registration.
+            $reg = $veh['PosRegistration'] ?? '';
             // Fuel = per-litre @ that depot's rate; non-fuel = flat.
             $isFuel = in_array($product, ['D0', 'D1', 'D3'], true);
             // New in-transit trucks are large, low-odometer -- most
@@ -276,6 +329,43 @@ class TfnDemoFixtures
                 'Litres'                => $litres,
                 'Odometer'              => mt_rand(120, 3_800),  // drive-away trucks are new -- odometer is trip-scale
                 'TransactionReference'  => 'TFN' . mt_rand(1000000, 9999999),
+                'IsReversal'            => false,
+                'ReversedTransactionID' => null,
+            ];
+        }
+
+        // Reversal exemplar.  Per Sikelela (2026-08-28): "A reversal
+        // always generates a new transaction row that references the
+        // original transaction ID.  The original row is never modified."
+        // We pick the last fuel row above, clone it with negated litres +
+        // amount and a `ReversedTransactionID` pointing back at the
+        // original.  The reconciler nets these against each other so
+        // month-end totals aren't inflated by a cancelled fuel-up.
+        $lastFuel = collect($rows)->last(fn ($r) => (float) ($r['Litres'] ?? 0) > 0);
+        if ($lastFuel) {
+            $rows[] = [
+                'TransactionID'         => sprintf('%08x-%04x-%04x-%04x-%012x', mt_rand(), mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand()),
+                'CustomerNumber'        => $lastFuel['CustomerNumber'],
+                'ProductCode'           => $lastFuel['ProductCode'],
+                'TransactionTypeCode'   => 'REV',
+                'TransactionDate'       => $now->copy()->subMinutes(mt_rand(2, 30))->toIso8601String(),
+                'CapturedDate'          => $now->copy()->subMinutes(mt_rand(2, 30))->toIso8601String(),
+                'SupplierName'          => $lastFuel['SupplierName'],
+                'VehicleRegistration'   => $lastFuel['VehicleRegistration'],
+                'VehicleFleetNumber'    => $lastFuel['VehicleFleetNumber'],
+                'VIN'                   => $lastFuel['VIN'],
+                'CustomerName'          => $lastFuel['CustomerName'],
+                // Reversals invert the sign of the original:
+                // purchase amount was negative (reduced balance),
+                // reversal is positive (restores balance).
+                'Amount'                => -1 * (float) $lastFuel['Amount'],
+                'VAT'                   => -1 * (float) $lastFuel['VAT'],
+                'Litres'                => -1 * (float) $lastFuel['Litres'],
+                'Odometer'              => $lastFuel['Odometer'],
+                'TransactionReference'  => 'REV/' . $lastFuel['TransactionReference'],
+                'IsReversal'            => true,
+                'ReversedTransactionID' => $lastFuel['TransactionID'],
+                'ReversalNote'          => 'Pump captured litres twice; second capture reversed.',
             ];
         }
 
@@ -286,58 +376,143 @@ class TfnDemoFixtures
 
     /**
      * Pre-authorisations placed by ops for driver refuelling.
-     * `Reference` is the drive-away JOB number so accounts can link
-     * the fuel authorisation straight back to the customer trip in
-     * TRIDENT (this is exactly what the "Order fuel" quick-action
-     * on the vehicles page pre-fills when ops clicks through).
      *
-     * Anchor is VIN because most units have no permanent plate.
+     * Shape mirrors the real TFN v3 GET Orders payload (confirmed from
+     * the QA sample Sikelela sent 2026-08-28): a list of Orders, each
+     * carrying an `Entries[]` array of line items with `Position` (int
+     * TFN entry id), `ProductCode`, `VehicleRegistration`, `MaxAllocation`
+     * (litre cap), `ValidDateStart` / `ValidDateEnd` and
+     * `LinkedTransactions[]` (transactions that have drawn against
+     * this entry -- empty until a driver fuels up).
+     *
+     * The `Reference` on the parent order is the drive-away JOB number
+     * so accounts can link the fuel authorisation straight back to the
+     * customer trip in TRIDENT.  The fuel Volt page flattens one row
+     * per entry for the table, so it works with either shape.
      */
     public function orders(): array
     {
         $now = now();
         $veh = collect($this->vehicles())->keyBy('VIN')->all();
-        $decorate = fn (string $vin, array $extra) => array_merge([
-            'VIN'                 => $vin,
-            'VehicleRegistration' => $veh[$vin]['Registration'] ?? null,
-            'CustomerName'        => $veh[$vin]['CustomerName'] ?? '',
-            'ProductCode'         => 'D0',
-        ], $extra);
+        $customerNumber = '01/6454';
 
+        // Helper: build one Order-with-Entries row using the fixture
+        // vehicle's derived POS registration (permanent plate OR
+        // driver trade plate).
+        $order = function (string $vin, array $entryOverrides, array $orderOverrides = []) use ($customerNumber, $veh, $now) {
+            $v = $veh[$vin] ?? [];
+            $reg = $v['PosRegistration'] ?? null;
+            return array_merge([
+                'IsDeleted'                       => false,
+                'Planned'                         => false,
+                'PlannedReasons'                  => '',
+                'OrderNumber'                     => $orderOverrides['OrderNumber'] ?? 'ORD/'.$customerNumber.'/'.random_int(10000, 99999),
+                'CustomerNumber'                  => $customerNumber,
+                'SubContractorCustomerNumber'     => '',
+                'CustomerReference'               => $orderOverrides['CustomerReference'] ?? ($v['ExternalNumber'] ?? ''),
+                'EntriesCompleteAfterFirstUse'    => true,
+                'MaxAllocation'                   => 0,
+                'SubContractorAccepted'           => false,
+                'SubContractorDeclined'           => false,
+                'StatusTitle'                     => $orderOverrides['StatusTitle'] ?? 'Active - Not started',
+                'CustomerName'                    => $v['CustomerName'] ?? '',
+                'VIN'                             => $vin,
+                'Entries' => [
+                    array_merge([
+                        'IsDeleted'                 => false,
+                        'Position'                  => random_int(10_000_000, 99_999_999),
+                        'SupplierNumber'            => 6,
+                        'ProductCode'               => 'D0',
+                        'VehicleRegistration'       => $reg,
+                        'CardNumber'                => '',
+                        'DriverCellNumber'          => '',
+                        'CurrentVirtualCardNumber'  => (string) random_int(800_000, 899_999),
+                        'ValidDateStart'            => $now->copy()->startOfDay()->format('Y-m-d\TH:i:s'),
+                        'ValidDateEnd'              => $now->copy()->addDays(2)->endOfDay()->format('Y-m-d\TH:i:s.v'),
+                        'CustomerReference'         => '',
+                        'LinkedTransactions'        => [],
+                    ], $entryOverrides),
+                ],
+            ], $orderOverrides);
+        };
+
+        // A mix of open, driver-trade-plate and permanent-plate orders
+        // so consumers can prove both branches of the "vehicle plate
+        // OR driver trade plate" rule against realistic-looking rows.
         return [
-            $decorate('ACVWR75LTG213611', [    // Isuzu Motors SA · NQR500AC · no plate
-                'OrderNumber'  => 'ORD-2026-8801',
-                'EntryNumber'  => 'ENT-91201',
-                'Litres'       => 180,
-                'Amount'       => 4077.00,
-                'DepotTitle'   => 'Kroonstad Refuel2Save',
-                'PlacedAt'     => $now->copy()->subHours(3)->toIso8601String(),
-                'ExpiresAt'    => $now->copy()->addDay()->toIso8601String(),
-                'Status'       => 'Open',
-                'Reference'    => '26082501',
+            $order('ACVWR75LTG213611', [    // Isuzu NQR500 · driver trade plate
+                'MaxAllocation' => 180,
+            ], [
+                'OrderNumber'      => 'ORD/'.$customerNumber.'/00056',
+                'StatusTitle'      => 'Active - Not started',
+                'CustomerReference'=> '26082501',
             ]),
-            $decorate('AK1522FLTB011743', [    // FAW South Africa · 15.180FL · no plate
-                'OrderNumber'  => 'ORD-2026-8800',
-                'EntryNumber'  => 'ENT-91198',
-                'Litres'       => 260,
-                'Amount'       => 5954.00,
-                'DepotTitle'   => 'Harrismith Truck Stop',
-                'PlacedAt'     => $now->copy()->subHours(6)->toIso8601String(),
-                'ExpiresAt'    => $now->copy()->addHours(18)->toIso8601String(),
-                'Status'       => 'Open',
-                'Reference'    => '26082503',
+            $order('AK1522FLTB011743', [    // FAW 15.180FL · driver trade plate
+                'MaxAllocation' => 260,
+            ], [
+                'OrderNumber'      => 'ORD/'.$customerNumber.'/00057',
+                'StatusTitle'      => 'Active - Not started',
+                'CustomerReference'=> '26082503',
             ]),
-            $decorate('AK8140FLTB001884', [    // FAW South Africa · 8.140FL · trade plate TP-DBN-07
-                'OrderNumber'  => 'ORD-2026-8799',
-                'EntryNumber'  => 'ENT-91190',
-                'Litres'       => 220,
-                'Amount'       => 5467.00,
-                'DepotTitle'   => 'Musina Depot',
-                'PlacedAt'     => $now->copy()->subDay()->toIso8601String(),
-                'ExpiresAt'    => $now->copy()->subHours(3)->toIso8601String(),
-                'Status'       => 'Utilised',
-                'Reference'    => '26082505',
+            $order('AK8140FLTB001884', [    // FAW 8.140FL · permanent plate SK12NXGP
+                'MaxAllocation' => 220,
+            ], [
+                'OrderNumber'      => 'ORD/'.$customerNumber.'/00058',
+                'StatusTitle'      => 'Completed',
+                'CustomerReference'=> '26082505',
             ]),
         ];
+    }
+
+    /**
+     * Convenience for consumers that want one flat row per entry
+     * (Order + Entry merged) instead of the nested Orders-with-Entries
+     * shape.  Preserves the legacy field names the fuel page's Volt
+     * template reads (`Litres`, `PlacedAt`, `ExpiresAt`, `Status`,
+     * `EntryNumber`, `Reference`) alongside the real ones from
+     * `orders()` so both existing and future consumers work.
+     */
+    public function ordersFlattened(): array
+    {
+        $out = [];
+        foreach ($this->orders() as $order) {
+            foreach ($order['Entries'] ?? [] as $entry) {
+                $out[] = [
+                    // Real TFN fields
+                    'OrderNumber'               => $order['OrderNumber'],
+                    'CustomerNumber'            => $order['CustomerNumber'],
+                    'CustomerReference'         => $order['CustomerReference'],
+                    'CustomerName'              => $order['CustomerName'] ?? '',
+                    'StatusTitle'               => $order['StatusTitle'] ?? '',
+                    'VIN'                       => $order['VIN'] ?? '',
+                    'Position'                  => $entry['Position'],
+                    'ProductCode'               => $entry['ProductCode'],
+                    'VehicleRegistration'       => $entry['VehicleRegistration'],
+                    'CurrentVirtualCardNumber'  => $entry['CurrentVirtualCardNumber'],
+                    'MaxAllocation'             => $entry['MaxAllocation'],
+                    'ValidDateStart'            => $entry['ValidDateStart'],
+                    'ValidDateEnd'              => $entry['ValidDateEnd'],
+                    'LinkedTransactions'        => $entry['LinkedTransactions'] ?? [],
+                    // Legacy field aliases the current fuel template
+                    // still reads.  Kept identical to the real fields
+                    // so removing the alias is a one-line change once
+                    // the Volt page has migrated across.
+                    'EntryNumber'               => (string) $entry['Position'],
+                    'Litres'                    => $entry['MaxAllocation'],
+                    'PlacedAt'                  => $entry['ValidDateStart'],
+                    'ExpiresAt'                 => $entry['ValidDateEnd'],
+                    'Status'                    => str_starts_with($order['StatusTitle'] ?? '', 'Active') ? 'Open' : $order['StatusTitle'],
+                    'Reference'                 => $order['CustomerReference'],
+                    // Amount is intentionally NOT synthesised: TFN's
+                    // order object doesn't carry a rand estimate --
+                    // the finance figure only appears once transactions
+                    // land against the entry.  The Volt column shows
+                    // "—" when Amount is missing, which is the honest
+                    // pre-utilisation state.
+                    'DepotTitle'                => null,
+                ];
+            }
+        }
+        return $out;
     }
 }

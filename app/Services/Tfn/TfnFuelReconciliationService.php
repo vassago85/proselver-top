@@ -2,6 +2,7 @@
 
 namespace App\Services\Tfn;
 
+use App\Models\DriverProfile;
 use App\Models\Job;
 use App\Services\Tfn\Exceptions\TfnException;
 use Illuminate\Support\Carbon;
@@ -13,19 +14,28 @@ use Illuminate\Support\Collection;
  *
  * The linkage:
  *
- *   Job.registration  ─►  Job's fuel window (collected_at → delivered_at + buffer)
+ *   Job.registration OR driver.trade_plate
+ *                    ─►  Job's fuel window (collected_at → delivered_at + buffer)
  *                    ─►  TFN transactions where VehicleRegistration matches
  *                        AND CapturedDate is inside the window
  *                        AND ProductCode is one of the diesel grades
- *                    ─►  SUM(Litres), SUM(|Amount|)
+ *                    ─►  SUM(Litres) net of reversals, SUM(|Amount|) net of reversals
  *
- * We deliberately DO NOT match on VIN even though FAW asks for "fuel by
- * VIN".  TFN doesn't hold the VIN of the transported vehicle -- the card
- * is bound to the vehicle Registration, which for the ProSelver drive-
- * away model IS the vehicle being transported (the driver drives the
- * FAW truck itself).  So VIN and Registration are two identifiers for
- * the same vehicle, and reg is what TFN knows.  The invoicing sheet
- * still keys its rows on VIN (that's what FAW's system reads).
+ * VIN vs. registration.  TFN's ledger keys on VehicleRegistration only
+ * and rejects VINs (Sikelela, 2026-08-28).  For units that ship without
+ * a permanent plate -- the common new-off-plant case -- the driver
+ * applies their trade plate for the drive-away leg, and THAT string is
+ * what TFN receives on every transaction.  So this service tries the
+ * job's registration first and falls back to the assigned driver's
+ * trade plate.  The invoicing sheet still keys its rows on VIN because
+ * that's what FAW's system reads, but the reconciliation itself never
+ * touches VIN.
+ *
+ * Reversals (per TFN, 2026-08-28): "A reversal always generates a new
+ * transaction row that references the original transaction ID.  The
+ * original row is never modified."  This service nets any reversal
+ * against its original so the fuel figure reflects what actually
+ * stuck, not gross litres.
  *
  * Design choices:
  *
@@ -34,10 +44,18 @@ use Illuminate\Support\Collection;
  *     by TFN's 3-month ceiling).  Anything else N+1s the API which
  *     ratelimits accounts out on OEMs with hundreds of monthly moves.
  *
+ *   - Eager-load the driver's profile.  We resolve the trade-plate
+ *     fallback per job, so `driver.driverProfile` needs to be on the
+ *     eloquent collection to avoid one query per row.  Callers on the
+ *     invoicing page already `->with('driver.driverProfile:id,user_id,trade_plate')`
+ *     for this reason.
+ *
  *   - Normalise registration hard.  Job.registration is uppercased by
- *     the model (Attribute cast, Job.php line 621) but users can enter
- *     it with or without spaces, and TFN stores whatever was captured
- *     at onboarding.  We collapse whitespace + upper before comparing.
+ *     the model (Attribute cast, Job.php ~line 621); DriverProfile.trade_plate
+ *     is normalised the same way (DriverProfile.php).  We also collapse
+ *     any inbound TFN VehicleRegistration via DriverProfile::normalisePlate
+ *     before comparing, so "ND 456 GP" and "nd456gp" and "ND-456-GP" all
+ *     match one row.
  *
  *   - Demo mode.  When TFN isn't live the demo fixtures include a
  *     handful of registrations -- most real jobs won't match, but the
@@ -116,20 +134,35 @@ class TfnFuelReconciliationService
         $sourceLabel = $this->client->isLive() ? 'tfn' : 'demo';
 
         // Index transactions by normalised registration once so we can
-        // look up each job in O(1).
+        // look up each job's plate AND its driver's trade plate in O(1).
         $byRegistration = collect($transactions)->groupBy(
-            fn ($t) => $this->normaliseRegistration($t['VehicleRegistration'] ?? '')
+            fn ($t) => (string) DriverProfile::normalisePlate($t['VehicleRegistration'] ?? '')
         );
 
         $out = [];
         foreach ($jobs as $job) {
-            $reg = $this->normaliseRegistration($job->registration);
-            if (blank($reg)) {
+            // Registration candidates: the vehicle's permanent plate
+            // first, then the assigned driver's trade plate as the
+            // fallback used when the unit shipped without a plate.
+            // Both are already normalised on their models, but we
+            // re-normalise here so external / test-fixture data goes
+            // through the same pipe.
+            $regs = array_values(array_filter([
+                DriverProfile::normalisePlate($job->registration),
+                DriverProfile::normalisePlate(optional($job->driver?->driverProfile)->trade_plate),
+            ], fn ($v) => !blank($v)));
+
+            if (empty($regs)) {
                 $out[$job->id] = $this->emptyResult('no_registration');
                 continue;
             }
 
-            $candidates = $byRegistration->get($reg, collect());
+            $candidates = collect();
+            foreach ($regs as $reg) {
+                $candidates = $candidates->merge($byRegistration->get($reg, collect()));
+            }
+            $candidates = $candidates->unique(fn ($t) => $t['TransactionID'] ?? spl_object_hash((object) $t));
+
             if ($candidates->isEmpty()) {
                 $out[$job->id] = $this->emptyResult('no_matches');
                 continue;
@@ -153,22 +186,70 @@ class TfnFuelReconciliationService
                 continue;
             }
 
-            $litres = $matches->sum(fn ($t) => (float) ($t['Litres'] ?? 0));
+            // Net reversals against their originals.  TFN inserts a
+            // separate row with `ReversedTransactionID` pointing back
+            // at the original -- the original row is never modified.
+            // If BOTH sides are inside our window they cancel out; if
+            // only the reversal is in-window (rare: a fuel-up shortly
+            // before the window with a reversal inside it) we still
+            // subtract it, which understates but never overstates.
+            $netted = $this->netReversals($matches);
+
+            $litres = $netted->sum(fn ($t) => (float) ($t['Litres'] ?? 0));
             // TFN convention: purchase amounts are negative (they reduce
-            // your balance).  On the invoicing sheet FAW wants a
-            // positive rand figure, so absolute-value here.
-            $amount = $matches->sum(fn ($t) => abs((float) ($t['Amount'] ?? 0)));
+            // your balance) and reversal amounts are positive (they
+            // restore balance).  We want a positive rand figure on the
+            // invoicing sheet, so absolute-value the AFTER-netting sum.
+            $signedAmount = $netted->sum(fn ($t) => (float) ($t['Amount'] ?? 0));
+            $amount = abs($signedAmount);
 
             $out[$job->id] = [
                 'litres'        => round($litres, 2),
                 'amount'        => round($amount, 2),
-                'matched_count' => $matches->count(),
+                'matched_count' => $netted->count(),
                 'source'        => $sourceLabel,
-                'transactions'  => $matches->all(),
+                'transactions'  => $netted->values()->all(),
             ];
         }
 
         return $out;
+    }
+
+    /**
+     * Drop reversals AND the originals they reference, so the totals
+     * reflect only transactions that stuck.
+     *
+     * TFN reversal shape (per Sikelela, 2026-08-28): the reversal row
+     * carries `IsReversal=true` and `ReversedTransactionID` pointing
+     * at the original.  In case the flag is absent on some historical
+     * rows we also treat any row with a non-empty
+     * `ReversedTransactionID` as a reversal.
+     */
+    private function netReversals(Collection $rows): Collection
+    {
+        $reversedIds = $rows
+            ->filter(fn ($t) => ($t['IsReversal'] ?? false) === true || !blank($t['ReversedTransactionID'] ?? null))
+            ->map(fn ($t) => (string) ($t['ReversedTransactionID'] ?? ''))
+            ->filter(fn ($id) => $id !== '')
+            ->values()
+            ->all();
+
+        if (empty($reversedIds)) {
+            return $rows;
+        }
+
+        $reversedSet = array_flip($reversedIds);
+
+        return $rows->reject(function ($t) use ($reversedSet) {
+            $id = (string) ($t['TransactionID'] ?? '');
+            $isReversalRow = ($t['IsReversal'] ?? false) === true || !blank($t['ReversedTransactionID'] ?? null);
+            // Drop the reversal row itself...
+            if ($isReversalRow) {
+                return true;
+            }
+            // ...and drop the original it points at.
+            return $id !== '' && isset($reversedSet[$id]);
+        });
     }
 
     /**
@@ -238,16 +319,6 @@ class TfnFuelReconciliationService
         // without redeploying -- see `tfn.reconciliation_products`.
         $accepted = array_map('strtoupper', (array) config('tfn.reconciliation_products', ['D0']));
         return in_array(strtoupper($code), $accepted, true);
-    }
-
-    /**
-     * Uppercase and strip every non-alphanumeric character so
-     * "ND 123 GP", "nd123gp" and "ND-123-GP" all compare equal.
-     */
-    private function normaliseRegistration(?string $reg): string
-    {
-        if (!$reg) return '';
-        return preg_replace('/[^A-Z0-9]/', '', strtoupper($reg)) ?? '';
     }
 
     private function emptyResult(string $source): array
