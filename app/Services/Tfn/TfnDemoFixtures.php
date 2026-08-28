@@ -21,14 +21,36 @@ use Illuminate\Support\Carbon;
  */
 class TfnDemoFixtures
 {
+    /**
+     * Sub-account balance.
+     *
+     * Real TFN v3 /api/SubAccountBalance returns exactly two numeric
+     * fields alongside the customer number: `AccountBalance` (SIGNED --
+     * negative means the sub-account is in arrears) and
+     * `AccountAvailableBalance` (available credit).  There is no
+     * `CreditLimit` and no `AsOf` in the real payload; consumers must
+     * handle their absence.
+     *
+     * The legacy demo keys (`Balance`, `CreditLimit`, `AvailableCredit`,
+     * `AsOf`) are emitted alongside the real ones so any consumer that
+     * still reads them keeps working while the migration lands.  The
+     * fuel Volt page reads the real keys first with a fallback to the
+     * legacy ones (see the KPI block).
+     */
     public function balance(): array
     {
+        $account = 148_732.55;      // positive: sub-account is in credit
+        $available = 101_267.45;    // available credit
         return [
-            'CustomerNumber'  => '10021',
-            'Balance'         => 148_732.55,
-            'CreditLimit'     => 250_000.00,
-            'AvailableCredit' => 101_267.45,
-            'AsOf'            => now()->toIso8601String(),
+            'CustomerNumber'          => '01/6454',
+            // Real v3 fields.
+            'AccountBalance'          => $account,
+            'AccountAvailableBalance' => $available,
+            // Legacy aliases -- remove once no consumer reads them.
+            'Balance'                 => $account,
+            'AvailableCredit'         => $available,
+            'CreditLimit'             => 250_000.00,
+            'AsOf'                    => now()->toIso8601String(),
         ];
     }
 
@@ -83,9 +105,31 @@ class TfnDemoFixtures
      * Numbers below are illustrative but hold to a realistic ~R 22.50
      * to ~R 25.20/L spread for 50ppm at the time of writing.
      *
-     * Shape is deliberately kept flat and PascalCase to mirror what
-     * we expect from /api/Pricing/{code} once we go live -- the view
-     * only cares about ProductCode, DepotTitle and PricePerLitre.
+     * Shape matches TFN v3 /api/Pricing?productCode=D0 exactly, per
+     * the 2026-08-28 QA probe:
+     *
+     *   [
+     *     {
+     *       "SupplierName": "Agile Fuel Depot",
+     *       "SupplierNumber": "0603",
+     *       "Price": 4.90,                 // ex grid fee
+     *       "PriceIncludingGrid": 27.90,   // driver-paid R/L
+     *       "VolumeDiscount": 0.10,
+     *       "PromotionalDiscount": 0.00,
+     *       "HasSpecificPricing": false,
+     *       "SpecificPricing": [],
+     *       "CustomerExternalReference": "",
+     *       "ParentExternalReference": ""
+     *     },
+     *     ...
+     *   ]
+     *
+     * There is NO `ProductCode` field on the row itself -- the caller
+     * knows the product because it's in the query string.  We emit
+     * legacy aliases (`DepotTitle`, `PricePerLitre`) alongside so
+     * consumers that haven't migrated to the real key names keep
+     * working; new consumers should read `SupplierName` and
+     * `PriceIncludingGrid` directly.
      */
     public function pricing(): array
     {
@@ -93,10 +137,12 @@ class TfnDemoFixtures
         // the numbers -- the meeting audience should see the network
         // respond to a poll, not a static screenshot.
         $jitter = fn (float $base) => round($base + (mt_rand(-8, 8) / 100), 2);
-        $asOf = now()->toIso8601String();
 
+        // Depot titles line up with depots() so the view can cross-
+        // reference by SupplierName. If you add a depot there, add
+        // it here (or the price list becomes shorter than the depot
+        // picker).  Base is the driver-paid `PriceIncludingGrid`.
         $baseByDepot = [
-            // depot title => base R/L for D0 (50ppm)
             'Kroonstad Refuel2Save'    => 22.65,
             'Harrismith Truck Stop'    => 22.90,
             'Bloemfontein Ring'        => 23.15,
@@ -105,70 +151,102 @@ class TfnDemoFixtures
             'Beitbridge Border'        => 25.10,
         ];
 
-        // Depot titles line up with depots() so the view can cross-
-        // reference by title. If you add a depot there, add it here
-        // (or the price list becomes shorter than the depot picker).
         $rows = [];
         $depotIndex = 1;
         foreach ($baseByDepot as $title => $base) {
+            $priceIncludingGrid = $jitter($base);
+            // TFN reports the ex-grid product cost separately -- it's
+            // typically ~R 23 lower than the pump price on 50ppm diesel
+            // (the grid fee covers pump / depot margin).  Numbers here
+            // are illustrative; the ex-grid figure isn't consumed by
+            // any current view but we emit it for API-shape fidelity.
+            $priceExGrid = round($priceIncludingGrid - 23.00, 2);
+
             $rows[] = [
-                'ProductCode'   => 'D0',
-                'Label'         => 'Diesel (50ppm)',
-                'DepotID'       => sprintf('11111111-0000-0000-0000-%012d', $depotIndex++),
-                'DepotTitle'    => $title,
-                'PricePerLitre' => $jitter($base),
-                'AsOf'          => $asOf,
+                // Real TFN v3 fields.
+                'SupplierName'              => $title,
+                'SupplierNumber'            => sprintf('%04d', 600 + $depotIndex),
+                'Price'                     => $priceExGrid,
+                'PriceIncludingGrid'        => $priceIncludingGrid,
+                'VolumeDiscount'            => 0.10,
+                'PromotionalDiscount'       => 0.00,
+                'HasSpecificPricing'        => false,
+                'SpecificPricing'           => [],
+                'CustomerExternalReference' => '',
+                'ParentExternalReference'   => '',
+                // Legacy aliases -- remove once no consumer reads them.
+                'DepotID'                   => sprintf('11111111-0000-0000-0000-%012d', $depotIndex),
+                'DepotTitle'                => $title,
+                'ProductCode'               => 'D0',
+                'Label'                     => 'Diesel (50ppm)',
+                'PricePerLitre'             => $priceIncludingGrid,
+                'AsOf'                      => now()->toIso8601String(),
             ];
+            $depotIndex++;
         }
 
         // Sort cheapest-first so the ops screen naturally guides
         // planners toward the best-priced depot for the trip window.
-        usort($rows, fn ($a, $b) => $a['PricePerLitre'] <=> $b['PricePerLitre']);
+        usort($rows, fn ($a, $b) => $a['PriceIncludingGrid'] <=> $b['PriceIncludingGrid']);
         return $rows;
     }
 
+    /**
+     * TFN v3 /api/Depots response.  Confirmed shape from the QA probe
+     * (2026-08-28): DepotID (UUID), Number (int), Title, GPSLatitude /
+     * GPSLongitude (fixed-precision decimal strings on the wire but
+     * fine to serialise as float here), MarketingCategory (int), and
+     * a nested Products[] array indicating which grades the depot
+     * dispenses.  We support at least D0 everywhere; ULP93 / ULP95
+     * are only at some depots.  MarketingCategory drives a chip
+     * colour on the depot picker (0 = plain, 1 = highlight, 2 = premium).
+     */
     public function depots(): array
     {
+        $productsD0 = [['ProductCode' => 'D0']];
+        $productsAll = [['ProductCode' => 'D0'], ['ProductCode' => 'ULP93'], ['ProductCode' => 'ULP95']];
         return [
-            ['DepotID' => '11111111-0000-0000-0000-000000000001', 'Number' => 101, 'Title' => 'Kroonstad Refuel2Save',       'GPSLatitude' => -27.6482, 'GPSLongitude' => 27.2359, 'MarketingCategory' => 0],
-            ['DepotID' => '11111111-0000-0000-0000-000000000002', 'Number' => 102, 'Title' => 'Harrismith Truck Stop',       'GPSLatitude' => -28.2734, 'GPSLongitude' => 29.1226, 'MarketingCategory' => 1],
-            ['DepotID' => '11111111-0000-0000-0000-000000000003', 'Number' => 103, 'Title' => 'Beitbridge Border',           'GPSLatitude' => -22.2183, 'GPSLongitude' => 30.0016, 'MarketingCategory' => 2],
-            ['DepotID' => '11111111-0000-0000-0000-000000000004', 'Number' => 104, 'Title' => 'Kempton Park — Nimrod',       'GPSLatitude' => -26.0964, 'GPSLongitude' => 28.2320, 'MarketingCategory' => 1],
-            ['DepotID' => '11111111-0000-0000-0000-000000000005', 'Number' => 105, 'Title' => 'Musina Depot',                'GPSLatitude' => -22.3392, 'GPSLongitude' => 30.0330, 'MarketingCategory' => 0],
-            ['DepotID' => '11111111-0000-0000-0000-000000000006', 'Number' => 106, 'Title' => 'Bloemfontein Ring',           'GPSLatitude' => -29.1211, 'GPSLongitude' => 26.2140, 'MarketingCategory' => 1],
+            ['DepotID' => '11111111-0000-0000-0000-000000000001', 'Number' => 101, 'Title' => 'Kroonstad Refuel2Save',       'GPSLatitude' => -27.6482, 'GPSLongitude' => 27.2359, 'MarketingCategory' => 0, 'Products' => $productsD0],
+            ['DepotID' => '11111111-0000-0000-0000-000000000002', 'Number' => 102, 'Title' => 'Harrismith Truck Stop',       'GPSLatitude' => -28.2734, 'GPSLongitude' => 29.1226, 'MarketingCategory' => 1, 'Products' => $productsAll],
+            ['DepotID' => '11111111-0000-0000-0000-000000000003', 'Number' => 103, 'Title' => 'Beitbridge Border',           'GPSLatitude' => -22.2183, 'GPSLongitude' => 30.0016, 'MarketingCategory' => 2, 'Products' => $productsD0],
+            ['DepotID' => '11111111-0000-0000-0000-000000000004', 'Number' => 104, 'Title' => 'Kempton Park — Nimrod',       'GPSLatitude' => -26.0964, 'GPSLongitude' => 28.2320, 'MarketingCategory' => 1, 'Products' => $productsAll],
+            ['DepotID' => '11111111-0000-0000-0000-000000000005', 'Number' => 105, 'Title' => 'Musina Depot',                'GPSLatitude' => -22.3392, 'GPSLongitude' => 30.0330, 'MarketingCategory' => 0, 'Products' => $productsD0],
+            ['DepotID' => '11111111-0000-0000-0000-000000000006', 'Number' => 106, 'Title' => 'Bloemfontein Ring',           'GPSLatitude' => -29.1211, 'GPSLongitude' => 26.2140, 'MarketingCategory' => 1, 'Products' => $productsAll],
         ];
     }
 
     /**
      * "Vehicles" here are the units ProSelver is moving drive-away
      * from plant to dealership -- Isuzu / FAW / Powerstar new trucks
-     * en-route. Each row combines the physical vehicle (VIN / brand /
-     * model / customer) with the trip-level context we need to place
-     * a TFN order:
+     * en-route.
      *
-     *   - `VIN` is the durable identifier for the vehicle itself and
-     *     is what the fuel page shows to humans in the picker.  TFN's
-     *     ledger does NOT store VIN -- their POS reads a registration
-     *     string only -- but we track it locally to reconcile back to
-     *     the trip.
+     * IMPORTANT: TFN's real /api/Vehicle response is much thinner than
+     * this fixture.  The 2026-08-28 QA probe returned only:
      *
-     *   - `Registration` is the vehicle's permanent plate, if it has
-     *     one.  Nullable: most new-from-plant units ship without a
-     *     permanent plate; the dealer applies one after handover.
+     *   { Registration, FleetNumber, TankSize, Status, ExternalNumber }
      *
-     *   - `DriverName` / `DriverTradePlate` describe the driver on the
-     *     trip.  When the vehicle has no permanent plate, the driver
-     *     applies their trade plate for the drive-away leg and TFN
-     *     receives THAT string as VehicleRegistration on every
-     *     transaction and order.  So a vehicle without a permanent
-     *     plate but with an assigned driver still has a valid POS
-     *     registration -- it's the driver's trade plate.
+     * No VIN, no CustomerName, no Brand/Model.  So in production the
+     * `vehicles()` list from TfnClient CANNOT power the fuel-order
+     * picker on its own -- the VIN + customer + brand/model + driver
+     * context has to come from OUR Job table, joined to TFN's list on
+     * Registration (or the driver's trade plate for plateless units).
+     * The fuel page's picker rewrite (planned follow-up) will source
+     * from Jobs-in-transit for exactly this reason.
      *
-     *   - `PosRegistration` is the derived string TFN actually sees on
-     *     the transaction -- vehicle plate if present, otherwise the
-     *     driver's trade plate.  Kept as a fixed field on the fixture
-     *     so tests can assert against it without recomputing.
+     * This fixture keeps the synthetic extras -- VIN / brand / model /
+     * customer / driver / trade plate / derived PosRegistration --
+     * because the demo screen needs to LOOK like the eventual joined
+     * shape.  Every row is authored so:
      *
+     *   - `VIN` is the durable identifier a human recognises.
+     *   - `Registration` is the vehicle's permanent plate, if any.
+     *     Nullable: most new-from-plant units ship without one.
+     *   - `DriverName` / `DriverTradePlate` describe the driver on
+     *     the trip.  When the vehicle is plateless, TFN receives the
+     *     driver's trade plate as VehicleRegistration on every
+     *     transaction and order.
+     *   - `PosRegistration` is the derived string TFN actually sees.
+     *     Kept as a fixed field so tests can assert against it.
      *   - `TankSize` is optional: plant delivery notes don't always
      *     spec the tank, and ops shouldn't guess.
      */

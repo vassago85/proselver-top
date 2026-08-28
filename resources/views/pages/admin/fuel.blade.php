@@ -117,7 +117,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                 'banner'     => $flag ?? 'TFN not configured — showing demo data. Set TFN_ENABLED=true and populate TFN_USERNAME / TFN_PASSWORD / TFN_CUSTOMER_NUMBER in .env to switch to live QA.',
                 'balance'    => $fixtures->balance(),
                 'aggregate'  => $fixtures->aggregateLitres(),
-                'pricing'    => $fixtures->pricing(),
+                'pricing'    => $this->normalisePricingRows($fixtures->pricing(), 'D0'),
                 'depots'     => $fixtures->depots(),
                 'vehicles'   => $fixtures->vehicles(),
                 'cards'      => $fixtures->virtualCards(),
@@ -219,18 +219,12 @@ new #[Layout('components.layouts.app')] class extends Component {
                 $rows = match (true) {
                     isset($response[0])                          => $response,
                     isset($response['rows'])                     => $response['rows'],
-                    isset($response['PricePerLitre'])            => [$response],
+                    isset($response['PricePerLitre']),
+                    isset($response['PriceIncludingGrid'])       => [$response],
                     default                                      => [],
                 };
-                foreach ($rows as $row) {
-                    $out[] = [
-                        'ProductCode'   => $code,
-                        'Label'         => $label,
-                        'DepotID'       => $row['DepotID'] ?? null,
-                        'DepotTitle'    => $row['DepotTitle'] ?? $row['SupplierName'] ?? '—',
-                        'PricePerLitre' => (float) ($row['PricePerLitre'] ?? $row['Price'] ?? 0),
-                        'AsOf'          => $row['AsOf'] ?? now()->toIso8601String(),
-                    ];
+                foreach ($this->normalisePricingRows($rows, $code, $label) as $row) {
+                    $out[] = $row;
                 }
             } catch (TfnException $e) {
                 // Skip this product -- others will still render.
@@ -239,6 +233,46 @@ new #[Layout('components.layouts.app')] class extends Component {
         // Cheapest first: guides the planner to the best-priced depot
         // when they read the panel top-down.
         usort($out, fn ($a, $b) => $a['PricePerLitre'] <=> $b['PricePerLitre']);
+        return $out;
+    }
+
+    /**
+     * Flatten TFN pricing rows to the SAME shape whether they came
+     * from real v3 (SupplierName / PriceIncludingGrid / Price / ...)
+     * or from a legacy demo fixture (DepotTitle / PricePerLitre / ...).
+     * The view template only cares about `ProductCode`, `DepotTitle`
+     * and `PricePerLitre`, so we resolve those from whichever key set
+     * is present.
+     *
+     * `PriceIncludingGrid` is the DRIVER-PAID R/L and wins over `Price`
+     * (which is the ex-grid product sub-total, not what shows on the
+     * receipt).  Deliberately no fallback to `Price` UNLESS
+     * `PriceIncludingGrid` is missing entirely -- otherwise a stale
+     * fixture with only `Price` set would silently under-price on
+     * screen.
+     */
+    private function normalisePricingRows(array $rows, string $productCode, ?string $label = null): array
+    {
+        $productLabels = config('tfn.product_labels', []);
+        $label = $label ?? ($productLabels[$productCode] ?? $productCode);
+        $out = [];
+        foreach ($rows as $row) {
+            if (!is_array($row)) { continue; }
+            $pricePerLitre = (float) (
+                $row['PriceIncludingGrid']
+                ?? $row['PricePerLitre']
+                ?? $row['Price']
+                ?? 0
+            );
+            $out[] = [
+                'ProductCode'   => $row['ProductCode'] ?? $productCode,
+                'Label'         => $row['Label'] ?? $label,
+                'DepotID'       => $row['DepotID'] ?? null,
+                'DepotTitle'    => $row['DepotTitle'] ?? $row['SupplierName'] ?? '—',
+                'PricePerLitre' => $pricePerLitre,
+                'AsOf'          => $row['AsOf'] ?? now()->toIso8601String(),
+            ];
+        }
         return $out;
     }
 
@@ -673,20 +707,37 @@ new #[Layout('components.layouts.app')] class extends Component {
             helperColor="sky"
         />
         @if($canSeeFinance)
+            @php
+                // Balance response shape: TFN's real v3 payload uses
+                // `AccountBalance` + `AccountAvailableBalance`; older
+                // demo fixtures used `Balance` + `AvailableCredit` +
+                // `CreditLimit`.  Accept either -- new keys win, old
+                // keys are the fallback.  AccountBalance is signed:
+                // negative means the sub-account is in arrears.
+                $rawBalance    = $balance['AccountBalance']          ?? $balance['Balance']         ?? 0;
+                $rawAvailable  = $balance['AccountAvailableBalance'] ?? $balance['AvailableCredit'] ?? 0;
+                $rawLimit      = $balance['CreditLimit']             ?? null;  // not in real v3 payload
+                $balanceLabel = $rawBalance < 0
+                    ? 'Sub-account · in arrears'
+                    : 'Sub-account balance';
+                $balanceHelper = 'Available credit R ' . number_format((float) $rawAvailable, 2);
+            @endphp
             <x-stat-card
-                label="Sub-account balance"
-                :value="'R ' . number_format((float) ($balance['Balance'] ?? 0), 2)"
-                color="blue"
-                :helper="'Available credit R ' . number_format((float) ($balance['AvailableCredit'] ?? 0), 2)"
+                :label="$balanceLabel"
+                :value="'R ' . number_format(abs((float) $rawBalance), 2)"
+                :color="$rawBalance < 0 ? 'red' : 'blue'"
+                :helper="$balanceHelper"
                 helperColor="slate"
             />
-            <x-stat-card
-                label="Credit limit"
-                :value="'R ' . number_format((float) ($balance['CreditLimit'] ?? 0), 2)"
-                color="indigo"
-                :helper="'Set by TFN — request change via account manager'"
-                helperColor="slate"
-            />
+            @if($rawLimit !== null)
+                <x-stat-card
+                    label="Credit limit"
+                    :value="'R ' . number_format((float) $rawLimit, 2)"
+                    color="indigo"
+                    :helper="'Set by TFN — request change via account manager'"
+                    helperColor="slate"
+                />
+            @endif
         @endif
         <x-stat-card
             label="Litres · month-to-date"
