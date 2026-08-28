@@ -23,12 +23,11 @@
     // change a page's gate, change the matching flag here.
     $canSeeFinanceDash = $isAccounts || $isOwner || $isDeveloper || $isSuperAdmin || $isOpsController;
     $canSeeOwnerDash = $isOwner || $isDeveloper || $isSuperAdmin;
-    // Customer invoicing, the petty-cash Overview and the driver pay report
-    // each have a different audience, so they're gated individually rather
-    // than behind one "finance" flag.
+    // Customer invoicing is the only Finance link that is per-role gated
+    // in the sidebar now; the Petty Cash tab strip handles the audience
+    // split for Overview / Reconciliation / Driver Pay inside the section
+    // (removed as sidebar duplicates in Phase 2 of the nav cut, 2026-08).
     $canSeeInvoicing = $isAccounts || $isOwner || $isDeveloper;
-    $canSeePettyCashOverview = $user->canViewPettyCashOverview();
-    $canSeeDriverPay = $isOwner || $isDeveloper || $isAccounts;
 
     // OEMs hold customer-tier roles for tenanting, so $isCustomer is true.
     // Treat the company type as the source of truth for the *portal* label
@@ -125,21 +124,15 @@
                 <li>
                     <p class="mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">Ops &middot; Booking</p>
                     <ul role="list" class="space-y-0.5">
-                        <x-sidebar-link :href="route('admin.orders.index')" :active="request()->routeIs('admin.orders.index') || request()->routeIs('admin.orders.show')">
+                        {{-- Bulk Upload sat here as its own entry until Phase 2 of
+                             the nav cut (2026-08).  Removed because it's a verb
+                             attached to Orders, not a separate room -- the Orders
+                             page now surfaces it as a page-action button gated to
+                             the same account-wide roles. --}}
+                        <x-sidebar-link :href="route('admin.orders.index')" :active="request()->routeIs('admin.orders.index') || request()->routeIs('admin.orders.show') || request()->routeIs('admin.orders.bulk-upload')">
                             <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4"/><path d="M12 16h4"/><path d="M8 11h.01"/><path d="M8 16h.01"/></svg></x-slot:icon>
                             Orders
                         </x-sidebar-link>
-
-                        {{-- Bulk Upload sits inside Booking next to Orders so ops controllers
-                             find it next to where they spend their day. Restricted to roles
-                             that already book on customers' behalf — drivers / dispatchers
-                             don't onboard OEM movement files. --}}
-                        @if($isDeveloper || $isSuperAdmin || $isOpsController || $isOwner)
-                        <x-sidebar-link :href="route('admin.orders.bulk-upload')" :active="request()->routeIs('admin.orders.bulk-upload')">
-                            <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></svg></x-slot:icon>
-                            Bulk Upload
-                        </x-sidebar-link>
-                        @endif
 
                         <x-sidebar-link :href="route('admin.documents.index')" :active="request()->routeIs('admin.documents.*')">
                             <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></svg></x-slot:icon>
@@ -174,38 +167,26 @@
                             Trips
                         </x-sidebar-link>
 
-                        <x-sidebar-link :href="route('admin.drivers.index')" :active="request()->routeIs('admin.drivers.index') || request()->routeIs('admin.drivers.create') || request()->routeIs('admin.drivers.edit')">
+                        {{-- One "Drivers" entry, not two.  Driver Ops (the
+                             fleet-control lens) sat here as a second link
+                             until Phase 2 of the nav cut (2026-08); it's the
+                             same roster, viewed differently, so the pair is
+                             now cross-linked by top-right buttons on each
+                             page.  The active rule lights the entry on both
+                             URLs so users can tell they're inside "Drivers"
+                             either way. --}}
+                        <x-sidebar-link :href="route('admin.drivers.index')" :active="request()->routeIs('admin.drivers.index') || request()->routeIs('admin.drivers.create') || request()->routeIs('admin.drivers.edit') || request()->routeIs('admin.drivers.operations')">
                             <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></x-slot:icon>
                             Drivers
-                        </x-sidebar-link>
-
-                        {{-- Driver Ops — fleet-control view (who is moving / idle /
-                             late / overloaded). Kept separate from the Drivers
-                             roster above so HR/compliance and ops stay distinct. --}}
-                        <x-sidebar-link :href="route('admin.drivers.operations')" :active="request()->routeIs('admin.drivers.operations')">
-                            <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></x-slot:icon>
-                            Driver Ops
                         </x-sidebar-link>
 
                         {{-- Wallboard removed 2026-05-26 -- the dispatch-TV
                              view depended on the TrackSolid position API, which
                              the owner confirmed isn't going to be available.
-                             Live Display below still renders the 3-lane status
-                             board without needing GPS positions. --}}
-
-                        {{-- Live Display — chromeless 3-lane board (waiting /
-                             in transit / delivered today) the dealer and OEM
-                             portals also expose.  For ops / owner / super
-                             admin / developer it runs system-wide (every
-                             customer's active jobs in one TV view), with the
-                             owning customer name on each card.  Opens in a
-                             new tab so the dispatcher can drop it on a
-                             wall-mounted monitor without losing their main
-                             session. --}}
-                        <x-sidebar-link :href="route('admin.live-display')" target="_blank" rel="noopener" :active="request()->routeIs('admin.live-display')">
-                            <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg></x-slot:icon>
-                            Live Display
-                        </x-sidebar-link>
+                             Live Display used to sit here as its own entry
+                             (removed 2026-08 as part of the nav cut) --
+                             it's a Dispatch action, exposed as a new-tab
+                             button on the Dispatch Board itself. --}}
                     </ul>
                 </li>
                 @endif
@@ -268,51 +249,28 @@
                         </x-sidebar-link>
                         @endif
 
-                        {{-- Driver-submitted slip approvals + reimbursement
-                             tracking.  Open to all internal staff; the
-                             PettyCashEntryPolicy decides who may approve.
-                             Covers the slip queue and Plans · Sign-off, which
-                             share a tab strip.  Listed route by route rather
-                             than as petty-cash.* because Reconciliation
-                             Queries lives under the same prefix but has its
-                             own entry below -- a wildcard here would light
-                             both up at once. --}}
+                        {{-- Petty Cash is one entry, not four.  Cash Overview,
+                             Reconciliation Queries and Driver Pay used to
+                             sit here as sibling entries; the Petty Cash
+                             pages already share a tab strip (section-tabs
+                             partial) so the sidebar duplicates were pure
+                             noise.  The active rule matches every route in
+                             that strip so a user on Overview / Reconciliation
+                             / Plans / Driver Pay still sees "Petty Cash"
+                             lit up here.  Gating on the tab strip stays as
+                             is: canViewPettyCashOverview() hides the three
+                             admin-only tabs from users who shouldn't see
+                             them, driver_pay stays owner/accounts/dev only. --}}
                         <x-sidebar-link
                             :href="route('admin.petty-cash.index')"
-                            :active="request()->routeIs('admin.petty-cash.index') || request()->routeIs('admin.petty-cash.plans')">
+                            :active="request()->routeIs('admin.petty-cash.index')
+                                || request()->routeIs('admin.petty-cash.plans')
+                                || request()->routeIs('admin.overview')
+                                || request()->routeIs('admin.petty-cash.reconciliation')
+                                || request()->routeIs('admin.drivers.pay')">
                             <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="14" x="2" y="5" rx="2"/><line x1="2" x2="22" y1="10" y2="10"/></svg></x-slot:icon>
                             Petty Cash
                         </x-sidebar-link>
-
-                        {{-- Issued vs spent vs reconciled, with variance and
-                             the needs-attention queue.  Accounts uses it for
-                             month-end; the ops controller for driver spend.
-                             Called "Cash Overview" rather than the old "Cash
-                             Reconciliation" so it doesn't read as the same
-                             thing as the Reconciliation Queries report below. --}}
-                        @if($canSeePettyCashOverview)
-                        <x-sidebar-link :href="route('admin.overview')" :active="request()->routeIs('admin.overview')">
-                            <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg></x-slot:icon>
-                            Cash Overview
-                        </x-sidebar-link>
-
-                        {{-- Advances issued on trips that were then cancelled:
-                             what is still outstanding, and the written
-                             explanation for everything already settled.  The
-                             owner's audit of where that cash went. --}}
-                        <x-sidebar-link :href="route('admin.petty-cash.reconciliation')" :active="request()->routeIs('admin.petty-cash.reconciliation')">
-                            <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" x2="12" y1="9" y2="13"/><line x1="12" x2="12.01" y1="17" y2="17"/></svg></x-slot:icon>
-                            Reconciliation Queries
-                        </x-sidebar-link>
-                        @endif
-
-                        {{-- Month-end per-driver movements × rate. --}}
-                        @if($canSeeDriverPay)
-                        <x-sidebar-link :href="route('admin.drivers.pay')" :active="request()->routeIs('admin.drivers.pay')">
-                            <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/><path d="M22 11h-4"/><path d="M20 9v4"/></svg></x-slot:icon>
-                            Driver Pay
-                        </x-sidebar-link>
-                        @endif
 
                         {{-- ProSelver SaaS licence meter — owner + developer
                              only, not accounts, ops or super_admin.  Soft-hide

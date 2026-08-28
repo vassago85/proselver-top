@@ -556,20 +556,41 @@ test('the dashboard tab strip only offers dashboards the viewer can open', funct
         ->assertDontSee(route('admin.dashboard.owner'));
 });
 
-test('the sidebar surfaces the finance pages that used to be buried as tabs', function () {
-    // The cash pages and Driver Pay previously had no sidebar entry at all --
-    // they were only reachable from inside Petty Cash. The overview entry is
-    // labelled "Cash Overview" rather than the original "Cash Reconciliation",
-    // which now belongs to the Reconciliation Queries report next to it.
+test('the finance pages are reachable via Petty Cash + Customer Invoicing (Phase 2 nav cut)', function () {
+    // Original intent: the cash pages and Driver Pay must not be buried --
+    // they used to have no entry at all, only inline tabs.  Phase 1 of the
+    // Finance regroup gave each its own sidebar entry.  Phase 2 of the
+    // 2026-08 nav cut folded those three back into a single "Petty Cash"
+    // entry because they already share a tab strip (section-tabs partial);
+    // three sibling sidebar entries duplicating the same tabs was noise.
+    //
+    // This test now pins the shape we actually want to hold: from Finance
+    // (a page any accounts user can reach), the sidebar reveals Petty Cash
+    // and Customer Invoicing; opening Petty Cash reveals the tab strip
+    // that carries Overview / Reconciliation / Driver Pay.  Together they
+    // guarantee none of the finance pages are ever more than two clicks
+    // from the finance dashboard.
+    // From Finance you can reach Petty Cash and Customer Invoicing via the
+    // sidebar; the Cash Overview / Reconciliation / Driver Pay pages are
+    // also linked from the finance dashboard body (KPI cards + footers).
     $this->actingAs(dashUser('accounts'))
         ->get(route('admin.dashboard.finance'))
+        ->assertSee(route('admin.petty-cash.index'))
+        ->assertSee(route('admin.invoices.index'))
+        ->assertSee('Petty Cash')
+        ->assertSee('Customer Invoicing');
+
+    // From the Petty Cash queue the tab strip exposes the other three,
+    // which is where they belong (they were already in the tab strip
+    // before Phase 2; the sidebar duplicates were the noise).
+    $this->actingAs(dashUser('accounts'))
+        ->get(route('admin.petty-cash.index'))
         ->assertSee(route('admin.overview'))
         ->assertSee(route('admin.petty-cash.reconciliation'))
         ->assertSee(route('admin.drivers.pay'))
-        ->assertSee(route('admin.invoices.index'))
-        ->assertSee('Cash Overview')
-        ->assertSee('Reconciliation Queries')
-        ->assertSee('Driver Pay');
+        ->assertSee('Overview')
+        ->assertSee('Reconciliation')
+        ->assertSee('Driver pay');
 });
 
 test('the sidebar hides the finance dashboard from a dispatcher', function () {
