@@ -205,16 +205,25 @@ class TfnClient
     /**
      * List pre-authorisation orders.
      *
-     * NOTE 2026-08-28: `GET /api/Orders` on v3 returns HTTP 405
-     * "UnsupportedApiVersion -- API version 3 does not support HTTP
-     * method GET", and on v4 returns HTTP 400.  The correct URL /
-     * method / version for LISTING orders is queued as a follow-up
-     * with Sikelela; the sample payload he sent earlier confirms
-     * the RESPONSE shape (Order + Entries[]) but not the request.
-     * `POST /api/Orders` (createOrder) does work.
+     * NOTE 2026-08-28: `/api/Orders` on the QA sandbox is currently
+     * unusable for BOTH read and write from our credentials.
      *
-     * Callers fall back to the fixture when TfnException fires, so
-     * the fuel screen keeps rendering while this is unresolved.
+     *   OPTIONS /api/Orders            allow: GET,POST,PUT,DELETE
+     *                                  api-supported-versions: 2.0, 3.0
+     *   GET  /api/Orders  v3          -> 405 UnsupportedApiVersion
+     *   GET  /api/Orders  v4          -> 400 UnsupportedApiVersion
+     *   GET  /api/Orders  v2          -> 404 not found
+     *   POST /api/Orders  v3          -> 405 UnsupportedApiVersion
+     *   POST /api/Orders  v2          -> 404 not found
+     *   POST /api/Order (singular)    -> 404 not found
+     *   OPTIONS response advertises the versions but individual
+     *   method+version combinations are all rejected.
+     *
+     * Sikelela is out on annual leave until Tuesday 2026-09-01; he
+     * owes us the correct URL / method / version pair AND likely a
+     * scope grant on the sandbox account.  Callers fall back to the
+     * fixture when TfnException fires, so the fuel screen keeps
+     * rendering while this is unresolved.
      */
     public function orders(?DateTimeInterface $after = null): array
     {
@@ -234,6 +243,15 @@ class TfnClient
      * Place a pre-authorisation ("order") against a vehicle. The order
      * later gets consumed by transactions at the pump, and appears in
      * their UtilisedOrders[] array once fuel is drawn.
+     *
+     * WARNING 2026-08-28: this call currently 405s on the QA sandbox
+     * with either a flat or a nested payload shape (both v2 and v3).
+     * See the note on `orders()` above.  Sikelela is out until Tuesday
+     * -- expect this to be blocked at go-live until he replies.  The
+     * fuel Volt page's placeOrder() catches TfnException from here
+     * and surfaces the message, so an ops controller trying to place
+     * a real order today would see \"TFN rejected the order: ...\"
+     * rather than a 500.
      *
      * @param  array  $order  Shape follows OrderSerializableV2 from the
      *                        swagger. Caller is expected to have run
