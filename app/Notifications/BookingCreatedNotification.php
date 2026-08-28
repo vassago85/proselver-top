@@ -23,18 +23,21 @@ class BookingCreatedNotification extends Notification implements ShouldQueue
     public function toMail(object $notifiable): MailMessage
     {
         $message = (new MailMessage)
-            ->subject("New Booking: {$this->job->job_number}")
-            ->greeting("New booking submitted")
+            ->subject("New Order: {$this->job->job_number}")
+            ->greeting("New order submitted")
             ->line("Job #{$this->job->job_number} requires PO verification.")
             ->line("Company: {$this->job->company->name}")
             ->line("Type: " . ($this->job->isTransport() ? 'Transport' : 'Yard Work'))
-            ->action('View Booking', url("/admin/bookings/{$this->job->id}"))
+            ->action('View Order', route('admin.orders.show', $this->job))
             ->salutation('TRIDENT Control & Dispatch Center');
 
+        // NB: template slug stays 'booking_created' -- it's an internal
+        // reporting key, not user-visible copy, and renaming it would
+        // orphan every existing NotificationLog row.
         NotificationLog::create([
             'to_email' => $notifiable->email ?? $notifiable->username,
             'to_user_id' => $notifiable->id,
-            'subject' => "New Booking: {$this->job->job_number}",
+            'subject' => "New Order: {$this->job->job_number}",
             'channel' => 'email',
             'template' => 'booking_created',
             'entity_type' => 'job',
@@ -51,7 +54,7 @@ class BookingCreatedNotification extends Notification implements ShouldQueue
         return [
             'job_id' => $this->job->id,
             'job_number' => $this->job->job_number,
-            'message' => "New booking #{$this->job->job_number} needs verification.",
+            'message' => "New order #{$this->job->job_number} needs verification.",
         ];
     }
 }

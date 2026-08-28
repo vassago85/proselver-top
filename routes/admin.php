@@ -162,13 +162,20 @@ Route::post('dev/role-switch', function (\Illuminate\Http\Request $request) {
     return redirect()->back();
 })->name('dev.role-switch');
 
-// Legacy bookings (still accessible by URL)
-Volt::route('bookings', 'admin.bookings.index')->name('bookings.index');
-Volt::route('bookings/{job}', 'admin.bookings.show')->name('bookings.show');
+// Legacy /admin/bookings and /admin/jobs → /admin/orders.  Orders is the
+// only internal list for a Job row; the old URLs and route names stay
+// resolvable so bookmarks, emails and any leftover route('admin.bookings.*')
+// / route('admin.jobs.*') call sites keep working.  Same shape as the
+// customers → companies redirects above.
+Route::redirect('bookings', '/admin/orders')->name('bookings.index');
+Route::get('bookings/{job}', function (\App\Models\Job $job) {
+    return redirect()->route('admin.orders.show', $job);
+})->name('bookings.show');
 
-// Jobs
-Volt::route('jobs', 'admin.jobs.index')->name('jobs.index');
-Volt::route('jobs/{job}', 'admin.jobs.show')->name('jobs.show');
+Route::redirect('jobs', '/admin/orders')->name('jobs.index');
+Route::get('jobs/{job}', function (\App\Models\Job $job) {
+    return redirect()->route('admin.orders.show', $job);
+})->name('jobs.show');
 
 // Drivers
 Volt::route('drivers', 'admin.drivers.index')->name('drivers.index');
