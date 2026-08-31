@@ -171,20 +171,31 @@ class TfnClient
     }
 
     /**
-     * NOTE 2026-08-31: /api/SubAccountAggregateLitres is DECLARED in the
-     * customerapi.qa.tfn.co.za v3 swagger spec but returns HTTP 404 in
-     * QA today (all other endpoints in the same spec work fine).
-     * Queued for Sikelela on his return -- either QA is missing a
-     * deploy, or the swagger spec is out of sync with the deployment.
+     * Per-sub-account fuel aggregates for a given month.
      *
-     * Callers already fall back to the fixture when TfnException fires,
-     * so this stays functional until the endpoint is confirmed.  Do
-     * NOT wire new consumers to this method until then.
+     * TFN v3 /api/SubAccountAggregateLitres (confirmed via QA probe on
+     * 2026-08-31): requires a `month` query param in `yyyyMM` form,
+     * e.g. `202608` for August 2026.  Omitting the parameter returns
+     * 404 "No HTTP resource was found ..." because the api-versioning
+     * router can't resolve the operation without a required param;
+     * passing anything other than 6 digits returns a helpful HTTP 400
+     * "Invalid month 'X' received, expected yyyyMM format e.g. 202607".
+     *
+     * The same missing-required-param bug that produced the mysterious
+     * 405 UnsupportedApiVersion on /api/Orders (fixed in PR #7) also
+     * gave us the earlier 404 here.
+     *
+     * Response is a flat array of per-sub-account rows for the
+     * requested month; empty array means no fuel was purchased under
+     * any sub-account that month (which is what QA returns today).
      */
-    public function subAccountAggregateLitres(): array
+    public function subAccountAggregateLitres(?DateTimeInterface $month = null): array
     {
+        $month = $month ?? Carbon::now();
+
         return (array) $this->requireJson($this->get('/api/SubAccountAggregateLitres', [
             'customerNumber' => $this->customerNumber(),
+            'month'          => $month->format('Ym'),
         ]));
     }
 
