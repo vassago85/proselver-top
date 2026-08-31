@@ -468,24 +468,50 @@ new #[Layout('components.layouts.app')] class extends Component {
             return;
         }
 
+        // Payload matches TFN v3 POST /api/Orders exactly (confirmed
+        // 2026-08-31 against QA sandbox with a real 200 OK response).
+        // The empty top-level `OrderNumber`, empty `Entry.Position` /
+        // `CurrentVirtualCardNumber`, and the null-UUID
+        // `LinkedTransactions[0].TransactionID` are Swashbuckle-style
+        // placeholders -- TFN's model binder ignores them on write and
+        // the server fills them in on the response.
+        $validStart = Carbon::now();
+        $validEnd   = Carbon::parse($this->orderExpiresAt);
+        $reference  = $this->orderReference ?: '';
         $payload = [
-            'CustomerNumber'      => config('tfn.customer_number'),
-            'VehicleRegistration' => $posRegistration,
-            'ProductCode'         => $this->orderProductCode,
-            // TFN's real GET payload uses MaxAllocation (litre cap) +
-            // ValidDateEnd; the create endpoint uses the same fields.
-            // Legacy `Litres` / `ExpiresAt` kept alongside because the
-            // create endpoint is documented to accept both -- once we
-            // have a confirmed CREATE sample from Sikelela this can
-            // shrink to the canonical shape.
-            'MaxAllocation'       => $litres,
-            'Litres'              => $litres,
-            'ValidDateStart'      => Carbon::now()->toIso8601String(),
-            'ValidDateEnd'        => Carbon::parse($this->orderExpiresAt)->toIso8601String(),
-            'ExpiresAt'           => Carbon::parse($this->orderExpiresAt)->toIso8601String(),
-            'DepotID'             => $this->orderDepotId ?: null,
-            'Reference'           => $this->orderReference ?: null,
-            'CustomerReference'   => $this->orderReference ?: null,
+            'IsDeleted'                     => false,
+            'Planned'                       => false,
+            'PlannedReasons'                => '',
+            'OrderNumber'                   => '',
+            'CustomerNumber'                => config('tfn.customer_number'),
+            'SubContractorCustomerNumber'   => '',
+            'CustomerReference'             => $reference,
+            'EntriesCompleteAfterFirstUse'  => true,
+            'MaxAllocation'                 => $litres,
+            'SubContractorAccepted'         => false,
+            'SubContractorDeclined'         => false,
+            'StatusTitle'                   => '',
+            'SkipSMS'                       => false,
+            'Entries' => [[
+                'IsDeleted'                => false,
+                'Position'                 => 0,
+                'SupplierNumber'           => 0,
+                'ProductCode'              => strtoupper($this->orderProductCode),
+                'VehicleRegistration'      => $posRegistration,
+                'CardNumber'               => '',
+                'DriverCellNumber'         => '',
+                'CurrentVirtualCardNumber' => '',
+                'MaxAllocation'            => $litres,
+                // TFN expects local (SAST/CAT) datetimes with fractional
+                // seconds but no offset; Carbon->format leaves the tz
+                // out unless we ask.  Matches Masupha's working sample.
+                'ValidDateStart'           => $validStart->format('Y-m-d\TH:i:s.u'),
+                'ValidDateEnd'             => $validEnd->format('Y-m-d\TH:i:s.u'),
+                'CustomerReference'        => $reference,
+                'LinkedTransactions'       => [[
+                    'TransactionID' => '00000000-0000-0000-0000-000000000000',
+                ]],
+            ]],
         ];
 
         $client = app(TfnClient::class);
@@ -500,18 +526,32 @@ new #[Layout('components.layouts.app')] class extends Component {
                 (int) $litres,
                 $this->orderProductCode,
                 $posRegistration,
-                Carbon::parse($this->orderExpiresAt)->format('D d M H:i'),
+                $validEnd->format('D d M H:i'),
             ));
             $this->reset(['orderLitres', 'orderReference']);
             return;
         }
 
         try {
-            $client->createOrder($payload);
-            session()->flash('success', sprintf('Order placed: %d L of %s against %s.', (int) $litres, $this->orderProductCode, $posRegistration));
+            // Client generates the newRecordIdentifier idempotency UUID
+            // per call.  createOrder unwraps the ValidationResult /
+            // Order / Message envelope and returns just the Order.
+            $order = $client->createOrder($payload);
+            $orderNumber = $order['OrderNumber'] ?? '';
+            $suffix = $orderNumber !== '' ? sprintf(' (%s)', $orderNumber) : '';
+            session()->flash('success', sprintf(
+                'Order placed%s: %d L of %s against %s.',
+                $suffix,
+                (int) $litres,
+                $this->orderProductCode,
+                $posRegistration,
+            ));
             $this->reset(['orderLitres', 'orderReference']);
         } catch (TfnException $e) {
-            session()->flash('error', 'TFN rejected the order: ' . $e->getMessage());
+            // createOrder now surfaces TFN's own Message string when the
+            // server returns a non-Successful ValidationResult, so we
+            // don't need to double-prefix here -- just show what TFN said.
+            session()->flash('error', $e->getMessage());
         }
     }
 

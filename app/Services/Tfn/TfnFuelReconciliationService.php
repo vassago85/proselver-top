@@ -187,12 +187,13 @@ class TfnFuelReconciliationService
             }
 
             // Net reversals against their originals.  TFN inserts a
-            // separate row with `ReversedTransactionID` pointing back
-            // at the original -- the original row is never modified.
-            // If BOTH sides are inside our window they cancel out; if
-            // only the reversal is in-window (rare: a fuel-up shortly
-            // before the window with a reversal inside it) we still
-            // subtract it, which understates but never overstates.
+            // separate row with a nested `ReversedTransaction` object
+            // whose `TransactionID` points back at the original -- the
+            // original row is never modified.  If BOTH sides are
+            // inside our window they cancel out; if only the reversal
+            // is in-window (rare: a fuel-up shortly before the window
+            // with a reversal inside it) we still subtract it, which
+            // understates but never overstates.
             $netted = $this->netReversals($matches);
 
             $litres = $netted->sum(fn ($t) => (float) ($t['Litres'] ?? 0));
@@ -219,18 +220,51 @@ class TfnFuelReconciliationService
      * Drop reversals AND the originals they reference, so the totals
      * reflect only transactions that stuck.
      *
-     * TFN reversal shape (per Sikelela, 2026-08-28): the reversal row
-     * carries `IsReversal=true` and `ReversedTransactionID` pointing
-     * at the original.  In case the flag is absent on some historical
-     * rows we also treat any row with a non-empty
-     * `ReversedTransactionID` as a reversal.
+     * TFN reversal shape (confirmed from real QA transaction rows on
+     * 2026-08-31): every transaction carries a nested
+     * `ReversedTransaction` object of shape
+     *
+     *   { TransactionID: <uuid>, IsFuel: bool, TransactionReference: string }
+     *
+     * When `TransactionID` is the null UUID (`00000000-0000-0000-0000-000000000000`)
+     * the row is a plain transaction.  Any non-null UUID there means
+     * "this row is a reversal, and it undoes that TransactionID".
+     *
+     * We also keep the pre-2026-08-31 fallback (`IsReversal` bool +
+     * top-level `ReversedTransactionID` string) for any fixture that
+     * hasn't been updated yet -- either format detects correctly.
      */
     private function netReversals(Collection $rows): Collection
     {
+        // A row is a reversal iff either format signals it.
+        $isReversal = static function (array $t): bool {
+            $nested = $t['ReversedTransaction'] ?? null;
+            if (is_array($nested)) {
+                $nestedId = (string) ($nested['TransactionID'] ?? '');
+                if ($nestedId !== '' && $nestedId !== '00000000-0000-0000-0000-000000000000') {
+                    return true;
+                }
+            }
+            if (($t['IsReversal'] ?? false) === true) {
+                return true;
+            }
+            $legacy = $t['ReversedTransactionID'] ?? null;
+            return !blank($legacy) && $legacy !== '00000000-0000-0000-0000-000000000000';
+        };
+
+        // The TransactionID this reversal references, in either format.
+        $referencedTxId = static function (array $t): string {
+            $nested = $t['ReversedTransaction'] ?? null;
+            if (is_array($nested) && !blank($nested['TransactionID'] ?? null)) {
+                return (string) $nested['TransactionID'];
+            }
+            return (string) ($t['ReversedTransactionID'] ?? '');
+        };
+
         $reversedIds = $rows
-            ->filter(fn ($t) => ($t['IsReversal'] ?? false) === true || !blank($t['ReversedTransactionID'] ?? null))
-            ->map(fn ($t) => (string) ($t['ReversedTransactionID'] ?? ''))
-            ->filter(fn ($id) => $id !== '')
+            ->filter(fn ($t) => is_array($t) && $isReversal($t))
+            ->map(fn ($t) => $referencedTxId($t))
+            ->filter(fn ($id) => $id !== '' && $id !== '00000000-0000-0000-0000-000000000000')
             ->values()
             ->all();
 
@@ -240,14 +274,16 @@ class TfnFuelReconciliationService
 
         $reversedSet = array_flip($reversedIds);
 
-        return $rows->reject(function ($t) use ($reversedSet) {
-            $id = (string) ($t['TransactionID'] ?? '');
-            $isReversalRow = ($t['IsReversal'] ?? false) === true || !blank($t['ReversedTransactionID'] ?? null);
+        return $rows->reject(function ($t) use ($isReversal, $reversedSet) {
+            if (!is_array($t)) {
+                return false;
+            }
             // Drop the reversal row itself...
-            if ($isReversalRow) {
+            if ($isReversal($t)) {
                 return true;
             }
             // ...and drop the original it points at.
+            $id = (string) ($t['TransactionID'] ?? '');
             return $id !== '' && isset($reversedSet[$id]);
         });
     }

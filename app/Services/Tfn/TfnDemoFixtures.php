@@ -390,66 +390,103 @@ class TfnDemoFixtures
                 default => $depotPrices[$depot],
             };
             $amount = $isFuel ? round($litres * $price, 2) : (float) $price;
+            $txId = self::syntheticTransactionId();
             $rows[] = [
-                'TransactionID'         => sprintf('%08x-%04x-%04x-%04x-%012x', mt_rand(), mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand()),
-                'CustomerNumber'        => '10021',
-                'ProductCode'           => $product,
-                'TransactionTypeCode'   => '',
-                'TransactionDate'       => $now->copy()->subMinutes(mt_rand(5, 60 * 20))->toIso8601String(),
-                'CapturedDate'          => $now->copy()->subMinutes(mt_rand(5, 60 * 20))->toIso8601String(),
-                'SupplierName'          => $depot,
-                'VehicleRegistration'   => $reg,
-                'VehicleFleetNumber'    => $veh['ExternalNumber'] ?? '',   // job number, not fleet #
-                'VIN'                   => $veh['VIN'] ?? '',
-                'CustomerName'          => $veh['CustomerName'] ?? '',
-                'Amount'                => -$amount, // TFN convention: purchases decrease balance
-                'VAT'                   => round($amount * 0.15 / 1.15, 2),
-                'Litres'                => $litres,
-                'Odometer'              => mt_rand(120, 3_800),  // drive-away trucks are new -- odometer is trip-scale
-                'TransactionReference'  => 'TFN' . mt_rand(1000000, 9999999),
-                'IsReversal'            => false,
-                'ReversedTransactionID' => null,
+                'TransactionID'               => $txId,
+                'CustomerNumber'              => '501/12623',
+                'CustomerExternalNumber'      => '',
+                'ChildCustomerNumber'         => '',
+                'ChildCustomerExternalNumber' => '',
+                'ProductCode'                 => $product,
+                // TFN v3 transactions use TransactionTypeCode "GP" for
+                // general purchases; reversals do NOT carry a "REV"
+                // code -- they are identified by ReversedTransaction
+                // pointing at the original (confirmed 2026-08-31).
+                'TransactionTypeCode'         => 'GP',
+                'TransactionDate'             => $now->copy()->subMinutes(mt_rand(5, 60 * 20))->toIso8601String(),
+                'CapturedDate'                => $now->copy()->subMinutes(mt_rand(5, 60 * 20))->toIso8601String(),
+                'SupplierName'                => $depot,
+                'SupplierNumber'              => sprintf('%04d', 600 + array_search($depot, $depots, true)),
+                'VehicleRegistration'         => $reg,
+                'VehicleFleetNumber'          => $veh['ExternalNumber'] ?? '',   // job number, not fleet #
+                'VehicleExternalNumber'       => '',
+                'Amount'                      => -$amount, // TFN convention: purchases decrease balance
+                'VAT'                         => $isFuel ? 0.0 : round($amount * 0.15 / 1.15, 2),
+                'ChildAccountAmount'          => 0.0,
+                'ChildAccountVAT'             => 0.0,
+                'Litres'                      => (float) $litres,
+                'Odometer'                    => (float) mt_rand(120, 3_800),
+                // Populated when a transaction has drawn against a
+                // specific pre-auth Order entry.  Empty here because
+                // our fixture orders aren't linked to fixture
+                // transactions -- the real linkage is TFN-side.
+                'UtilisedOrders'              => [],
+                'TransactionReference'        => sprintf('%08d/%03d', mt_rand(1_000_000, 99_999_999), 600 + array_search($depot, $depots, true)),
+                'Identifier'                  => sprintf('%06d (%s)', mt_rand(500_000, 999_999), $reg),
+                'ReversedTransaction'         => [
+                    'TransactionID'        => '00000000-0000-0000-0000-000000000000',
+                    'IsFuel'               => false,
+                    'TransactionReference' => '',
+                ],
+                // Synthetic-VIN kept for the fuel screen's "matched
+                // trip" column; TFN's real payload does NOT include VIN.
+                'VIN'                         => $veh['VIN'] ?? '',
+                'CustomerName'                => $veh['CustomerName'] ?? '',
             ];
         }
 
-        // Reversal exemplar.  Per Sikelela (2026-08-28): "A reversal
-        // always generates a new transaction row that references the
-        // original transaction ID.  The original row is never modified."
-        // We pick the last fuel row above, clone it with negated litres +
-        // amount and a `ReversedTransactionID` pointing back at the
-        // original.  The reconciler nets these against each other so
-        // month-end totals aren't inflated by a cancelled fuel-up.
+        // Reversal exemplar.  Real shape: the reversal is a NEW
+        // transaction row whose `ReversedTransaction.TransactionID`
+        // points at the original (confirmed against the 2026-08-31
+        // real QA payload).  When TransactionID there is the null
+        // UUID, the row is a plain purchase; anything else marks the
+        // row as a reversal.  We clone the last fuel row with negated
+        // litres + amount so the reconciler nets it to zero.
         $lastFuel = collect($rows)->last(fn ($r) => (float) ($r['Litres'] ?? 0) > 0);
         if ($lastFuel) {
-            $rows[] = [
-                'TransactionID'         => sprintf('%08x-%04x-%04x-%04x-%012x', mt_rand(), mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand()),
-                'CustomerNumber'        => $lastFuel['CustomerNumber'],
-                'ProductCode'           => $lastFuel['ProductCode'],
-                'TransactionTypeCode'   => 'REV',
+            $revId = self::syntheticTransactionId();
+            $rows[] = array_merge($lastFuel, [
+                'TransactionID'         => $revId,
                 'TransactionDate'       => $now->copy()->subMinutes(mt_rand(2, 30))->toIso8601String(),
                 'CapturedDate'          => $now->copy()->subMinutes(mt_rand(2, 30))->toIso8601String(),
-                'SupplierName'          => $lastFuel['SupplierName'],
-                'VehicleRegistration'   => $lastFuel['VehicleRegistration'],
-                'VehicleFleetNumber'    => $lastFuel['VehicleFleetNumber'],
-                'VIN'                   => $lastFuel['VIN'],
-                'CustomerName'          => $lastFuel['CustomerName'],
-                // Reversals invert the sign of the original:
-                // purchase amount was negative (reduced balance),
-                // reversal is positive (restores balance).
+                // Reversals invert the sign: purchase amount was
+                // negative (reduced balance), reversal is positive
+                // (restores balance).
                 'Amount'                => -1 * (float) $lastFuel['Amount'],
                 'VAT'                   => -1 * (float) $lastFuel['VAT'],
                 'Litres'                => -1 * (float) $lastFuel['Litres'],
-                'Odometer'              => $lastFuel['Odometer'],
                 'TransactionReference'  => 'REV/' . $lastFuel['TransactionReference'],
-                'IsReversal'            => true,
-                'ReversedTransactionID' => $lastFuel['TransactionID'],
-                'ReversalNote'          => 'Pump captured litres twice; second capture reversed.',
-            ];
+                'ReversedTransaction'   => [
+                    'TransactionID'        => $lastFuel['TransactionID'],
+                    'IsFuel'               => true,
+                    'TransactionReference' => $lastFuel['TransactionReference'],
+                ],
+            ]);
         }
 
         // Newest first, matching TFN's default ordering.
         usort($rows, fn ($a, $b) => strcmp($b['CapturedDate'], $a['CapturedDate']));
         return $rows;
+    }
+
+    /**
+     * TFN transaction IDs are v1 UUIDs (time-based).  A synthetic v4
+     * UUID would look wrong to anyone comparing demo screenshots to
+     * real ones, but exact wire compatibility isn't required for
+     * anything downstream -- we just need something UUID-shaped and
+     * unique.  Uses PHP's mt_rand so multiple calls in the same second
+     * still produce distinct ids.
+     */
+    private static function syntheticTransactionId(): string
+    {
+        return sprintf(
+            '%08x-%04x-%04x-%04x-%012x',
+            mt_rand(),
+            mt_rand(0, 0xffff),
+            mt_rand(0, 0xffff),
+            mt_rand(0, 0xffff),
+            mt_rand(),
+        );
     }
 
     /**

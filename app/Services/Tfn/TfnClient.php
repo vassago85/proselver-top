@@ -171,13 +171,15 @@ class TfnClient
     }
 
     /**
-     * @deprecated 2026-08-28 -- QA returns HTTP 404 on both v3 and v4
-     * for /api/SubAccountAggregateLitres and /api/SubAccountAggregatedLitres.
-     * The correct endpoint (or query shape) is unclear; queued as a
-     * follow-up question for Sikelela.  Callers already fall back to
-     * the fixture when TfnException fires, so this stays functional
-     * until the endpoint is confirmed.  Do NOT wire new consumers to
-     * this method until then.
+     * NOTE 2026-08-31: /api/SubAccountAggregateLitres is DECLARED in the
+     * customerapi.qa.tfn.co.za v3 swagger spec but returns HTTP 404 in
+     * QA today (all other endpoints in the same spec work fine).
+     * Queued for Sikelela on his return -- either QA is missing a
+     * deploy, or the swagger spec is out of sync with the deployment.
+     *
+     * Callers already fall back to the fixture when TfnException fires,
+     * so this stays functional until the endpoint is confirmed.  Do
+     * NOT wire new consumers to this method until then.
      */
     public function subAccountAggregateLitres(): array
     {
@@ -203,35 +205,40 @@ class TfnClient
     }
 
     /**
-     * List pre-authorisation orders.
+     * List pre-authorisation orders modified since a given date.
      *
-     * NOTE 2026-08-28: `/api/Orders` on the QA sandbox is currently
-     * unusable for BOTH read and write from our credentials.
+     * TFN v3 /api/Orders (per 2026-08-31 QA probe against the real
+     * swagger spec fetched from https://customerapi.qa.tfn.co.za/v3/swagger):
      *
-     *   OPTIONS /api/Orders            allow: GET,POST,PUT,DELETE
-     *                                  api-supported-versions: 2.0, 3.0
-     *   GET  /api/Orders  v3          -> 405 UnsupportedApiVersion
-     *   GET  /api/Orders  v4          -> 400 UnsupportedApiVersion
-     *   GET  /api/Orders  v2          -> 404 not found
-     *   POST /api/Orders  v3          -> 405 UnsupportedApiVersion
-     *   POST /api/Orders  v2          -> 404 not found
-     *   POST /api/Order (singular)    -> 404 not found
-     *   OPTIONS response advertises the versions but individual
-     *   method+version combinations are all rejected.
+     *   GET /api/Orders
+     *     customerNumber=<cn>          required
+     *     modifiedAfterDate=<iso8601>  required (rejected earlier than
+     *                                  ~14 days ago with a 400 "Please
+     *                                  specify a modifiedAfterDate
+     *                                  after <date>")
+     *     api-version=3                required
      *
-     * Sikelela is out on annual leave until Tuesday 2026-09-01; he
-     * owes us the correct URL / method / version pair AND likely a
-     * scope grant on the sandbox account.  Callers fall back to the
-     * fixture when TfnException fires, so the fuel screen keeps
-     * rendering while this is unresolved.
+     * The historical 405 "UnsupportedApiVersion" turned out to be a
+     * misleading routing error -- when a REQUIRED query param is
+     * missing, ASP.NET's version negotiator kicks in first and can't
+     * find a matching (method, version) tuple, so it returns 405
+     * instead of the more informative "missing parameter" error.
+     * Passing modifiedAfterDate makes it resolve cleanly.
+     *
+     * Response is a flat array of Order objects (each with a nested
+     * Entries[] array); see TfnDemoFixtures::orders() for the exact
+     * shape.
      */
-    public function orders(?DateTimeInterface $after = null): array
+    public function orders(?DateTimeInterface $modifiedAfterDate = null): array
     {
-        $after = $after ?? Carbon::now()->subDays(7);
+        // QA rejects dates earlier than ~14 days ago; default to 13
+        // days so the caller has one day of head-room before the
+        // window would flip.  Tune upward if TFN widens the window.
+        $modifiedAfterDate = $modifiedAfterDate ?? Carbon::now()->subDays(13);
 
         return (array) $this->requireJson($this->get('/api/Orders', [
-            'customerNumber' => $this->customerNumber(),
-            'dateAfter'      => $after->format(DATE_ATOM),
+            'customerNumber'    => $this->customerNumber(),
+            'modifiedAfterDate' => $modifiedAfterDate->format(DATE_ATOM),
         ]));
     }
 
@@ -240,35 +247,77 @@ class TfnClient
      |----------------------------------------------------------------*/
 
     /**
-     * Place a pre-authorisation ("order") against a vehicle. The order
-     * later gets consumed by transactions at the pump, and appears in
-     * their UtilisedOrders[] array once fuel is drawn.
+     * Place a pre-authorisation ("order") against a vehicle.  The
+     * order later gets consumed by transactions at the pump, and the
+     * resulting transaction rows can be joined back via
+     * `Entry.LinkedTransactions[]` on the order (populated on GET
+     * /api/Orders).
      *
-     * WARNING 2026-08-28: this call currently 405s on the QA sandbox
-     * with either a flat or a nested payload shape (both v2 and v3).
-     * See the note on `orders()` above.  Sikelela is out until Tuesday
-     * -- expect this to be blocked at go-live until he replies.  The
-     * fuel Volt page's placeOrder() catches TfnException from here
-     * and surfaces the message, so an ops controller trying to place
-     * a real order today would see \"TFN rejected the order: ...\"
-     * rather than a 500.
+     * TFN v3 POST /api/Orders (per 2026-08-31 QA probe):
      *
-     * @param  array  $order  Shape follows OrderSerializableV2 from the
-     *                        swagger. Caller is expected to have run
-     *                        client-side validation already.
-     * @return array          The created order (mirrors the request
-     *                        body with server-side fields like
-     *                        OrderNumber / EntryNumber populated).
+     *   POST /api/Orders?newRecordIdentifier=<uuid>&api-version=3
+     *
+     * `newRecordIdentifier` is a REQUIRED client-generated UUID that
+     * acts as an idempotency key.  Retrying with the same value gets
+     * the same order back; TFN's routing layer 405s the request if
+     * it's missing (the misleading "UnsupportedApiVersion" error).
+     * We auto-generate one if the caller doesn't supply one so retry
+     * safety is opt-in but explicit.
+     *
+     * The response is wrapped:
+     *
+     *   { "ValidationResult": "Successful",
+     *     "Order":            { ...OrderSerializableV2... },
+     *     "Message":          null | "..." }
+     *
+     * We unwrap and return just `Order` so callers don't have to
+     * know about the envelope.  On a non-"Successful" ValidationResult
+     * we throw TfnException carrying the `Message` field so the fuel
+     * Volt page's placeOrder() flashes it in the UI.
+     *
+     * @param  array   $order              Shape follows OrderSerializableV2 from
+     *                                     the swagger.  Caller is expected to
+     *                                     have run client-side validation.
+     * @param  ?string $newRecordIdentifier Optional idempotency UUID (auto if null).
+     * @return array                        The created Order (fully populated
+     *                                     with server-side fields including
+     *                                     OrderNumber, Entry Position, and the
+     *                                     issued CurrentVirtualCardNumber).
      */
-    public function createOrder(array $order): array
+    public function createOrder(array $order, ?string $newRecordIdentifier = null): array
     {
-        $response = $this->request()
+        $newRecordIdentifier ??= (string) \Illuminate\Support\Str::uuid();
+
+        // Laravel's HTTP client silently discards any query string on
+        // the URL argument to ->post() when withQueryParameters() has
+        // been set on the pending request (as `request()` does with
+        // api-version).  So the idempotency UUID goes through
+        // withQueryParameters() to make sure it reaches the wire.
+        $call = fn () => $this->request()
+            ->withQueryParameters(['newRecordIdentifier' => $newRecordIdentifier])
             ->withBody(json_encode($order), 'application/json')
             ->post($this->url('/api/Orders'));
 
-        return (array) $this->requireJson($this->handleAuthRetry($response, fn () => $this->request()
-            ->withBody(json_encode($order), 'application/json')
-            ->post($this->url('/api/Orders'))));
+        $response = $this->handleAuthRetry($call(), $call);
+        $body = (array) $this->requireJson($response);
+
+        // Unwrap the { ValidationResult, Order, Message } envelope.  A
+        // failed ValidationResult carries operator-friendly text in
+        // Message; surface it as an exception so the Volt page flashes
+        // exactly what TFN said.
+        $result = $body['ValidationResult'] ?? null;
+        if ($result !== null && strcasecmp((string) $result, 'Successful') !== 0) {
+            throw new TfnException(
+                message: 'TFN rejected the order: ' . ((string) ($body['Message'] ?? $result)),
+                payload: $body,
+            );
+        }
+
+        // Prefer the unwrapped Order; some legacy stubs may still
+        // return the flat shape, so accept either.
+        return isset($body['Order']) && is_array($body['Order'])
+            ? $body['Order']
+            : $body;
     }
 
     /**
