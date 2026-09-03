@@ -1,9 +1,11 @@
 <?php
 
+use App\Models\TfnFuelOrderPlacement;
 use App\Services\Tfn\Exceptions\TfnException;
 use App\Services\Tfn\TfnClient;
 use App\Services\Tfn\TfnDemoFixtures;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Log;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\Url;
 use Livewire\Volt\Component;
@@ -159,8 +161,13 @@ new #[Layout('components.layouts.app')] class extends Component {
         // <20 vehicles) instead of walking every vehicle on the account.
         // TFN's /api/Orders returns a list of Orders with nested
         // Entries[]; the template renders one row per entry, so we
-        // flatten at the boundary.  Fallback matches the same shape.
-        $orders = $safe(fn () => $this->flattenOrders($client->orders()), $fixtures->ordersFlattened());
+        // flatten at the boundary.
+        //
+        // IMPORTANT: on a live account, never fall back to demo-fixture
+        // orders.  Those carry synthetic VINs (ACVWR75…, AK1522…) that
+        // look like real open pre-auths and confuse ops searching the
+        // fleet.  Empty list + the per-endpoint error log is honest.
+        $orders = $safe(fn () => $this->flattenOrders($client->orders()), []);
 
         $openOrderRegs = collect($orders)
             ->filter(fn ($o) => strcasecmp($o['Status'] ?? '', 'open') === 0)
@@ -222,6 +229,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                     'ExpiresAt'                 => $entry['ValidDateEnd'] ?? null,
                     'Status'                    => str_starts_with($status, 'Active') ? 'Open' : $status,
                     'Reference'                 => $order['CustomerReference'] ?? null,
+                    'PlacedBy'                  => null,
                     'DepotTitle'                => null,
                 ];
             }
@@ -674,6 +682,14 @@ new #[Layout('components.layouts.app')] class extends Component {
             // page render still reads from fixtures so the newly-
             // "placed" order won't appear in the Open Orders table --
             // that's fine, this is a walkthrough tool.
+            $demoOrderNumber = 'DEMO/' . now()->format('YmdHis');
+            $this->recordOrderPlacement(
+                orderNumber: $demoOrderNumber,
+                registration: $posRegistration,
+                productCode: $this->orderProductCode,
+                litres: $litres,
+                customerReference: $reference,
+            );
             session()->flash('success', sprintf(
                 '(Demo) Order placed: %d L of %s against %s. Expires %s.',
                 (int) $litres,
@@ -691,6 +707,15 @@ new #[Layout('components.layouts.app')] class extends Component {
             // Order / Message envelope and returns just the Order.
             $order = $client->createOrder($payload);
             $orderNumber = $order['OrderNumber'] ?? '';
+            if ($orderNumber !== '') {
+                $this->recordOrderPlacement(
+                    orderNumber: $orderNumber,
+                    registration: $posRegistration,
+                    productCode: $this->orderProductCode,
+                    litres: $litres,
+                    customerReference: $reference,
+                );
+            }
             $suffix = $orderNumber !== '' ? sprintf(' (%s)', $orderNumber) : '';
             session()->flash('success', sprintf(
                 'Order placed%s: %d L of %s against %s.',
@@ -706,6 +731,43 @@ new #[Layout('components.layouts.app')] class extends Component {
             // don't need to double-prefix here -- just show what TFN said.
             session()->flash('error', $e->getMessage());
         }
+    }
+
+    /**
+     * Persist who placed a TFN pre-auth so the open/closed orders
+     * tables can show "Placed by".  TFN itself does not return a
+     * placer — CustomerReference is the job ref — so this is local.
+     */
+    private function recordOrderPlacement(
+        string $orderNumber,
+        string $registration,
+        string $productCode,
+        float $litres,
+        string $customerReference,
+    ): void {
+        $user = auth()->user();
+        $name = $user?->name ?: ($user?->username ?: 'Unknown');
+
+        TfnFuelOrderPlacement::query()->create([
+            'order_number'         => $orderNumber,
+            'vehicle_registration' => $registration,
+            'product_code'         => strtoupper($productCode),
+            'litres'               => $litres,
+            'customer_reference'   => $customerReference !== '' ? $customerReference : null,
+            'user_id'              => $user?->id,
+            'placed_by_name'       => $name,
+            'placed_at'            => now(),
+        ]);
+
+        Log::info('TFN fuel order placed', [
+            'order_number'         => $orderNumber,
+            'vehicle_registration' => $registration,
+            'product_code'         => strtoupper($productCode),
+            'litres'               => $litres,
+            'customer_reference'   => $customerReference,
+            'user_id'              => $user?->id,
+            'placed_by'            => $name,
+        ]);
     }
 
     public function cancelOrderEntry(string $entryNumber): void
@@ -1053,6 +1115,35 @@ new #[Layout('components.layouts.app')] class extends Component {
             ->filter(fn ($o) => strcasecmp($o['Status'] ?? '', 'open') !== 0)
             ->values()
             ->all();
+
+        // Attach "Placed by" from our local placement audit.  Demo
+        // fixtures may already carry PlacedBy; the DB row wins when
+        // both exist (live path after a TRIDENT-placed order).
+        $placerByOrder = TfnFuelOrderPlacement::query()
+            ->whereIn(
+                'order_number',
+                collect($openOrders)
+                    ->merge($utilisedOrders)
+                    ->pluck('OrderNumber')
+                    ->filter()
+                    ->unique()
+                    ->all()
+            )
+            ->orderByDesc('placed_at')
+            ->get()
+            ->unique('order_number')
+            ->keyBy('order_number');
+
+        $attachPlacer = function (array $orders) use ($placerByOrder): array {
+            return collect($orders)->map(function (array $o) use ($placerByOrder) {
+                $fromDb = $placerByOrder->get($o['OrderNumber'] ?? '')?->placed_by_name;
+                $o['PlacedBy'] = $fromDb ?: ($o['PlacedBy'] ?? null);
+                return $o;
+            })->all();
+        };
+
+        $openOrders = $attachPlacer($openOrders);
+        $utilisedOrders = $attachPlacer($utilisedOrders);
 
         // Fleet table = only vehicles with an OPEN TFN order.  Real
         // customer accounts hold 1000+ registered vehicles (most
@@ -1583,6 +1674,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                         @endif
                         <th class="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Depot</th>
                         <th class="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Placed</th>
+                        <th class="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Placed by</th>
                         <th class="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Expires</th>
                         <th class="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Job #</th>
                         <th class="px-4 py-2.5 text-right text-[11px] font-semibold uppercase tracking-wider text-slate-500">Actions</th>
@@ -1635,6 +1727,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                             @endif
                             <td class="px-4 py-3 text-sm text-slate-600">{{ $o['DepotTitle'] ?? 'Any' }}</td>
                             <td class="px-4 py-3 text-xs text-slate-500">{{ \Illuminate\Support\Carbon::parse($o['PlacedAt'] ?? now())->format('d M · H:i') }}</td>
+                            <td class="px-4 py-3 text-xs text-slate-700">{{ $o['PlacedBy'] ?? '—' }}</td>
                             <td class="px-4 py-3 text-xs text-slate-500">{{ \Illuminate\Support\Carbon::parse($o['ExpiresAt'] ?? now())->format('d M · H:i') }}</td>
                             <td class="px-4 py-3 text-xs font-mono text-slate-500">{{ $o['Reference'] ?? '—' }}</td>
                             <td class="px-4 py-3 text-right">
@@ -1645,7 +1738,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                             </td>
                         </tr>
                     @empty
-                        <tr><td colspan="{{ $canSeeFinance ? 13 : 12 }}" class="px-4 py-8 text-center text-sm text-slate-500">No open pre-authorisations. Use the form above to place one.</td></tr>
+                        <tr><td colspan="{{ $canSeeFinance ? 14 : 13 }}" class="px-4 py-8 text-center text-sm text-slate-500">No open pre-authorisations. Use the form above to place one.</td></tr>
                     @endforelse
                 </tbody>
             </table>
@@ -1936,6 +2029,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                                 <th class="px-4 py-2.5 text-right text-[11px] font-semibold uppercase tracking-wider text-slate-500">Amount</th>
                             @endif
                             <th class="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Status</th>
+                            <th class="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Placed by</th>
                             <th class="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Reference</th>
                         </tr>
                     </thead>
@@ -1950,6 +2044,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                                     <td class="px-4 py-2.5 text-right text-sm tabular-nums text-slate-700">R {{ number_format((float) ($o['Amount'] ?? 0), 2) }}</td>
                                 @endif
                                 <td class="px-4 py-2.5 text-xs"><span class="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">{{ $o['Status'] ?? '—' }}</span></td>
+                                <td class="px-4 py-2.5 text-xs text-slate-700">{{ $o['PlacedBy'] ?? '—' }}</td>
                                 <td class="px-4 py-2.5 text-xs font-mono text-slate-500">{{ $o['Reference'] ?? '—' }}</td>
                             </tr>
                         @endforeach

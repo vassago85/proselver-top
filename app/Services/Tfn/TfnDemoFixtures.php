@@ -657,6 +657,9 @@ class TfnDemoFixtures
                     'ExpiresAt'                 => $entry['ValidDateEnd'],
                     'Status'                    => str_starts_with($order['StatusTitle'] ?? '', 'Active') ? 'Open' : $order['StatusTitle'],
                     'Reference'                 => $order['CustomerReference'],
+                    // Demo-only placer so the open/closed tables show
+                    // the column populated without a live placement row.
+                    'PlacedBy'                  => $order['PlacedBy'] ?? 'Lize (portal)',
                     // Amount is intentionally NOT synthesised: TFN's
                     // order object doesn't carry a rand estimate --
                     // the finance figure only appears once transactions
