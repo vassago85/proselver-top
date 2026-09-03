@@ -81,6 +81,17 @@ class LocationsDedupe extends Command
         ['table' => 'route_toll_plaza_hints', 'col' => 'delivery_location_id', 'pair' => ['pickup_location_id',   'toll_plaza_id']],
     ];
 
+    /**
+     * When a composite row is retired (collision with keeper's row),
+     * re-point these FKs to the keeper row before DELETE.  Without this,
+     * transport_jobs.transport_route_id blocks deleting the absorbed route.
+     */
+    private const COMPOSITE_ROW_REPOINTS = [
+        'transport_routes' => [
+            ['table' => 'transport_jobs', 'col' => 'transport_route_id'],
+        ],
+    ];
+
     public function handle(): int
     {
         $dryRun = (bool) $this->option('dry-run');
@@ -238,22 +249,12 @@ class LocationsDedupe extends Command
             ->get(array_merge(['id', $col], $pair));
 
         foreach ($rows as $row) {
-            $existing = DB::table($table)
-                ->where($col, $keeperId)
-                ->where(function ($q) use ($row, $pair) {
-                    foreach ($pair as $p) {
-                        $value = $row->{$p};
-                        if ($value === null) {
-                            $q->whereNull($p);
-                        } else {
-                            $q->where($p, $value);
-                        }
-                    }
-                })
-                ->exists();
+            $keeperRowId = $this->findCompositeKeeperRowId($table, $col, $pair, $keeperId, $row);
 
-            if ($existing) {
-                DB::table($table)->where('id', $row->id)->delete();
+            if ($keeperRowId !== null) {
+                // Keeper already has this lane — re-point FKs (e.g.
+                // transport_jobs.transport_route_id) then drop the dupe.
+                $this->retireCompositeRow($table, (int) $row->id, $keeperRowId);
                 continue;
             }
 
@@ -266,11 +267,46 @@ class LocationsDedupe extends Command
                 DB::statement("RELEASE SAVEPOINT {$sp}");
             } catch (\Throwable $e) {
                 DB::statement("ROLLBACK TO SAVEPOINT {$sp}");
-                // Collision that the pre-check missed (race / null quirks)
-                // — drop the absorbed row; keeper already covers the pair.
-                DB::table($table)->where('id', $row->id)->delete();
+                // Collision the pre-check missed — find keeper row and retire.
+                $fallbackKeeperId = $this->findCompositeKeeperRowId($table, $col, $pair, $keeperId, $row);
+                $this->retireCompositeRow($table, (int) $row->id, $fallbackKeeperId);
             }
         }
+    }
+
+    private function findCompositeKeeperRowId(string $table, string $col, array $pair, int $keeperId, object $row): ?int
+    {
+        $query = DB::table($table)->where($col, $keeperId);
+        foreach ($pair as $p) {
+            $value = $row->{$p};
+            if ($value === null) {
+                $query->whereNull($p);
+            } else {
+                $query->where($p, $value);
+            }
+        }
+
+        $id = $query->value('id');
+
+        return $id !== null ? (int) $id : null;
+    }
+
+    /**
+     * Re-point any child FKs from an absorbed composite row onto the
+     * keeper's row (or null), then delete the absorbed row.
+     */
+    private function retireCompositeRow(string $table, int $absorbedRowId, ?int $keeperRowId): void
+    {
+        foreach (self::COMPOSITE_ROW_REPOINTS[$table] ?? [] as $ref) {
+            if (!$this->tableHasColumn($ref['table'], $ref['col'])) {
+                continue;
+            }
+            DB::table($ref['table'])
+                ->where($ref['col'], $absorbedRowId)
+                ->update([$ref['col'] => $keeperRowId]);
+        }
+
+        DB::table($table)->where('id', $absorbedRowId)->delete();
     }
 
     private function tableHasColumn(string $table, string $column): bool

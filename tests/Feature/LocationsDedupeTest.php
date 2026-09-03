@@ -92,6 +92,51 @@ test('dedupe handles composite-unique tables without crashing', function () {
     expect(\DB::table('route_estimates')->where('pickup_location_id', $a->id)->count())->toBe(1);
 });
 
+test('dedupe re-points transport_jobs off absorbed transport_routes before deleting them', function () {
+    // Production failure: deleting a colliding transport_routes row while
+    // transport_jobs.transport_route_id still pointed at it (FK 23503).
+    $company = Company::factory()->create(['name' => 'Route Co']);
+    $origin = makeLocFor($company, 'Origin', 'Origin');
+    $keeper = makeLocFor($company, 'DEST', 'DEST');
+    $dupe = makeLocFor($company, 'dest', 'dest');
+    $vehicleClass = \App\Models\VehicleClass::create(['name' => 'Class A']);
+
+    $keeperRouteId = \DB::table('transport_routes')->insertGetId([
+        'origin_location_id' => $origin->id,
+        'destination_location_id' => $keeper->id,
+        'vehicle_class_id' => $vehicleClass->id,
+        'base_price' => 100,
+        'is_active' => true,
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+    $dupeRouteId = \DB::table('transport_routes')->insertGetId([
+        'origin_location_id' => $origin->id,
+        'destination_location_id' => $dupe->id,
+        'vehicle_class_id' => $vehicleClass->id,
+        'base_price' => 100,
+        'is_active' => true,
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+
+    $job = makeJobAt($company, $origin, $dupe);
+    $job->update(['transport_route_id' => $dupeRouteId]);
+
+    // Give keeper more refs so it wins.
+    makeJobAt($company, $origin, $keeper);
+    makeJobAt($company, $origin, $keeper);
+
+    $this->artisan('locations:dedupe', ['--company' => 'Route Co'])
+        ->assertExitCode(0);
+
+    expect(Location::find($dupe->id))->toBeNull();
+    expect(\DB::table('transport_routes')->where('id', $dupeRouteId)->exists())->toBeFalse();
+    expect(\DB::table('transport_routes')->where('id', $keeperRouteId)->exists())->toBeTrue();
+    expect(Job::find($job->id)->transport_route_id)->toBe($keeperRouteId);
+    expect(Job::find($job->id)->delivery_location_id)->toBe($keeper->id);
+});
+
 test('dry-run does not change anything', function () {
     $company = Company::factory()->create(['name' => 'Dry Run Co']);
     $a = makeLocFor($company, 'X', 'X');
