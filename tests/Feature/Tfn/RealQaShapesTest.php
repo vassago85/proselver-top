@@ -327,6 +327,66 @@ test('createOrder always sends newRecordIdentifier as a query param', function (
 });
 
 // -----------------------------------------------------------------
+// 4. TfnClient::subAccountAggregateLitres formats month as yyyyMM
+// -----------------------------------------------------------------
+
+test('subAccountAggregateLitres sends month in yyyyMM format on the wire', function () {
+    // Third instance of the "TFN routes 404 when a required query
+    // param is missing" bug.  The endpoint requires ?month=yyyyMM
+    // (six digits, no separator); anything else 400s with "Invalid
+    // month 'X' received, expected yyyyMM format e.g. 202607".  Pin
+    // the format so a well-meaning refactor to '2026-08' or '08-2026'
+    // fails loudly.
+    config()->set('tfn.enabled', true);
+    config()->set('tfn.username', 'API_ProQA_Tech');
+    config()->set('tfn.password', 'x');
+    config()->set('tfn.customer_number', '501/12623');
+    config()->set('tfn.base_url', 'https://customerapi.qa.tfn.co.za');
+    config()->set('tfn.api_version', '3');
+
+    $tokens = new class extends \App\Services\Tfn\TfnTokenManager {
+        public function __construct() {}
+        public function token(): string { return 'fake-bearer'; }
+        public function invalidate(): void {}
+        public function refresh(): string { return 'fake-bearer'; }
+    };
+    $client = new TfnClient($tokens);
+
+    \Illuminate\Support\Facades\Http::fake([
+        '*' => \Illuminate\Support\Facades\Http::response([], 200),
+    ]);
+
+    // Explicit month.
+    $client->subAccountAggregateLitres(\Carbon\Carbon::createFromDate(2026, 8, 15));
+    // Default month (this call's month at run time).
+    $client->subAccountAggregateLitres();
+
+    \Illuminate\Support\Facades\Http::assertSentCount(2);
+
+    $urls = collect(\Illuminate\Support\Facades\Http::recorded())
+        ->map(fn ($pair) => (string) $pair[0]->url())
+        ->all();
+
+    // First call: month=202608 verbatim on the wire.
+    expect(collect($urls)->contains(fn ($u) => str_contains($u, 'month=202608')))
+        ->toBeTrue("Expected month=202608 on the URL. Got: " . json_encode($urls));
+
+    // Second call: current month, six digits, no separator.
+    $expected = 'month=' . now()->format('Ym');
+    expect(collect($urls)->contains(fn ($u) => str_contains($u, $expected)))
+        ->toBeTrue("Expected {$expected} on the URL. Got: " . json_encode($urls));
+
+    // The wrong-format regressions we want to catch (any of these on
+    // the URL would return 400 from TFN).
+    foreach ($urls as $u) {
+        expect($u)->not->toContain('month=2026-08');
+        expect($u)->not->toContain('month=08-2026');
+        expect($u)->not->toContain('month=8');
+        expect($u)->not->toContain('month=2026-08-15');
+    }
+});
+
+// -----------------------------------------------------------------
 // Helpers
 // -----------------------------------------------------------------
 
