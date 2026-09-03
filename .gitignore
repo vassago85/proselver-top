@@ -6,6 +6,9 @@
 /storage/*.key
 /storage/framework/views/*.php
 /storage/framework/views/*.blade.php
+/storage/framework/views/**/*.php
+/storage/framework/views/**/*.blade.php
+/storage/framework/testing/
 /storage/pail
 /storage/test-*.pdf
 /storage/app/test-*.pdf

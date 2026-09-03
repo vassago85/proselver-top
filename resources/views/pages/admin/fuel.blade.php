@@ -53,6 +53,15 @@ new #[Layout('components.layouts.app')] class extends Component {
     // updates without a full re-render.
     public ?array $ping = null;
 
+    // Per-request memoization for source().  Volt calls this from
+    // with() (the render path) and again from any Livewire action
+    // that inspects the current vehicle list (placeOrder,
+    // autoPopulateOrderReference, ...).  Without a cache each of
+    // those repeated calls would trigger a fresh sweep of upstream
+    // TFN reads -- on a 1000+ vehicle account that means dozens of
+    // extra sequential HTTP round trips per page render.
+    private ?array $sourceCache = null;
+
     public function mount(): void
     {
         // Only internal staff (ops controller, dispatcher, accounts,
@@ -98,9 +107,15 @@ new #[Layout('components.layouts.app')] class extends Component {
      * Router for reads: hits TfnClient when live, falls back to
      * fixtures otherwise. Kept as one method so the view never has to
      * branch on "live vs demo".
+     *
+     * Memoized per Livewire request via $this->sourceCache -- see the
+     * property declaration for the rationale.
      */
     private function source(): array
     {
+        if ($this->sourceCache !== null) {
+            return $this->sourceCache;
+        }
         $client = app(TfnClient::class);
         $fixtures = app(TfnDemoFixtures::class);
 
@@ -116,7 +131,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         }
 
         if (!$isLive) {
-            return [
+            return $this->sourceCache = [
                 'live'       => false,
                 'banner'     => $flag ?? 'TFN not configured — showing demo data. Set TFN_ENABLED=true and populate TFN_USERNAME / TFN_PASSWORD / TFN_CUSTOMER_NUMBER in .env to switch to live QA.',
                 'balance'    => $fixtures->balance(),
@@ -139,7 +154,23 @@ new #[Layout('components.layouts.app')] class extends Component {
         // see everything else and refresh.
         $safe = fn (callable $fn, mixed $fallback = []) => $this->safely($fn, $fallback);
 
-        return [
+        // Fetch orders FIRST so we know which vehicles are actually in
+        // flight; card lookups are then scoped to that set (typically
+        // <20 vehicles) instead of walking every vehicle on the account.
+        // TFN's /api/Orders returns a list of Orders with nested
+        // Entries[]; the template renders one row per entry, so we
+        // flatten at the boundary.  Fallback matches the same shape.
+        $orders = $safe(fn () => $this->flattenOrders($client->orders()), $fixtures->ordersFlattened());
+
+        $openOrderRegs = collect($orders)
+            ->filter(fn ($o) => strcasecmp($o['Status'] ?? '', 'open') === 0)
+            ->pluck('VehicleRegistration')
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
+        return $this->sourceCache = [
             'live'         => true,
             'banner'       => null,
             'balance'      => $safe(fn () => $client->subAccountBalance(), $fixtures->balance()),
@@ -147,11 +178,8 @@ new #[Layout('components.layouts.app')] class extends Component {
             'pricing'      => $safe(fn () => $this->pricingBundle($client), $fixtures->pricing()),
             'depots'       => $safe(fn () => $client->depots(), $fixtures->depots()),
             'vehicles'     => $safe(fn () => $client->vehicles(), $fixtures->vehicles()),
-            'cards'        => $safe(fn () => $this->cardsForVehicles($client), $fixtures->virtualCards()),
-            // TFN's /api/Orders returns a list of Orders with nested
-            // Entries[]; the template renders one row per entry, so we
-            // flatten at the boundary.  Fallback matches the same shape.
-            'orders'       => $safe(fn () => $this->flattenOrders($client->orders()), $fixtures->ordersFlattened()),
+            'cards'        => $safe(fn () => $this->cardsForRegistrations($client, $openOrderRegs), []),
+            'orders'       => $orders,
             'transactions' => $safe(fn () => $client->transactions($this->txWindowStart()), $fixtures->transactions()),
         ];
     }
@@ -280,24 +308,29 @@ new #[Layout('components.layouts.app')] class extends Component {
         return $out;
     }
 
-    private function cardsForVehicles(TfnClient $client): array
+    /**
+     * Look up virtual card numbers for a specific set of registrations
+     * (typically vehicles with an open order right now).
+     *
+     * Historically this walked every vehicle on the account.  On a real
+     * customer account with 1000+ vehicles that turned into 1000+
+     * sequential /api/VirtualCardNumber calls per page load (~2 minutes
+     * of upstream work, no cache, on every render).  We only ever need
+     * card numbers for the handful of vehicles the operator is actually
+     * moving, so scope the lookup to that set.
+     *
+     * Keyed on the normalised registration so downstream lookup by
+     * either the raw or normalised form finds a match.
+     */
+    private function cardsForRegistrations(TfnClient $client, array $registrations): array
     {
-        $vehicles = $client->vehicles();
         $out = [];
-        foreach ($vehicles as $v) {
-            // Anchor on VIN -- new-from-plant units don't have a
-            // permanent registration yet. When TFN's lookup needs a
-            // registration string (their v3 endpoint currently does)
-            // we fall back to it, otherwise pass VIN.
-            $vin = $v['VIN'] ?? null;
-            $reg = $v['Registration'] ?? null;
-            $key = $vin ?: $reg;
-            if (!$key) continue;
+        foreach (array_unique(array_filter($registrations)) as $reg) {
+            $key = strtoupper(preg_replace('/\s+/', '', (string) $reg));
+            if ($key === '') continue;
             try {
-                $out[$key] = $client->virtualCardNumber($reg ?: $vin);
+                $out[$key] = $client->virtualCardNumber($reg);
             } catch (TfnException $e) {
-                // Vehicle exists but no active card -- show a placeholder
-                // so the operator knows to reissue.
                 $out[$key] = null;
             }
         }
@@ -710,38 +743,6 @@ new #[Layout('components.layouts.app')] class extends Component {
             ->map(fn ($rows) => $rows->sum('Litres'))
             ->toArray();
 
-        // Merge vehicles with their card + last-txn to power a single
-        // fleet table row per vehicle. VIN is the durable identifier
-        // (registration is often null on new-from-plant units), so
-        // we index every lookup by VIN.
-        $lastTxByVehicle = collect($data['transactions'])->groupBy('VIN');
-
-        $fleet = collect($data['vehicles'])->map(function ($v) use ($data, $lastTxByVehicle) {
-            $vin = $v['VIN'] ?? '';
-            $card = $data['cards'][$vin] ?? null;
-            // optional() only guards ONE method call -- optional(null)->foo()
-            // returns null, and calling ->bar() on that then blows up.
-            // Vehicles with zero transactions in-window would hit exactly
-            // that path.  Use PHP's null-safe operator so the whole chain
-            // short-circuits to null cleanly.
-            $lastTx = $lastTxByVehicle->get($vin)?->sortByDesc('CapturedDate')->first();
-            return [
-                'vin'          => $vin,
-                'registration' => $v['Registration'] ?? null,
-                'customer'     => $v['CustomerName'] ?? null,
-                'brand'        => $v['Brand'] ?? null,
-                'model'        => $v['Model'] ?? null,
-                'job_number'   => $v['ExternalNumber'] ?? null,
-                'tank_size'    => $v['TankSize'] ?? null,
-                'status_code'  => $v['Status'] ?? null,
-                'card_number'  => $card['VirtualCardNumber'] ?? null,
-                'card_expires' => $card['ExpiryDate'] ?? null,
-                'last_tx_at'   => $lastTx['CapturedDate'] ?? null,
-                'last_tx_l'    => $lastTx['Litres'] ?? null,
-                'last_tx_dep'  => $lastTx['SupplierName'] ?? null,
-            ];
-        })->all();
-
         $openOrders = collect($data['orders'])
             ->filter(fn ($o) => strcasecmp($o['Status'] ?? '', 'open') === 0)
             ->values()
@@ -749,6 +750,72 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         $utilisedOrders = collect($data['orders'])
             ->filter(fn ($o) => strcasecmp($o['Status'] ?? '', 'open') !== 0)
+            ->values()
+            ->all();
+
+        // Fleet table = only vehicles with an OPEN TFN order.  Real
+        // customer accounts hold 1000+ registered vehicles (most
+        // 'Unused' / 'Stolen' / 'Dormant') and rendering the whole
+        // catalogue is noise -- the operational table wants the
+        // handful of trucks actually in flight right now.
+        //
+        // Build two lookup indexes:
+        //   $fleetRegs      : set of registrations that have an open order
+        //   $lastTxByReg    : transactions grouped by VehicleRegistration
+        //                     (real TFN key) with a VIN fallback for demo
+        //                     fixtures that still emit VIN.
+        //
+        // Both are keyed on the *normalised* registration (uppercased,
+        // whitespace-trimmed) so 'ABC 123 GP' and 'abc123gp' collide.
+        $normReg = fn ($r) => strtoupper(preg_replace('/\s+/', '', (string) ($r ?? '')));
+
+        $fleetRegs = collect($openOrders)
+            ->map(fn ($o) => $normReg($o['VehicleRegistration'] ?? null))
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
+        $lastTxByReg = collect($data['transactions'])
+            ->groupBy(fn ($t) => $normReg(
+                $t['VehicleRegistration']
+                ?? $t['Registration']
+                ?? $t['VIN']  // legacy demo-fixture shape
+                ?? null
+            ))
+            ->forget('');  // guard against phantom '' bucket bleed
+
+        $fleet = collect($data['vehicles'])
+            ->filter(function ($v) use ($fleetRegs, $normReg) {
+                if (empty($fleetRegs)) {
+                    return true;  // demo mode / no open orders -> keep old behaviour
+                }
+                return in_array($normReg($v['Registration'] ?? null), $fleetRegs, true);
+            })
+            ->map(function ($v) use ($data, $lastTxByReg, $normReg) {
+                $reg = $normReg($v['Registration'] ?? null);
+                $vin = $v['VIN'] ?? '';
+                $card = $data['cards'][$reg] ?? $data['cards'][$vin] ?? null;
+                $lastTx = $reg
+                    ? $lastTxByReg->get($reg)?->sortByDesc('CapturedDate')->first()
+                    : null;
+                return [
+                    'vin'          => $vin,
+                    'registration' => $v['Registration'] ?? null,
+                    'customer'     => $v['CustomerName'] ?? null,
+                    'brand'        => $v['Brand'] ?? null,
+                    'model'        => $v['Model'] ?? null,
+                    'fleet_number' => $v['FleetNumber'] ?? null,
+                    'job_number'   => $v['ExternalNumber'] ?? null,
+                    'tank_size'    => $v['TankSize'] ?? null,
+                    'status_code'  => $v['Status'] ?? null,
+                    'card_number'  => $card['VirtualCardNumber'] ?? null,
+                    'card_expires' => $card['ExpiryDate'] ?? null,
+                    'last_tx_at'   => $lastTx['CapturedDate'] ?? null,
+                    'last_tx_l'    => $lastTx['Litres'] ?? null,
+                    'last_tx_dep'  => $lastTx['SupplierName'] ?? null,
+                ];
+            })
             ->values()
             ->all();
 
@@ -1006,26 +1073,58 @@ new #[Layout('components.layouts.app')] class extends Component {
             </div>
 
             <form wire:submit="placeOrder" class="grid grid-cols-1 gap-4 p-4 sm:grid-cols-2">
-                <div class="sm:col-span-2">
-                    <label class="mb-1 block text-xs font-medium text-slate-700">Vehicle in transit</label>
-                    {{-- The option value is the VIN (what humans use to
-                         identify the vehicle).  The registration TFN
-                         actually receives is resolved server-side --
-                         permanent plate if the vehicle has one, else
-                         the assigned driver's trade plate, else we
-                         refuse the order.  See posRegistrationFor() /
-                         placeOrder() in the mount. --}}
-                    <select wire:model="orderRegistration" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500">
+                <div class="sm:col-span-2" x-data="{
+                    q: '',
+                    filter() {
+                        const needle = this.q.trim().toLowerCase();
+                        let shown = 0;
+                        Array.from(this.$refs.sel.options).forEach(o => {
+                            if (!o.dataset.searchLabel) return; // keep the placeholder
+                            const match = needle === '' || o.dataset.searchLabel.indexOf(needle) !== -1;
+                            o.hidden = !match;
+                            if (match) shown++;
+                        });
+                        this.$refs.count.textContent = needle === ''
+                            ? (this.$refs.sel.options.length - 1) + ' vehicles'
+                            : shown + ' of ' + (this.$refs.sel.options.length - 1) + ' vehicles';
+                    }
+                }" x-init="filter()">
+                    <div class="mb-1 flex items-baseline justify-between">
+                        <label class="block text-xs font-medium text-slate-700">Vehicle in transit</label>
+                        <span class="text-[10px] text-slate-400" x-ref="count"></span>
+                    </div>
+                    <input type="text" x-model.debounce.100ms="q" @input="filter()" placeholder="Filter by plate, customer, VIN, driver, fleet number..." class="mb-2 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500" />
+                    {{-- Real TFN accounts hold 1000+ vehicles; the select
+                         still contains all of them for placing orders on
+                         cold plates, but options with `hidden` are hidden
+                         from the drop-down by the Alpine filter above. --}}
+                    <select wire:model="orderRegistration" x-ref="sel" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500">
                         <option value="">— Select a vehicle —</option>
                         @foreach($vehicles as $v)
-                            {{-- Real TFN vehicles only carry `Registration`; only
-                                 our demo fixtures carry `VIN`.  Use VIN when it
-                                 exists (nicer to humans) and fall back to plate.
-                                 Must NOT read $v['VIN'] unguarded -- Laravel
-                                 promotes 'Undefined array key' to a fatal in
-                                 production and takes the whole page out. --}}
-                            <option value="{{ !empty($v['VIN']) ? $v['VIN'] : ($v['Registration'] ?? '') }}">
-                                @if(!empty($v['CustomerName'])){{ $v['CustomerName'] }} · @endif{{ trim(($v['Brand'] ?? '').' '.($v['Model'] ?? '')) ?: 'Unknown model' }}
+                            @php
+                                // Option value: demo fixtures carry VIN; real
+                                // TFN vehicles carry only Registration.  Guard
+                                // both -- an unguarded $v['VIN'] read on real
+                                // payloads was the original /admin/fuel 500.
+                                $optValue = !empty($v['VIN']) ? $v['VIN'] : ($v['Registration'] ?? '');
+                                // Searchable haystack (all lowercase, all the
+                                // fields an operator might type).  Kept in a
+                                // data attribute so the Alpine filter can grep
+                                // it without touching the visible option text.
+                                $haystack = strtolower(implode(' ', array_filter([
+                                    $v['CustomerName'] ?? null,
+                                    $v['Brand'] ?? null,
+                                    $v['Model'] ?? null,
+                                    $v['VIN'] ?? null,
+                                    $v['Registration'] ?? null,
+                                    $v['DriverTradePlate'] ?? null,
+                                    $v['DriverName'] ?? null,
+                                    $v['ExternalNumber'] ?? null,
+                                    $v['FleetNumber'] ?? null,
+                                ])));
+                            @endphp
+                            <option value="{{ $optValue }}" data-search-label="{{ $haystack }}">
+                                @if(!empty($v['CustomerName'])){{ $v['CustomerName'] }} · @endif{{ trim(($v['Brand'] ?? '').' '.($v['Model'] ?? '')) ?: ($v['FleetNumber'] ?? 'Unknown model') }}
                                 @if(!empty($v['VIN'])) · VIN {{ $v['VIN'] }} @endif
                                 @if(!empty($v['Registration']))
                                     · plate {{ $v['Registration'] }}
@@ -1296,7 +1395,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                                     <span class="text-[11px] italic text-slate-400">no plate</span>
                                 @endif
                             </td>
-                            <td class="px-4 py-2.5 font-mono text-[11px] text-slate-500">{{ $t['VehicleFleetNumber'] ?: '—' }}</td>
+                            <td class="px-4 py-2.5 font-mono text-[11px] text-slate-500">{{ ($t['VehicleFleetNumber'] ?? $t['FleetNumber'] ?? null) ?: '—' }}</td>
                             <td class="px-4 py-2.5 text-sm text-slate-700">{{ $t['SupplierName'] ?? '—' }}</td>
                             <td class="px-4 py-2.5 text-sm">
                                 <span class="inline-flex items-center rounded-md bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">{{ $t['ProductCode'] ?? '—' }}</span>
@@ -1353,10 +1452,10 @@ new #[Layout('components.layouts.app')] class extends Component {
     <div class="rounded-xl border border-slate-200 bg-white shadow-sm">
         <div class="flex items-center justify-between border-b border-slate-100 p-4">
             <div>
-                <h2 class="text-sm font-semibold text-slate-900">In-transit vehicles &middot; virtual cards</h2>
-                <p class="mt-0.5 text-xs text-slate-500">One row per customer vehicle currently being moved drive-away. TFN issues a virtual card for the trip &mdash; card retires when the driver hands the keys over at the dealership.</p>
+                <h2 class="text-sm font-semibold text-slate-900">Vehicles with open TFN orders</h2>
+                <p class="mt-0.5 text-xs text-slate-500">One row per vehicle with an open (unfilled) order on TFN &mdash; the trip is authorised, driver just hasn&rsquo;t pumped yet. Card retires when the order is fully utilised.</p>
             </div>
-            <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700">{{ count($fleet) }} in transit</span>
+            <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700">{{ count($fleet) }} open</span>
         </div>
 
         <div class="overflow-x-auto">
@@ -1415,7 +1514,17 @@ new #[Layout('components.layouts.app')] class extends Component {
                                 @endif
                             </td>
                             <td class="px-4 py-3 text-xs text-slate-700">
-                                <p class="font-medium text-slate-900">{{ $row['brand'] }} {{ $row['model'] }}</p>
+                                @php $vehicleLabel = trim(($row['brand'] ?? '').' '.($row['model'] ?? '')); @endphp
+                                @if($vehicleLabel !== '')
+                                    <p class="font-medium text-slate-900">{{ $vehicleLabel }}</p>
+                                @elseif($row['fleet_number'])
+                                    {{-- Real TFN vehicles carry no brand/model.
+                                         FleetNumber (e.g. 'OUTBOUND', 'FUEL') is
+                                         the closest useful primary label. --}}
+                                    <p class="font-mono text-[11px] font-medium text-slate-700" title="TFN fleet number">{{ $row['fleet_number'] }}</p>
+                                @else
+                                    <p class="text-slate-400">&mdash;</p>
+                                @endif
                                 <span class="inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium ring-1 ring-inset {{ $statusClass }} mt-0.5">{{ $statusLabel }}</span>
                             </td>
                             <td class="px-4 py-3 font-mono text-[11px] text-slate-600">{{ $row['vin'] ?: '—' }}</td>
