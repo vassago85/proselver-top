@@ -65,11 +65,15 @@ new #[Layout('components.layouts.app')] class extends Component {
     public function updatingSearch(): void
     {
         $this->resetPage();
+        // Drop the deep-link once the operator starts searching — otherwise
+        // ?focus=208 sticks in the URL and looks like a broken filter.
+        $this->focusLocationId = null;
     }
 
     public function updatingFilterCompany(): void
     {
         $this->resetPage();
+        $this->focusLocationId = null;
     }
 
     public function add(): void
@@ -217,9 +221,14 @@ new #[Layout('components.layouts.app')] class extends Component {
     {
         $query = Location::with(['company', 'zone'])
             ->when($this->search, function ($q) {
-                $q->where(function ($q) {
-                    $q->where('company_name', 'like', "%{$this->search}%")
-                      ->orWhere('address', 'like', "%{$this->search}%");
+                // Postgres: LIKE is case-sensitive. OEM stubs are often
+                // ALL CAPS ("MOTOR BODY…") so a lowercase search returned
+                // zero rows and looked like search was broken.
+                $term = '%' . $this->search . '%';
+                $q->where(function ($q) use ($term) {
+                    $q->where('company_name', 'ilike', $term)
+                      ->orWhere('address', 'ilike', $term)
+                      ->orWhere('city', 'ilike', $term);
                 });
             })
             ->when($this->filterCompany, fn ($q) => $q->where('company_id', $this->filterCompany))
