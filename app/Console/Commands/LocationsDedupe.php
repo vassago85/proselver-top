@@ -7,6 +7,7 @@ use App\Models\Location;
 use App\Services\AuditService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 /**
  * Merge duplicate locations within each company.
@@ -140,7 +141,18 @@ class LocationsDedupe extends Command
                     });
                     $totalAbsorbed += count($absorbed);
                 } catch (\Throwable $e) {
-                    $this->error("    ! Skipped: " . $e->getMessage());
+                    // Prefer the root cause — on Postgres a swallowed
+                    // mid-txn failure surfaces as the opaque 25P02 on
+                    // the next statement.
+                    $root = $e;
+                    while ($root->getPrevious()) {
+                        $root = $root->getPrevious();
+                    }
+                    $msg = $root->getMessage();
+                    if ($root !== $e && !str_contains($e->getMessage(), $msg)) {
+                        $msg = $e->getMessage() . ' (cause: ' . $msg . ')';
+                    }
+                    $this->error("    ! Skipped: " . $msg);
                 }
             }
 
@@ -178,25 +190,34 @@ class LocationsDedupe extends Command
 
     /**
      * For each cluster, do the merge work in a single transaction.
+     *
+     * IMPORTANT: never catch-and-continue around DB work inside this
+     * transaction.  On PostgreSQL the first failure aborts the whole
+     * txn (25P02 — "commands ignored until end of transaction block"),
+     * and a swallowed exception then surfaces as a misleading failure
+     * on the soft-delete.  Skip missing tables via Schema::hasTable.
      */
     private function mergeAbsorbedInto(int $keeperId, array $absorbedIds): void
     {
         foreach (self::SAFE_TABLES as $ref) {
-            try {
-                DB::table($ref['table'])
-                    ->whereIn($ref['col'], $absorbedIds)
-                    ->update([$ref['col'] => $keeperId]);
-            } catch (\Throwable $e) {
-                // Table absent on this env -- skip silently.
+            if (!$this->tableHasColumn($ref['table'], $ref['col'])) {
+                continue;
             }
+            DB::table($ref['table'])
+                ->whereIn($ref['col'], $absorbedIds)
+                ->update([$ref['col'] => $keeperId]);
         }
 
         foreach (self::COMPOSITE_TABLES as $ref) {
-            try {
-                $this->mergeComposite($ref['table'], $ref['col'], $ref['pair'], $keeperId, $absorbedIds);
-            } catch (\Throwable $e) {
-                // Table absent on this env -- skip silently.
+            if (!$this->tableHasColumn($ref['table'], $ref['col'])) {
+                continue;
             }
+            foreach ($ref['pair'] as $pairCol) {
+                if (!$this->tableHasColumn($ref['table'], $pairCol)) {
+                    continue 2;
+                }
+            }
+            $this->mergeComposite($ref['table'], $ref['col'], $ref['pair'], $keeperId, $absorbedIds);
         }
     }
 
@@ -206,6 +227,9 @@ class LocationsDedupe extends Command
      * check whether a row already exists with col=keeper and the same
      * pair-values; if it does, delete the source instead of UPDATE-ing
      * (which would explode the unique constraint).
+     *
+     * Uses a SAVEPOINT per row so a unique-violation on Postgres can be
+     * recovered without aborting the outer cluster transaction.
      */
     private function mergeComposite(string $table, string $col, array $pair, int $keeperId, array $absorbedIds): void
     {
@@ -216,19 +240,42 @@ class LocationsDedupe extends Command
         foreach ($rows as $row) {
             $existing = DB::table($table)
                 ->where($col, $keeperId)
-                ->when(true, function ($q) use ($row, $pair) {
+                ->where(function ($q) use ($row, $pair) {
                     foreach ($pair as $p) {
-                        $q->where($p, $row->{$p});
+                        $value = $row->{$p};
+                        if ($value === null) {
+                            $q->whereNull($p);
+                        } else {
+                            $q->where($p, $value);
+                        }
                     }
                 })
                 ->exists();
 
             if ($existing) {
                 DB::table($table)->where('id', $row->id)->delete();
-            } else {
+                continue;
+            }
+
+            // SAVEPOINT: on Postgres a unique violation aborts the
+            // whole transaction unless we roll back to a savepoint.
+            $sp = 'dedupe_' . $row->id;
+            DB::statement("SAVEPOINT {$sp}");
+            try {
                 DB::table($table)->where('id', $row->id)->update([$col => $keeperId]);
+                DB::statement("RELEASE SAVEPOINT {$sp}");
+            } catch (\Throwable $e) {
+                DB::statement("ROLLBACK TO SAVEPOINT {$sp}");
+                // Collision that the pre-check missed (race / null quirks)
+                // — drop the absorbed row; keeper already covers the pair.
+                DB::table($table)->where('id', $row->id)->delete();
             }
         }
+    }
+
+    private function tableHasColumn(string $table, string $column): bool
+    {
+        return Schema::hasTable($table) && Schema::hasColumn($table, $column);
     }
 
     /**
@@ -291,17 +338,16 @@ class LocationsDedupe extends Command
     {
         $allReferenced = [];
         foreach (array_merge(self::SAFE_TABLES, self::COMPOSITE_TABLES) as $ref) {
-            try {
-                $ids = DB::table($ref['table'])
-                    ->whereNotNull($ref['col'])
-                    ->distinct()
-                    ->pluck($ref['col'])
-                    ->all();
-                foreach ($ids as $id) {
-                    $allReferenced[$id] = true;
-                }
-            } catch (\Throwable $e) {
-                // missing table on this env
+            if (!$this->tableHasColumn($ref['table'], $ref['col'])) {
+                continue;
+            }
+            $ids = DB::table($ref['table'])
+                ->whereNotNull($ref['col'])
+                ->distinct()
+                ->pluck($ref['col'])
+                ->all();
+            foreach ($ids as $id) {
+                $allReferenced[$id] = true;
             }
         }
 
@@ -316,11 +362,10 @@ class LocationsDedupe extends Command
     {
         $total = 0;
         foreach (array_merge(self::SAFE_TABLES, self::COMPOSITE_TABLES) as $ref) {
-            try {
-                $total += (int) DB::table($ref['table'])->where($ref['col'], $locationId)->count();
-            } catch (\Throwable $e) {
-                // missing table on this env
+            if (!$this->tableHasColumn($ref['table'], $ref['col'])) {
+                continue;
             }
+            $total += (int) DB::table($ref['table'])->where($ref['col'], $locationId)->count();
         }
         return $total;
     }
