@@ -4,8 +4,8 @@ use App\Models\TfnFuelOrderPlacement;
 use App\Services\Tfn\Exceptions\TfnException;
 use App\Services\Tfn\TfnClient;
 use App\Services\Tfn\TfnDemoFixtures;
+use App\Services\Tfn\TfnFuelOrderService;
 use Illuminate\Support\Carbon;
-use Illuminate\Support\Facades\Log;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\Url;
 use Livewire\Volt\Component;
@@ -561,6 +561,49 @@ new #[Layout('components.layouts.app')] class extends Component {
     }
 
     /**
+     * Best-effort resolve of the driver cellphone TFN should SMS the
+     * voucher to.  Looks up the same in-flight Job the reference
+     * derivation uses; if the trip has an assigned driver we hand
+     * back their phone (User.phone wins, DriverProfile.cellphone is
+     * the fallback -- same rule the Issue-to-Driver modal uses).
+     * Returns an empty string when nothing usable is found; the
+     * service just leaves DriverCellNumber blank and TFN skips SMS.
+     */
+    private function driverCellFor(string $key): string
+    {
+        if ($key === '') {
+            return '';
+        }
+        $canonicalPlate = \App\Models\DriverProfile::normalisePlate($key);
+
+        $job = \App\Models\Job::query()
+            ->with(['driver:id,name,phone', 'driver.driverProfile:id,user_id,cellphone'])
+            ->where(function ($q) use ($key, $canonicalPlate) {
+                $q->where('vin', $key)
+                  ->orWhere('registration', $key);
+                if (!blank($canonicalPlate)) {
+                    $q->orWhereHas('driver.driverProfile', fn ($qq) => $qq->where('trade_plate', $canonicalPlate));
+                }
+            })
+            ->whereIn('status', [
+                \App\Models\Job::STATUS_CONFIRMED,
+                \App\Models\Job::STATUS_PLANNED,
+                \App\Models\Job::STATUS_DRIVER_ASSIGNED,
+                \App\Models\Job::STATUS_READY_FOR_COLLECTION,
+                \App\Models\Job::STATUS_COLLECTED,
+                \App\Models\Job::STATUS_IN_TRANSIT,
+            ])
+            ->orderByDesc('id')
+            ->first();
+
+        return (string) (
+            $job?->driver?->phone
+            ?: $job?->driver?->driverProfile?->cellphone
+            ?: ''
+        );
+    }
+
+    /**
      * Look up the POS registration for the selected vehicle.  This is
      * the string TFN puts on every transaction and rejects when blank
      * or non-alphanumeric -- so we must never send the VIN (which is
@@ -649,108 +692,64 @@ new #[Layout('components.layouts.app')] class extends Component {
             return;
         }
 
-        // Payload matches TFN v3 POST /api/Orders exactly (confirmed
-        // 2026-08-31 against QA sandbox with a real 200 OK response).
-        // The empty top-level `OrderNumber`, empty `Entry.Position` /
-        // `CurrentVirtualCardNumber`, and the null-UUID
-        // `LinkedTransactions[0].TransactionID` are Swashbuckle-style
-        // placeholders -- TFN's model binder ignores them on write and
-        // the server fills them in on the response.
-        $validStart = Carbon::now();
+        // TFN payload build, live/demo dispatch, and local "placed by"
+        // audit are handled by TfnFuelOrderService so the order-show
+        // page can place through the same code path.  We keep the
+        // UI-level validation (litres range, expiry-in-future, product
+        // allow-list, POS-registration guard) here because those are
+        // Volt-form concerns; the service assumes valid inputs.
         $validEnd   = Carbon::parse($this->orderExpiresAt);
         $reference  = $this->orderReference ?: '';
-        $payload = [
-            'IsDeleted'                     => false,
-            'Planned'                       => false,
-            'PlannedReasons'                => '',
-            'OrderNumber'                   => '',
-            'CustomerNumber'                => config('tfn.customer_number'),
-            'SubContractorCustomerNumber'   => '',
-            'CustomerReference'             => $reference,
-            'EntriesCompleteAfterFirstUse'  => true,
-            'MaxAllocation'                 => $litres,
-            'SubContractorAccepted'         => false,
-            'SubContractorDeclined'         => false,
-            'StatusTitle'                   => '',
-            'SkipSMS'                       => false,
-            'Entries' => [[
-                'IsDeleted'                => false,
-                'Position'                 => 0,
-                'SupplierNumber'           => 0,
-                'ProductCode'              => strtoupper($this->orderProductCode),
-                'VehicleRegistration'      => $posRegistration,
-                'CardNumber'               => '',
-                'DriverCellNumber'         => '',
-                'CurrentVirtualCardNumber' => '',
-                'MaxAllocation'            => $litres,
-                // TFN expects local (SAST/CAT) datetimes with fractional
-                // seconds but no offset; Carbon->format leaves the tz
-                // out unless we ask.  Matches Masupha's working sample.
-                'ValidDateStart'           => $validStart->format('Y-m-d\TH:i:s.u'),
-                'ValidDateEnd'             => $validEnd->format('Y-m-d\TH:i:s.u'),
-                'CustomerReference'        => $reference,
-                'LinkedTransactions'       => [[
-                    'TransactionID' => '00000000-0000-0000-0000-000000000000',
-                ]],
-            ]],
-        ];
+        $driverCell = $this->driverCellFor($this->orderRegistration);
+        $service    = app(TfnFuelOrderService::class);
 
-        $client = app(TfnClient::class);
-
-        if (!$client->isLive()) {
-            // Demo mode: pretend we posted successfully. The next
-            // page render still reads from fixtures so the newly-
-            // "placed" order won't appear in the Open Orders table --
-            // that's fine, this is a walkthrough tool.
-            $demoOrderNumber = 'DEMO/' . now()->format('YmdHis');
-            $this->recordOrderPlacement(
-                orderNumber: $demoOrderNumber,
-                registration: $posRegistration,
+        try {
+            $result = $service->place(
+                posRegistration: $posRegistration,
                 productCode: $this->orderProductCode,
-                litres: $litres,
+                allocation: $litres,
+                expiresAt: $validEnd,
                 customerReference: $reference,
+                driverCellNumber: $driverCell,
             );
-            session()->flash('success', sprintf(
-                '(Demo) Order placed: %s of %s against %s. Expires %s.',
-                $isOvernight ? ((int) $litres).' night(s)' : ((int) $litres).' L',
-                $this->orderProductCode,
-                $posRegistration,
-                $validEnd->format('D d M H:i'),
-            ));
-            $this->reset(['orderLitres', 'orderReference']);
+        } catch (TfnException $e) {
+            // TfnClient::createOrder surfaces TFN's Message field when
+            // the server returns a non-Successful ValidationResult, so
+            // we don't double-prefix -- just show what TFN said.
+            session()->flash('error', $e->getMessage());
             return;
         }
 
-        try {
-            // Client generates the newRecordIdentifier idempotency UUID
-            // per call.  createOrder unwraps the ValidationResult /
-            // Order / Message envelope and returns just the Order.
-            $order = $client->createOrder($payload);
-            $orderNumber = $order['OrderNumber'] ?? '';
-            if ($orderNumber !== '') {
-                $this->recordOrderPlacement(
-                    orderNumber: $orderNumber,
-                    registration: $posRegistration,
-                    productCode: $this->orderProductCode,
-                    litres: $litres,
-                    customerReference: $reference,
-                );
-            }
-            $suffix = $orderNumber !== '' ? sprintf(' (%s)', $orderNumber) : '';
-            session()->flash('success', sprintf(
-                'Order placed%s: %s of %s against %s.',
-                $suffix,
-                $isOvernight ? ((int) $litres).' night(s)' : ((int) $litres).' L',
-                $this->orderProductCode,
-                $posRegistration,
-            ));
-            $this->reset(['orderLitres', 'orderReference']);
-        } catch (TfnException $e) {
-            // createOrder now surfaces TFN's own Message string when the
-            // server returns a non-Successful ValidationResult, so we
-            // don't need to double-prefix here -- just show what TFN said.
-            session()->flash('error', $e->getMessage());
+        // Speak like ops: "Diesel order placed" beats "Order placed: D0".
+        $productLabel = $isOvernight ? 'Overnight stay' : 'Diesel';
+        $quantity     = $isOvernight
+            ? ((int) $litres) . ' night' . ((int) $litres === 1 ? '' : 's')
+            : ((int) $litres) . ' L';
+        $orderText    = $result['order_number'] !== '' ? sprintf(' (%s)', $result['order_number']) : '';
+        $prefix       = $result['demo'] ? '(Demo) ' : '';
+
+        // TFN sends a voucher SMS to DriverCellNumber when populated.
+        // Surface where it's going so ops can double-check before the
+        // driver phones back asking for the code.
+        if (filled($driverCell)) {
+            $smsNote = $result['demo']
+                ? ' TFN would SMS the voucher to ' . $driverCell . '.'
+                : ' TFN will SMS the voucher to the driver on ' . $driverCell . '.';
+        } else {
+            $smsNote = ' No driver cellphone on file — pull the voucher from the TFN portal and pass it to the driver.';
         }
+
+        session()->flash('success', sprintf(
+            '%s%s order placed%s: %s against %s.%s',
+            $prefix,
+            $productLabel,
+            $orderText,
+            $quantity,
+            $posRegistration,
+            $smsNote,
+        ));
+
+        $this->reset(['orderLitres', 'orderReference']);
     }
 
     /**
@@ -778,43 +777,6 @@ new #[Layout('components.layouts.app')] class extends Component {
             ->filter()
             ->values()
             ->all();
-    }
-
-    /**
-     * Persist who placed a TFN pre-auth so the open/closed orders
-     * tables can show "Placed by".  TFN itself does not return a
-     * placer — CustomerReference is the job ref — so this is local.
-     */
-    private function recordOrderPlacement(
-        string $orderNumber,
-        string $registration,
-        string $productCode,
-        float $litres,
-        string $customerReference,
-    ): void {
-        $user = auth()->user();
-        $name = $user?->name ?: ($user?->username ?: 'Unknown');
-
-        TfnFuelOrderPlacement::query()->create([
-            'order_number'         => $orderNumber,
-            'vehicle_registration' => $registration,
-            'product_code'         => strtoupper($productCode),
-            'litres'               => $litres,
-            'customer_reference'   => $customerReference !== '' ? $customerReference : null,
-            'user_id'              => $user?->id,
-            'placed_by_name'       => $name,
-            'placed_at'            => now(),
-        ]);
-
-        Log::info('TFN fuel order placed', [
-            'order_number'         => $orderNumber,
-            'vehicle_registration' => $registration,
-            'product_code'         => strtoupper($productCode),
-            'litres'               => $litres,
-            'customer_reference'   => $customerReference,
-            'user_id'              => $user?->id,
-            'placed_by'            => $name,
-        ]);
     }
 
     public function cancelOrderEntry(string $entryNumber): void

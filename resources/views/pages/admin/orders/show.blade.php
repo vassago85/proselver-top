@@ -5,11 +5,15 @@ use App\Models\Location;
 use App\Models\ModelTollClassHint;
 use App\Models\PettyCashPlan;
 use App\Models\RouteTollPlazaHint;
+use App\Models\TfnFuelOrderPlacement;
 use App\Models\TollPlaza;
 use App\Models\Trip;
 use App\Models\User;
 use App\Services\AuditService;
+use App\Services\Tfn\Exceptions\TfnException;
+use App\Services\Tfn\TfnFuelOrderService;
 use App\Services\TripCostEstimator;
+use Illuminate\Support\Carbon;
 use Livewire\Volt\Component;
 use Livewire\Attributes\Layout;
 
@@ -141,6 +145,35 @@ new #[Layout('components.layouts.app')] class extends Component {
     // Persisted to advance_custom_items (JSON) on save.  Labels are
     // remembered per customer company so future trips auto-suggest.
     public array $advanceCustomItems = [];
+
+    /*
+     * TFN Fuel modal -- lets ops place a diesel pre-authorisation (or
+     * overnight-stay allocation) against this trip without leaving the
+     * order page.  Separate from petty cash by design: fuel is TFN
+     * network cost, cash is Wallet cash; same desk moment but different
+     * paths.  Plateless FAW / Isuzu vehicles need the driver's trade
+     * plate as the POS registration, so the modal makes ops eyeball
+     * and confirm the plate before submit.  See TfnFuelOrderService.
+     */
+    public bool $showFuelModal = false;
+    public string $fuelProductCode = 'D0';
+    public string $fuelLitres = '';
+    public string $fuelExpiresAt = '';
+    public bool $fuelPlateConfirmed = false;
+    // Editable trade plate on the modal.  Ops rarely change the plate
+    // on a driver (a trade plate lives for as long as the dealership
+    // owns it) but new drivers get plates and old ones get re-issued,
+    // so the field is editable.  Pre-filled from DriverProfile when
+    // the driver already has one on record; empty otherwise.  This
+    // input is IGNORED when the vehicle has its own permanent plate
+    // (TFN reads that first).
+    public string $fuelTradePlate = '';
+    // "Save as this driver's permanent trade plate" -- appears next
+    // to the plate input the moment ops types something different
+    // from what's on the profile.  Persisting keeps the profile in
+    // sync so the next trip pre-fills correctly without ops having
+    // to remember to update the driver page separately.
+    public bool $fuelPersistTradePlate = false;
 
     // Picker state for "Add gate" -- the toll_plaza_id selected in
     // the dropdown next to the toll table.  Cleared after each add.
@@ -1454,6 +1487,209 @@ new #[Layout('components.layouts.app')] class extends Component {
     }
 
     /* ----------------------------------------------------------------
+     | TFN Fuel order (pre-authorisation).
+     |
+     | Ops places a fuel/overnight pre-auth against this trip directly
+     | from the order page -- keeps the trade-plate confirmation in
+     | context so plateless new-from-plant vehicles can be fuelled
+     | without a detour to /admin/fuel.  Delegates the actual TFN call
+     | to TfnFuelOrderService so the fuel operations page and the
+     | order-show page share one tested code path.
+     |---------------------------------------------------------------*/
+
+    public function openFuelModal(): void
+    {
+        if (!auth()->user()?->isInternal()) abort(403);
+
+        // The modal opens whenever the trip is billable to TFN.  That's:
+        //   (a) a permanent vehicle plate on the job (TFN reads that
+        //       first, no trade plate involvement), OR
+        //   (b) an assigned driver -- even without a trade plate on the
+        //       profile yet, because ops can type one on the modal (new
+        //       trade plate issued to the driver today).
+        // Anything else has nothing to bill against.
+        $hasReg    = filled($this->job->registration);
+        $hasDriver = (bool) $this->job->driver_user_id;
+        if (!$hasReg && !$hasDriver) {
+            session()->flash(
+                'error',
+                'This trip has no permanent plate and no assigned driver. '
+                . 'Assign a driver (or capture the vehicle registration) '
+                . 'before placing a TFN fuel order.'
+            );
+            return;
+        }
+
+        // Seed form defaults.  Expiry matches the /admin/fuel default
+        // (end of the fourth day, SAST) which is the ops window Lize
+        // uses for every real ORD/01/2951/* order on the account.
+        $this->fuelProductCode       = 'D0';
+        $this->fuelLitres            = '';
+        $this->fuelExpiresAt         = now()->addDays(4)->endOfDay()->format('Y-m-d\TH:i');
+        $this->fuelPlateConfirmed    = false;
+        $this->fuelPersistTradePlate = false;
+        // Pre-fill from DriverProfile when the trip is trade-plate
+        // driven.  Empty string when the vehicle has its own permanent
+        // plate (input is hidden in that case) or when the driver has
+        // no plate on record yet.
+        $this->fuelTradePlate = $hasReg
+            ? ''
+            : (string) ($this->job->driver?->driverProfile?->trade_plate ?? '');
+        $this->showFuelModal = true;
+    }
+
+    public function closeFuelModal(): void
+    {
+        $this->showFuelModal = false;
+    }
+
+    public function placeFuelOrder(TfnFuelOrderService $orders): void
+    {
+        if (!auth()->user()?->isInternal()) abort(403);
+
+        $productCode = strtoupper(trim($this->fuelProductCode));
+        if (!isset(config('tfn.orderable_products')[$productCode])) {
+            session()->flash('error', 'Choose a valid product.');
+            return;
+        }
+        $isOvernight = $productCode === 'OS';
+
+        $allocation = (float) $this->fuelLitres;
+        if ($isOvernight) {
+            if ($allocation < 1 || $allocation > 14) {
+                session()->flash('error', 'Nights must be between 1 and 14.');
+                return;
+            }
+        } elseif ($allocation <= 0 || $allocation > 2000) {
+            session()->flash('error', 'Litres must be between 1 and 2000.');
+            return;
+        }
+
+        if (blank($this->fuelExpiresAt) || Carbon::parse($this->fuelExpiresAt)->isPast()) {
+            session()->flash('error', 'Order expiry must be in the future.');
+            return;
+        }
+
+        if (!$this->fuelPlateConfirmed) {
+            session()->flash('error', 'Tick "I confirm this plate is correct" before placing the order.');
+            return;
+        }
+
+        // Resolve the POS registration.  Vehicle plate wins if present
+        // (TFN never touches the trade plate then); otherwise the
+        // ops-typed trade plate is what we send.  Normalise via the
+        // same rule the reconciler uses so a typed "tp jhb 11" survives
+        // the round-trip as "TPJHB11".
+        $posRegistration = null;
+        if (filled($this->job->registration)) {
+            $posRegistration = \App\Models\DriverProfile::normalisePlate($this->job->registration);
+        } elseif (filled($this->fuelTradePlate)) {
+            $posRegistration = \App\Models\DriverProfile::normalisePlate($this->fuelTradePlate);
+        }
+        if (blank($posRegistration)) {
+            session()->flash(
+                'error',
+                'Enter the driver\'s trade plate before placing the order — TFN needs a registration string on every transaction.'
+            );
+            return;
+        }
+
+        // Driver cell for TFN's voucher SMS.  Same fallback the Issue
+        // modal uses: User.phone first, then DriverProfile.cellphone
+        // -- the driver's own field wins because it's what payroll
+        // and dispatch update; profile.cellphone is the legacy row.
+        $driverCell = (string) (
+            $this->job->driver?->phone
+            ?: $this->job->driver?->driverProfile?->cellphone
+            ?: ''
+        );
+
+        try {
+            $result = $orders->place(
+                posRegistration: $posRegistration,
+                productCode: $productCode,
+                allocation: $allocation,
+                expiresAt: Carbon::parse($this->fuelExpiresAt),
+                // ProSelver ops convention: TFN CustomerReference is the
+                // job / delivery ref.  Reconciliation matches on it.
+                customerReference: (string) ($this->job->job_number ?? ''),
+                driverCellNumber: $driverCell,
+            );
+        } catch (TfnException $e) {
+            session()->flash('error', $e->getMessage());
+            return;
+        }
+
+        // Trade-plate persistence.  Only relevant when the trip was
+        // trade-plate driven (vehicle had no permanent plate) AND ops
+        // opted in AND the driver actually has a profile row.  Compares
+        // normalised forms so a case/whitespace-only change doesn't
+        // touch the DB.
+        $persistedPlate = false;
+        if ($this->fuelPersistTradePlate
+            && blank($this->job->registration)
+            && $this->job->driver?->driverProfile
+        ) {
+            $currentProfilePlate = \App\Models\DriverProfile::normalisePlate($this->job->driver->driverProfile->trade_plate ?? '');
+            if ($currentProfilePlate !== $posRegistration) {
+                $before = ['trade_plate' => $currentProfilePlate];
+                $this->job->driver->driverProfile->forceFill([
+                    'trade_plate' => $posRegistration,
+                ])->save();
+                AuditService::log(
+                    'driver_trade_plate_updated',
+                    'driver_profile',
+                    $this->job->driver->driverProfile->id,
+                    $before,
+                    ['trade_plate' => $posRegistration, 'via' => 'order_show_fuel_modal', 'job_id' => $this->job->id],
+                );
+                $persistedPlate = true;
+                $this->job->refresh();
+            }
+        }
+
+        // Human-friendly product label so the flash reads like ops
+        // speaks: "Diesel order placed" beats "TFN order placed: D0".
+        $productLabel = $isOvernight ? 'Overnight stay' : 'Diesel';
+        $quantity     = $isOvernight
+            ? ((int) $allocation) . ' night' . ((int) $allocation === 1 ? '' : 's')
+            : ((int) $allocation) . ' L';
+        $prefix       = $result['demo'] ? '(Demo) ' : '';
+        $orderText    = $result['order_number'] !== '' ? ' (' . $result['order_number'] . ')' : '';
+
+        // Explain what happens next.  Live: TFN sends a voucher SMS
+        // when a cell number is on the entry; demo: describe what
+        // WOULD happen so ops sees the destination on a walkthrough.
+        if (filled($driverCell)) {
+            $smsNote = $result['demo']
+                ? ' TFN would SMS the voucher to ' . $driverCell . '.'
+                : ' TFN will SMS the voucher to the driver on ' . $driverCell . '.';
+        } else {
+            $smsNote = ' No driver cellphone on file — capture the voucher from the TFN portal and pass it to the driver manually.';
+        }
+
+        $plateNote = $persistedPlate
+            ? ' Trade plate saved to ' . ($this->job->driver?->name ?? 'driver') . '\'s profile.'
+            : '';
+
+        session()->flash('success', sprintf(
+            '%s%s order placed%s: %s against %s.%s%s',
+            $prefix,
+            $productLabel,
+            $orderText,
+            $quantity,
+            $posRegistration,
+            $smsNote,
+            $plateNote,
+        ));
+
+        $this->showFuelModal         = false;
+        $this->fuelLitres            = '';
+        $this->fuelPlateConfirmed    = false;
+        $this->fuelPersistTradePlate = false;
+    }
+
+    /* ----------------------------------------------------------------
      | Remove advance.
      |
      | Two states, owner-stated rule:
@@ -2041,6 +2277,35 @@ new #[Layout('components.layouts.app')] class extends Component {
             ])
             ->all();
 
+        // Latest TFN fuel placement against this trip -- used to badge
+        // the Fuel button on the order action bar ("Fuel · 200 L · 03
+        // Sep") without duplicating the /admin/fuel open-orders read.
+        // CustomerReference on TFN carries the job number, and the
+        // local audit persists that verbatim so the join is stable.
+        $latestFuelPlacement = ($user && $user->isInternal() && $this->job->job_number)
+            ? TfnFuelOrderPlacement::query()
+                ->where('customer_reference', $this->job->job_number)
+                ->orderByDesc('placed_at')
+                ->first()
+            : null;
+
+        // The Fuel button is disabled when there is no way to bill a
+        // TFN order against the trip.  That's true only when the trip
+        // has BOTH no permanent plate on the vehicle AND no assigned
+        // driver -- if there's a driver, ops can type a trade plate
+        // on the modal even when the profile is empty.
+        $fuelPos          = app(TfnFuelOrderService::class)->resolvePosRegistrationForJob($this->job);
+        $fuelCanPlace     = filled($this->job->registration) || (bool) $this->job->driver_user_id;
+        $fuelDriverPlate  = (string) ($this->job->driver?->driverProfile?->trade_plate ?? '');
+        // TFN sends the voucher SMS to this number.  Same fallback the
+        // Issue-to-Driver modal uses so the two screens agree on what
+        // the driver's contact number is.
+        $fuelDriverCell   = (string) (
+            $this->job->driver?->phone
+            ?: $this->job->driver?->driverProfile?->cellphone
+            ?: ''
+        );
+
         return [
             'drivers' => $drivers,
             'driverOptions' => $driverOptions,
@@ -2058,6 +2323,13 @@ new #[Layout('components.layouts.app')] class extends Component {
             'executorChoices' => Job::EXECUTOR_LABELS,
             'advanceAudit' => $advanceAudit,
             'bookingLocationOptions' => $bookingLocationOptions,
+            'latestFuelPlacement' => $latestFuelPlacement,
+            'fuelPosRegistration' => $fuelPos['registration'],
+            'fuelPosSource'       => $fuelPos['source'],
+            'fuelCanPlace'        => $fuelCanPlace,
+            'fuelDriverPlate'     => $fuelDriverPlate,
+            'fuelDriverCell'      => $fuelDriverCell,
+            'orderableFuelProducts' => config('tfn.orderable_products', []),
         ];
     }
 };
@@ -2725,6 +2997,40 @@ new #[Layout('components.layouts.app')] class extends Component {
                                 title="Record that the cash has been handed to {{ $job->driver?->name }} / EFT sent.">
                                 <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
                                 Issue to Driver
+                            </button>
+                        @endif
+                    @endif
+
+                    {{-- TFN Fuel pre-authorisation.  Separate from petty
+                         cash because fuel is TFN network cost, not cash
+                         out of the wallet.  Disabled only when the trip
+                         has NO permanent plate AND NO assigned driver
+                         -- if there's a driver, ops can type a trade
+                         plate on the modal even when the profile has
+                         no plate on record yet (rare but happens with
+                         new drivers). --}}
+                    @if(auth()->user()?->isInternal() && !$isTerminal)
+                        @if($latestFuelPlacement)
+                            <button wire:click="openFuelModal"
+                                class="inline-flex items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3.5 py-2.5 text-sm font-medium text-amber-900 hover:bg-amber-100 transition-colors"
+                                title="Last TFN order: {{ (int) $latestFuelPlacement->litres }} {{ strtoupper($latestFuelPlacement->product_code) === 'OS' ? 'night(s)' : 'L' }} of {{ strtoupper($latestFuelPlacement->product_code) }} — placed {{ $latestFuelPlacement->placed_at?->diffForHumans() }} by {{ $latestFuelPlacement->placed_by_name }}.">
+                                <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 22h12"/><path d="M4 9h9v13H4z"/><path d="M13 9V5a2 2 0 0 1 2-2h1"/><path d="M16 9v6.5a1.5 1.5 0 0 0 3 0V7l-2-2"/></svg>
+                                Fuel · {{ (int) $latestFuelPlacement->litres }}{{ strtoupper($latestFuelPlacement->product_code) === 'OS' ? ' nt' : ' L' }} · {{ $latestFuelPlacement->placed_at?->format('d M') }}
+                            </button>
+                        @elseif(!$fuelCanPlace)
+                            <button type="button" disabled
+                                class="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-gray-100 px-3.5 py-2.5 text-sm font-medium text-gray-400 cursor-not-allowed"
+                                title="No permanent plate on the vehicle and no driver assigned — assign a driver first, then you can enter a trade plate.">
+                                <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 22h12"/><path d="M4 9h9v13H4z"/><path d="M13 9V5a2 2 0 0 1 2-2h1"/><path d="M16 9v6.5a1.5 1.5 0 0 0 3 0V7l-2-2"/></svg>
+                                TFN Fuel
+                                <span class="text-[10px] uppercase tracking-wide text-amber-600 font-semibold">assign driver</span>
+                            </button>
+                        @else
+                            <button wire:click="openFuelModal"
+                                class="inline-flex items-center gap-2 rounded-lg border border-amber-300 bg-white px-3.5 py-2.5 text-sm font-medium text-amber-800 hover:bg-amber-50 transition-colors"
+                                title="Place a TFN diesel / overnight pre-authorisation for this trip.">
+                                <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 22h12"/><path d="M4 9h9v13H4z"/><path d="M13 9V5a2 2 0 0 1 2-2h1"/><path d="M16 9v6.5a1.5 1.5 0 0 0 3 0V7l-2-2"/></svg>
+                                TFN Fuel
                             </button>
                         @endif
                     @endif
@@ -3854,6 +4160,170 @@ new #[Layout('components.layouts.app')] class extends Component {
                     wire:confirm="Record this advance as physically issued to the driver?"
                     class="rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-blue-500 transition-colors">
                     @if($job->advance_issued_at) Re-issue & update ref @else Confirm issued @endif
+                </button>
+            </div>
+        </div>
+    </div>
+    @endif
+
+    {{-- TFN Fuel modal -- place a diesel (D0) or overnight (OS) pre-
+         authorisation against this trip.  When the vehicle has its
+         own permanent plate, TFN reads that (trade plate ignored).
+         Otherwise ops can enter/confirm the driver's trade plate --
+         if it differs from what's on the profile the modal offers to
+         persist the new one so the driver's next trip pre-fills
+         correctly.  Delegates the TFN call to TfnFuelOrderService. --}}
+    @if($showFuelModal)
+    @php
+        $fuelIsOvernight = strtoupper((string) $fuelProductCode) === 'OS';
+        $fuelUseTradePlate = blank($job->registration);
+        // Compare typed value against the driver's stored trade plate
+        // using the same normalisation the DriverProfile uses at rest
+        // (upper-case, strip non-alphanumeric).  Empty string on either
+        // side means "no plate to compare against".
+        $typedNorm    = \App\Models\DriverProfile::normalisePlate($fuelTradePlate ?? '');
+        $profileNorm  = \App\Models\DriverProfile::normalisePlate($fuelDriverPlate ?? '');
+        $plateChanged = $fuelUseTradePlate
+            && filled($typedNorm)
+            && $typedNorm !== $profileNorm;
+    @endphp
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60" wire:click.self="closeFuelModal">
+        <div class="relative w-full max-w-md mx-4 bg-white rounded-2xl shadow-2xl overflow-hidden">
+            <div class="border-b border-gray-200 px-6 py-4 bg-amber-50">
+                <div class="flex items-center gap-2">
+                    <svg class="h-5 w-5 text-amber-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 22h12"/><path d="M4 9h9v13H4z"/><path d="M13 9V5a2 2 0 0 1 2-2h1"/><path d="M16 9v6.5a1.5 1.5 0 0 0 3 0V7l-2-2"/></svg>
+                    <h3 class="text-lg font-semibold text-amber-900">TFN fuel order</h3>
+                </div>
+                <p class="text-sm text-amber-800/80 mt-0.5">{{ $job->job_number }} · {{ $job->driver?->name ?? 'no driver yet' }}</p>
+            </div>
+
+            <div class="px-6 py-5 space-y-4">
+                @if($fuelUseTradePlate)
+                    <div class="rounded-lg border border-amber-300 bg-amber-50/60 px-4 py-3 space-y-2">
+                        <div class="flex items-center justify-between gap-2">
+                            <label for="fuelTradePlateInput" class="text-[11px] uppercase tracking-wide text-amber-700 font-semibold">
+                                Driver trade plate
+                            </label>
+                            @if(filled($fuelDriverPlate))
+                                <span class="text-[10px] text-amber-700/70">
+                                    On file: <span class="font-mono font-semibold">{{ $fuelDriverPlate }}</span>
+                                </span>
+                            @else
+                                <span class="text-[10px] text-amber-700/70">Nothing on file yet</span>
+                            @endif
+                        </div>
+                        <input id="fuelTradePlateInput" wire:model.live="fuelTradePlate" type="text"
+                            maxlength="16" spellcheck="false" autocomplete="off"
+                            placeholder="e.g. TPJHB011"
+                            class="w-full rounded-md border-2 border-amber-400 bg-white px-3 py-2 font-mono text-xl font-bold text-amber-900 tracking-wider uppercase focus:border-amber-600 focus:ring-amber-600">
+                        <p class="text-[11px] text-amber-800/80">
+                            This vehicle has no permanent plate. TFN will bill against whatever you enter here — <strong>confirm the plate on the truck matches</strong> before submitting.
+                        </p>
+
+                        @if($plateChanged)
+                            <label class="mt-1 flex items-start gap-2 rounded-md border border-amber-400 bg-white px-3 py-2 cursor-pointer hover:bg-amber-50">
+                                <input wire:model.live="fuelPersistTradePlate" type="checkbox"
+                                    class="mt-0.5 h-4 w-4 rounded border-amber-400 text-amber-600 focus:ring-amber-500">
+                                <span class="text-xs text-amber-900">
+                                    Save <span class="font-mono font-semibold">{{ $typedNorm }}</span> as
+                                    {{ $job->driver?->name ?? 'this driver' }}'s permanent trade plate
+                                    @if(filled($profileNorm))
+                                        (replaces <span class="font-mono">{{ $profileNorm }}</span> on the profile).
+                                    @else
+                                        on the profile.
+                                    @endif
+                                </span>
+                            </label>
+                        @endif
+                    </div>
+                @else
+                    <div class="rounded-lg border border-amber-300 bg-amber-50/60 px-4 py-3">
+                        <div class="text-[11px] uppercase tracking-wide text-amber-700 font-semibold">
+                            Vehicle registration
+                        </div>
+                        <div class="mt-0.5 font-mono text-2xl font-bold text-amber-900 tracking-wider">
+                            {{ \App\Models\DriverProfile::normalisePlate($job->registration) }}
+                        </div>
+                    </div>
+                @endif
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1.5">Product</label>
+                    <select wire:model.live="fuelProductCode"
+                        class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-amber-500 focus:ring-amber-500">
+                        @foreach($orderableFuelProducts as $code => $label)
+                            <option value="{{ $code }}">{{ $code }} — {{ $label }}</option>
+                        @endforeach
+                    </select>
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1.5">
+                        @if($fuelIsOvernight) Nights (1–14) @else Litres (1–2000) @endif
+                    </label>
+                    <input wire:model="fuelLitres" type="number"
+                        min="1" max="{{ $fuelIsOvernight ? 14 : 2000 }}" step="{{ $fuelIsOvernight ? 1 : 0.01 }}"
+                        placeholder="{{ $fuelIsOvernight ? 'e.g. 2' : 'e.g. 200' }}"
+                        class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-amber-500 focus:ring-amber-500">
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1.5">Expires</label>
+                    <input wire:model="fuelExpiresAt" type="datetime-local"
+                        class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-amber-500 focus:ring-amber-500">
+                    <p class="mt-1 text-[11px] text-gray-500">
+                        Default: end of the fourth day (SAST). Matches the standard ops window.
+                    </p>
+                </div>
+
+                @php
+                    $submitPlate = $fuelUseTradePlate
+                        ? $typedNorm
+                        : \App\Models\DriverProfile::normalisePlate($job->registration);
+                @endphp
+                <label class="flex items-start gap-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2.5 cursor-pointer hover:bg-gray-100">
+                    <input wire:model.live="fuelPlateConfirmed" type="checkbox"
+                        class="mt-0.5 h-4 w-4 rounded border-gray-300 text-amber-600 focus:ring-amber-500">
+                    <span class="text-sm text-gray-800">
+                        I confirm <span class="font-mono font-semibold">{{ $submitPlate ?: '—' }}</span>
+                        is the correct plate for this trip.
+                    </span>
+                </label>
+
+                {{-- SMS destination note.  TFN sends the voucher to
+                     this cellphone (SkipSMS=false + populated
+                     DriverCellNumber).  When no phone is on record we
+                     tell ops the SMS can't go out so they know to
+                     read the voucher off the portal instead. --}}
+                @if(filled($fuelDriverCell))
+                    <div class="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-900">
+                        <svg class="inline h-3.5 w-3.5 -mt-0.5 mr-1" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12" y2="18.01"/></svg>
+                        TFN will SMS the voucher to
+                        <span class="font-mono font-semibold">{{ $fuelDriverCell }}</span>
+                        @if($job->driver?->name) ({{ $job->driver->name }}) @endif
+                        as soon as the order is accepted.
+                    </div>
+                @else
+                    <div class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                        <svg class="inline h-3.5 w-3.5 -mt-0.5 mr-1" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/></svg>
+                        No cellphone on file for the driver — TFN has nowhere to SMS the voucher.
+                        You'll need to pull the code from the TFN portal after placing.
+                    </div>
+                @endif
+            </div>
+
+            <div class="border-t border-gray-200 px-6 py-4 flex items-center justify-end gap-3 bg-gray-50">
+                <button wire:click="closeFuelModal" type="button"
+                    class="rounded-lg px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-100 transition-colors">
+                    Cancel
+                </button>
+                <button wire:click="placeFuelOrder" type="button"
+                    @if(!$fuelPlateConfirmed || blank($submitPlate)) disabled @endif
+                    class="rounded-lg px-5 py-2.5 text-sm font-semibold text-white transition-colors
+                        {{ $fuelPlateConfirmed && filled($submitPlate)
+                            ? 'bg-amber-600 hover:bg-amber-500'
+                            : 'bg-amber-300 cursor-not-allowed' }}">
+                    Place TFN order
                 </button>
             </div>
         </div>
