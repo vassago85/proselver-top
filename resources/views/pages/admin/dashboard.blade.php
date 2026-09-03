@@ -442,8 +442,11 @@ new #[Layout('components.layouts.app')] class extends Component
         $priority = (clone $this->baseJobsQuery(applyStatusFilter: true))
             ->whereIn('status', self::ACTIVE_PHASE1)
             ->with([
-                'pickupLocation:id,city,province',
-                'deliveryLocation:id,city,province',
+                // company_name + address required: many dealer locations
+                // (esp. bulk-imported) have no city yet, and the board
+                // falls back city → company_name → address.
+                'pickupLocation:id,company_name,address,city,province',
+                'deliveryLocation:id,company_name,address,city,province',
                 'driver:id,name',
                 'inventory:id,chassis_number,vin',
                 'company:id,name',
