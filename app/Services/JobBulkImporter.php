@@ -353,30 +353,7 @@ class JobBulkImporter
         // both hit the same hint.
         $savedHints = (array) ($company->movement_csv_mapping['model_class_hints'] ?? []);
 
-        // The importing company's own address book takes precedence, but
-        // we ALSO let a row resolve to a shared operational location owned
-        // by another company. Body builders, yards and plants are platform
-        // infrastructure that turn up as origins / destinations on many
-        // customers' files (e.g. "Anchor Body Builders" on an OEM's import).
-        // Matching to the real record — which carries a proper street
-        // address / city — stops the importer spawning a blank, city-less
-        // duplicate under the importing company for every such row. We key
-        // off the LOCATION type (not the owner's company type) so an OEM's
-        // plant location, a body-builder's yard, and a standalone yard
-        // company are all reachable.
-        $ownLocations = $company->locations()->get();
-        $sharedLocations = Location::query()
-            ->where('is_active', true)
-            ->where('company_id', '!=', $company->id)
-            ->whereIn('type', [
-                Location::TYPE_BODY_BUILDER,
-                Location::TYPE_YARD,
-                Location::TYPE_PLANT,
-            ])
-            ->get();
-        // Own first so an exact / slug name clash resolves to the
-        // customer's own record rather than a shared one.
-        $locations = $ownLocations->concat($sharedLocations)->unique('id')->values();
+        $locations = $this->importableLocations($company);
 
         // Dedup: pull every in-flight job for this customer keyed by
         // BOTH VIN and registration so we can warn operators about
@@ -782,14 +759,16 @@ class JobBulkImporter
             &$errors,
             &$modelHints,
         ) {
-            // In-run address-book cache, keyed by a normalised location
-            // name. Seeded with the company's existing locations and then
-            // populated with every location created during THIS import, so
-            // the same address appearing on many rows reuses one record
-            // instead of spawning a duplicate per row (the cause of the
-            // "55 Main Street …" × N mess in the address book).
+            // Same pool preview() matched against (own book + shared
+            // plants/yards/body builders). Livewire cannot round-trip
+            // nested Eloquent models in public $previewRows — matches
+            // arrive as null — so commit MUST re-match here. Seeding the
+            // cache from this pool (not just $company->locations()) is
+            // what stops "ANCHOR AUTO BODY BUILDERS CC" spawning a new
+            // city-less OEM stub on every Excel upload.
+            $locations = $this->importableLocations($company);
             $locationCache = [];
-            foreach ($company->locations()->get() as $existingLocation) {
+            foreach ($locations as $existingLocation) {
                 foreach ([$existingLocation->company_name, $existingLocation->address] as $candidate) {
                     $key = $this->locationKey($candidate);
                     if ($key !== '' && !isset($locationCache[$key])) {
@@ -810,16 +789,29 @@ class JobBulkImporter
                 }
 
                 try {
+                    $pickupMatch = $this->hydrateLocationMatch(
+                        $row['parsed']['pickup_match'] ?? null,
+                        $row['parsed']['pickup_location_id'] ?? null,
+                        $row['parsed']['pickup_raw'] ?? null,
+                        $locations,
+                    );
+                    $deliveryMatch = $this->hydrateLocationMatch(
+                        $row['parsed']['delivery_match'] ?? null,
+                        $row['parsed']['delivery_location_id'] ?? null,
+                        $row['parsed']['delivery_raw'] ?? null,
+                        $locations,
+                    );
+
                     [$pickupId, $createdPickup] = $this->resolveLocation(
                         $company,
-                        $row['parsed']['pickup_match'],
+                        $pickupMatch,
                         $row['parsed']['pickup_raw'],
                         $autoCreate,
                         $locationCache,
                     );
                     [$deliveryId, $createdDelivery] = $this->resolveLocation(
                         $company,
-                        $row['parsed']['delivery_match'],
+                        $deliveryMatch,
                         $row['parsed']['delivery_raw'],
                         $autoCreate,
                         $locationCache,
@@ -1077,6 +1069,10 @@ class JobBulkImporter
                 'model' => $model,
                 'pickup_raw' => $pickup,
                 'delivery_raw' => $delivery,
+                // Integer ids survive Livewire round-trips; Eloquent
+                // models nested in public $previewRows do not.
+                'pickup_location_id' => $pickupMatch?->id,
+                'delivery_location_id' => $deliveryMatch?->id,
                 'pickup_match' => $pickupMatch,
                 'delivery_match' => $deliveryMatch,
                 'scheduled_date' => $scheduledDate?->toDateString(),
@@ -1167,15 +1163,64 @@ class JobBulkImporter
     }
 
     /**
-     * Match a free-text location name against the company's address book.
-     * Strategy:
-     *   1. exact match (case-insensitive) on company_name
-     *   2. exact match on slugified company_name (strips punctuation/spaces)
-     *   3. substring match (incoming string contained in book entry, or
-     *      vice versa) — only if exactly one location matches
-     *
-     * Returns the matching Location or null.
+     * Address book visible to an import: the customer's own locations
+     * first, then shared plants / yards / body builders owned by other
+     * companies. Own-first so a name clash prefers the customer's row.
      */
+    private function importableLocations(Company $company): \Illuminate\Support\Collection
+    {
+        $ownLocations = $company->locations()->get();
+        $sharedLocations = Location::query()
+            ->where('is_active', true)
+            ->where('company_id', '!=', $company->id)
+            ->whereIn('type', [
+                Location::TYPE_BODY_BUILDER,
+                Location::TYPE_YARD,
+                Location::TYPE_PLANT,
+            ])
+            ->get();
+
+        return $ownLocations->concat($sharedLocations)->unique('id')->values();
+    }
+
+    /**
+     * Recover a Location after Livewire (or any serialiser) has touched
+     * the preview row. Prefer an explicit id, then a surviving Eloquent
+     * instance / attributes array, then re-match on the raw cell text.
+     */
+    private function hydrateLocationMatch(
+        mixed $stored,
+        mixed $storedId,
+        ?string $rawName,
+        \Illuminate\Support\Collection $locations,
+    ): ?Location {
+        $id = null;
+        if (is_numeric($storedId)) {
+            $id = (int) $storedId;
+        } elseif ($stored instanceof Location) {
+            $id = (int) $stored->id;
+        } elseif (is_array($stored) && isset($stored['id'])) {
+            $id = (int) $stored['id'];
+        }
+
+        if ($id) {
+            $fromPool = $locations->firstWhere('id', $id);
+            if ($fromPool) {
+                return $fromPool;
+            }
+            $fresh = Location::query()->find($id);
+            if ($fresh) {
+                return $fresh;
+            }
+        }
+
+        if ($stored instanceof Location) {
+            return $stored;
+        }
+
+        return $this->matchLocation($rawName, $locations);
+    }
+
     /**
      * A location can only produce a route (and therefore a toll estimate)
      * when it has both coordinates. Mirrors the falsy guard in
@@ -1186,6 +1231,31 @@ class JobBulkImporter
         return !empty($location->latitude) && !empty($location->longitude);
     }
 
+    /**
+     * Prefer a geocoded book entry when several share the same name —
+     * otherwise the first (often a city-less stub) wins and tolls stay broken.
+     */
+    private function preferGeocodedLocation(\Illuminate\Support\Collection $matches): ?Location
+    {
+        if ($matches->isEmpty()) {
+            return null;
+        }
+
+        return $matches
+            ->sortBy([
+                fn (Location $l) => $this->locationHasCoordinates($l) ? 0 : 1,
+                fn (Location $l) => $l->id,
+            ])
+            ->first();
+    }
+
+    /**
+     * Match a free-text location name against the company's address book.
+     * Strategy:
+     *   1. exact match (case-insensitive) on company_name or address
+     *   2. exact match on slugified company_name / address
+     *   3. substring match — only if exactly one location matches
+     */
     private function matchLocation(?string $name, \Illuminate\Support\Collection $locations): ?Location
     {
         if ($name === null || $name === '') {
@@ -1198,21 +1268,21 @@ class JobBulkImporter
         // pickup/delivery cell while the matching book row stores that
         // string in `address` (name being e.g. "Demo Motors"); matching on
         // name alone missed those and created a duplicate every time.
-        $exact = $locations->first(fn (Location $l) =>
+        $exact = $locations->filter(fn (Location $l) =>
             Str::lower((string) $l->company_name) === $needle
             || Str::lower((string) $l->address) === $needle
         );
-        if ($exact) {
-            return $exact;
+        if ($exact->isNotEmpty()) {
+            return $this->preferGeocodedLocation($exact);
         }
 
         $needleSlug = Str::slug($name, '');
-        $slugMatch = $locations->first(fn (Location $l) =>
+        $slugMatches = $locations->filter(fn (Location $l) =>
             Str::slug((string) $l->company_name, '') === $needleSlug
             || Str::slug((string) $l->address, '') === $needleSlug
         );
-        if ($slugMatch) {
-            return $slugMatch;
+        if ($slugMatches->isNotEmpty()) {
+            return $this->preferGeocodedLocation($slugMatches);
         }
 
         $contains = $locations->filter(function (Location $l) use ($needle) {

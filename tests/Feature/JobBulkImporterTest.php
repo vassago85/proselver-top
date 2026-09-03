@@ -317,6 +317,97 @@ it('links an existing shared body-builder location instead of spawning a city-le
     expect($job->deliveryLocation->city)->toBe('Johannesburg');
 });
 
+it('commit() still reuses a shared body-builder when Livewire stripped the Eloquent match', function () {
+    // Livewire public $previewRows cannot round-trip nested Eloquent
+    // models — pickup_match / delivery_match arrive as null (or a plain
+    // attributes array) on commitImport(). Before the fix, commit only
+    // cached the importing company's own book, so a lost shared match
+    // spawned a fresh city-less dealer stub under the OEM on every upload.
+    $brand = Brand::create(['name' => 'FAW']);
+    $vehicleClass = VehicleClass::create(['name' => 'Truck Class 4']);
+    $oem = setUpOemCompany('Isuzu SA', ['VCDC Yard']);
+    $user = User::factory()->create();
+
+    $bb = Company::factory()->create(['name' => 'Anchor Auto Body Builders CC', 'type' => Company::TYPE_BODY_BUILDER]);
+    $anchor = Location::create([
+        'company_id' => $bb->id,
+        'company_name' => 'ANCHOR AUTO BODY BUILDERS CC',
+        'address' => '12 Fitment Road, Springs',
+        'city' => 'Springs',
+        'province' => 'Gauteng',
+        'latitude' => -26.2540,
+        'longitude' => 28.4420,
+        'type' => Location::TYPE_BODY_BUILDER,
+        'is_active' => true,
+    ]);
+
+    $tomorrow = now()->addDay()->format('d-m-Y');
+    $importer = app(JobBulkImporter::class);
+    $rows = [[
+        '_sheet' => 'X', '_row' => 2,
+        'Chassis No.' => 'LIVEWIRELOST00001', 'Model' => '8.140FL',
+        'From' => 'VCDC Yard', 'To' => 'ANCHOR AUTO BODY BUILDERS CC',
+        'Movement Order Date' => $tomorrow, 'Comments' => '',
+    ]];
+    $mapping = $importer->detectMapping(['Chassis No.', 'Model', 'From', 'To', 'Movement Order Date', 'Comments']);
+    $preview = $importer->preview($oem, $rows, $mapping, ['default_vehicle_class_id' => $vehicleClass->id]);
+
+    expect($preview['rows'][0]['parsed']['delivery_match']?->id)->toBe($anchor->id);
+
+    // Simulate Livewire dehydrating nested models out of the public array.
+    $dehydrated = $preview['rows'];
+    $dehydrated[0]['parsed']['pickup_match'] = null;
+    $dehydrated[0]['parsed']['delivery_match'] = null;
+
+    $result = $importer->commit($oem, $user->id, $dehydrated, $brand->id, $vehicleClass->id);
+
+    expect($result['created'])->toBe(1);
+    expect($result['created_locations'])->toBe(0);
+    expect(Location::where('company_name', 'ANCHOR AUTO BODY BUILDERS CC')->count())->toBe(1);
+    expect(Job::first()->delivery_location_id)->toBe($anchor->id);
+});
+
+it('commit() reuses an existing OEM stub instead of creating another when the name already exists in-book', function () {
+    // Regression for the address-book screenshot: once a prior import
+    // already created "ANCHOR AUTO BODY BUILDERS CC" under the OEM,
+    // a second import with the Eloquent match stripped must reuse it —
+    // not mint ANCHOR #2, #3, …
+    $brand = Brand::create(['name' => 'FAW']);
+    $vehicleClass = VehicleClass::create(['name' => 'Truck Class 4']);
+    $oem = setUpOemCompany('Isuzu SA', ['VCDC Yard']);
+    $user = User::factory()->create();
+
+    $stub = Location::create([
+        'company_id' => $oem->id,
+        'company_name' => 'ANCHOR AUTO BODY BUILDERS CC',
+        'address' => 'ANCHOR AUTO BODY BUILDERS CC',
+        'type' => Location::TYPE_DEALER,
+        'is_active' => true,
+    ]);
+
+    $tomorrow = now()->addDay()->format('d-m-Y');
+    $importer = app(JobBulkImporter::class);
+    $rows = [[
+        '_sheet' => 'X', '_row' => 2,
+        'Chassis No.' => 'STUBREUSE0000001', 'Model' => '8.140FL',
+        'From' => 'VCDC Yard', 'To' => 'ANCHOR AUTO BODY BUILDERS CC',
+        'Movement Order Date' => $tomorrow, 'Comments' => '',
+    ]];
+    $mapping = $importer->detectMapping(['Chassis No.', 'Model', 'From', 'To', 'Movement Order Date', 'Comments']);
+    $preview = $importer->preview($oem, $rows, $mapping, ['default_vehicle_class_id' => $vehicleClass->id]);
+
+    $dehydrated = $preview['rows'];
+    $dehydrated[0]['parsed']['pickup_match'] = null;
+    $dehydrated[0]['parsed']['delivery_match'] = null;
+
+    $result = $importer->commit($oem, $user->id, $dehydrated, $brand->id, $vehicleClass->id);
+
+    expect($result['created'])->toBe(1);
+    expect($result['created_locations'])->toBe(0);
+    expect(Location::where('company_id', $oem->id)->where('company_name', 'ANCHOR AUTO BODY BUILDERS CC')->count())->toBe(1);
+    expect(Job::first()->delivery_location_id)->toBe($stub->id);
+});
+
 it('warns (but still imports) when a matched location has no coordinates so tolls will not calculate', function () {
     $vehicleClass = VehicleClass::create(['name' => 'Truck Class 4']);
     $company = setUpOemCompany('FAW SA', ['PE Plant']); // PE Plant is geocoded by the helper
