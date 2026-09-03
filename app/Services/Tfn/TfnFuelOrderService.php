@@ -111,7 +111,12 @@ class TfnFuelOrderService
      * @param string $driverCellNumber     Optional. E.164 or local; TFN
      *                                     accepts either.  Empty = no SMS.
      *
-     * @return array{order_number:string, demo:bool}
+     * @return array{order_number:string, voucher_number:string, demo:bool}
+     *   `voucher_number` is TFN's `CurrentVirtualCardNumber` from the
+     *   response entry -- the 6-digit code the driver enters at the
+     *   pump.  Captured locally so ops can read it back to the driver
+     *   if TFN's voucher SMS never arrives.  Empty when TFN's response
+     *   didn't include one (unusual live; never in demo).
      * @throws TfnException When TFN rejects the order live.
      */
     public function place(
@@ -168,14 +173,24 @@ class TfnFuelOrderService
 
         if (!$this->client->isLive()) {
             $orderNumber = 'DEMO/' . now()->format('YmdHis');
+            // Mint a plausible 6-digit voucher so the demo path
+            // exercises the same "share this code with the driver"
+            // UX as live.  Real TFN codes are 6 digits (see
+            // TfnDemoFixtures docblock, confirmed against production).
+            $voucherNumber = (string) random_int(100_000, 999_999);
             $this->audit(
                 orderNumber: $orderNumber,
+                voucherNumber: $voucherNumber,
                 registration: $posRegistration,
                 productCode: $productCode,
                 litres: $allocation,
                 customerReference: $customerReference,
             );
-            return ['order_number' => $orderNumber, 'demo' => true];
+            return [
+                'order_number'   => $orderNumber,
+                'voucher_number' => $voucherNumber,
+                'demo'           => true,
+            ];
         }
 
         // TfnClient::createOrder unwraps the ValidationResult/Order/Message
@@ -184,10 +199,16 @@ class TfnFuelOrderService
         // -- the caller wants to flash the exact text TFN returned.
         $order = $this->client->createOrder($payload);
         $orderNumber = (string) ($order['OrderNumber'] ?? '');
+        // The voucher lives on the first (only) entry of the placed
+        // order.  Real responses always populate it -- we still guard
+        // for absent/empty so a partial TFN outage doesn't take the
+        // audit down with it.
+        $voucherNumber = (string) ($order['Entries'][0]['CurrentVirtualCardNumber'] ?? '');
 
         if ($orderNumber !== '') {
             $this->audit(
                 orderNumber: $orderNumber,
+                voucherNumber: $voucherNumber,
                 registration: $posRegistration,
                 productCode: $productCode,
                 litres: $allocation,
@@ -195,16 +216,27 @@ class TfnFuelOrderService
             );
         }
 
-        return ['order_number' => $orderNumber, 'demo' => false];
+        return [
+            'order_number'   => $orderNumber,
+            'voucher_number' => $voucherNumber,
+            'demo'           => false,
+        ];
     }
 
     /**
      * Persist who placed a TFN pre-auth so the open/closed orders
      * tables can show "Placed by".  TFN itself does not return a
      * placer -- CustomerReference is the job ref -- so this is local.
+     *
+     * Also snapshots the voucher (`CurrentVirtualCardNumber`) so ops
+     * can share it with the driver from the order-show page if TFN's
+     * SMS never lands.  Voucher may be blank when TFN's response
+     * omitted it (never happens on the sandbox but the audit row is
+     * still created so the placer + order number are recorded).
      */
     private function audit(
         string $orderNumber,
+        string $voucherNumber,
         string $registration,
         string $productCode,
         float $litres,
@@ -215,6 +247,7 @@ class TfnFuelOrderService
 
         TfnFuelOrderPlacement::query()->create([
             'order_number'         => $orderNumber,
+            'voucher_number'       => $voucherNumber !== '' ? $voucherNumber : null,
             'vehicle_registration' => $registration,
             'product_code'         => $productCode,
             'litres'               => $litres,
@@ -226,6 +259,7 @@ class TfnFuelOrderService
 
         Log::info('TFN fuel order placed', [
             'order_number'         => $orderNumber,
+            'voucher_number'       => $voucherNumber,
             'vehicle_registration' => $registration,
             'product_code'         => $productCode,
             'litres'               => $litres,

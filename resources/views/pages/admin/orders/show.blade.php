@@ -1659,34 +1659,54 @@ new #[Layout('components.layouts.app')] class extends Component {
         // obvious that a partial placement needs follow-up.
         $successParts = [];
         $errorParts   = [];
+        $vouchers     = [];   // Collected across successful attempts.
         $anyDemo      = false;
         foreach ($attempts as $a) {
             if ($a['ok']) {
                 $orderText = $a['order_number'] !== '' ? ' (' . $a['order_number'] . ')' : '';
                 $successParts[] = $a['label'] . ' placed' . $orderText . ': ' . $a['quantity'];
+                if ($a['voucher_number'] !== '') {
+                    // Pair each voucher with its label so the flash
+                    // reads "Vouchers -- Diesel: 812345, Overnight
+                    // stay: 812346" when both products go through.
+                    $vouchers[] = $a['label'] . ': ' . $a['voucher_number'];
+                }
                 $anyDemo = $anyDemo || $a['demo'];
             } else {
                 $errorParts[] = $a['label'] . ' rejected: ' . $a['error'];
             }
         }
 
+        // Read the voucher(s) back in the flash so ops can pass them
+        // to the driver right away -- the SMS is a fallback, not a
+        // hard dependency.  Single voucher: "Voucher: 812345."; two
+        // vouchers: "Vouchers -- Diesel: 812345, Overnight stay:
+        // 812346."  Nothing rendered when the response was blank.
+        $voucherNote = '';
+        if ($vouchers !== []) {
+            $voucherNote = count($vouchers) === 1
+                ? ' Voucher: ' . explode(': ', $vouchers[0], 2)[1] . '.'
+                : ' Vouchers — ' . implode(', ', $vouchers) . '.';
+        }
+
         $smsNote = '';
         if ($successParts !== []) {
+            $noun = count($vouchers) > 1 ? 'them' : 'it';
             if (filled($driverCell)) {
                 $smsNote = $anyDemo
-                    ? ' TFN would SMS the voucher(s) to ' . $driverCell . '.'
-                    : ' TFN will SMS the voucher(s) to the driver on ' . $driverCell . '.';
+                    ? ' TFN would also SMS ' . $noun . ' to ' . $driverCell . '.'
+                    : ' TFN will also SMS ' . $noun . ' to the driver on ' . $driverCell . '.';
             } else {
-                $smsNote = ' No driver cellphone on file — pull the voucher(s) from the TFN portal.';
+                $smsNote = ' No driver cellphone on file — read the code(s) to the driver directly.';
             }
         }
         $plateNote = $persistedPlate ? ' ' . $persistedTarget : '';
         $prefix    = $anyDemo ? '(Demo) ' : '';
 
         if ($successParts !== [] && $errorParts === []) {
-            session()->flash('success', $prefix . implode('. ', $successParts) . ' against ' . $posRegistration . '.' . $smsNote . $plateNote);
+            session()->flash('success', $prefix . implode('. ', $successParts) . ' against ' . $posRegistration . '.' . $voucherNote . $smsNote . $plateNote);
         } elseif ($successParts !== [] && $errorParts !== []) {
-            session()->flash('warning', $prefix . implode('. ', $successParts) . ' against ' . $posRegistration . '.' . $smsNote . ' However: ' . implode('. ', $errorParts) . '.');
+            session()->flash('warning', $prefix . implode('. ', $successParts) . ' against ' . $posRegistration . '.' . $voucherNote . $smsNote . ' However: ' . implode('. ', $errorParts) . '.');
         } else {
             session()->flash('error', implode('. ', $errorParts) . '.');
             return;   // leave the modal open so ops can fix + retry
@@ -1706,7 +1726,7 @@ new #[Layout('components.layouts.app')] class extends Component {
      * aggregated flash builder in placeFuelOrder.  Never throws --
      * TFN rejections come back as ['ok' => false, 'error' => ...].
      *
-     * @return array{ok:bool, label:string, quantity:string, order_number:string, demo:bool, error:string}
+     * @return array{ok:bool, label:string, quantity:string, order_number:string, voucher_number:string, demo:bool, error:string}
      */
     private function placeSingleFuelOrder(
         TfnFuelOrderService $orders,
@@ -1730,22 +1750,27 @@ new #[Layout('components.layouts.app')] class extends Component {
             );
         } catch (TfnException $e) {
             return [
-                'ok'           => false,
-                'label'        => $label,
-                'quantity'     => $quantityDisplay,
-                'order_number' => '',
-                'demo'         => false,
-                'error'        => $e->getMessage(),
+                'ok'             => false,
+                'label'          => $label,
+                'quantity'       => $quantityDisplay,
+                'order_number'   => '',
+                'voucher_number' => '',
+                'demo'           => false,
+                'error'          => $e->getMessage(),
             ];
         }
 
         return [
-            'ok'           => true,
-            'label'        => $label,
-            'quantity'     => $quantityDisplay,
-            'order_number' => $result['order_number'],
-            'demo'         => $result['demo'],
-            'error'        => '',
+            'ok'             => true,
+            'label'          => $label,
+            'quantity'       => $quantityDisplay,
+            'order_number'   => $result['order_number'],
+            // Voucher is the driver-facing pump code.  Missing key
+            // from a legacy/mocked service means empty string -- the
+            // flash builder just omits the "Voucher:" segment.
+            'voucher_number' => (string) ($result['voucher_number'] ?? ''),
+            'demo'           => $result['demo'],
+            'error'          => '',
         ];
     }
 
@@ -3144,10 +3169,33 @@ new #[Layout('components.layouts.app')] class extends Component {
                         @if($latestFuelPlacement)
                             <button wire:click="openFuelModal"
                                 class="inline-flex items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3.5 py-2.5 text-sm font-medium text-amber-900 hover:bg-amber-100 transition-colors"
-                                title="Last TFN order: {{ (int) $latestFuelPlacement->litres }} {{ strtoupper($latestFuelPlacement->product_code) === 'OS' ? 'night(s)' : 'L' }} of {{ strtoupper($latestFuelPlacement->product_code) }} — placed {{ $latestFuelPlacement->placed_at?->diffForHumans() }} by {{ $latestFuelPlacement->placed_by_name }}.">
+                                title="Last TFN order: {{ (int) $latestFuelPlacement->litres }} {{ strtoupper($latestFuelPlacement->product_code) === 'OS' ? 'night(s)' : 'L' }} of {{ strtoupper($latestFuelPlacement->product_code) }} — placed {{ $latestFuelPlacement->placed_at?->diffForHumans() }} by {{ $latestFuelPlacement->placed_by_name }}.@if($latestFuelPlacement->voucher_number) Driver enters {{ $latestFuelPlacement->voucher_number }} at the pump.@endif">
                                 <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 22h12"/><path d="M4 9h9v13H4z"/><path d="M13 9V5a2 2 0 0 1 2-2h1"/><path d="M16 9v6.5a1.5 1.5 0 0 0 3 0V7l-2-2"/></svg>
                                 Fuel · {{ (int) $latestFuelPlacement->litres }}{{ strtoupper($latestFuelPlacement->product_code) === 'OS' ? ' nt' : ' L' }} · {{ $latestFuelPlacement->placed_at?->format('d M') }}
                             </button>
+                            {{-- Voucher chip.  Sits next to the Fuel
+                                 button so ops can click-to-copy the
+                                 pump code and paste it into WhatsApp
+                                 if TFN's voucher SMS never landed on
+                                 the driver's handset.  We deliberately
+                                 render the digits verbatim on the pill
+                                 (not just on click) so ops can read
+                                 the code back on a phone call without
+                                 opening the modal. --}}
+                            @if($latestFuelPlacement->voucher_number)
+                                <button type="button"
+                                    x-data="{ copied: false }"
+                                    @click="navigator.clipboard.writeText('{{ $latestFuelPlacement->voucher_number }}').then(() => { copied = true; setTimeout(() => copied = false, 1500); })"
+                                    class="inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-100 px-3 py-2.5 text-sm font-medium text-amber-900 hover:bg-amber-200 transition-colors"
+                                    title="Click to copy — the driver punches this code into the pump keypad. TFN also SMSes it; this is your fallback if the SMS never arrives.">
+                                    <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                                    </svg>
+                                    <span x-show="!copied" x-cloak>Voucher</span>
+                                    <span x-show="copied" x-cloak class="text-emerald-800">Copied</span>
+                                    <span class="font-mono font-bold tracking-wider">{{ $latestFuelPlacement->voucher_number }}</span>
+                                </button>
+                            @endif
                         @elseif(!$fuelCanPlace)
                             <button type="button" disabled
                                 class="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-gray-100 px-3.5 py-2.5 text-sm font-medium text-gray-400 cursor-not-allowed"

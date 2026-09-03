@@ -28,18 +28,22 @@ beforeEach(function () {
  * Build a live-mode TfnClient stub that captures the create-order
  * payload without hitting the network.
  */
-function fuelOrderServiceCapturingClient(array &$captured): TfnClient
+function fuelOrderServiceCapturingClient(array &$captured, string $voucher = '812345'): TfnClient
 {
-    return new class ($captured) extends TfnClient {
+    return new class ($captured, $voucher) extends TfnClient {
         /** @param array $captured Passed by reference so the test can inspect it. */
-        public function __construct(private array &$captured) {}
+        public function __construct(private array &$captured, private string $voucher) {}
         public function isLive(): bool { return true; }
         public function createOrder(array $order, ?string $newRecordIdentifier = null): array
         {
             $this->captured = $order;
+            // Mirror the real TFN v3 response shape: OrderNumber at
+            // the top level, and each Entry echoes back with a
+            // server-populated CurrentVirtualCardNumber (the driver's
+            // pump voucher).
             return [
                 'OrderNumber' => 'ORD/01/TEST/00042',
-                'Entries'     => [['CurrentVirtualCardNumber' => '9999999999']],
+                'Entries'     => [['CurrentVirtualCardNumber' => $this->voucher]],
             ];
         }
     };
@@ -75,6 +79,64 @@ test('the payload includes DriverCellNumber verbatim when the caller supplies on
     expect($row)->not->toBeNull();
     expect($row->order_number)->toBe('ORD/01/TEST/00042');
     expect($row->user_id)->toBe($ops->id);
+});
+
+test('the service captures the TFN voucher number into the placement audit so ops can share it if SMS fails', function () {
+    // TFN's response echoes each entry back with CurrentVirtualCardNumber
+    // populated by the server -- that's the driver's pump code.  We
+    // snapshot it locally so a failed SMS doesn't leave ops without a
+    // way to read the code back to the driver on the phone.
+    $ops = User::factory()->create(['is_active' => true]);
+    $ops->assignRole('operations_controller');
+    $this->actingAs($ops);
+
+    $captured = [];
+    $service  = new TfnFuelOrderService(fuelOrderServiceCapturingClient($captured, '812345'));
+
+    $result = $service->place(
+        posRegistration: 'TPJHB011',
+        productCode: 'D0',
+        allocation: 200.0,
+        expiresAt: Carbon::now()->addDays(4)->endOfDay(),
+        customerReference: 'JOB-ABC123',
+        driverCellNumber: '0835551234',
+    );
+
+    // Return tuple carries the voucher so callers can flash it.
+    expect($result['voucher_number'])->toBe('812345');
+    expect($result['order_number'])->toBe('ORD/01/TEST/00042');
+    expect($result['demo'])->toBeFalse();
+
+    // Audit row snapshots the voucher alongside the order number.
+    $row = TfnFuelOrderPlacement::query()->first();
+    expect($row->voucher_number)->toBe('812345');
+});
+
+test('the service mints a demo voucher when the TFN client is not live so the demo UX matches production', function () {
+    // The demo path is what runs on staging and in ops training.  If
+    // it didn't produce a voucher, the flash/badge would look wildly
+    // different from live -- so we synthesise a plausible 6-digit
+    // number here too.
+    $ops = User::factory()->create(['is_active' => true]);
+    $ops->assignRole('operations_controller');
+    $this->actingAs($ops);
+
+    // isLive() defaults to false when TFN_KEY isn't set in .env.testing.
+    $service = app(TfnFuelOrderService::class);
+
+    $result = $service->place(
+        posRegistration: 'TPJHB011',
+        productCode: 'D0',
+        allocation: 200.0,
+        expiresAt: Carbon::now()->addDays(4)->endOfDay(),
+        customerReference: 'JOB-ABC123',
+    );
+
+    expect($result['demo'])->toBeTrue();
+    expect($result['voucher_number'])->toMatch('/^\d{6}$/');
+
+    $row = TfnFuelOrderPlacement::query()->first();
+    expect($row->voucher_number)->toBe($result['voucher_number']);
 });
 
 test('the payload leaves DriverCellNumber blank when no phone is supplied', function () {

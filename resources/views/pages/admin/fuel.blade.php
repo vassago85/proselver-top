@@ -728,24 +728,32 @@ new #[Layout('components.layouts.app')] class extends Component {
         $orderText    = $result['order_number'] !== '' ? sprintf(' (%s)', $result['order_number']) : '';
         $prefix       = $result['demo'] ? '(Demo) ' : '';
 
+        // TFN returned the voucher code the driver punches into the
+        // pump.  Read it back in the flash so ops can pass it on the
+        // phone right away if the driver is standing at the pump --
+        // the SMS is a fallback, not a hard dependency.
+        $voucher    = (string) ($result['voucher_number'] ?? '');
+        $voucherNote = $voucher !== '' ? ' Voucher: ' . $voucher . '.' : '';
+
         // TFN sends a voucher SMS to DriverCellNumber when populated.
         // Surface where it's going so ops can double-check before the
         // driver phones back asking for the code.
         if (filled($driverCell)) {
             $smsNote = $result['demo']
-                ? ' TFN would SMS the voucher to ' . $driverCell . '.'
-                : ' TFN will SMS the voucher to the driver on ' . $driverCell . '.';
+                ? ' TFN would also SMS it to ' . $driverCell . '.'
+                : ' TFN will also SMS it to the driver on ' . $driverCell . '.';
         } else {
-            $smsNote = ' No driver cellphone on file — pull the voucher from the TFN portal and pass it to the driver.';
+            $smsNote = ' No driver cellphone on file — read the voucher above to the driver directly.';
         }
 
         session()->flash('success', sprintf(
-            '%s%s order placed%s: %s against %s.%s',
+            '%s%s order placed%s: %s against %s.%s%s',
             $prefix,
             $productLabel,
             $orderText,
             $quantity,
             $posRegistration,
+            $voucherNote,
             $smsNote,
         ));
 

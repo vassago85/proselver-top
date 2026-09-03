@@ -258,6 +258,7 @@ test('the fuel button shows a badge for the most recent placement on this trip',
 
     TfnFuelOrderPlacement::query()->create([
         'order_number'         => 'ORD/01/6454/00099',
+        'voucher_number'       => '812345',
         'vehicle_registration' => 'ND456GP',
         'product_code'         => 'D0',
         'litres'               => 200,
@@ -269,7 +270,51 @@ test('the fuel button shows a badge for the most recent placement on this trip',
 
     Volt::actingAs($ops)
         ->test('admin.orders.show', ['job' => $job])
-        ->assertSee('Fuel · 200 L');
+        ->assertSee('Fuel · 200 L')
+        // Voucher chip renders the pump code verbatim so ops can
+        // read it on a phone call without opening the modal.
+        ->assertSee('812345');
+});
+
+test('the fuel button omits the voucher chip when no voucher was captured', function () {
+    // Older placement rows written before we captured
+    // CurrentVirtualCardNumber have voucher_number = null.  The chip
+    // should not render for those or ops will hunt for a code that
+    // was never persisted.
+    ['ops' => $ops, 'job' => $job] = fuelOrderShowScenario(registration: 'ND456GP', tradePlate: null);
+
+    TfnFuelOrderPlacement::query()->create([
+        'order_number'         => 'ORD/01/6454/00098',
+        'voucher_number'       => null,
+        'vehicle_registration' => 'ND456GP',
+        'product_code'         => 'D0',
+        'litres'               => 200,
+        'customer_reference'   => $job->job_number,
+        'user_id'              => $ops->id,
+        'placed_by_name'       => 'Lize Ops',
+        'placed_at'            => now()->subMinutes(5),
+    ]);
+
+    Volt::actingAs($ops)
+        ->test('admin.orders.show', ['job' => $job])
+        ->assertSee('Fuel · 200 L')
+        ->assertDontSee('Voucher');
+});
+
+test('placeFuelOrder writes the TFN voucher into the placement audit for later lookup', function () {
+    // Demo mode (default in tests) mints a 6-digit voucher inside
+    // TfnFuelOrderService so the flash + audit look the same as live.
+    ['ops' => $ops, 'job' => $job] = fuelOrderShowScenario(registration: null, tradePlate: 'TPJHB011');
+
+    Volt::actingAs($ops)
+        ->test('admin.orders.show', ['job' => $job])
+        ->call('openFuelModal')
+        ->set('fuelLitres', '200')
+        ->set('fuelPlateConfirmed', true)
+        ->call('placeFuelOrder');
+
+    $row = TfnFuelOrderPlacement::query()->first();
+    expect($row->voucher_number)->toMatch('/^\d{6}$/');
 });
 
 // -----------------------------------------------------------------
@@ -433,7 +478,7 @@ test('placeFuelOrder passes the drivers cellphone through to TfnFuelOrderService
             expect($driverCellNumber)->toBe('0835551234');
             return true;
         })
-        ->andReturn(['order_number' => 'DEMO/TEST', 'demo' => true]);
+        ->andReturn(['order_number' => 'DEMO/TEST', 'voucher_number' => '654321', 'demo' => true]);
 
     app()->instance(\App\Services\Tfn\TfnFuelOrderService::class, $spy);
 

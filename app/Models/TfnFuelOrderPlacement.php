@@ -9,6 +9,7 @@ class TfnFuelOrderPlacement extends Model
 {
     protected $fillable = [
         'order_number',
+        'voucher_number',
         'vehicle_registration',
         'product_code',
         'litres',
