@@ -62,9 +62,13 @@ new #[Layout('components.layouts.app')] class extends Component {
             abort(403);
         }
 
-        // Sensible default: order expires end of the next business day
-        // in SAST. The operator can override before submit.
-        $this->orderExpiresAt = now()->addDay()->endOfDay()->format('Y-m-d\TH:i');
+        // Sensible default: order expires end of the fourth day (SAST).
+        // Matches the standard ProSelver ops window Lize uses today for
+        // Lize-style drive-away trips (Beaufort West -> Cape Town leg,
+        // FAW HO -> dealer, etc. -- every real ORD/01/2951/* order on
+        // the account is a four-day window).  Operator can override
+        // before submit.
+        $this->orderExpiresAt = now()->addDays(4)->endOfDay()->format('Y-m-d\TH:i');
     }
 
     /**
@@ -356,7 +360,8 @@ new #[Layout('components.layouts.app')] class extends Component {
         $this->reset(['orderRegistration', 'orderLitres', 'orderReference', 'orderDepotId']);
         // Reset the product to the first orderable code (D0 today).
         $this->orderProductCode = (string) (array_key_first(config('tfn.orderable_products', ['D0' => ''])) ?: 'D0');
-        $this->orderExpiresAt = now()->addDay()->endOfDay()->format('Y-m-d\TH:i');
+        // Match mount()'s four-day default.
+        $this->orderExpiresAt = now()->addDays(4)->endOfDay()->format('Y-m-d\TH:i');
     }
 
     public function testConnection(): void
@@ -384,6 +389,121 @@ new #[Layout('components.layouts.app')] class extends Component {
     public function selectVehicleForOrder(string $registration): void
     {
         $this->orderRegistration = $registration;
+        $this->autoPopulateOrderReference();
+    }
+
+    /**
+     * Fires when the operator changes the vehicle in the picker.  We
+     * only use it to auto-populate the Reference field so the form
+     * matches the ProSelver ops convention seen on every real order
+     * against `01/2951` -- see also autoPopulateOrderReference() below.
+     */
+    public function updatedOrderRegistration(): void
+    {
+        $this->autoPopulateOrderReference();
+    }
+
+    /**
+     * Fill in `orderReference` with the "{delivery-or-origin} {VIN}"
+     * pattern ProSelver ops (Lize) uses on every real TFN order today:
+     *
+     *   ISUZU HO ACVNRR75LTN218468
+     *   BIDVEST ISUZU PTA EAST ACVFRR90LTN212673
+     *   FAW HO AAK3534FDTB051552
+     *   WILLIAM HUNT MIDRAND ACVBRRAR0T4209229
+     *
+     * That reference is what feeds ProSelver's month-end reconciliation,
+     * so TRIDENT-placed orders MUST land in the same list looking like
+     * Lize's manual orders or accounts will have two shapes to chase.
+     *
+     * The rule:
+     *   - Never overwrite an existing reference (operator override wins).
+     *   - Prefer a matching in-transit Job's delivery company + VIN.
+     *   - Fall back to fixture data (CustomerName + VIN) so demo mode
+     *     shows a realistic reference for stakeholder walk-throughs.
+     */
+    private function autoPopulateOrderReference(): void
+    {
+        if (!blank($this->orderReference)) {
+            return;
+        }
+        if (blank($this->orderRegistration)) {
+            return;
+        }
+
+        $ref = $this->deriveReferenceFromJob($this->orderRegistration)
+            ?? $this->deriveReferenceFromVehicleFixture($this->orderRegistration);
+
+        if (!blank($ref)) {
+            $this->orderReference = $ref;
+        }
+    }
+
+    /**
+     * Look up a live trip in TRIDENT by whichever identifier the
+     * picker holds (VIN, permanent plate, or driver trade plate) and
+     * emit the ProSelver "{DELIVERY COMPANY} {VIN}" reference for it.
+     */
+    private function deriveReferenceFromJob(string $key): ?string
+    {
+        $canonicalPlate = \App\Models\DriverProfile::normalisePlate($key);
+
+        $job = \App\Models\Job::query()
+            ->with('deliveryLocation:id,company_name')
+            ->where(function ($q) use ($key, $canonicalPlate) {
+                $q->where('vin', $key)
+                  ->orWhere('registration', $key);
+                if (!blank($canonicalPlate)) {
+                    $q->orWhereHas('driver.driverProfile', fn ($qq) => $qq->where('trade_plate', $canonicalPlate));
+                }
+            })
+            // Prefer in-flight trips -- historical ones are noise for
+            // the "place an order" workflow.
+            ->whereIn('status', [
+                \App\Models\Job::STATUS_CONFIRMED,
+                \App\Models\Job::STATUS_PLANNED,
+                \App\Models\Job::STATUS_DRIVER_ASSIGNED,
+                \App\Models\Job::STATUS_READY_FOR_COLLECTION,
+                \App\Models\Job::STATUS_COLLECTED,
+                \App\Models\Job::STATUS_IN_TRANSIT,
+            ])
+            ->orderByDesc('id')
+            ->first();
+
+        if (!$job) {
+            return null;
+        }
+
+        $company = trim((string) ($job->deliveryLocation?->company_name ?? ''));
+        $vin     = trim((string) ($job->vin ?? ''));
+
+        return $this->formatReference($company, $vin);
+    }
+
+    /**
+     * Fallback used when there's no matching Job yet (demo mode, or a
+     * TFN vehicle that arrived on the picker before its Job was
+     * captured in TRIDENT).  Reads from whatever source() already put
+     * in memory -- fixture in demo, TfnClient::vehicles() in live.
+     */
+    private function deriveReferenceFromVehicleFixture(string $key): ?string
+    {
+        $vehicles = $this->source()['vehicles'] ?? [];
+        $veh = collect($vehicles)->firstWhere('VIN', $key)
+            ?? collect($vehicles)->firstWhere('Registration', $key);
+        if (!$veh) {
+            return null;
+        }
+        $company = trim((string) ($veh['CustomerName'] ?? ''));
+        $vin     = trim((string) ($veh['VIN'] ?? ''));
+
+        return $this->formatReference($company, $vin);
+    }
+
+    private function formatReference(string $company, string $vin): ?string
+    {
+        $ref = trim(($company !== '' ? $company . ' ' : '') . $vin);
+        return $ref !== '' ? strtoupper($ref) : null;
     }
 
     /**
