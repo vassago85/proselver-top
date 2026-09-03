@@ -84,6 +84,23 @@ services:
       - GOOGLE_MAPS_API_KEY=${GOOGLE_MAPS_API_KEY:-}
       - COLLECTION_NOTE_PUBLIC_URL=${COLLECTION_NOTE_PUBLIC_URL:-}
       - LIVEWIRE_TEMPORARY_FILE_UPLOAD_DISK=public
+      # TFN (TruckFuelNet) — powers /admin/fuel.  Both flags default to
+      # OFF so a freshly-deployed instance without credentials silently
+      # falls back to demo fixtures instead of 500-ing on every read.
+      # Flip TFN_ENABLED=true + TFN_DEMO_MODE=false in host .env when
+      # go-live credentials land; no image rebuild required after this
+      # -- just `docker compose up -d --force-recreate app`.
+      - TFN_ENABLED=${TFN_ENABLED:-false}
+      - TFN_DEMO_MODE=${TFN_DEMO_MODE:-true}
+      - TFN_BASE_URL=${TFN_BASE_URL:-https://api.tfn.co.za}
+      - TFN_API_VERSION=${TFN_API_VERSION:-3}
+      - TFN_CLIENT_ID=${TFN_CLIENT_ID:-customerAPI}
+      - TFN_USERNAME=${TFN_USERNAME:-}
+      - TFN_PASSWORD=${TFN_PASSWORD:-}
+      - TFN_CUSTOMER_NUMBER=${TFN_CUSTOMER_NUMBER:-}
+      - TFN_TIMEOUT=${TFN_TIMEOUT:-15}
+      - TFN_TOKEN_REFRESH_BUFFER=${TFN_TOKEN_REFRESH_BUFFER:-60}
+      - TFN_CACHE_PREFIX=${TFN_CACHE_PREFIX:-tfn:}
     volumes:
       - app-logs:/var/www/html/storage/logs
       - app-storage:/var/www/html/storage/app
@@ -160,6 +177,22 @@ services:
       - R2_BACKUP_BUCKET=${R2_BACKUP_BUCKET:-}
       - R2_BACKUP_ENDPOINT=${R2_BACKUP_ENDPOINT:-}
       - R2_BACKUP_REGION=${R2_BACKUP_REGION:-auto}
+      # TFN — mirrors the app service.  Scheduler needs it for any
+      # scheduled reconciliation / vehicle-list refresh commands we
+      # add later (nothing today, but flipping this on now costs
+      # nothing and prevents a "why is scheduler in demo mode" moment
+      # the day we wire the first cron).
+      - TFN_ENABLED=${TFN_ENABLED:-false}
+      - TFN_DEMO_MODE=${TFN_DEMO_MODE:-true}
+      - TFN_BASE_URL=${TFN_BASE_URL:-https://api.tfn.co.za}
+      - TFN_API_VERSION=${TFN_API_VERSION:-3}
+      - TFN_CLIENT_ID=${TFN_CLIENT_ID:-customerAPI}
+      - TFN_USERNAME=${TFN_USERNAME:-}
+      - TFN_PASSWORD=${TFN_PASSWORD:-}
+      - TFN_CUSTOMER_NUMBER=${TFN_CUSTOMER_NUMBER:-}
+      - TFN_TIMEOUT=${TFN_TIMEOUT:-15}
+      - TFN_TOKEN_REFRESH_BUFFER=${TFN_TOKEN_REFRESH_BUFFER:-60}
+      - TFN_CACHE_PREFIX=${TFN_CACHE_PREFIX:-tfn:}
     volumes:
       - app-logs:/var/www/html/storage/logs
       - app-storage:/var/www/html/storage/app
@@ -221,6 +254,21 @@ services:
       - AWS_USE_PATH_STYLE_ENDPOINT=${AWS_USE_PATH_STYLE_ENDPOINT:-false}
       - COLLECTION_NOTE_PUBLIC_URL=${COLLECTION_NOTE_PUBLIC_URL:-}
       - LIVEWIRE_TEMPORARY_FILE_UPLOAD_DISK=public
+      # TFN — mirrors the app service.  Queue needs it for the
+      # webhook processor we'll wire later (TFN posts a transaction,
+      # we dispatch a Job onto the queue that reconciles it to a
+      # TRIDENT Job row).
+      - TFN_ENABLED=${TFN_ENABLED:-false}
+      - TFN_DEMO_MODE=${TFN_DEMO_MODE:-true}
+      - TFN_BASE_URL=${TFN_BASE_URL:-https://api.tfn.co.za}
+      - TFN_API_VERSION=${TFN_API_VERSION:-3}
+      - TFN_CLIENT_ID=${TFN_CLIENT_ID:-customerAPI}
+      - TFN_USERNAME=${TFN_USERNAME:-}
+      - TFN_PASSWORD=${TFN_PASSWORD:-}
+      - TFN_CUSTOMER_NUMBER=${TFN_CUSTOMER_NUMBER:-}
+      - TFN_TIMEOUT=${TFN_TIMEOUT:-15}
+      - TFN_TOKEN_REFRESH_BUFFER=${TFN_TOKEN_REFRESH_BUFFER:-60}
+      - TFN_CACHE_PREFIX=${TFN_CACHE_PREFIX:-tfn:}
     volumes:
       - app-logs:/var/www/html/storage/logs
       - app-storage:/var/www/html/storage/app
