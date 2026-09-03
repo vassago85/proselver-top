@@ -781,6 +781,196 @@ new #[Layout('components.layouts.app')] class extends Component {
     }
 
     /**
+     * Group network pricing: South African provinces first (ops almost
+     * never leave SA), then out-of-country. Within each group, cheapest
+     * depot first. TFN's /api/Pricing has no province field — we join
+     * to /api/Depots GPS + title heuristics.
+     *
+     * @return list<array{key:string,label:string,domestic:bool,rows:list<array>}>
+     */
+    private function groupNetworkPricing(array $pricing, array $depots): array
+    {
+        $depotByTitle = [];
+        foreach ($depots as $d) {
+            $title = strtoupper(trim((string) ($d['Title'] ?? '')));
+            if ($title !== '') {
+                $depotByTitle[$title] = $d;
+            }
+        }
+
+        $buckets = [];
+        foreach ($pricing as $row) {
+            $title = (string) ($row['DepotTitle'] ?? $row['SupplierName'] ?? '');
+            $depot = $depotByTitle[strtoupper(trim($title))] ?? null;
+            $loc = $this->classifyDepotLocation(
+                isset($depot['GPSLatitude']) ? (float) $depot['GPSLatitude'] : null,
+                isset($depot['GPSLongitude']) ? (float) $depot['GPSLongitude'] : null,
+                $title,
+            );
+            $key = $loc['key'];
+            if (!isset($buckets[$key])) {
+                $buckets[$key] = [
+                    'key'      => $key,
+                    'label'    => $loc['label'],
+                    'domestic' => $loc['domestic'],
+                    'sort'     => $loc['sort'],
+                    'rows'     => [],
+                ];
+            }
+            $buckets[$key]['rows'][] = $row;
+        }
+
+        foreach ($buckets as &$bucket) {
+            usort($bucket['rows'], fn ($a, $b) => ((float) ($a['PricePerLitre'] ?? 0)) <=> ((float) ($b['PricePerLitre'] ?? 0)));
+        }
+        unset($bucket);
+
+        uasort($buckets, fn ($a, $b) => $a['sort'] <=> $b['sort']);
+
+        return array_values($buckets);
+    }
+
+    /**
+     * @return array{key:string,label:string,domestic:bool,sort:int}
+     */
+    private function classifyDepotLocation(?float $lat, ?float $lon, string $title): array
+    {
+        $hay = strtolower($title);
+
+        // Explicit foreign place-names win over GPS (border depots often
+        // sit just inside the SA box but serve the other side).
+        foreach ($this->foreignDepotKeywords() as $country => $keywords) {
+            foreach ($keywords as $kw) {
+                if (str_contains($hay, $kw)) {
+                    return $this->regionMeta($country, domestic: false);
+                }
+            }
+        }
+
+        foreach ($this->saProvinceKeywords() as $province => $keywords) {
+            foreach ($keywords as $kw) {
+                if (str_contains($hay, $kw)) {
+                    return $this->regionMeta($province, domestic: true);
+                }
+            }
+        }
+
+        if ($lat !== null && $lon !== null) {
+            // Rough SA mainland box. Anything outside is cross-border.
+            $inSa = $lat <= -22.0 && $lat >= -35.0 && $lon >= 16.0 && $lon <= 33.0;
+            if (!$inSa) {
+                return $this->regionMeta($this->countryFromGps($lat, $lon), domestic: false);
+            }
+
+            return $this->regionMeta($this->saProvinceFromGps($lat, $lon), domestic: true);
+        }
+
+        // No GPS and no name match — keep visible under SA "Other"
+        // rather than burying it in foreign.
+        return $this->regionMeta('Other (SA)', domestic: true);
+    }
+
+    /** @return array{key:string,label:string,domestic:bool,sort:int} */
+    private function regionMeta(string $label, bool $domestic): array
+    {
+        $saOrder = [
+            'Gauteng' => 10,
+            'Mpumalanga' => 20,
+            'Limpopo' => 30,
+            'North West' => 40,
+            'Free State' => 50,
+            'KwaZulu-Natal' => 60,
+            'Eastern Cape' => 70,
+            'Northern Cape' => 80,
+            'Western Cape' => 90,
+            'Other (SA)' => 99,
+        ];
+        $foreignOrder = [
+            'Botswana' => 200,
+            'Zimbabwe' => 210,
+            'Namibia' => 220,
+            'Mozambique' => 230,
+            'Eswatini' => 240,
+            'Zambia' => 250,
+            'Lesotho' => 260,
+            'Other (cross-border)' => 299,
+        ];
+
+        $sort = $domestic
+            ? ($saOrder[$label] ?? 99)
+            : ($foreignOrder[$label] ?? 299);
+
+        return [
+            'key'      => ($domestic ? 'sa:' : 'fx:') . strtolower($label),
+            'label'    => $label,
+            'domestic' => $domestic,
+            'sort'     => $sort,
+        ];
+    }
+
+    /** @return array<string, list<string>> */
+    private function foreignDepotKeywords(): array
+    {
+        return [
+            'Botswana' => ['botswana', 'maun', 'francistown', 'lobatse', 'tlokweng', 'kazungula', 'mamuno', 'letlhakane', 'pandamatenga', 'palapye', 'gaborone', 'martinsdrift', 'kwa nokeng'],
+            'Zimbabwe' => ['zimbabwe', 'harare', 'bulawayo', 'masvingo', 'mutare', 'victoria falls', 'duze petroleum'],
+            'Namibia' => ['namibia', 'windhoek', 'walvis', 'oshikango', 'keetmanshoop'],
+            'Mozambique' => ['mozambique', 'maputo', 'beira', 'ressano garcia', 'namaacha'],
+            'Eswatini' => ['eswatini', 'swaziland', 'manzini', 'mbabane'],
+            'Zambia' => ['zambia', 'lusaka', 'livingstone', 'ndola', 'kitwe', 'chirundu'],
+            'Lesotho' => ['lesotho', 'maseru'],
+        ];
+    }
+
+    /** @return array<string, list<string>> */
+    private function saProvinceKeywords(): array
+    {
+        return [
+            'Gauteng' => ['gauteng', 'johannesburg', 'pretoria', 'kempton', 'germiston', 'boksburg', 'alberton', 'midrand', 'centurion', 'soweto', 'heidelberg', 'nimrod'],
+            'Mpumalanga' => ['mpumalanga', 'nelspruit', 'mbombela', 'witbank', 'emalahleni', 'secunda', 'middelburg', 'komatipoort'],
+            'Limpopo' => ['limpopo', 'polokwane', 'musina', 'tzaneen', 'mokopane', 'beitbridge'],
+            'North West' => ['north west', 'northwest', 'rustenburg', 'mahikeng', 'mafikeng', 'klerksdorp', 'potchefstroom', 'brit'],
+            'Free State' => ['free state', 'bloemfontein', 'kroonstad', 'harrismith', 'welkom', 'bethlehem'],
+            'KwaZulu-Natal' => ['kwazulu', 'kzn', 'durban', 'pietermaritzburg', 'ladysmith', 'newcastle', 'richards bay', 'pinetown'],
+            'Eastern Cape' => ['eastern cape', 'gqeberha', 'port elizabeth', 'east london', 'mthatha', 'umthatha'],
+            'Northern Cape' => ['northern cape', 'kimberley', 'upington', 'springbok', 'kuruman'],
+            'Western Cape' => ['western cape', 'cape town', 'stellenbosch', 'paarl', 'worcester', 'beaufort west', 'george', 'mossel', 'kraaifontein', 'markman'],
+        ];
+    }
+
+    private function saProvinceFromGps(float $lat, float $lon): string
+    {
+        // Coarse boxes — good enough to bucket ~270 depots for ops
+        // browsing. Overlaps favour the denser truck-corridor province.
+        return match (true) {
+            $lat > -26.7 && $lat < -25.4 && $lon > 27.5 && $lon < 28.7 => 'Gauteng',
+            $lat > -27.6 && $lat < -24.0 && $lon >= 28.7 && $lon < 32.5 => 'Mpumalanga',
+            $lat > -25.5 && $lat <= -22.0 && $lon > 26.5 && $lon < 32.0 => 'Limpopo',
+            $lat > -28.2 && $lat < -24.5 && $lon > 22.0 && $lon <= 27.5 => 'North West',
+            $lat > -30.8 && $lat <= -26.5 && $lon > 24.0 && $lon < 29.8 => 'Free State',
+            $lat > -31.5 && $lat < -26.8 && $lon >= 29.0 && $lon < 33.0 => 'KwaZulu-Natal',
+            $lat <= -30.5 && $lat > -34.5 && $lon > 22.5 && $lon < 30.5 => 'Eastern Cape',
+            $lat > -33.5 && $lat < -26.0 && $lon >= 16.0 && $lon <= 25.0 => 'Northern Cape',
+            $lat <= -31.0 && $lon >= 17.0 && $lon <= 25.0 => 'Western Cape',
+            default => 'Other (SA)',
+        };
+    }
+
+    private function countryFromGps(float $lat, float $lon): string
+    {
+        return match (true) {
+            $lat > -27.0 && $lat < -17.5 && $lon > 19.5 && $lon < 29.5 => 'Botswana',
+            $lat > -22.5 && $lat < -15.5 && $lon >= 25.0 && $lon < 33.5 => 'Zimbabwe',
+            $lat > -29.5 && $lat < -16.5 && $lon >= 11.5 && $lon < 20.5 => 'Namibia',
+            $lat > -27.0 && $lat < -10.0 && $lon >= 30.0 && $lon < 41.0 => 'Mozambique',
+            $lat > -27.5 && $lat < -25.5 && $lon > 30.5 && $lon < 32.5 => 'Eswatini',
+            $lat > -18.5 && $lat < -8.0 && $lon > 21.5 && $lon < 34.0 => 'Zambia',
+            $lat > -31.0 && $lat < -28.5 && $lon > 27.0 && $lon < 29.5 => 'Lesotho',
+            default => 'Other (cross-border)',
+        };
+    }
+
+    /**
      * Pre-render aggregations. We compute derived values here (rather
      * than in the Blade) so the template stays declarative.
      */
@@ -790,28 +980,47 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         // Totals for the KPI strip. Exclude account payments/credits —
         // abs()'ing them previously made a R200k top-up look like spend.
+        //
+        // Always load month-start transactions when live: Litres MTD
+        // falls back to them when the aggregate endpoint is empty, and
+        // the "avg paid /L" KPI is volume-weighted from the same set.
+        $monthTx = $data['transactions'];
+        if (!empty($data['live'])) {
+            try {
+                $monthTx = app(TfnClient::class)->transactions(
+                    Carbon::now()->startOfMonth()->toDateTimeImmutable()
+                );
+            } catch (\Throwable) {
+                // Keep the in-window list — better a partial month than nothing.
+            }
+        }
+
         $litresMtd = collect($data['aggregate'])->sum(fn ($r) => $this->rowLitres($r));
-        $monthTx = null;
 
         // SubAccountAggregateLitres often returns [] even when the pumps
         // have been busy (QA returned []; live can too when there is no
         // sub-account rollup). Fall back to net litres from transactions
         // since month-start so the tile isn't stuck at 0 L.
         if ($litresMtd <= 0) {
-            $monthTx = $data['transactions'];
-            if (!empty($data['live'])) {
-                try {
-                    $monthTx = app(TfnClient::class)->transactions(
-                        Carbon::now()->startOfMonth()->toDateTimeImmutable()
-                    );
-                } catch (\Throwable) {
-                    // Keep the in-window list — better a partial MTD than 0.
-                }
-            }
             $litresMtd = collect($monthTx)
                 ->reject(fn ($t) => $this->isAccountPayment($t))
                 ->sum(fn ($t) => $this->rowLitres($t));
         }
+
+        // Volume-weighted average R/L actually paid at the pump this
+        // calendar month (Σ|Amount| / ΣLitres on fuel fills). Min/max
+        // are per-fill effective R/L so the helper shows the spread we
+        // really paid, not the network list.
+        $fuelFills = collect($monthTx)
+            ->reject(fn ($t) => $this->isAccountPayment($t))
+            ->filter(fn ($t) => $this->rowLitres($t) > 0);
+        $paidLitres = $fuelFills->sum(fn ($t) => $this->rowLitres($t));
+        $paidSpend  = $fuelFills->sum(fn ($t) => abs((float) ($t['Amount'] ?? 0)));
+        $avgPaidPerLitre = $paidLitres > 0 ? ($paidSpend / $paidLitres) : 0.0;
+        $perFillRpl = $fuelFills->map(fn ($t) => abs((float) ($t['Amount'] ?? 0)) / $this->rowLitres($t));
+        $paidMinRpl = $perFillRpl->count() ? (float) $perFillRpl->min() : 0.0;
+        $paidMaxRpl = $perFillRpl->count() ? (float) $perFillRpl->max() : 0.0;
+        $paidFillCount = $fuelFills->count();
 
         $spendToday = collect($data['transactions'])
             ->filter(fn ($t) => \Illuminate\Support\Carbon::parse($t['TransactionDate'] ?? $t['CapturedDate'] ?? now())->isToday())
@@ -827,8 +1036,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         // When aggregate was empty, rebuild product mix from the same
         // month-start fallback so the helper under the KPI isn't blank.
         if ($productMix === [] && $litresMtd > 0) {
-            $mixSource = $monthTx ?? $data['transactions'];
-            $productMix = collect($mixSource)
+            $productMix = collect($monthTx)
                 ->reject(fn ($t) => $this->isAccountPayment($t))
                 ->filter(fn ($t) => filled($t['ProductCode'] ?? null))
                 ->groupBy('ProductCode')
@@ -912,14 +1120,21 @@ new #[Layout('components.layouts.app')] class extends Component {
             ->values()
             ->all();
 
+        $pricingByRegion = $this->groupNetworkPricing($data['pricing'], $data['depots']);
+
         return [
             'live'           => $data['live'],
             'banner'         => $data['banner'],
             'balance'        => $data['balance'],
             'litresMtd'      => $litresMtd,
             'spendToday'     => $spendToday,
+            'avgPaidPerLitre'=> $avgPaidPerLitre,
+            'paidMinRpl'     => $paidMinRpl,
+            'paidMaxRpl'     => $paidMaxRpl,
+            'paidFillCount'  => $paidFillCount,
             'productMix'     => $productMix,
             'pricing'        => $data['pricing'],
+            'pricingByRegion'=> $pricingByRegion,
             'depots'         => $data['depots'],
             'vehicles'       => $data['vehicles'],
             'fleet'          => $fleet,
@@ -1001,29 +1216,29 @@ new #[Layout('components.layouts.app')] class extends Component {
     @endif
 
     {{-- ────────── KPI strip ────────── --}}
-    {{-- Litres month-to-date + "Diesel · network avg" are operational
-         signals visible to everyone -- ops needs the avg pump price
-         to decide when a longer detour to a cheaper depot is worth
-         it. Balance / credit limit / rand spend are FINANCE data --
-         hidden from ops / dispatcher, only owner + accounts + dev +
-         super_admin see them. See `canSeeFinance()`. --}}
+    {{-- Litres month-to-date + "Diesel · avg paid" are operational
+         signals visible to everyone -- ops needs the realised R/L
+         to know what we've actually been paying at the pump this
+         month. Balance / credit limit / rand spend are FINANCE data
+         -- hidden from ops / dispatcher, only owner + accounts +
+         dev + super_admin see them. See `canSeeFinance()`. --}}
     @php
-        // Network average / cheapest / priciest for the primary
-        // diesel grade. Proselver is D0-only today but the code
-        // adapts to whatever the first orderable product is.
+        // Network average kept for the per-transaction R/L delta
+        // column (pump vs list). The KPI tile itself shows realised
+        // avg paid from `with()` ($avgPaidPerLitre).
         $primaryProduct = array_key_first($orderableProducts) ?: 'D0';
         $primaryLabel   = $orderableProducts[$primaryProduct] ?? $primaryProduct;
         $primaryPrices  = collect($pricing)->where('ProductCode', $primaryProduct)->pluck('PricePerLitre');
         $networkAvg     = $primaryPrices->count() ? (float) $primaryPrices->avg() : 0.0;
-        $networkMin     = $primaryPrices->count() ? (float) $primaryPrices->min() : 0.0;
-        $networkMax     = $primaryPrices->count() ? (float) $primaryPrices->max() : 0.0;
     @endphp
     <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 {{ $canSeeFinance ? 'lg:grid-cols-5' : 'lg:grid-cols-3' }}">
         <x-stat-card
-            label="Diesel · network avg"
-            :value="'R ' . number_format($networkAvg, 2) . '/L'"
+            label="Diesel · avg paid"
+            :value="$avgPaidPerLitre > 0 ? ('R ' . number_format($avgPaidPerLitre, 2) . '/L') : '—'"
             color="sky"
-            :helper="$primaryLabel . ' · low R ' . number_format($networkMin, 2) . ' · high R ' . number_format($networkMax, 2)"
+            :helper="$avgPaidPerLitre > 0
+                ? ($paidFillCount . ' fills this month · low R ' . number_format($paidMinRpl, 2) . ' · high R ' . number_format($paidMaxRpl, 2))
+                : 'No fuel fills this month yet'"
             helperColor="sky"
         />
         @if($canSeeFinance)
@@ -1102,7 +1317,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         <div class="rounded-xl border border-slate-200 bg-white shadow-sm lg:col-span-1">
             <div class="border-b border-slate-100 p-4">
                 <h2 class="text-sm font-semibold text-slate-900">Network pricing</h2>
-                <p class="mt-0.5 text-xs text-slate-500">Diesel price varies by depot &mdash; cheapest first. Use this to route the driver to a better-priced stop when the trip window allows.</p>
+                <p class="mt-0.5 text-xs text-slate-500">South Africa by province first (cheapest depot in each), then cross-border. Few trips leave SA &mdash; scroll past provinces only when needed.</p>
             </div>
 
             {{-- Range headline per product code (usually just D0) --}}
@@ -1134,21 +1349,38 @@ new #[Layout('components.layouts.app')] class extends Component {
                 </div>
             @endforeach
 
-            {{-- Per-depot list. Bounded height so the panel stays
-                 compact but scrollable when the network grows. --}}
-            <div class="max-h-96 overflow-y-auto divide-y divide-slate-100">
-                @forelse($pricing as $row)
-                    @php
-                        $delta = isset($avg) ? ((float) $row['PricePerLitre']) - $avg : 0;
-                        $deltaClass = $delta < 0 ? 'text-emerald-600' : ($delta > 0 ? 'text-rose-600' : 'text-slate-400');
-                        $sign = $delta > 0 ? '+' : '';
-                    @endphp
-                    <div class="flex items-center justify-between px-4 py-2.5">
-                        <div class="min-w-0">
-                            <p class="truncate text-sm font-medium text-slate-900">{{ $row['DepotTitle'] ?? '—' }}</p>
-                            <p class="text-[11px] text-slate-500">{{ $row['ProductCode'] }} · <span class="{{ $deltaClass }} tabular-nums">{{ $sign }}{{ number_format($delta, 2) }}</span> vs avg</p>
+            {{-- SA provinces, then out-of-country. Bounded height so the
+                 panel stays compact but scrollable. --}}
+            <div class="max-h-96 overflow-y-auto">
+                @php $sawForeign = false; @endphp
+                @forelse($pricingByRegion as $region)
+                    @if(!$region['domestic'] && !$sawForeign)
+                        @php $sawForeign = true; @endphp
+                        <div class="border-y border-amber-200 bg-amber-50 px-4 py-1.5">
+                            <p class="text-[10px] font-semibold uppercase tracking-widest text-amber-800">Out of country</p>
                         </div>
-                        <p class="shrink-0 text-sm font-semibold tabular-nums text-slate-900">R {{ number_format((float) ($row['PricePerLitre'] ?? 0), 2) }}</p>
+                    @endif
+                    <div class="border-b border-slate-200 bg-slate-100 px-4 py-1.5">
+                        <div class="flex items-center justify-between gap-2">
+                            <p class="text-[11px] font-semibold text-slate-700">{{ $region['label'] }}</p>
+                            <p class="text-[10px] tabular-nums text-slate-400">{{ count($region['rows']) }} · from R {{ number_format((float) ($region['rows'][0]['PricePerLitre'] ?? 0), 2) }}</p>
+                        </div>
+                    </div>
+                    <div class="divide-y divide-slate-100">
+                        @foreach($region['rows'] as $row)
+                            @php
+                                $delta = isset($avg) ? ((float) $row['PricePerLitre']) - $avg : 0;
+                                $deltaClass = $delta < 0 ? 'text-emerald-600' : ($delta > 0 ? 'text-rose-600' : 'text-slate-400');
+                                $sign = $delta > 0 ? '+' : '';
+                            @endphp
+                            <div class="flex items-center justify-between px-4 py-2.5">
+                                <div class="min-w-0">
+                                    <p class="truncate text-sm font-medium text-slate-900">{{ $row['DepotTitle'] ?? '—' }}</p>
+                                    <p class="text-[11px] text-slate-500">{{ $row['ProductCode'] }} · <span class="{{ $deltaClass }} tabular-nums">{{ $sign }}{{ number_format($delta, 2) }}</span> vs avg</p>
+                                </div>
+                                <p class="shrink-0 text-sm font-semibold tabular-nums text-slate-900">R {{ number_format((float) ($row['PricePerLitre'] ?? 0), 2) }}</p>
+                            </div>
+                        @endforeach
                     </div>
                 @empty
                     <div class="p-4 text-sm text-slate-500">No pricing available.</div>

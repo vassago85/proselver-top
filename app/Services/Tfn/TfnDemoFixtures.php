@@ -143,12 +143,16 @@ class TfnDemoFixtures
         // it here (or the price list becomes shorter than the depot
         // picker).  Base is the driver-paid `PriceIncludingGrid`.
         $baseByDepot = [
-            'Kroonstad Refuel2Save'    => 22.65,
-            'Harrismith Truck Stop'    => 22.90,
-            'Bloemfontein Ring'        => 23.15,
-            'Kempton Park — Nimrod'    => 24.20,
-            'Musina Depot'             => 24.85,
-            'Beitbridge Border'        => 25.10,
+            'Kroonstad Refuel2Save'         => 22.65,
+            'Harrismith Truck Stop'         => 22.90,
+            'Bloemfontein Ring'             => 23.15,
+            'Kempton Park — Nimrod'         => 24.20,
+            'Musina Depot'                  => 24.85,
+            'Beitbridge Border'             => 25.10,
+            'Fuel 1 - Kraaifontein'         => 28.62,
+            'Kwa Nokeng Oil - Maun'         => 22.98,
+            'Duze Petroleum - Bulawayo'     => 26.40,
+            'Shell Benchicks - Palapye'     => 23.55,
         ];
 
         $rows = [];
@@ -212,6 +216,12 @@ class TfnDemoFixtures
             ['DepotID' => '11111111-0000-0000-0000-000000000004', 'Number' => 104, 'Title' => 'Kempton Park — Nimrod',       'GPSLatitude' => -26.0964, 'GPSLongitude' => 28.2320, 'MarketingCategory' => 1, 'Products' => $productsAll],
             ['DepotID' => '11111111-0000-0000-0000-000000000005', 'Number' => 105, 'Title' => 'Musina Depot',                'GPSLatitude' => -22.3392, 'GPSLongitude' => 30.0330, 'MarketingCategory' => 0, 'Products' => $productsD0],
             ['DepotID' => '11111111-0000-0000-0000-000000000006', 'Number' => 106, 'Title' => 'Bloemfontein Ring',           'GPSLatitude' => -29.1211, 'GPSLongitude' => 26.2140, 'MarketingCategory' => 1, 'Products' => $productsAll],
+            ['DepotID' => '11111111-0000-0000-0000-000000000007', 'Number' => 107, 'Title' => 'Fuel 1 - Kraaifontein',       'GPSLatitude' => -33.8410, 'GPSLongitude' => 18.7240, 'MarketingCategory' => 1, 'Products' => $productsD0],
+            // Cross-border — GPS outside the SA box so the pricing
+            // panel buckets them under "Out of country".
+            ['DepotID' => '11111111-0000-0000-0000-000000000008', 'Number' => 201, 'Title' => 'Kwa Nokeng Oil - Maun',       'GPSLatitude' => -19.9831, 'GPSLongitude' => 23.4167, 'MarketingCategory' => 2, 'Products' => $productsD0],
+            ['DepotID' => '11111111-0000-0000-0000-000000000009', 'Number' => 202, 'Title' => 'Duze Petroleum - Bulawayo',   'GPSLatitude' => -20.1500, 'GPSLongitude' => 28.5833, 'MarketingCategory' => 2, 'Products' => $productsD0],
+            ['DepotID' => '11111111-0000-0000-0000-000000000010', 'Number' => 203, 'Title' => 'Shell Benchicks - Palapye',   'GPSLatitude' => -22.5500, 'GPSLongitude' => 27.1167, 'MarketingCategory' => 2, 'Products' => $productsD0],
         ];
     }
 
