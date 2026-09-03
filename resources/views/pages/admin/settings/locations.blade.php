@@ -149,6 +149,10 @@ new #[Layout('components.layouts.app')] class extends Component {
         $this->editCustomerName    = (string) ($loc->customer_name ?? '');
         $this->editCustomerPhone   = (string) ($loc->customer_phone ?? '');
         $this->editCustomerEmail   = (string) ($loc->customer_email ?? '');
+        $this->showAddForm = false;
+        // Deep-link / edit must not depend on the row being on the
+        // current paginated page — the form now lives above the table.
+        $this->resetPage();
     }
 
     public function update(): void
@@ -179,11 +183,13 @@ new #[Layout('components.layouts.app')] class extends Component {
         ]);
 
         $this->editingId = null;
+        $this->focusLocationId = null;
     }
 
     public function cancelEdit(): void
     {
         $this->editingId = null;
+        $this->focusLocationId = null;
     }
 
     public function toggle(int $id): void
@@ -338,6 +344,93 @@ new #[Layout('components.layouts.app')] class extends Component {
         </div>
         @endif
 
+        {{-- Edit Form — always above the table so ?focus=ID works even when
+             the row is on another paginated page (inline-in-row previously
+             hid the form whenever the location was not on page 1). --}}
+        @if($editingId)
+        <div class="bg-white rounded-xl shadow-sm border border-blue-200 p-6">
+            <div class="flex items-start justify-between gap-3 mb-4">
+                <div>
+                    <h3 class="text-lg font-semibold text-gray-900">Edit Location #{{ $editingId }}</h3>
+                    <p class="text-xs text-slate-500 mt-0.5">Fix the street address (use autocomplete), then Save — coords refresh for tolls / advances.</p>
+                </div>
+                @if($editLat && $editLng)
+                    <span class="shrink-0 inline-flex items-center rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700 border border-emerald-200">
+                        {{ $editLat }}, {{ $editLng }}
+                    </span>
+                @else
+                    <span class="shrink-0 inline-flex items-center rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-800 border border-amber-200">
+                        No coordinates
+                    </span>
+                @endif
+            </div>
+            <form wire:submit="update" class="space-y-4">
+                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                    <div>
+                        <label class="block text-xs font-medium text-gray-700 mb-1">Owner Company</label>
+                        <x-searchable-select
+                            wire:model="editCompanyId"
+                            :options="$companyOptions"
+                            placeholder="— None —"
+                            search-placeholder="Search companies…"
+                        />
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-gray-700 mb-1">Location Name *</label>
+                        <input wire:model="editCompanyName" type="text" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
+                        @error('editCompanyName')<p class="text-xs text-red-600 mt-1">{{ $message }}</p>@enderror
+                    </div>
+                    <div x-data="placesAutocomplete({ addressModel: 'editAddress', cityModel: 'editCity', provinceModel: 'editProvince', latModel: 'editLat', lngModel: 'editLng' })">
+                        <label class="block text-xs font-medium text-gray-700 mb-1">Address *</label>
+                        <input x-ref="addressInput" wire:model="editAddress" type="text" autocomplete="off" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500" placeholder="Start typing to search...">
+                        @error('editAddress')<p class="text-xs text-red-600 mt-1">{{ $message }}</p>@enderror
+                        <button type="button" wire:click="lookupEditAddress" class="mt-1 inline-flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 font-medium">
+                            <svg class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+                            <span wire:loading.remove wire:target="lookupEditAddress">Lookup Address</span>
+                            <span wire:loading wire:target="lookupEditAddress">Looking up...</span>
+                        </button>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-gray-700 mb-1">City *</label>
+                        <input wire:model="editCity" type="text" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
+                        @error('editCity')<p class="text-xs text-red-600 mt-1">{{ $message }}</p>@enderror
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-gray-700 mb-1">Province *</label>
+                        <input wire:model="editProvince" type="text" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
+                        @error('editProvince')<p class="text-xs text-red-600 mt-1">{{ $message }}</p>@enderror
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-gray-700 mb-1">Zone</label>
+                        <x-searchable-select
+                            wire:model="editZoneId"
+                            :options="$zoneOptions"
+                            placeholder="Select zone..."
+                            search-placeholder="Search zones…"
+                        />
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-gray-700 mb-1">Customer Name</label>
+                        <input wire:model="editCustomerName" type="text" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-gray-700 mb-1">Customer Phone</label>
+                        <input wire:model="editCustomerPhone" type="text" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-gray-700 mb-1">Customer Email</label>
+                        <input wire:model="editCustomerEmail" type="email" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
+                        @error('editCustomerEmail')<p class="text-xs text-red-600 mt-1">{{ $message }}</p>@enderror
+                    </div>
+                </div>
+                <div class="flex items-center gap-3 pt-2">
+                    <button type="submit" class="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-500 transition">Save</button>
+                    <button type="button" wire:click="cancelEdit" class="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition">Cancel</button>
+                </div>
+            </form>
+        </div>
+        @endif
+
         {{-- Table --}}
         <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
             <div class="overflow-x-auto">
@@ -356,100 +449,29 @@ new #[Layout('components.layouts.app')] class extends Component {
                     </thead>
                     <tbody class="divide-y divide-gray-200">
                         @forelse($locations as $loc)
-                            @if($editingId === $loc->id)
-                                <tr class="bg-blue-50/50">
-                                    <td colspan="8" class="px-4 py-4">
-                                        <form wire:submit="update" class="space-y-4">
-                                            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                                                <div>
-                                                    <label class="block text-xs font-medium text-gray-700 mb-1">Owner Company</label>
-                                                    <x-searchable-select
-                                                        wire:model="editCompanyId"
-                                                        :options="$companyOptions"
-                                                        placeholder="— None —"
-                                                        search-placeholder="Search companies…"
-                                                    />
-                                                </div>
-                                                <div>
-                                                    <label class="block text-xs font-medium text-gray-700 mb-1">Location Name *</label>
-                                                    <input wire:model="editCompanyName" type="text" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
-                                                    @error('editCompanyName')<p class="text-xs text-red-600 mt-1">{{ $message }}</p>@enderror
-                                                </div>
-                                                <div x-data="placesAutocomplete({ addressModel: 'editAddress', cityModel: 'editCity', provinceModel: 'editProvince', latModel: 'editLat', lngModel: 'editLng' })">
-                                                    <label class="block text-xs font-medium text-gray-700 mb-1">Address *</label>
-                                                    <input x-ref="addressInput" wire:model="editAddress" type="text" autocomplete="off" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500" placeholder="Start typing to search...">
-                                                    @error('editAddress')<p class="text-xs text-red-600 mt-1">{{ $message }}</p>@enderror
-                                                    <button type="button" wire:click="lookupEditAddress" class="mt-1 inline-flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 font-medium">
-                                                        <svg class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
-                                                        <span wire:loading.remove wire:target="lookupEditAddress">Lookup Address</span>
-                                                        <span wire:loading wire:target="lookupEditAddress">Looking up...</span>
-                                                    </button>
-                                                </div>
-                                                <div>
-                                                    <label class="block text-xs font-medium text-gray-700 mb-1">City *</label>
-                                                    <input wire:model="editCity" type="text" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
-                                                    @error('editCity')<p class="text-xs text-red-600 mt-1">{{ $message }}</p>@enderror
-                                                </div>
-                                                <div>
-                                                    <label class="block text-xs font-medium text-gray-700 mb-1">Province *</label>
-                                                    <input wire:model="editProvince" type="text" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
-                                                    @error('editProvince')<p class="text-xs text-red-600 mt-1">{{ $message }}</p>@enderror
-                                                </div>
-                                                <div>
-                                                    <label class="block text-xs font-medium text-gray-700 mb-1">Zone</label>
-                                                    <x-searchable-select
-                                                        wire:model="editZoneId"
-                                                        :options="$zoneOptions"
-                                                        placeholder="Select zone..."
-                                                        search-placeholder="Search zones…"
-                                                    />
-                                                </div>
-                                                <div>
-                                                    <label class="block text-xs font-medium text-gray-700 mb-1">Customer Name</label>
-                                                    <input wire:model="editCustomerName" type="text" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
-                                                </div>
-                                                <div>
-                                                    <label class="block text-xs font-medium text-gray-700 mb-1">Customer Phone</label>
-                                                    <input wire:model="editCustomerPhone" type="text" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
-                                                </div>
-                                                <div>
-                                                    <label class="block text-xs font-medium text-gray-700 mb-1">Customer Email</label>
-                                                    <input wire:model="editCustomerEmail" type="email" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500">
-                                                    @error('editCustomerEmail')<p class="text-xs text-red-600 mt-1">{{ $message }}</p>@enderror
-                                                </div>
-                                            </div>
-                                            <div class="flex items-center gap-3">
-                                                <button type="submit" class="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-500 transition">Save</button>
-                                                <button type="button" wire:click="cancelEdit" class="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition">Cancel</button>
-                                            </div>
-                                        </form>
-                                    </td>
-                                </tr>
-                            @else
-                                <tr class="hover:bg-gray-50">
-                                    <td class="px-4 py-3 text-sm font-medium {{ $loc->is_active ? 'text-gray-900' : 'text-gray-400 line-through' }}">{{ $loc->company_name }}</td>
-                                    <td class="px-4 py-3 text-sm text-gray-600">{{ $loc->address }}</td>
-                                    <td class="px-4 py-3 text-sm text-gray-600">{{ $loc->city }}</td>
-                                    <td class="px-4 py-3 text-sm text-gray-600">{{ $loc->province }}</td>
-                                    <td class="px-4 py-3 text-sm text-gray-600">{{ $loc->zone?->name ?? '—' }}</td>
-                                    <td class="px-4 py-3 text-sm text-gray-600">{{ $loc->company?->name ?? '—' }}</td>
-                                    <td class="px-4 py-3 text-center">
-                                        @if($loc->is_active)
-                                            <span class="inline-flex items-center rounded-full bg-green-50 px-2 py-0.5 text-xs font-medium text-green-700">Active</span>
-                                        @else
-                                            <span class="inline-flex items-center rounded-full bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700">Inactive</span>
-                                        @endif
-                                    </td>
-                                    <td class="px-4 py-3 text-right">
-                                        <div class="flex items-center justify-end gap-2">
-                                            <button wire:click="startEdit({{ $loc->id }})" class="text-sm text-blue-600 hover:text-blue-800 font-medium">Edit</button>
-                                            <button wire:click="toggle({{ $loc->id }})" class="text-sm {{ $loc->is_active ? 'text-red-600 hover:text-red-800' : 'text-green-600 hover:text-green-800' }} font-medium">
-                                                {{ $loc->is_active ? 'Disable' : 'Enable' }}
-                                            </button>
-                                        </div>
-                                    </td>
-                                </tr>
-                            @endif
+                            <tr class="hover:bg-gray-50 {{ $editingId === $loc->id ? 'bg-blue-50/70 ring-1 ring-inset ring-blue-200' : '' }}">
+                                <td class="px-4 py-3 text-sm font-medium {{ $loc->is_active ? 'text-gray-900' : 'text-gray-400 line-through' }}">{{ $loc->company_name }}</td>
+                                <td class="px-4 py-3 text-sm text-gray-600">{{ $loc->address }}</td>
+                                <td class="px-4 py-3 text-sm text-gray-600">{{ $loc->city }}</td>
+                                <td class="px-4 py-3 text-sm text-gray-600">{{ $loc->province }}</td>
+                                <td class="px-4 py-3 text-sm text-gray-600">{{ $loc->zone?->name ?? '—' }}</td>
+                                <td class="px-4 py-3 text-sm text-gray-600">{{ $loc->company?->name ?? '—' }}</td>
+                                <td class="px-4 py-3 text-center">
+                                    @if($loc->is_active)
+                                        <span class="inline-flex items-center rounded-full bg-green-50 px-2 py-0.5 text-xs font-medium text-green-700">Active</span>
+                                    @else
+                                        <span class="inline-flex items-center rounded-full bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700">Inactive</span>
+                                    @endif
+                                </td>
+                                <td class="px-4 py-3 text-right">
+                                    <div class="flex items-center justify-end gap-2">
+                                        <button wire:click="startEdit({{ $loc->id }})" class="text-sm text-blue-600 hover:text-blue-800 font-medium">Edit</button>
+                                        <button wire:click="toggle({{ $loc->id }})" class="text-sm {{ $loc->is_active ? 'text-red-600 hover:text-red-800' : 'text-green-600 hover:text-green-800' }} font-medium">
+                                            {{ $loc->is_active ? 'Disable' : 'Enable' }}
+                                        </button>
+                                    </div>
+                                </td>
+                            </tr>
                         @empty
                             <tr>
                                 <td colspan="8" class="px-4 py-12 text-center text-sm text-gray-500">No locations found.</td>
