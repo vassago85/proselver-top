@@ -724,6 +724,63 @@ new #[Layout('components.layouts.app')] class extends Component {
     }
 
     /**
+     * TFN puts account top-ups / credits on the same /api/Transactions
+     * feed as pump spend. Detect those so the table can label them
+     * "Payment" and so spend KPIs don't treat a R200k credit as diesel.
+     *
+     * Signals (any one is enough):
+     *   - TransactionTypeCode CC / CD / CX (credit, debit, correction)
+     *   - ProductCode EW (eWallet allocation)
+     *   - Positive Amount with no litres and no pump product / supplier
+     *     (the usual shape of a SubAccountPayment landing as a tx)
+     */
+    public function isAccountPayment(array $t): bool
+    {
+        $type = strtoupper(trim((string) ($t['TransactionTypeCode'] ?? '')));
+        if (in_array($type, ['CC', 'CD', 'CX'], true)) {
+            return true;
+        }
+
+        $product = strtoupper(trim((string) ($t['ProductCode'] ?? '')));
+        if ($product === 'EW') {
+            return true;
+        }
+
+        $amount = (float) ($t['Amount'] ?? 0);
+        $litres = $this->rowLitres($t);
+        $supplier = trim((string) ($t['SupplierName'] ?? ''));
+
+        // Pump / site spend always carries a product or a supplier.
+        // A bare rand movement with no litres is an account payment.
+        if ($litres <= 0 && $product === '' && $supplier === '' && abs($amount) > 0) {
+            return true;
+        }
+
+        // Credit onto the account: Amount > 0 in TFN's convention
+        // (purchases are negative), still no pump footprint.
+        $pumpCodes = array_keys(config('tfn.product_labels', []));
+        if ($amount > 0 && $litres <= 0 && ($product === '' || !in_array($product, $pumpCodes, true))) {
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * Litres on a TFN row. Aggregate and transaction payloads have used
+     * Litres / Quantity / TotalLitres across versions — read whichever
+     * is present so the MTD tile and tx table don't go blank.
+     */
+    public function rowLitres(array $row): float
+    {
+        return (float) ($row['Litres']
+            ?? $row['Quantity']
+            ?? $row['TotalLitres']
+            ?? $row['Volume']
+            ?? 0);
+    }
+
+    /**
      * Pre-render aggregations. We compute derived values here (rather
      * than in the Blade) so the template stays declarative.
      */
@@ -731,17 +788,53 @@ new #[Layout('components.layouts.app')] class extends Component {
     {
         $data = $this->source();
 
-        // Totals for the KPI strip.
-        $litresMtd = collect($data['aggregate'])->sum('Litres');
+        // Totals for the KPI strip. Exclude account payments/credits —
+        // abs()'ing them previously made a R200k top-up look like spend.
+        $litresMtd = collect($data['aggregate'])->sum(fn ($r) => $this->rowLitres($r));
+        $monthTx = null;
+
+        // SubAccountAggregateLitres often returns [] even when the pumps
+        // have been busy (QA returned []; live can too when there is no
+        // sub-account rollup). Fall back to net litres from transactions
+        // since month-start so the tile isn't stuck at 0 L.
+        if ($litresMtd <= 0) {
+            $monthTx = $data['transactions'];
+            if (!empty($data['live'])) {
+                try {
+                    $monthTx = app(TfnClient::class)->transactions(
+                        Carbon::now()->startOfMonth()->toDateTimeImmutable()
+                    );
+                } catch (\Throwable) {
+                    // Keep the in-window list — better a partial MTD than 0.
+                }
+            }
+            $litresMtd = collect($monthTx)
+                ->reject(fn ($t) => $this->isAccountPayment($t))
+                ->sum(fn ($t) => $this->rowLitres($t));
+        }
+
         $spendToday = collect($data['transactions'])
             ->filter(fn ($t) => \Illuminate\Support\Carbon::parse($t['TransactionDate'] ?? $t['CapturedDate'] ?? now())->isToday())
+            ->reject(fn ($t) => $this->isAccountPayment($t))
             ->sum(fn ($t) => abs((float) ($t['Amount'] ?? 0)));
 
         // Product mix summary (litres by fuel grade this month).
         $productMix = collect($data['aggregate'])
             ->groupBy('ProductCode')
-            ->map(fn ($rows) => $rows->sum('Litres'))
+            ->map(fn ($rows) => $rows->sum(fn ($r) => $this->rowLitres($r)))
             ->toArray();
+
+        // When aggregate was empty, rebuild product mix from the same
+        // month-start fallback so the helper under the KPI isn't blank.
+        if ($productMix === [] && $litresMtd > 0) {
+            $mixSource = $monthTx ?? $data['transactions'];
+            $productMix = collect($mixSource)
+                ->reject(fn ($t) => $this->isAccountPayment($t))
+                ->filter(fn ($t) => filled($t['ProductCode'] ?? null))
+                ->groupBy('ProductCode')
+                ->map(fn ($rows) => $rows->sum(fn ($r) => $this->rowLitres($r)))
+                ->toArray();
+        }
 
         $openOrders = collect($data['orders'])
             ->filter(fn ($o) => strcasecmp($o['Status'] ?? '', 'open') === 0)
@@ -1364,6 +1457,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <tbody class="divide-y divide-slate-100">
                     @forelse($transactions as $t)
                         @php
+                            $isPayment = $this->isAccountPayment($t);
                             $customer = strtolower($t['CustomerName'] ?? '');
                             $customerChip = match(true) {
                                 str_contains($customer, 'faw')       => 'bg-red-50 text-red-700 ring-red-600/20',
@@ -1378,7 +1472,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                                 default                              => $t['CustomerName'] ?? '',
                             };
                         @endphp
-                        <tr class="hover:bg-slate-50/50">
+                        <tr class="hover:bg-slate-50/50 {{ $isPayment ? 'bg-emerald-50/40' : '' }}">
                             <td class="px-4 py-2.5 text-xs text-slate-500">{{ \Illuminate\Support\Carbon::parse($t['CapturedDate'] ?? $t['TransactionDate'] ?? now())->format('d M · H:i') }}</td>
                             <td class="px-4 py-2.5">
                                 @if(!empty($t['CustomerName']))
@@ -1389,28 +1483,43 @@ new #[Layout('components.layouts.app')] class extends Component {
                             </td>
                             <td class="px-4 py-2.5 font-mono text-[11px] text-slate-600">{{ $t['VIN'] ?? '—' }}</td>
                             <td class="px-4 py-2.5">
-                                @if(!empty($t['VehicleRegistration']))
+                                @if($isPayment)
+                                    <span class="text-[11px] italic text-slate-400">—</span>
+                                @elseif(!empty($t['VehicleRegistration']))
                                     <span class="inline-flex rounded bg-yellow-100 border border-yellow-300 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-yellow-900">{{ $t['VehicleRegistration'] }}</span>
                                 @else
                                     <span class="text-[11px] italic text-slate-400">no plate</span>
                                 @endif
                             </td>
-                            <td class="px-4 py-2.5 font-mono text-[11px] text-slate-500">{{ ($t['VehicleFleetNumber'] ?? $t['FleetNumber'] ?? null) ?: '—' }}</td>
-                            <td class="px-4 py-2.5 text-sm text-slate-700">{{ $t['SupplierName'] ?? '—' }}</td>
+                            <td class="px-4 py-2.5 font-mono text-[11px] text-slate-500">{{ $isPayment ? '—' : (($t['VehicleFleetNumber'] ?? $t['FleetNumber'] ?? null) ?: '—') }}</td>
+                            <td class="px-4 py-2.5 text-sm text-slate-700">{{ $isPayment ? '—' : ($t['SupplierName'] ?? '—') }}</td>
                             <td class="px-4 py-2.5 text-sm">
-                                <span class="inline-flex items-center rounded-md bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">{{ $t['ProductCode'] ?? '—' }}</span>
-                                <span class="ml-1 text-xs text-slate-400">{{ $productLabels[$t['ProductCode'] ?? ''] ?? '' }}</span>
+                                @if($isPayment)
+                                    <span class="inline-flex items-center rounded-md bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-800 ring-1 ring-inset ring-emerald-600/20">Payment</span>
+                                @else
+                                    <span class="inline-flex items-center rounded-md bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">{{ $t['ProductCode'] ?? '—' }}</span>
+                                    <span class="ml-1 text-xs text-slate-400">{{ $productLabels[$t['ProductCode'] ?? ''] ?? '' }}</span>
+                                @endif
                             </td>
-                            <td class="px-4 py-2.5 text-right text-sm tabular-nums text-slate-900">{{ !empty($t['Litres']) ? number_format((float) $t['Litres']) . ' L' : '—' }}</td>
+                            <td class="px-4 py-2.5 text-right text-sm tabular-nums text-slate-900">
+                                @php $txLitresDisplay = $this->rowLitres($t); @endphp
+                                {{ !$isPayment && abs($txLitresDisplay) > 0 ? number_format($txLitresDisplay) . ' L' : '—' }}
+                            </td>
                             @if($canSeeFinance)
-                                <td class="px-4 py-2.5 text-right text-sm tabular-nums text-slate-900">R {{ number_format(abs((float) ($t['Amount'] ?? 0)), 2) }}</td>
+                                <td class="px-4 py-2.5 text-right text-sm tabular-nums {{ $isPayment ? 'font-semibold text-emerald-700' : 'text-slate-900' }}">
+                                    @if($isPayment)
+                                        +R {{ number_format(abs((float) ($t['Amount'] ?? 0)), 2) }}
+                                    @else
+                                        R {{ number_format(abs((float) ($t['Amount'] ?? 0)), 2) }}
+                                    @endif
+                                </td>
                                 @php
                                     // Effective R/L for this pump event. Only meaningful for
                                     // fuel products (D0/D1/D3) where litres > 0. Non-fuel
-                                    // items like WSH / CAN / OS show a dash.
-                                    $txLitres = (float) ($t['Litres'] ?? 0);
+                                    // items like WSH / CAN / OS show a dash. Payments never.
+                                    $txLitres = $this->rowLitres($t);
                                     $txAmount = abs((float) ($t['Amount'] ?? 0));
-                                    $txRpl    = $txLitres > 0 ? $txAmount / $txLitres : null;
+                                    $txRpl    = (!$isPayment && $txLitres > 0) ? $txAmount / $txLitres : null;
                                     // Delta vs network avg -- >2c/L above = warn (red),
                                     // >2c/L below = win (emerald), else neutral. Cap the
                                     // sensitivity so day-to-day noise doesn't flag rows.
@@ -1437,7 +1546,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                                     @endif
                                 </td>
                             @endif
-                            <td class="px-4 py-2.5 text-right text-xs tabular-nums text-slate-500">{{ !empty($t['Odometer']) ? number_format((float) $t['Odometer']) . ' km' : '—' }}</td>
+                            <td class="px-4 py-2.5 text-right text-xs tabular-nums text-slate-500">{{ !$isPayment && !empty($t['Odometer']) ? number_format((float) $t['Odometer']) . ' km' : '—' }}</td>
                             <td class="px-4 py-2.5 text-xs font-mono text-slate-500">{{ $t['TransactionReference'] ?? '—' }}</td>
                         </tr>
                     @empty

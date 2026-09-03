@@ -464,6 +464,35 @@ class TfnDemoFixtures
             ]);
         }
 
+        // Account top-up (SubAccountPayment) — same feed as pump spend,
+        // but no plate / depot / product / litres. Keeps the ops screen
+        // honest about how payments look next to diesel fills.
+        $rows[] = [
+            'TransactionID'         => self::syntheticTransactionId(),
+            'CustomerNumber'        => '10021',
+            'ProductCode'           => '',
+            'TransactionTypeCode'   => 'CC',
+            'TransactionDate'       => $now->copy()->subHours(6)->toIso8601String(),
+            'CapturedDate'          => $now->copy()->subHours(6)->toIso8601String(),
+            'SupplierName'          => '',
+            'VehicleRegistration'   => '',
+            'VehicleFleetNumber'    => '',
+            'VIN'                   => '',
+            'CustomerName'          => '',
+            'Amount'                => 200_000.00, // credit increases balance
+            'VAT'                   => 0,
+            'Litres'                => 0,
+            'Odometer'              => 0,
+            'TransactionReference'  => 'TE' . mt_rand(1000000, 9999999),
+            'UtilisedOrders'        => [],
+            'Identifier'            => '',
+            'ReversedTransaction'   => [
+                'TransactionID'        => '00000000-0000-0000-0000-000000000000',
+                'IsFuel'               => false,
+                'TransactionReference' => '',
+            ],
+        ];
+
         // Newest first, matching TFN's default ordering.
         usort($rows, fn ($a, $b) => strcmp($b['CapturedDate'], $a['CapturedDate']));
         return $rows;
