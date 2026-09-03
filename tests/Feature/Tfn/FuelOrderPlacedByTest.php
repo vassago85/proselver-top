@@ -83,3 +83,27 @@ test('open orders show Placed by from the local placement audit', function () {
         ->assertSee('Placed by')
         ->assertSee('Abri Controller');
 });
+
+test('the fuel-order form accepts overnight stay (OS) as an orderable product', function () {
+    $user = User::factory()->create([
+        'name'      => 'Ops Overnight',
+        'is_active' => true,
+    ]);
+    $user->assignRole('operations_controller');
+
+    Volt::actingAs($user)
+        ->test('admin.fuel')
+        ->assertSee('OS — Overnight stay')
+        ->set('orderRegistration', 'ACVWR75LTG213611')
+        ->set('orderProductCode', 'OS')
+        ->set('orderLitres', '2')
+        ->set('orderExpiresAt', now()->addDays(4)->format('Y-m-d\TH:i'))
+        ->call('placeOrder')
+        ->assertHasNoErrors()
+        ->assertSet('orderLitres', '');
+
+    $row = TfnFuelOrderPlacement::query()->latest('id')->first();
+    expect($row)->not->toBeNull();
+    expect($row->product_code)->toBe('OS');
+    expect((float) $row->litres)->toBe(2.0);
+});

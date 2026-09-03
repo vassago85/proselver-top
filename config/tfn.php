@@ -69,19 +69,12 @@ return [
     //   TFN_ENABLED=false                       = demo fixtures
     'demo_mode' => (bool) env('TFN_DEMO_MODE', true),
 
-    // Product codes we treat as "fuel" for the diesel-ordering form
-    // AND for auto-populating the FAW invoicing sheet. Proselver's
-    // policy is 50ppm only (product D0) -- keep this list to just D0
-    // so ops can't accidentally pre-authorise a different grade and
-    // so reconciliation ignores any 500ppm / 10ppm rows that might
-    // land on the card by mistake (they'd stay on petty cash).
-    //
-    // Petrol (ULP93/ULP95) is intentionally omitted -- Proselver is
-    // not yet approved to transact petrol on TFN; Sibusiso is
-    // escalating with the TFN Director. When that lands, add them
-    // here behind a feature flag.
+    // Product codes ops may pre-authorise on the fuel page.
+    // D0 = diesel (litres). OS = overnight stay (nights as MaxAllocation).
+    // Petrol (ULP93/ULP95) stays omitted until TFN Director approval.
     'orderable_products' => [
         'D0' => 'Diesel (50ppm)',
+        'OS' => 'Overnight stay',
     ],
 
     // Wider set of product codes that count as "diesel" during

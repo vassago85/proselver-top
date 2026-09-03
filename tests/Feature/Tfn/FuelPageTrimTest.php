@@ -22,6 +22,7 @@
 
 use App\Models\Role;
 use App\Models\SystemSetting;
+use App\Models\TfnFuelOrderPlacement;
 use App\Models\User;
 use App\Services\ProselverLicenceBilling;
 use App\Services\Tfn\TfnClient;
@@ -116,6 +117,19 @@ test('fleet grid shows only vehicles with an open order, not the whole catalogue
     $u = User::factory()->create(['is_active' => true]);
     $u->assignRole('operations_controller');
 
+    // Live path only tracks orders TRIDENT itself placed.
+    foreach (['ORD/01/2951/11291', 'ORD/01/2951/11235'] as $num) {
+        TfnFuelOrderPlacement::query()->create([
+            'order_number'         => $num,
+            'vehicle_registration' => $num === 'ORD/01/2951/11291' ? 'AGH818GP' : 'MR44JRGP',
+            'product_code'         => 'D0',
+            'litres'               => 200,
+            'user_id'              => $u->id,
+            'placed_by_name'       => $u->name,
+            'placed_at'            => now(),
+        ]);
+    }
+
     $response = $this->actingAs($u)->get('/admin/fuel')->assertOk();
 
     // In-flight regs shown.
@@ -125,8 +139,35 @@ test('fleet grid shows only vehicles with an open order, not the whole catalogue
     // Fleet grid header count -- "2 open" not "5 open".
     $response->assertSee('2 open');
 
-    // Header still says "Vehicles with open TFN orders" (was "In-transit vehicles").
-    $response->assertSee('Vehicles with open TFN orders');
+    // Header names TRIDENT-placed orders (not the whole TFN catalogue).
+    $response->assertSee('Vehicles with open TRIDENT fuel orders');
+});
+
+test('live fleet stays empty when TFN has vehicles but TRIDENT has placed no orders', function () {
+    // Regression for the "1080 open" dump: empty tracked-order set
+    // must NOT fall through to the full vehicle catalogue.
+    $vehicles = [
+        ['Registration' => 'ABC214EC', 'FleetNumber' => 'FUEL', 'TankSize' => 1000, 'Status' => 3],
+        ['Registration' => 'ABJ427FS', 'FleetNumber' => '',     'TankSize' => 400,  'Status' => 6],
+        ['Registration' => 'AGH818GP', 'FleetNumber' => 'FUEL', 'TankSize' => 1000, 'Status' => 3],
+    ];
+
+    $fake = fakeTfnClient([
+        'vehicles' => $vehicles,
+        'orders'   => [],
+    ]);
+    app()->instance(TfnClient::class, $fake);
+
+    $u = User::factory()->create(['is_active' => true]);
+    $u->assignRole('operations_controller');
+
+    $this->actingAs($u)->get('/admin/fuel')
+        ->assertOk()
+        ->assertSee('0 open')
+        ->assertSee('Vehicles with open TRIDENT fuel orders');
+    // Plates may still appear in the order-form vehicle picker (full
+    // TFN catalogue) — that is intentional.  The regression is the
+    // fleet badge claiming "1080 open".
 });
 
 test('cards are only looked up for vehicles with open orders (not the whole catalogue)', function () {
@@ -156,6 +197,16 @@ test('cards are only looked up for vehicles with open orders (not the whole cata
 
     $u = User::factory()->create(['is_active' => true]);
     $u->assignRole('operations_controller');
+
+    TfnFuelOrderPlacement::query()->create([
+        'order_number'         => 'ORD/01/2951/1',
+        'vehicle_registration' => 'TEST007',
+        'product_code'         => 'D0',
+        'litres'               => 200,
+        'user_id'              => $u->id,
+        'placed_by_name'       => $u->name,
+        'placed_at'            => now(),
+    ]);
 
     $this->actingAs($u)->get('/admin/fuel')->assertOk();
 
@@ -193,6 +244,18 @@ test('transactions are attached to the correct fleet row by VehicleRegistration 
 
     $u = User::factory()->create(['is_active' => true]);
     $u->assignRole('operations_controller');
+
+    foreach (['A' => 'AGH818GP', 'B' => 'MR44JRGP'] as $num => $reg) {
+        TfnFuelOrderPlacement::query()->create([
+            'order_number'         => $num,
+            'vehicle_registration' => $reg,
+            'product_code'         => 'D0',
+            'litres'               => 100,
+            'user_id'              => $u->id,
+            'placed_by_name'       => $u->name,
+            'placed_at'            => now(),
+        ]);
+    }
 
     $body = $this->actingAs($u)->get('/admin/fuel')->assertOk()->getContent();
 

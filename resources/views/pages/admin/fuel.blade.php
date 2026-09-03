@@ -169,6 +169,19 @@ new #[Layout('components.layouts.app')] class extends Component {
         // fleet.  Empty list + the per-endpoint error log is honest.
         $orders = $safe(fn () => $this->flattenOrders($client->orders()), []);
 
+        // Only track pre-auths placed through TRIDENT.  Portal-side
+        // orders (Lize / Abri on the TFN website) stay on TFN but are
+        // noise here — and without this filter an empty open-order
+        // set used to dump the entire 1000+ vehicle catalogue into
+        // the fleet grid.
+        $tracked = array_flip($this->trackedOrderNumbers());
+        $orders = $tracked === []
+            ? []
+            : array_values(array_filter(
+                $orders,
+                fn ($o) => isset($tracked[(string) ($o['OrderNumber'] ?? '')])
+            ));
+
         $openOrderRegs = collect($orders)
             ->filter(fn ($o) => strcasecmp($o['Status'] ?? '', 'open') === 0)
             ->pluck('VehicleRegistration')
@@ -601,10 +614,17 @@ new #[Layout('components.layouts.app')] class extends Component {
             return;
         }
         if (!isset(config('tfn.orderable_products')[$this->orderProductCode])) {
-            session()->flash('error', 'Choose a valid diesel product.');
+            session()->flash('error', 'Choose a valid product.');
             return;
         }
-        if ($litres <= 0 || $litres > 2000) {
+
+        $isOvernight = $this->isOvernightProduct();
+        if ($isOvernight) {
+            if ($litres < 1 || $litres > 14) {
+                session()->flash('error', 'Nights must be between 1 and 14.');
+                return;
+            }
+        } elseif ($litres <= 0 || $litres > 2000) {
             session()->flash('error', 'Litres must be between 1 and 2000.');
             return;
         }
@@ -691,8 +711,8 @@ new #[Layout('components.layouts.app')] class extends Component {
                 customerReference: $reference,
             );
             session()->flash('success', sprintf(
-                '(Demo) Order placed: %d L of %s against %s. Expires %s.',
-                (int) $litres,
+                '(Demo) Order placed: %s of %s against %s. Expires %s.',
+                $isOvernight ? ((int) $litres).' night(s)' : ((int) $litres).' L',
                 $this->orderProductCode,
                 $posRegistration,
                 $validEnd->format('D d M H:i'),
@@ -718,9 +738,9 @@ new #[Layout('components.layouts.app')] class extends Component {
             }
             $suffix = $orderNumber !== '' ? sprintf(' (%s)', $orderNumber) : '';
             session()->flash('success', sprintf(
-                'Order placed%s: %d L of %s against %s.',
+                'Order placed%s: %s of %s against %s.',
                 $suffix,
-                (int) $litres,
+                $isOvernight ? ((int) $litres).' night(s)' : ((int) $litres).' L',
                 $this->orderProductCode,
                 $posRegistration,
             ));
@@ -731,6 +751,33 @@ new #[Layout('components.layouts.app')] class extends Component {
             // don't need to double-prefix here -- just show what TFN said.
             session()->flash('error', $e->getMessage());
         }
+    }
+
+    /**
+     * Overnight stay (OS) uses MaxAllocation as nights, not litres.
+     */
+    public function isOvernightProduct(?string $code = null): bool
+    {
+        return strtoupper((string) ($code ?? $this->orderProductCode)) === 'OS';
+    }
+
+    /**
+     * Order numbers TRIDENT has itself placed (local audit).  Used to
+     * scope the open/closed order tables and the fleet grid so we
+     * never render the whole TFN vehicle catalogue or portal-only
+     * pre-auths.
+     *
+     * @return list<string>
+     */
+    private function trackedOrderNumbers(): array
+    {
+        return TfnFuelOrderPlacement::query()
+            ->orderByDesc('placed_at')
+            ->limit(1000)
+            ->pluck('order_number')
+            ->filter()
+            ->values()
+            ->all();
     }
 
     /**
@@ -1179,8 +1226,11 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         $fleet = collect($data['vehicles'])
             ->filter(function ($v) use ($fleetRegs, $normReg) {
-                if (empty($fleetRegs)) {
-                    return true;  // demo mode / no open orders -> keep old behaviour
+                // Empty open-order set ⇒ empty fleet.  Never fall back
+                // to the full TFN catalogue (that's how we got "1080
+                // open" with Stolen / Unused / Sold noise).
+                if ($fleetRegs === []) {
+                    return false;
                 }
                 return in_array($normReg($v['Registration'] ?? null), $fleetRegs, true);
             })
@@ -1483,9 +1533,9 @@ new #[Layout('components.layouts.app')] class extends Component {
             <div class="border-b border-slate-100 p-4">
                 <div class="flex items-center gap-2">
                     <svg class="h-4 w-4 text-slate-500" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3h5l2 2v14a2 2 0 0 1-2 2h-5"/><path d="M9 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h4"/><path d="M12 3v18"/><path d="M12 12l3-3"/><path d="M12 12l-3-3"/></svg>
-                    <h2 class="text-sm font-semibold text-slate-900">Place a diesel order</h2>
+                    <h2 class="text-sm font-semibold text-slate-900">Place a TFN order</h2>
                 </div>
-                <p class="mt-0.5 text-xs text-slate-500">Pre-authorises the pump for a specific vehicle. The order is burnt down by transactions when the driver fuels up.</p>
+                <p class="mt-0.5 text-xs text-slate-500">Pre-authorises diesel at the pump or an overnight stay against a vehicle. The order is burnt down when the driver fuels or checks in.</p>
             </div>
 
             <form wire:submit="placeOrder" class="grid grid-cols-1 gap-4 p-4 sm:grid-cols-2">
@@ -1568,36 +1618,38 @@ new #[Layout('components.layouts.app')] class extends Component {
                 </div>
 
                 <div>
+                    @php $orderingOvernight = $this->isOvernightProduct($orderProductCode); @endphp
                     <label class="mb-1 block text-xs font-medium text-slate-700">
-                        Litres
-                        @php
-                            // Show a tank-size hint next to the input when
-                            // we actually know it. Customer trucks off the
-                            // plant often have no tank spec on the delivery
-                            // note -- in that case we don't guess.
-                            // $orderRegistration holds the VIN (see picker
-                            // above); fall back to Registration for older
-                            // rows that still key on plate.
-                            $selectedVehicle = collect($vehicles)->firstWhere('VIN', $orderRegistration)
-                                ?? collect($vehicles)->firstWhere('Registration', $orderRegistration);
-                            $knownTank = $selectedVehicle['TankSize'] ?? null;
-                        @endphp
-                        @if($knownTank)
-                            <span class="text-[10px] font-normal text-slate-400">· tank {{ $knownTank }} L</span>
-                        @elseif($orderRegistration)
-                            <span class="text-[10px] font-normal text-slate-400">· tank size unknown &mdash; confirm with the driver</span>
+                        @if($orderingOvernight)
+                            Nights
+                        @else
+                            Litres
+                            @php
+                                // Show a tank-size hint next to the input when
+                                // we actually know it. Customer trucks off the
+                                // plant often have no tank spec on the delivery
+                                // note -- in that case we don't guess.
+                                $selectedVehicle = collect($vehicles)->firstWhere('VIN', $orderRegistration)
+                                    ?? collect($vehicles)->firstWhere('Registration', $orderRegistration);
+                                $knownTank = $selectedVehicle['TankSize'] ?? null;
+                            @endphp
+                            @if($knownTank)
+                                <span class="text-[10px] font-normal text-slate-400">· tank {{ $knownTank }} L</span>
+                            @elseif($orderRegistration)
+                                <span class="text-[10px] font-normal text-slate-400">· tank size unknown &mdash; confirm with the driver</span>
+                            @endif
                         @endif
                     </label>
-                    <input wire:model.live.debounce.300ms="orderLitres" type="number" min="1" max="2000" step="1" placeholder="e.g. 400" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm tabular-nums focus:border-blue-500 focus:ring-1 focus:ring-blue-500" />
+                    <input
+                        wire:model.live.debounce.300ms="orderLitres"
+                        type="number"
+                        min="1"
+                        max="{{ $orderingOvernight ? 14 : 2000 }}"
+                        step="1"
+                        placeholder="{{ $orderingOvernight ? 'e.g. 1' : 'e.g. 400' }}"
+                        class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm tabular-nums focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                    />
                     @php
-                        // Estimate uses (in priority order):
-                        //   1. price at the depot the operator has picked
-                        //   2. network average across depots for this product
-                        //   3. zero (no pricing available yet)
-                        // Displaying "at depot X" vs "network avg" is
-                        // important -- it tells the operator whether the
-                        // total they're about to authorise is anchored to
-                        // a specific pump or a rough network estimate.
                         $productPrices = collect($pricing)->where('ProductCode', $orderProductCode);
                         $selectedDepot = collect($depots)->firstWhere('DepotID', $orderDepotId);
                         $selectedDepotTitle = $selectedDepot['Title'] ?? null;
@@ -1609,10 +1661,21 @@ new #[Layout('components.layouts.app')] class extends Component {
                         $priceSource = $depotPrice ? 'at '.$selectedDepotTitle : 'network avg';
                         $estimated = ((float) $orderLitres) * (float) $selectedPrice;
                     @endphp
-                    <p class="mt-1 text-xs text-slate-500">
-                        At R {{ number_format((float) $selectedPrice, 2) }}/L <span class="text-slate-400">({{ $priceSource }})</span>, estimated total
-                        <span class="font-semibold text-slate-800 tabular-nums">R {{ number_format($estimated, 2) }}</span>
-                    </p>
+                    @if($orderingOvernight)
+                        <p class="mt-1 text-xs text-slate-500">
+                            @if($selectedPrice > 0)
+                                At R {{ number_format((float) $selectedPrice, 2) }}/night <span class="text-slate-400">({{ $priceSource }})</span>, estimated total
+                                <span class="font-semibold text-slate-800 tabular-nums">R {{ number_format($estimated, 2) }}</span>
+                            @else
+                                Overnight fee is confirmed at check-in &mdash; MaxAllocation is the number of nights authorised.
+                            @endif
+                        </p>
+                    @else
+                        <p class="mt-1 text-xs text-slate-500">
+                            At R {{ number_format((float) $selectedPrice, 2) }}/L <span class="text-slate-400">({{ $priceSource }})</span>, estimated total
+                            <span class="font-semibold text-slate-800 tabular-nums">R {{ number_format($estimated, 2) }}</span>
+                        </p>
+                    @endif
                 </div>
 
                 <div>
@@ -1654,7 +1717,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         <div class="flex items-center justify-between border-b border-slate-100 p-4">
             <div>
                 <h2 class="text-sm font-semibold text-slate-900">Open pre-authorisation orders</h2>
-                <p class="mt-0.5 text-xs text-slate-500">Pre-approved fuel awaiting the driver at the pump. Cancel any order that's no longer valid.</p>
+                <p class="mt-0.5 text-xs text-slate-500">TRIDENT-placed pre-approvals awaiting the pump. Cancel any order that's no longer valid. Portal-only TFN orders are omitted.</p>
             </div>
             <span class="inline-flex items-center rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-medium text-blue-700 ring-1 ring-inset ring-blue-600/20">{{ count($openOrders) }} open</span>
         </div>
@@ -1721,7 +1784,13 @@ new #[Layout('components.layouts.app')] class extends Component {
                                 @endif
                             </td>
                             <td class="px-4 py-3 text-sm text-slate-700">{{ $o['ProductCode'] ?? '—' }} <span class="text-xs text-slate-400">· {{ $productLabels[$o['ProductCode'] ?? ''] ?? '' }}</span></td>
-                            <td class="px-4 py-3 text-right text-sm tabular-nums text-slate-900">{{ number_format((float) ($o['Litres'] ?? 0)) }} L</td>
+                            <td class="px-4 py-3 text-right text-sm tabular-nums text-slate-900">
+                                @if(strtoupper((string) ($o['ProductCode'] ?? '')) === 'OS')
+                                    {{ number_format((float) ($o['Litres'] ?? 0)) }} night(s)
+                                @else
+                                    {{ number_format((float) ($o['Litres'] ?? 0)) }} L
+                                @endif
+                            </td>
                             @if($canSeeFinance)
                                 <td class="px-4 py-3 text-right text-sm tabular-nums text-slate-900">R {{ number_format((float) ($o['Amount'] ?? 0), 2) }}</td>
                             @endif
@@ -1886,8 +1955,8 @@ new #[Layout('components.layouts.app')] class extends Component {
     <div class="rounded-xl border border-slate-200 bg-white shadow-sm">
         <div class="flex items-center justify-between border-b border-slate-100 p-4">
             <div>
-                <h2 class="text-sm font-semibold text-slate-900">Vehicles with open TFN orders</h2>
-                <p class="mt-0.5 text-xs text-slate-500">One row per vehicle with an open (unfilled) order on TFN &mdash; the trip is authorised, driver just hasn&rsquo;t pumped yet. Card retires when the order is fully utilised.</p>
+                <h2 class="text-sm font-semibold text-slate-900">Vehicles with open TRIDENT fuel orders</h2>
+                <p class="mt-0.5 text-xs text-slate-500">Only pre-auths placed in TRIDENT &mdash; one row per vehicle still awaiting the pump. Portal-only TFN orders are not listed here.</p>
             </div>
             <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700">{{ count($fleet) }} open</span>
         </div>
@@ -2013,7 +2082,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             <div class="flex items-center justify-between border-b border-slate-100 p-4">
                 <div>
                     <h2 class="text-sm font-semibold text-slate-900">Recently closed orders</h2>
-                    <p class="mt-0.5 text-xs text-slate-500">Pre-authorisations that have been fulfilled at the pump or expired.</p>
+                    <p class="mt-0.5 text-xs text-slate-500">TRIDENT-placed pre-auths that have been fulfilled at the pump or expired.</p>
                 </div>
                 <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700">{{ count($utilisedOrders) }}</span>
             </div>
