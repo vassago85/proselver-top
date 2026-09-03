@@ -1018,7 +1018,13 @@ new #[Layout('components.layouts.app')] class extends Component {
                     <select wire:model="orderRegistration" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500">
                         <option value="">— Select a vehicle —</option>
                         @foreach($vehicles as $v)
-                            <option value="{{ $v['VIN'] ?: $v['Registration'] }}">
+                            {{-- Real TFN vehicles only carry `Registration`; only
+                                 our demo fixtures carry `VIN`.  Use VIN when it
+                                 exists (nicer to humans) and fall back to plate.
+                                 Must NOT read $v['VIN'] unguarded -- Laravel
+                                 promotes 'Undefined array key' to a fatal in
+                                 production and takes the whole page out. --}}
+                            <option value="{{ !empty($v['VIN']) ? $v['VIN'] : ($v['Registration'] ?? '') }}">
                                 @if(!empty($v['CustomerName'])){{ $v['CustomerName'] }} · @endif{{ trim(($v['Brand'] ?? '').' '.($v['Model'] ?? '')) ?: 'Unknown model' }}
                                 @if(!empty($v['VIN'])) · VIN {{ $v['VIN'] }} @endif
                                 @if(!empty($v['Registration']))
