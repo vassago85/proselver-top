@@ -34,35 +34,34 @@ class RouteCalculationService
         }
 
         try {
-            // alternatives=true asks Google for up to 3 routes.  Heavy
-            // trucks take the main *tolled* national corridor (better
-            // road, what dispatch plans the advance against) rather than
-            // the literal shortest path or an inland R-road shortcut, so
-            // we score each returned alternative on toll-network coverage
-            // and pick the best (see pickBestRoute).  Falls back to the
-            // first (shortest) result if only one route comes back.
-            $response = Http::get('https://maps.googleapis.com/maps/api/directions/json', [
-                'origin' => "{$pickup->latitude},{$pickup->longitude}",
-                'destination' => "{$delivery->latitude},{$delivery->longitude}",
-                'alternatives' => 'true',
-                'key' => $apiKey,
-            ]);
+            // Prefer lat/lng (stable, no geocode ambiguity).  When Google
+            // returns ZERO_RESULTS the pin is usually off-road inside an
+            // industrial site (Coega / Riverside) even though a street
+            // address for the same location routes fine — retry with the
+            // address string before giving up.  Consumer Maps shows the
+            // same failure as "Driving not available" + flights only.
+            $coordOrigin = self::coordQuery($pickup);
+            $coordDest = self::coordQuery($delivery);
+            $data = self::directionsRequest($apiKey, $coordOrigin, $coordDest, $pickup->id, $delivery->id);
 
-            if (!$response->successful()) {
-                Log::warning('Route calc: HTTP failure', [
-                    'status' => $response->status(),
-                    'pickup_id' => $pickup->id, 'delivery_id' => $delivery->id,
-                ]);
+            if (($data['status'] ?? null) === 'ZERO_RESULTS') {
+                $addrOrigin = self::addressQuery($pickup);
+                $addrDest = self::addressQuery($delivery);
+                if ($addrOrigin && $addrDest) {
+                    Log::info('Route calc: lat/lng ZERO_RESULTS — retrying with address strings', [
+                        'pickup_id' => $pickup->id,
+                        'delivery_id' => $delivery->id,
+                        'origin' => $addrOrigin,
+                        'destination' => $addrDest,
+                    ]);
+                    $data = self::directionsRequest($apiKey, $addrOrigin, $addrDest, $pickup->id, $delivery->id);
+                }
+            }
+
+            if ($data === null) {
                 return null;
             }
 
-            $data = $response->json();
-
-            // Google returns 200 OK even when there's no route -- the
-            // actual outcome is in $data['status'].  Log it so we can
-            // distinguish REQUEST_DENIED (API not enabled), OVER_QUERY_LIMIT
-            // (quota), ZERO_RESULTS (no route exists), INVALID_REQUEST
-            // (malformed coords), etc.
             $googleStatus = $data['status'] ?? 'UNKNOWN';
             if ($googleStatus !== 'OK' || empty($data['routes'][0])) {
                 Log::warning('Route calc: Google returned no usable route', [
@@ -100,6 +99,79 @@ class RouteCalculationService
             ]);
             return null;
         }
+    }
+
+    private static function coordQuery(Location $location): string
+    {
+        return "{$location->latitude},{$location->longitude}";
+    }
+
+    /**
+     * Build a Directions origin/destination string Google can geocode onto
+     * a road. Prefers a street-looking address; falls back to name + city.
+     */
+    public static function addressQuery(Location $location): ?string
+    {
+        $name = trim((string) $location->company_name);
+        $address = trim((string) $location->address);
+        $city = trim((string) ($location->city ?? ''));
+        $province = trim((string) ($location->province ?? ''));
+
+        $street = null;
+        if ($address !== '' && (preg_match('/\d/', $address) || str_contains($address, ','))) {
+            $street = $address;
+        }
+
+        $bits = array_values(array_filter([
+            $street ?: ($name !== '' ? $name : null),
+            // Avoid repeating the city when it's already in the street line.
+            $city !== '' && (!$street || !str_contains(mb_strtolower($street), mb_strtolower($city)))
+                ? $city
+                : null,
+            $province !== '' && (!$street || !str_contains(mb_strtolower($street), mb_strtolower($province)))
+                ? $province
+                : null,
+            'South Africa',
+        ]));
+
+        $query = implode(', ', $bits);
+        return $query !== 'South Africa' ? $query : null;
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private static function directionsRequest(
+        string $apiKey,
+        string $origin,
+        string $destination,
+        int $pickupId,
+        int $deliveryId,
+    ): ?array {
+        // alternatives=true asks Google for up to 3 routes.  Heavy
+        // trucks take the main *tolled* national corridor (better
+        // road, what dispatch plans the advance against) rather than
+        // the literal shortest path or an inland R-road shortcut, so
+        // we score each returned alternative on toll-network coverage
+        // and pick the best (see pickBestRoute).  Falls back to the
+        // first (shortest) result if only one route comes back.
+        $response = Http::get('https://maps.googleapis.com/maps/api/directions/json', [
+            'origin' => $origin,
+            'destination' => $destination,
+            'region' => 'za',
+            'alternatives' => 'true',
+            'key' => $apiKey,
+        ]);
+
+        if (!$response->successful()) {
+            Log::warning('Route calc: HTTP failure', [
+                'status' => $response->status(),
+                'pickup_id' => $pickupId, 'delivery_id' => $deliveryId,
+            ]);
+            return null;
+        }
+
+        return $response->json();
     }
 
     /**

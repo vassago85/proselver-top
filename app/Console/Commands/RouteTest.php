@@ -79,17 +79,49 @@ class RouteTest extends Command
         $this->line("API key  length " . strlen($apiKey));
         $this->newLine();
 
+        $coordOrigin = "{$pickup->latitude},{$pickup->longitude}";
+        $coordDest = "{$delivery->latitude},{$delivery->longitude}";
+
         $response = Http::get('https://maps.googleapis.com/maps/api/directions/json', [
-            'origin' => "{$pickup->latitude},{$pickup->longitude}",
-            'destination' => "{$delivery->latitude},{$delivery->longitude}",
+            'origin' => $coordOrigin,
+            'destination' => $coordDest,
+            'region' => 'za',
             'key' => $apiKey,
         ]);
 
+        $this->line("Attempt 1 — lat/lng");
+        $this->line("  origin:      {$coordOrigin}");
+        $this->line("  destination: {$coordDest}");
         $this->line("HTTP status: " . $response->status());
         $data = $response->json();
         $this->line("Google status: " . ($data['status'] ?? 'NO_STATUS_FIELD'));
         if (!empty($data['error_message'])) {
             $this->warn("error_message: " . $data['error_message']);
+        }
+
+        // Mirror RouteCalculationService: off-road industrial pins often
+        // ZERO_RESULT on lat/lng but route fine on the street address.
+        if (($data['status'] ?? null) === 'ZERO_RESULTS') {
+            $addrOrigin = \App\Services\RouteCalculationService::addressQuery($pickup);
+            $addrDest = \App\Services\RouteCalculationService::addressQuery($delivery);
+            if ($addrOrigin && $addrDest) {
+                $this->newLine();
+                $this->line("Attempt 2 — address fallback (same as production now)");
+                $this->line("  origin:      {$addrOrigin}");
+                $this->line("  destination: {$addrDest}");
+                $response = Http::get('https://maps.googleapis.com/maps/api/directions/json', [
+                    'origin' => $addrOrigin,
+                    'destination' => $addrDest,
+                    'region' => 'za',
+                    'key' => $apiKey,
+                ]);
+                $this->line("HTTP status: " . $response->status());
+                $data = $response->json();
+                $this->line("Google status: " . ($data['status'] ?? 'NO_STATUS_FIELD'));
+                if (!empty($data['error_message'])) {
+                    $this->warn("error_message: " . $data['error_message']);
+                }
+            }
         }
 
         if (empty($data['routes'][0])) {
