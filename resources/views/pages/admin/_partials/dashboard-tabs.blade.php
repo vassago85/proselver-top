@@ -11,7 +11,7 @@
 
         Operations  every internal role
         Finance     accounts, owner, developer, super admin, ops controller
-        Owner       owner, developer, super admin
+        Owner       owner, developer
 
     A viewer who can only reach one dashboard gets no strip at all, since
     a single-tab switcher is just noise.
@@ -27,7 +27,7 @@
         || $u->isSuperAdmin()
         || $u->isOperationsController()
     );
-    $canSeeOwner = $u && ($u->isOwner() || $u->isDeveloper() || $u->isSuperAdmin());
+    $canSeeOwner = $u && ($u->isOwner() || $u->isDeveloper());
 
     $visibleCount = (int) $canSeeOps + (int) $canSeeFinance + (int) $canSeeOwner;
 

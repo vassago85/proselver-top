@@ -18,25 +18,32 @@ if (!function_exists('resolveInternalDashboardRoute')) {
      * Owner roll-up.  Each internal role has one natural home:
      *
      *   accounts                     -> Finance
-     *   owner / super_admin / dev    -> Owner roll-up (links to both)
-     *   ops controller / dispatcher  -> Operations
+     *   owner / developer            -> Owner command centre
+     *   super_admin / ops controller
+     *     / dispatcher               -> Operations
      *
      * This is the single source of truth: both the post-login redirect
      * and the /admin/dashboard compatibility route call it, so they can
      * never disagree.  Returns a route NAME, not a URL, so callers can
      * decide between route() and redirect()->route().
+     *
+     * super_admin used to land on the owner roll-up alongside owner and
+     * developer, but the Owner page is now a business-oversight surface
+     * (money, MTD spend, fuel credit, customer rankings) intentionally
+     * scoped to the business owner and the developer who maintains it.
+     * super_admin keeps full sidebar reach and lands on Operations.
      */
     function resolveInternalDashboardRoute($user): string
     {
-        // Developer is checked first and separately from hasRole() because
-        // developers can role-switch in the dev toolbar; when they've
-        // switched we want the switched role's dashboard, but an unswitched
-        // developer should see the owner roll-up rather than raw ops.
         if ($user->isAccounts()) {
             return 'admin.dashboard.finance';
         }
 
-        if ($user->isOwner() || $user->isSuperAdmin() || $user->isDeveloper()) {
+        // Developer is checked here (rather than only via isDeveloper())
+        // because a developer with the dev toolbar switched to another
+        // role should see that role's dashboard; an unswitched developer
+        // shares the owner's command centre.
+        if ($user->isOwner() || $user->isDeveloper()) {
             return 'admin.dashboard.owner';
         }
 

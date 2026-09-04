@@ -113,20 +113,24 @@ test('accounts lands on the finance dashboard', function () {
         ->assertRedirect(route('admin.dashboard.finance'));
 });
 
-test('owner lands on the owner roll-up', function () {
+test('owner lands on the owner command centre', function () {
     $this->actingAs(dashUser('owner'))
         ->get('/admin/dashboard')
         ->assertRedirect(route('admin.dashboard.owner'));
 });
 
-test('super admin and developer land on the owner roll-up', function () {
-    $this->actingAs(dashUser('super_admin'))
-        ->get('/admin/dashboard')
-        ->assertRedirect(route('admin.dashboard.owner'));
-
+test('developer lands on the owner command centre', function () {
     $this->actingAs(dashUser('developer'))
         ->get('/admin/dashboard')
         ->assertRedirect(route('admin.dashboard.owner'));
+});
+
+test('super admin lands on operations, not the owner command centre', function () {
+    // Owner is the business-oversight page; super_admin keeps every other
+    // admin surface but not that one, so their post-login home is Ops.
+    $this->actingAs(dashUser('super_admin'))
+        ->get('/admin/dashboard')
+        ->assertRedirect(route('admin.dashboard.ops'));
 });
 
 test('operations roles land on the operations dashboard', function (string $slug) {
@@ -160,17 +164,20 @@ test('finance dashboard is closed to a plain dispatcher', function () {
         ->assertForbidden();
 });
 
-test('owner dashboard is open only to owner, developer and super admin', function (string $slug) {
+test('owner dashboard is open only to owner and developer', function (string $slug) {
     $this->actingAs(dashUser($slug))
         ->get(route('admin.dashboard.owner'))
         ->assertOk();
-})->with(['owner', 'developer', 'super_admin']);
+})->with(['owner', 'developer']);
 
-test('owner dashboard is closed to accounts and to ops', function (string $slug) {
+test('owner dashboard is closed to super admin, accounts and ops', function (string $slug) {
+    // super_admin used to land here; the command-centre rewrite scoped it
+    // back to the business owner and the maintainer developer, so this
+    // pins that gate against accidental widening.
     $this->actingAs(dashUser($slug))
         ->get(route('admin.dashboard.owner'))
         ->assertForbidden();
-})->with(['accounts', 'operations_controller', 'dispatcher']);
+})->with(['super_admin', 'accounts', 'operations_controller', 'dispatcher']);
 
 test('both new dashboards are closed to customers by the internal middleware', function () {
     $customer = dashUser('customer_owner');
@@ -396,11 +403,14 @@ test('finance dashboard groups outstanding value by customer', function () {
 // 4. Owner roll-up
 // -----------------------------------------------------------------
 
-test('owner roll-up reports an empty attention list when nothing is outstanding', function () {
+test('owner command centre hides the attention strip entirely when nothing is outstanding', function () {
+    // The command-centre design drops the "waiting on you" panel when
+    // there is nothing to clear -- an empty panel on the morning check
+    // was noise the previous roll-up carried and the owner did not want.
     $c = Volt::actingAs(dashUser('owner'))->test('admin.dashboard.owner');
 
     expect($c->viewData('attention'))->toBeEmpty();
-    $c->assertSee('All clear.');
+    $c->assertDontSee('Waiting on you');
 });
 
 test('owner roll-up surfaces only non-zero attention rows, most urgent first', function () {
@@ -486,26 +496,25 @@ test('owner roll-up counts pending booking change requests', function () {
     expect($attention->firstWhere('label', 'Booking change requests pending')['count'])->toBe(1);
 });
 
-test('owner roll-up ops strip separates in-flight from on-the-road and delivered', function () {
+test('owner command centre counts vehicles delivered this month, ignoring prior months', function () {
     $oem = Company::factory()->create(['type' => Company::TYPE_OEM]);
     $creator = User::factory()->create();
 
-    dashJob(['status' => Job::STATUS_RECEIVED, 'delivered_at' => null], $oem, $creator);
-    dashJob(['status' => Job::STATUS_CONFIRMED, 'delivered_at' => null], $oem, $creator);
+    // Two delivered this month, one delivered in a prior month.  Only the
+    // in-scope ones should hit the vehicles-delivered KPI.
+    dashJob(['status' => Job::STATUS_DELIVERED, 'delivered_at' => now()->startOfMonth()->addDays(2)], $oem, $creator);
+    dashJob(['status' => Job::STATUS_DELIVERED, 'delivered_at' => now()->startOfMonth()->addDays(5)], $oem, $creator);
+    dashJob(['status' => Job::STATUS_DELIVERED, 'delivered_at' => now()->subMonthNoOverflow()->startOfMonth()->addDays(3)], $oem, $creator);
+    // At-risk stays live regardless of the picker; deliveries in flight are
+    // not counted as "delivered" this month.
     dashJob(['status' => Job::STATUS_IN_TRANSIT, 'delivered_at' => null], $oem, $creator);
-    dashJob(['status' => Job::STATUS_COLLECTED, 'delivered_at' => null], $oem, $creator);
-    dashJob(['status' => Job::STATUS_DELIVERED, 'delivered_at' => now()->subDays(3)], $oem, $creator);
-    // Older than the 30-day throughput window.
-    dashJob(['status' => Job::STATUS_DELIVERED, 'delivered_at' => now()->subDays(45)], $oem, $creator);
 
     $c = Volt::actingAs(dashUser('owner'))->test('admin.dashboard.owner');
 
-    expect($c->viewData('activeTotal'))->toBe(4);
-    expect($c->viewData('onRoad'))->toBe(2);
-    expect($c->viewData('deliveredRecent'))->toBe(1);
+    expect($c->viewData('deliveredMonth'))->toBe(2);
 });
 
-test('owner roll-up finance strip agrees with the finance dashboard', function () {
+test('owner command centre money figures agree with the finance dashboard for the same month', function () {
     $oem = Company::factory()->create(['type' => Company::TYPE_OEM]);
     $creator = User::factory()->create();
 
@@ -528,7 +537,90 @@ test('owner roll-up finance strip agrees with the finance dashboard', function (
     expect($ownerDash->viewData('unbilledValue'))->toBe(2000.0);
 });
 
-test('owner roll-up reports the licence as off when metering is disabled', function () {
+test('owner command centre month picker walks backward but not into the future', function () {
+    $c = Volt::actingAs(dashUser('owner'))->test('admin.dashboard.owner');
+
+    expect($c->get('month'))->toBe(now()->format('Y-m'));
+
+    $c->call('stepMonth', 1);
+    expect($c->get('month'))->toBe(now()->format('Y-m'));
+
+    $c->call('stepMonth', -1);
+    expect($c->get('month'))->toBe(now()->subMonthNoOverflow()->format('Y-m'));
+});
+
+test('owner command centre respects the month URL when scoping delivered volume', function () {
+    $oem = Company::factory()->create(['type' => Company::TYPE_OEM]);
+    $creator = User::factory()->create();
+
+    $lastMonth = now()->subMonthNoOverflow()->startOfMonth()->addDays(4);
+
+    dashJob(['status' => Job::STATUS_DELIVERED, 'delivered_at' => now()], $oem, $creator);
+    dashJob(['status' => Job::STATUS_DELIVERED, 'delivered_at' => $lastMonth], $oem, $creator);
+
+    $c = Volt::actingAs(dashUser('owner'))->test('admin.dashboard.owner');
+    expect($c->viewData('deliveredMonth'))->toBe(1);
+
+    $c->set('month', $lastMonth->format('Y-m'));
+    expect($c->viewData('deliveredMonth'))->toBe(1);
+    expect($c->viewData('anchor')->format('Y-m'))->toBe($lastMonth->format('Y-m'));
+});
+
+test('owner command centre reports MoM trend when the prior month has comparable data', function () {
+    $oem = Company::factory()->create(['type' => Company::TYPE_OEM]);
+    $creator = User::factory()->create();
+
+    // Prior month: 1 delivery.  Current month: 3 deliveries.  Expect +200%.
+    dashJob(['status' => Job::STATUS_DELIVERED, 'delivered_at' => now()->subMonthNoOverflow()->startOfMonth()->addDays(1)], $oem, $creator);
+    dashJob(['status' => Job::STATUS_DELIVERED, 'delivered_at' => now()->startOfMonth()->addDays(1)], $oem, $creator);
+    dashJob(['status' => Job::STATUS_DELIVERED, 'delivered_at' => now()->startOfMonth()->addDays(2)], $oem, $creator);
+    dashJob(['status' => Job::STATUS_DELIVERED, 'delivered_at' => now()->startOfMonth()->addDays(3)], $oem, $creator);
+
+    $c = Volt::actingAs(dashUser('owner'))->test('admin.dashboard.owner');
+
+    expect($c->viewData('deliveredTrend'))->toMatchArray([
+        'dir' => 'up',
+        'label' => '+200%',
+    ]);
+});
+
+test('owner command centre ranks top customers by both volume and value', function () {
+    $busy = Company::factory()->create(['type' => Company::TYPE_OEM, 'name' => 'Busy Motors']);
+    $rich = Company::factory()->create(['type' => Company::TYPE_OEM, 'name' => 'Rich Motors']);
+    $creator = User::factory()->create();
+
+    // Busy moves 3 vehicles for cheap; Rich moves 1 expensive vehicle.
+    foreach (range(1, 3) as $_) {
+        dashJob(['total_sell_price' => 400, 'invoice_amount' => 400], $busy, $creator);
+    }
+    dashJob(['total_sell_price' => 5000, 'invoice_amount' => 5000], $rich, $creator);
+
+    $c = Volt::actingAs(dashUser('owner'))->test('admin.dashboard.owner');
+
+    $volume = $c->viewData('volumeRows');
+    $value = $c->viewData('valueRows');
+
+    expect($volume->first()->company_name)->toBe('Busy Motors');
+    expect((int) $volume->first()->moves)->toBe(3);
+
+    expect($value->first()->company_name)->toBe('Rich Motors');
+    expect((float) $value->first()->invoiced_sum)->toBe(5000.0);
+});
+
+test('owner command centre reports the licence figure inline', function () {
+    dashJob(['status' => Job::STATUS_DELIVERED, 'delivered_at' => now()]);
+
+    $c = Volt::actingAs(dashUser('owner'))->test('admin.dashboard.owner');
+
+    // Owner + developer are the two roles cleared to see this figure, so
+    // the tile is unconditional here (unlike Finance which gates it).
+    // 1 move × R150 + 15% VAT = R172.50
+    expect($c->viewData('licence'))->not->toBeNull();
+    expect($c->viewData('licence')['moves'])->toBe(1);
+    expect($c->viewData('licence')['total_incl_vat'])->toBe(172.5);
+});
+
+test('owner command centre reports the licence as off when metering is disabled', function () {
     SystemSetting::set(ProselverLicenceBilling::SETTING_ENABLED, false);
 
     $c = Volt::actingAs(dashUser('owner'))->test('admin.dashboard.owner');
@@ -552,6 +644,14 @@ test('the dashboard tab strip only offers dashboards the viewer can open', funct
     // Accounts sees Operations + Finance but never the owner roll-up.
     $this->actingAs(dashUser('accounts'))
         ->get(route('admin.dashboard.finance'))
+        ->assertSee(route('admin.dashboard.finance'))
+        ->assertDontSee(route('admin.dashboard.owner'));
+
+    // super_admin keeps every admin surface but not the owner command
+    // centre; the strip on Finance must not tease a link that would 403.
+    $this->actingAs(dashUser('super_admin'))
+        ->get(route('admin.dashboard.finance'))
+        ->assertSee(route('admin.dashboard.ops'))
         ->assertSee(route('admin.dashboard.finance'))
         ->assertDontSee(route('admin.dashboard.owner'));
 });

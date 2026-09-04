@@ -22,7 +22,9 @@
     // mount() gate so the sidebar never offers a link that 403s -- if you
     // change a page's gate, change the matching flag here.
     $canSeeFinanceDash = $isAccounts || $isOwner || $isDeveloper || $isSuperAdmin || $isOpsController;
-    $canSeeOwnerDash = $isOwner || $isDeveloper || $isSuperAdmin;
+    // Owner command centre is business-oversight only: owner + developer.
+    // super_admin keeps every other admin surface but not this one.
+    $canSeeOwnerDash = $isOwner || $isDeveloper;
     // Customer invoicing is the only Finance link that is per-role gated
     // in the sidebar now; the Petty Cash tab strip handles the audience
     // split for Overview / Reconciliation / Driver Pay inside the section

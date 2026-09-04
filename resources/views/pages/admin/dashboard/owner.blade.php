@@ -3,51 +3,82 @@
 use App\Models\AuditLog;
 use App\Models\BodyBuilderRequest;
 use App\Models\BookingChangeRequest;
+use App\Models\Company;
 use App\Models\Job;
 use App\Models\PettyCashEntry;
 use App\Models\PettyCashPlan;
 use App\Models\SystemSetting;
 use App\Models\User;
 use App\Services\ProselverLicenceBilling;
+use App\Services\Tfn\TfnClient;
+use App\Services\Tfn\TfnDemoFixtures;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
 use Livewire\Attributes\Layout;
+use Livewire\Attributes\Url;
 use Livewire\Volt\Component;
 
 /**
  * ╔══════════════════════════════════════════════════════════════════╗
- * ║  OWNER ROLL-UP                                                   ║
+ * ║  OWNER BUSINESS COMMAND CENTRE                                    ║
  * ╠══════════════════════════════════════════════════════════════════╣
- * ║  Deliberately thin.  Two strips of headline numbers -- one        ║
- * ║  operational, one financial -- plus the list of things only the   ║
- * ║  owner can clear.  Every number links through to the page that    ║
- * ║  owns it; nothing is captured, approved or edited here.          ║
+ * ║  One screen the owner opens in the morning: what needs a          ║
+ * ║  signature, where the money is at for the picked month, how much  ║
+ * ║  fuel we've burnt / how much credit is left on the card, and who  ║
+ * ║  moved the most metal.  Read-only -- every number links to the    ║
+ * ║  page that owns the work.                                         ║
  * ║                                                                  ║
- * ║  This page is NOT a superset of the Operations and Finance        ║
- * ║  dashboards.  If you find yourself wanting to add a chart, a      ║
- * ║  filter bar or a drill-down table, it belongs on one of those two ║
- * ║  instead -- the value of this page is that it fits on one screen  ║
- * ║  and answers "is anything wrong, and is anything waiting on me".  ║
+ * ║  Restricted to the business owner and the developer who maintains ║
+ * ║  the platform.  super_admin has full sidebar reach but not this   ║
+ * ║  page, because the oversight numbers here are the owner's book.   ║
  * ║                                                                  ║
- * ║  No filters by design.  The window is fixed: "now" for pipeline   ║
- * ║  state, the current calendar month for money, last 30 days for    ║
- * ║  throughput.  An owner who wants to slice the data goes to the    ║
- * ║  dashboard that has the filters.                                  ║
+ * ║  Every money figure agrees, definition-for-definition, with the   ║
+ * ║  Finance dashboard for the same month -- billable is ProSelver +  ║
+ * ║  delivered, petty cash matches Petty Cash Overview, licence is    ║
+ * ║  the same per-move × count calc.  If a number drifts between the  ║
+ * ║  two pages, one of them copied a scope wrong.                     ║
  * ║                                                                  ║
  * ║  SQL is kept portable (no Postgres-only FILTER or ::date) so this ║
  * ║  page is coverable by the SQLite test suite.                      ║
  * ╚══════════════════════════════════════════════════════════════════╝
  */
 new #[Layout('components.layouts.app')] class extends Component {
-    /** Throughput window for the "delivered" headline. */
-    private const THROUGHPUT_DAYS = 30;
+    /** Picked month as YYYY-MM.  Defaults to the current month. */
+    #[Url] public string $month = '';
 
     public function mount(): void
     {
         $u = auth()->user();
 
-        if (!$u || (!$u->isOwner() && !$u->isDeveloper() && !$u->isSuperAdmin())) {
-            abort(403, 'The owner overview is restricted to the business owner.');
+        if (!$u || (!$u->isOwner() && !$u->isDeveloper())) {
+            abort(403, 'The owner command centre is restricted to the business owner.');
+        }
+
+        if (!preg_match('/^\d{4}-\d{2}$/', $this->month)) {
+            $this->month = now()->format('Y-m');
+        }
+    }
+
+    public function stepMonth(int $delta): void
+    {
+        $anchor = $this->anchor()->addMonthsNoOverflow($delta);
+
+        // Never walk into the future -- the oversight numbers only make
+        // sense for months that have actually happened.
+        if ($anchor->greaterThan(now()->startOfMonth())) {
+            return;
+        }
+
+        $this->month = $anchor->format('Y-m');
+    }
+
+    /** First day of the picked month, falling back to this month. */
+    private function anchor(): Carbon
+    {
+        try {
+            return Carbon::createFromFormat('!Y-m', $this->month)->startOfMonth();
+        } catch (\Throwable $e) {
+            return now()->startOfMonth();
         }
     }
 
@@ -106,14 +137,250 @@ new #[Layout('components.layouts.app')] class extends Component {
     }
 
     /**
+     * ProSelver movements that are billable in the window.  Mirrors
+     * Finance dashboard::billableQuery() so the two pages can never
+     * disagree.
+     */
+    private function billableQuery(Carbon $from, Carbon $to): \Illuminate\Database\Eloquent\Builder
+    {
+        return Job::query()
+            ->where('executor_type', Job::EXECUTOR_PROSELVER)
+            ->whereIn('status', [
+                Job::STATUS_DELIVERED,
+                Job::STATUS_COMPLETED,
+                Job::STATUS_INVOICED,
+            ])
+            ->whereNotNull('delivered_at')
+            ->whereBetween('delivered_at', [$from, $to]);
+    }
+
+    /**
+     * Petty cash issued vs spent for a window.  Same definitions as
+     * the Finance dashboard so the variance figures agree.
+     *
+     * @return array{issued: float, spent: float}
+     */
+    private function pettyCash(Carbon $from, Carbon $to): array
+    {
+        $issued = (float) Job::query()
+            ->excludingTransferredAdvances()
+            ->whereNotNull('advance_assigned_at')
+            ->whereBetween('advance_assigned_at', [$from, $to])
+            ->sum('advance_total');
+
+        $spent = (float) PettyCashEntry::query()
+            ->whereIn('status', [
+                PettyCashEntry::STATUS_APPROVED,
+                PettyCashEntry::STATUS_REIMBURSED,
+                PettyCashEntry::STATUS_SUBMITTED,
+            ])
+            ->whereBetween('created_at', [$from, $to])
+            ->sum('amount_cents') / 100;
+
+        return ['issued' => $issued, 'spent' => $spent];
+    }
+
+    /**
+     * Percentage movement vs the previous month.  Matches the Finance
+     * dashboard's trend() helper -- the caller decides whether an "up"
+     * is good news or bad, this only reports direction and magnitude.
+     *
+     * Works on int or float inputs; percentages are rounded to whole
+     * points so the tile stays glanceable.
+     */
+    private function trend(int|float $current, int|float $previous): ?array
+    {
+        if ((float) $previous === 0.0 && (float) $current === 0.0) {
+            return null;
+        }
+        if ((float) $previous === 0.0) {
+            return ['dir' => 'up', 'label' => 'new'];
+        }
+
+        $delta = (int) round((($current - $previous) / $previous) * 100);
+
+        return [
+            'dir' => $delta >= 0 ? 'up' : 'down',
+            'label' => ($delta >= 0 ? '+' : '') . $delta . '%',
+        ];
+    }
+
+    /**
+     * Deliveries per calendar day of the picked month.  A dense-array
+     * shape (one row per day, zeros filled in) keeps the SVG loop simple
+     * on the view side.
+     *
+     * @return list<array{date: Carbon, count: int}>
+     */
+    private function deliveriesByDay(Carbon $from, Carbon $to): array
+    {
+        // COUNT + DATE(delivered_at) is portable across MySQL / Postgres /
+        // SQLite (the test connection).  A raw ::date cast would not be.
+        $rows = Job::query()
+            ->where('executor_type', Job::EXECUTOR_PROSELVER)
+            ->whereIn('status', [Job::STATUS_DELIVERED, Job::STATUS_COMPLETED, Job::STATUS_INVOICED])
+            ->whereNotNull('delivered_at')
+            ->whereBetween('delivered_at', [$from, $to])
+            ->selectRaw('DATE(delivered_at) AS d, COUNT(*) AS cnt')
+            ->groupBy('d')
+            ->pluck('cnt', 'd');
+
+        $out = [];
+        for ($day = $from->copy(); $day->lte($to); $day->addDay()) {
+            $key = $day->toDateString();
+            $out[] = [
+                'date' => $day->copy(),
+                'count' => (int) ($rows[$key] ?? 0),
+            ];
+        }
+
+        return $out;
+    }
+
+    /**
+     * Petty cash spent per category in the month.  Filters to the same
+     * committed-money status set as the KPI so the totals reconcile.
+     *
+     * @return array<string, float>  category slug => rand amount
+     */
+    private function pettyCashByCategory(Carbon $from, Carbon $to): array
+    {
+        $rows = PettyCashEntry::query()
+            ->whereIn('status', [
+                PettyCashEntry::STATUS_APPROVED,
+                PettyCashEntry::STATUS_REIMBURSED,
+                PettyCashEntry::STATUS_SUBMITTED,
+            ])
+            ->whereBetween('created_at', [$from, $to])
+            ->selectRaw('category, COALESCE(SUM(amount_cents), 0) AS total_cents')
+            ->groupBy('category')
+            ->pluck('total_cents', 'category');
+
+        // Present every category so a zero bar is visible.  Order fixed
+        // for readability -- fuel first, "other" last.
+        $order = [
+            PettyCashEntry::CATEGORY_FUEL,
+            PettyCashEntry::CATEGORY_TOLL,
+            PettyCashEntry::CATEGORY_FOOD,
+            PettyCashEntry::CATEGORY_ACCOMMODATION,
+            PettyCashEntry::CATEGORY_PARKING,
+            PettyCashEntry::CATEGORY_OTHER,
+        ];
+
+        $out = [];
+        foreach ($order as $cat) {
+            $out[$cat] = (float) ($rows[$cat] ?? 0) / 100;
+        }
+
+        return $out;
+    }
+
+    /**
+     * Live fuel snapshot from TFN, with a safe fallback to demo fixtures.
+     * Wrapped end-to-end so the dashboard never 500s on a flaky API --
+     * a broken TFN gives us "—" on the tile and a note in the banner,
+     * not a dead page.
+     *
+     * The month-aggregate reads whichever month the picker sits on; if
+     * that call fails we degrade the tile to slip-based fuel only.
+     *
+     * @return array{
+     *     available: ?float,
+     *     balance: ?float,
+     *     tfn_litres: ?float,
+     *     source: 'live'|'demo',
+     *     ok: bool
+     * }
+     */
+    private function fuelSnapshot(Carbon $anchor): array
+    {
+        $client = app(TfnClient::class);
+        $fixtures = app(TfnDemoFixtures::class);
+
+        $isLive = false;
+        try {
+            $isLive = $client->isLive();
+        } catch (\Throwable $e) {
+            $isLive = false;
+        }
+
+        $balancePayload = null;
+        $aggregatePayload = null;
+        $ok = true;
+
+        if ($isLive) {
+            try {
+                $balancePayload = $client->subAccountBalance();
+            } catch (\Throwable $e) {
+                $balancePayload = $fixtures->balance();
+                $ok = false;
+            }
+            try {
+                $aggregatePayload = $client->subAccountAggregateLitres($anchor);
+            } catch (\Throwable $e) {
+                $aggregatePayload = $fixtures->aggregateLitres();
+                $ok = false;
+            }
+        } else {
+            $balancePayload = $fixtures->balance();
+            $aggregatePayload = $fixtures->aggregateLitres();
+        }
+
+        $available = $balancePayload['AccountAvailableBalance']
+            ?? $balancePayload['AvailableCredit']
+            ?? null;
+        $balance = $balancePayload['AccountBalance']
+            ?? $balancePayload['Balance']
+            ?? null;
+
+        $litres = 0.0;
+        foreach ((array) $aggregatePayload as $row) {
+            $litres += (float) ($row['Litres'] ?? 0);
+        }
+
+        return [
+            'available' => $available !== null ? (float) $available : null,
+            'balance' => $balance !== null ? (float) $balance : null,
+            'tfn_litres' => $litres > 0 ? $litres : null,
+            'source' => $isLive ? 'live' : 'demo',
+            'ok' => $ok,
+        ];
+    }
+
+    /**
+     * Range shortcuts into the audit log.  Owner asked to be able to
+     * pull every change for the current week, this month and last month
+     * without touching a date picker.
+     *
+     * @return list<array{label: string, href: string}>
+     */
+    private function changeRanges(): array
+    {
+        $now = now();
+
+        $ranges = [
+            'Yesterday' => [$now->copy()->subDay()->startOfDay(), $now->copy()->subDay()->endOfDay()],
+            'This week' => [$now->copy()->startOfWeek(), $now->copy()->endOfWeek()],
+            'This month' => [$now->copy()->startOfMonth(), $now->copy()->endOfMonth()],
+            'Last month' => [
+                $now->copy()->subMonthNoOverflow()->startOfMonth(),
+                $now->copy()->subMonthNoOverflow()->endOfMonth(),
+            ],
+        ];
+
+        return collect($ranges)->map(fn ($window, $label) => [
+            'label' => $label,
+            'href' => route('admin.audit-log', [
+                'dateFrom' => $window[0]->toDateString(),
+                'dateTo' => $window[1]->toDateString(),
+            ]),
+        ])->values()->all();
+    }
+
+    /**
      * Yesterday's activity, summarised. The owner's first question after being
      * away is "what moved while I wasn't looking", and the audit log answers it
      * but only if you already know what to filter for.
-     *
-     * A digest, deliberately -- counts and the top few actors/actions, every
-     * one of them a link into the audit log with the filter already applied.
-     * No table and no filters here, per this page's doctrine: the drill-down
-     * lives on the page that owns it.
      */
     private function yesterdayDigest(): array
     {
@@ -169,118 +436,140 @@ new #[Layout('components.layouts.app')] class extends Component {
         ];
     }
 
-    /**
-     * Range shortcuts into the audit log. The owner asked to be able to pull
-     * every change for the current week, this month and last month without
-     * touching a date picker.
-     */
-    private function changeRanges(): array
-    {
-        $now = now();
-
-        $ranges = [
-            'Yesterday' => [$now->copy()->subDay()->startOfDay(), $now->copy()->subDay()->endOfDay()],
-            'This week' => [$now->copy()->startOfWeek(), $now->copy()->endOfWeek()],
-            'This month' => [$now->copy()->startOfMonth(), $now->copy()->endOfMonth()],
-            'Last month' => [
-                $now->copy()->subMonthNoOverflow()->startOfMonth(),
-                $now->copy()->subMonthNoOverflow()->endOfMonth(),
-            ],
-        ];
-
-        return collect($ranges)->map(fn ($window, $label) => [
-            'label' => $label,
-            'href' => route('admin.audit-log', [
-                'dateFrom' => $window[0]->toDateString(),
-                'dateTo' => $window[1]->toDateString(),
-            ]),
-        ])->values()->all();
-    }
-
     public function with(): array
     {
-        $monthFrom = now()->startOfMonth();
-        $monthTo = now()->endOfMonth();
-        $throughputFrom = now()->subDays(self::THROUGHPUT_DAYS - 1)->startOfDay();
+        $anchor = $this->anchor();
+        $from = $anchor->copy()->startOfMonth();
+        $to = $anchor->copy()->endOfMonth();
+        $prevAnchor = $anchor->copy()->subMonthNoOverflow();
+        $prevFrom = $prevAnchor->copy()->startOfMonth();
+        $prevTo = $prevAnchor->copy()->endOfMonth();
+        $atCurrentMonth = $anchor->equalTo(now()->startOfMonth());
 
-        // ─── Operational headlines ─────────────────────────────────────
-        $activeTotal = (int) $this->activeQuery()->count();
-
-        $onRoad = (int) $this->activeQuery()
-            ->whereIn('status', [Job::STATUS_COLLECTED, Job::STATUS_IN_TRANSIT])
-            ->count();
-
-        $deliveredRecent = (int) Job::query()
-            ->where('executor_type', Job::EXECUTOR_PROSELVER)
-            ->whereNotNull('delivered_at')
-            ->whereBetween('delivered_at', [$throughputFrom, now()])
-            ->count();
-
-        $atRisk = $this->atRiskCount();
-
-        // ─── Financial headlines (current calendar month) ──────────────
-        // One pass over the month's billable movements, matching the
-        // invoicing page's definition of billable.
-        $billing = Job::query()
-            ->where('executor_type', Job::EXECUTOR_PROSELVER)
-            ->whereIn('status', [Job::STATUS_DELIVERED, Job::STATUS_COMPLETED, Job::STATUS_INVOICED])
-            ->whereNotNull('delivered_at')
-            ->whereBetween('delivered_at', [$monthFrom, $monthTo])
+        // ─── Money for the picked month ────────────────────────────────
+        // One pass over the month's billable rows -- same aggregates the
+        // Finance dashboard uses, so the two pages can't drift.
+        $billing = $this->billableQuery($from, $to)
+            ->selectRaw('COUNT(*) AS total_count')
             ->selectRaw('COUNT(CASE WHEN invoicing_completed_at IS NULL AND invoicing_excluded_at IS NULL THEN 1 END) AS open_count')
             ->selectRaw('COALESCE(SUM(CASE WHEN invoicing_completed_at IS NULL AND invoicing_excluded_at IS NULL THEN total_sell_price END), 0) AS unbilled_sum')
             ->selectRaw('COALESCE(SUM(CASE WHEN invoicing_excluded_at IS NULL THEN invoice_amount END), 0) AS invoiced_sum')
             ->selectRaw('COUNT(CASE WHEN (invoice_number IS NULL OR invoice_number = ?) AND invoicing_excluded_at IS NULL THEN 1 END) AS missing_number_count', [''])
             ->first();
 
-        // Petty cash issued vs spent for the month -- same definitions as
-        // the Petty Cash Overview so the variance figures agree.
-        $issued = (float) Job::query()
-            ->excludingTransferredAdvances()
-            ->whereNotNull('advance_assigned_at')
-            ->whereBetween('advance_assigned_at', [$monthFrom, $monthTo])
-            ->sum('advance_total');
+        $prevBilling = $this->billableQuery($prevFrom, $prevTo)
+            ->selectRaw('COALESCE(SUM(CASE WHEN invoicing_completed_at IS NULL AND invoicing_excluded_at IS NULL THEN total_sell_price END), 0) AS unbilled_sum')
+            ->selectRaw('COALESCE(SUM(CASE WHEN invoicing_excluded_at IS NULL THEN invoice_amount END), 0) AS invoiced_sum')
+            ->first();
 
-        $spent = (float) PettyCashEntry::query()
+        // Vehicles delivered in the picked month -- one number, one scope,
+        // shared by the KPI, the leaderboard and the licence figure.
+        $deliveredMonth = (int) Job::query()
+            ->where('executor_type', Job::EXECUTOR_PROSELVER)
+            ->whereIn('status', [Job::STATUS_DELIVERED, Job::STATUS_COMPLETED, Job::STATUS_INVOICED])
+            ->whereNotNull('delivered_at')
+            ->whereBetween('delivered_at', [$from, $to])
+            ->count();
+
+        $prevDelivered = (int) Job::query()
+            ->where('executor_type', Job::EXECUTOR_PROSELVER)
+            ->whereIn('status', [Job::STATUS_DELIVERED, Job::STATUS_COMPLETED, Job::STATUS_INVOICED])
+            ->whereNotNull('delivered_at')
+            ->whereBetween('delivered_at', [$prevFrom, $prevTo])
+            ->count();
+
+        // ─── Petty cash for the month ──────────────────────────────────
+        $cash = $this->pettyCash($from, $to);
+        $prevCash = $this->pettyCash($prevFrom, $prevTo);
+        $variance = round($cash['spent'] - $cash['issued'], 2);
+
+        // ─── Fuel snapshot (live TFN or fixtures) ──────────────────────
+        $fuel = $this->fuelSnapshot($anchor);
+
+        // Slip-based fuel spend for the picked month -- always available
+        // even when TFN is down, and used as helper text on the KPI.
+        $slipFuelMonth = (float) PettyCashEntry::query()
+            ->where('category', PettyCashEntry::CATEGORY_FUEL)
             ->whereIn('status', [
                 PettyCashEntry::STATUS_APPROVED,
                 PettyCashEntry::STATUS_REIMBURSED,
                 PettyCashEntry::STATUS_SUBMITTED,
             ])
-            ->whereBetween('created_at', [$monthFrom, $monthTo])
+            ->whereBetween('created_at', [$from, $to])
             ->sum('amount_cents') / 100;
 
-        $variance = round($spent - $issued, 2);
+        $prevSlipFuel = (float) PettyCashEntry::query()
+            ->where('category', PettyCashEntry::CATEGORY_FUEL)
+            ->whereIn('status', [
+                PettyCashEntry::STATUS_APPROVED,
+                PettyCashEntry::STATUS_REIMBURSED,
+                PettyCashEntry::STATUS_SUBMITTED,
+            ])
+            ->whereBetween('created_at', [$prevFrom, $prevTo])
+            ->sum('amount_cents') / 100;
 
-        // Platform licence for the month. Gated even here: this page is open to
-        // super_admin as well as the owner and developer, and super_admin is
-        // not entitled to the licence figure (the billing page 403s them, so
-        // showing the number would have been both a leak and a dead link).
+        // ─── Platform licence (owner + developer only, gated again) ────
         $licenceService = app(ProselverLicenceBilling::class);
         $licence = null;
-        $canSeeLicence = (bool) auth()->user()?->canViewPlatformLicence();
-
-        if ($canSeeLicence && $licenceService->isEnabled()) {
-            $moves = (int) Job::query()
-                ->where('executor_type', Job::EXECUTOR_PROSELVER)
-                ->whereIn('status', [Job::STATUS_DELIVERED, Job::STATUS_COMPLETED])
-                ->whereNotNull('delivered_at')
-                ->whereBetween('delivered_at', [$monthFrom, $monthTo])
-                ->count();
-
-            $excl = $moves * $licenceService->perMoveFee();
-
+        if ($licenceService->isEnabled()) {
+            $excl = $deliveredMonth * $licenceService->perMoveFee();
             $licence = [
-                'moves' => $moves,
+                'moves' => $deliveredMonth,
+                'per_move' => $licenceService->perMoveFee(),
                 'total_incl_vat' => $excl + round($excl * ProselverLicenceBilling::VAT_RATE, 2),
             ];
         }
 
-        // ─── Waiting on the owner ──────────────────────────────────────
-        // Each row is something the business genuinely cannot progress
-        // without an owner decision, plus the two exception counts an
-        // owner is expected to chase.  Zero-count rows are filtered out
-        // in the view so this list is either empty (all clear) or
-        // entirely actionable.
+        // ─── At-risk pipeline (live, not month-scoped) ─────────────────
+        $atRisk = $this->atRiskCount();
+
+        // ─── Charts ────────────────────────────────────────────────────
+        $deliveriesSeries = $this->deliveriesByDay($from, $to);
+        $deliveriesPeak = max(1, collect($deliveriesSeries)->max('count') ?? 0);
+
+        $cashByCategory = $this->pettyCashByCategory($from, $to);
+        $cashPeak = max(0.01, max($cashByCategory ?: [0]));
+
+        // ─── Customer leaderboards (top 8 for the month) ───────────────
+        $volumeRows = Job::query()
+            ->where('executor_type', Job::EXECUTOR_PROSELVER)
+            ->whereIn('status', [Job::STATUS_DELIVERED, Job::STATUS_COMPLETED, Job::STATUS_INVOICED])
+            ->whereNotNull('delivered_at')
+            ->whereBetween('delivered_at', [$from, $to])
+            ->whereNotNull('company_id')
+            ->groupBy('company_id')
+            ->selectRaw('company_id, COUNT(*) AS moves')
+            ->orderByDesc('moves')
+            ->orderBy('company_id')
+            ->limit(8)
+            ->get();
+
+        $valueRows = Job::query()
+            ->where('executor_type', Job::EXECUTOR_PROSELVER)
+            ->whereIn('status', [Job::STATUS_DELIVERED, Job::STATUS_COMPLETED, Job::STATUS_INVOICED])
+            ->whereNotNull('delivered_at')
+            ->whereBetween('delivered_at', [$from, $to])
+            ->whereNull('invoicing_excluded_at')
+            ->whereNotNull('company_id')
+            ->groupBy('company_id')
+            ->selectRaw('company_id, COUNT(*) AS moves, COALESCE(SUM(invoice_amount), 0) AS invoiced_sum')
+            ->orderByDesc('invoiced_sum')
+            ->orderBy('company_id')
+            ->limit(8)
+            ->get();
+
+        // Batch the name lookup so we hit companies once rather than 16 times.
+        $companyIds = $volumeRows->pluck('company_id')->merge($valueRows->pluck('company_id'))->unique();
+        $companyNames = $companyIds->isEmpty()
+            ? collect()
+            : Company::whereIn('id', $companyIds)->pluck('name', 'id');
+
+        $volumeRows->each(fn ($r) => $r->setAttribute('company_name', $companyNames->get($r->company_id) ?? 'Unknown customer'));
+        $valueRows->each(fn ($r) => $r->setAttribute('company_name', $companyNames->get($r->company_id) ?? 'Unknown customer'));
+
+        // ─── Waiting on you ────────────────────────────────────────────
+        // Live (not month-scoped) -- an owner opens the page to clear
+        // whatever is blocking right now, regardless of the picker.
         $attention = [
             [
                 'label' => 'Petty cash plans awaiting your sign-off',
@@ -292,9 +581,6 @@ new #[Layout('components.layouts.app')] class extends Component {
             [
                 'label' => 'Open reconciliation queries',
                 'count' => (int) Job::query()->issuedCancellationQueryOpen()->count(),
-                // Points at the dedicated report rather than the Overview: it
-                // lists every open query with the clearing action inline, and
-                // the settled ones with their explanations underneath.
                 'href' => route('admin.petty-cash.reconciliation'),
                 'severity' => 'high',
                 'note' => 'Trips cancelled after cash was issued, with no explanation signed off.',
@@ -310,8 +596,8 @@ new #[Layout('components.layouts.app')] class extends Component {
                 'label' => 'Movements missing an invoice number',
                 'count' => (int) ($billing->missing_number_count ?? 0),
                 'href' => route('admin.invoices.index', [
-                    'dateFrom' => $monthFrom->toDateString(),
-                    'dateTo' => $monthTo->toDateString(),
+                    'dateFrom' => $from->toDateString(),
+                    'dateTo' => $to->toDateString(),
                     'completion' => 'all',
                 ]),
                 'severity' => 'medium',
@@ -340,11 +626,6 @@ new #[Layout('components.layouts.app')] class extends Component {
             ],
         ];
 
-        // Highest-severity, biggest-count first so the top of the list is
-        // always the most urgent thing.  A single integer sort key keeps
-        // this unambiguous: severity dominates, count breaks ties, and the
-        // count is negated so bigger sorts earlier.  Counts are clamped so
-        // an extreme value can't bleed into the severity band.
         $severityRank = ['high' => 0, 'medium' => 1, 'low' => 2];
 
         $attention = collect($attention)
@@ -354,23 +635,55 @@ new #[Layout('components.layouts.app')] class extends Component {
             ->values();
 
         return [
-            'monthLabel' => $monthFrom->format('F Y'),
-            'throughputDays' => self::THROUGHPUT_DAYS,
+            'anchor' => $anchor,
+            'from' => $from,
+            'to' => $to,
+            'atCurrentMonth' => $atCurrentMonth,
 
-            'activeTotal' => $activeTotal,
-            'onRoad' => $onRoad,
-            'deliveredRecent' => $deliveredRecent,
+            // KPI values
+            'cashSpent' => $cash['spent'],
+            'cashIssued' => $cash['issued'],
+            'variance' => $variance,
+            'cashTrend' => $this->trend($cash['spent'], $prevCash['spent']),
+
+            'fuel' => $fuel,
+            'slipFuelMonth' => $slipFuelMonth,
+            'fuelTrend' => $this->trend(
+                (float) ($fuel['tfn_litres'] ?? $slipFuelMonth),
+                (float) $prevSlipFuel,
+            ),
+
+            'deliveredMonth' => $deliveredMonth,
+            'deliveredTrend' => $this->trend($deliveredMonth, $prevDelivered),
+
+            'invoicedValue' => (float) ($billing->invoiced_sum ?? 0),
+            'invoicedTrend' => $this->trend(
+                (float) ($billing->invoiced_sum ?? 0),
+                (float) ($prevBilling->invoiced_sum ?? 0),
+            ),
+
+            'unbilledValue' => (float) ($billing->unbilled_sum ?? 0),
+            'openInvoicing' => (int) ($billing->open_count ?? 0),
+            'unbilledTrend' => $this->trend(
+                (float) ($billing->unbilled_sum ?? 0),
+                (float) ($prevBilling->unbilled_sum ?? 0),
+            ),
+
+            'licence' => $licence,
             'atRisk' => $atRisk,
 
-            'openInvoicing' => (int) ($billing->open_count ?? 0),
-            'unbilledValue' => (float) ($billing->unbilled_sum ?? 0),
-            'invoicedValue' => (float) ($billing->invoiced_sum ?? 0),
-            'variance' => $variance,
-            'licence' => $licence,
-            'canSeeLicence' => $canSeeLicence,
+            // Charts
+            'deliveriesSeries' => $deliveriesSeries,
+            'deliveriesPeak' => $deliveriesPeak,
+            'cashByCategory' => $cashByCategory,
+            'cashPeak' => $cashPeak,
 
+            // Leaderboards
+            'volumeRows' => $volumeRows,
+            'valueRows' => $valueRows,
+
+            // Attention + digest
             'attention' => $attention,
-
             'digest' => $this->yesterdayDigest(),
             'changeRanges' => $this->changeRanges(),
         ];
@@ -382,9 +695,18 @@ new #[Layout('components.layouts.app')] class extends Component {
     $num = fn ($v) => number_format((int) $v);
 
     $severityStyles = [
-        'high' => ['dot' => 'bg-rose-500', 'count' => 'text-rose-700', 'ring' => 'border-rose-200 bg-rose-50/50'],
-        'medium' => ['dot' => 'bg-amber-500', 'count' => 'text-amber-700', 'ring' => 'border-amber-200 bg-amber-50/50'],
-        'low' => ['dot' => 'bg-slate-400', 'count' => 'text-slate-700', 'ring' => 'border-slate-200 bg-slate-50/50'],
+        'high' => ['dot' => 'bg-rose-500', 'count' => 'text-rose-700'],
+        'medium' => ['dot' => 'bg-amber-500', 'count' => 'text-amber-700'],
+        'low' => ['dot' => 'bg-slate-400', 'count' => 'text-slate-700'],
+    ];
+
+    $categoryLabels = [
+        'fuel_slip' => 'Fuel',
+        'toll_slip' => 'Tolls',
+        'food_slip' => 'Food',
+        'accommodation_slip' => 'Accommodation',
+        'parking_slip' => 'Parking',
+        'other' => 'Other',
     ];
 @endphp
 
@@ -392,8 +714,8 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     <x-page-header
         eyebrow="Owner"
-        title="Business Overview"
-        subtitle="Where the operation and the money stand, and what's waiting on you.">
+        title="Business Command Centre"
+        subtitle="Where the money and the metal are for {{ $anchor->format('F Y') }}, and what's waiting on you.">
         <x-slot:actions>
             <x-button variant="secondary" size="sm" :href="route('admin.reports.index')">
                 <x-slot:icon>
@@ -415,24 +737,15 @@ new #[Layout('components.layouts.app')] class extends Component {
     {{-- ══════════════════════════════════════════════════════════════ --}}
     {{-- WAITING ON YOU                                                 --}}
     {{-- ══════════════════════════════════════════════════════════════ --}}
-    {{-- Deliberately first. An owner opening this page wants to know
-         whether anything is blocked on them before they read numbers. --}}
-    <x-dash.panel
-        title="Waiting on you"
-        :subtitle="$attention->isEmpty() ? 'Nothing needs a decision right now' : $attention->count() . ' ' . \Illuminate\Support\Str::plural('item', $attention->count()) . ' need attention'"
-        :tight="true">
+    {{-- First, always. Owner opens the page to answer "is anything
+         blocked on me" before they read money. Renders live counts,
+         never month-scoped. --}}
+    @if($attention->isNotEmpty())
+        <x-dash.panel
+            title="Waiting on you"
+            :subtitle="$attention->count() . ' ' . \Illuminate\Support\Str::plural('item', $attention->count()) . ' need attention'"
+            :tight="true">
 
-        @if($attention->isEmpty())
-            <div class="flex items-center gap-3 px-5 py-6">
-                <span class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-emerald-50 text-emerald-600">
-                    <svg class="h-4.5 w-4.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
-                </span>
-                <div>
-                    <p class="text-sm font-semibold text-slate-900">All clear.</p>
-                    <p class="text-xs text-slate-500">No sign-offs, queries or pending requests are outstanding.</p>
-                </div>
-            </div>
-        @else
             <ul class="divide-y divide-slate-100">
                 @foreach($attention as $row)
                     @php $style = $severityStyles[$row['severity']] ?? $severityStyles['low']; @endphp
@@ -449,230 +762,374 @@ new #[Layout('components.layouts.app')] class extends Component {
                     </li>
                 @endforeach
             </ul>
-        @endif
-    </x-dash.panel>
+        </x-dash.panel>
+    @endif
 
     {{-- ══════════════════════════════════════════════════════════════ --}}
-    {{-- WHAT CHANGED YESTERDAY                                         --}}
+    {{-- MONTH PICKER                                                   --}}
     {{-- ══════════════════════════════════════════════════════════════ --}}
-    {{-- Second question after "is anything blocked on me": what did the team
-         do while I wasn't looking. A digest only — every figure is a link into
-         the audit log with the filter pre-applied, and the range row covers
-         the week / month / previous month without a date picker. --}}
-    <x-dash.panel
-        title="What changed yesterday"
-        :subtitle="$digest['date']->format('l d F Y')"
-        :tight="true">
-        <x-slot:actions>
-            <x-dash.pill :variant="$digest['total'] > 0 ? 'blue' : 'slate'">
-                {{ $num($digest['total']) }} {{ \Illuminate\Support\Str::plural('change', $digest['total']) }}
-            </x-dash.pill>
-        </x-slot:actions>
+    {{-- Same pattern as the Finance dashboard so the two behave
+         identically -- stepper + native month input, capped at "now". --}}
+    <div class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+        <div class="flex items-center gap-2">
+            <button type="button" wire:click="stepMonth(-1)"
+                class="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 text-slate-500 transition hover:bg-slate-50 hover:text-slate-900"
+                aria-label="Previous month">
+                <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+            </button>
 
-        @if($digest['total'] === 0)
-            <div class="flex items-center gap-3 px-5 py-6">
-                <span class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-400">
-                    <svg class="h-4.5 w-4.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-                </span>
-                <div>
-                    <p class="text-sm font-semibold text-slate-900">Nothing was recorded yesterday.</p>
-                    <p class="text-xs text-slate-500">No orders, cash or settings were touched.</p>
+            <input type="month" wire:model.live="month" max="{{ now()->format('Y-m') }}"
+                class="rounded-lg border-slate-300 text-sm font-semibold text-slate-900 shadow-sm focus:border-blue-500 focus:ring-blue-500">
+
+            <button type="button" wire:click="stepMonth(1)" @disabled($atCurrentMonth)
+                class="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 text-slate-500 transition hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"
+                aria-label="Next month">
+                <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+            </button>
+        </div>
+
+        <p class="text-[11px] font-medium text-slate-500">
+            {{ $from->format('d M Y') }} &rarr; {{ $to->format('d M Y') }}
+            &middot; MTD, delivered-date basis
+        </p>
+    </div>
+
+    {{-- ══════════════════════════════════════════════════════════════ --}}
+    {{-- KPI ROW -- money, fuel and metal at a glance, with MoM deltas  --}}
+    {{-- ══════════════════════════════════════════════════════════════ --}}
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+
+        {{-- Petty cash spent MTD --}}
+        <x-dash.kpi
+            label="Petty cash spent"
+            :value="$money($cashSpent)"
+            :color="abs($variance) < 1 ? 'green' : ($variance > 0 ? 'red' : 'amber')"
+            :href="route('admin.overview')"
+            :trend="$cashTrend"
+            :helper="$money($cashIssued) . ' issued · ' . (abs($variance) < 1 ? 'balanced' : ($variance > 0 ? $money(abs($variance)) . ' over' : $money(abs($variance)) . ' under'))">
+            <x-slot:icon>
+                <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="14" x="2" y="5" rx="2"/><line x1="2" x2="22" y1="10" y2="10"/></svg>
+            </x-slot:icon>
+        </x-dash.kpi>
+
+        {{-- Fuel spend MTD -- litres from TFN if we have them, slip rand as helper.
+             When TFN is unreachable we still surface the slip figure so the tile
+             is never blank. --}}
+        <x-dash.kpi
+            label="Fuel MTD"
+            :value="$fuel['tfn_litres'] !== null ? $num($fuel['tfn_litres']) . ' L' : $money($slipFuelMonth)"
+            color="orange"
+            :href="route('admin.fuel')"
+            :trend="$fuelTrend"
+            :helper="$fuel['tfn_litres'] !== null
+                ? 'TFN litres this month · ' . $money($slipFuelMonth) . ' cash fuel slips'
+                : ($fuel['ok'] ? 'From driver fuel slips (TFN not connected)' : 'TFN unreachable — showing cash fuel slips')">
+            <x-slot:icon>
+                <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" x2="15" y1="22" y2="22"/><line x1="4" x2="14" y1="9" y2="9"/><path d="M14 22V4a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v18"/><path d="M14 13h2a2 2 0 0 1 2 2v2a2 2 0 0 0 2 2 2 2 0 0 0 2-2V9.83a2 2 0 0 0-.59-1.42L18 5"/></svg>
+            </x-slot:icon>
+        </x-dash.kpi>
+
+        {{-- Fuel available credit -- live snapshot, not month-scoped. --}}
+        <x-dash.kpi
+            label="Fuel credit available"
+            :value="$fuel['available'] !== null ? $money($fuel['available']) : '—'"
+            :color="$fuel['available'] === null ? 'slate' : ($fuel['available'] < 20000 ? 'red' : ($fuel['available'] < 50000 ? 'amber' : 'green'))"
+            :href="route('admin.fuel')"
+            :helper="$fuel['available'] === null
+                ? 'TFN account not connected'
+                : ($fuel['source'] === 'live' && $fuel['ok']
+                    ? 'On the TFN sub-account right now'
+                    : 'TFN reachable but stale — refresh on the Fuel page')">
+            <x-slot:icon>
+                <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="14" x="2" y="5" rx="2"/><path d="M6 15h.01"/><path d="M10 15h.01"/></svg>
+            </x-slot:icon>
+        </x-dash.kpi>
+
+        {{-- Vehicles delivered MTD --}}
+        <x-dash.kpi
+            label="Vehicles delivered"
+            :value="$num($deliveredMonth)"
+            color="green"
+            :href="route('admin.deliveries')"
+            :trend="$deliveredTrend"
+            helper="ProSelver-executed, delivered this month">
+            <x-slot:icon>
+                <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 16H9m10 0h3v-3.15a1 1 0 0 0-.84-.99L16 11l-2.7-3.6a1 1 0 0 0-.8-.4H5.24a2 2 0 0 0-1.8 1.1l-.8 1.63A6 6 0 0 0 2 12.42V16h2"/><circle cx="6.5" cy="16.5" r="2.5"/><circle cx="16.5" cy="16.5" r="2.5"/></svg>
+            </x-slot:icon>
+        </x-dash.kpi>
+
+        {{-- Invoiced MTD --}}
+        <x-dash.kpi
+            label="Invoiced"
+            :value="$money($invoicedValue)"
+            color="purple"
+            :href="route('admin.invoices.index', ['dateFrom' => $from->toDateString(), 'dateTo' => $to->toDateString()])"
+            :trend="$invoicedTrend"
+            helper="Captured invoice value this month">
+            <x-slot:icon>
+                <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" x2="16" y1="13" y2="13"/></svg>
+            </x-slot:icon>
+        </x-dash.kpi>
+
+        {{-- Still to bill MTD --}}
+        <x-dash.kpi
+            label="Still to bill"
+            :value="$money($unbilledValue)"
+            :color="$openInvoicing > 0 ? 'orange' : 'green'"
+            :href="route('admin.dashboard.finance')"
+            :trend="$unbilledTrend"
+            :helper="$num($openInvoicing) . ' delivered movements not yet captured'">
+            <x-slot:icon>
+                <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            </x-slot:icon>
+        </x-dash.kpi>
+    </div>
+
+    {{-- ══════════════════════════════════════════════════════════════ --}}
+    {{-- CHARTS ROW                                                     --}}
+    {{-- ══════════════════════════════════════════════════════════════ --}}
+    <div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
+
+        {{-- Deliveries per day (inline SVG, same style as Ops activity) --}}
+        <x-dash.panel
+            class="lg:col-span-2"
+            title="Deliveries per day"
+            :subtitle="$anchor->format('F Y') . ' · ProSelver-executed'">
+            <x-slot:actions>
+                <a href="{{ route('admin.reports.index') }}" class="text-xs font-semibold text-blue-600 hover:text-blue-700">Full report &rarr;</a>
+            </x-slot:actions>
+
+            @if($deliveredMonth === 0)
+                <div class="flex h-56 items-center justify-center text-sm text-slate-400">
+                    No deliveries in {{ $anchor->format('F Y') }}
                 </div>
+            @else
+                @php
+                    $count = count($deliveriesSeries);
+                    $chartH = 180;
+                    $chartW = max(600, $count * 22);
+                    $groupW = $chartW / max($count, 1);
+                    $innerW = max(1, $groupW - 6);
+                    $barW = max(2, $innerW * 0.7);
+                    $labelEvery = $count > 15 ? (int) ceil($count / 15) : 1;
+                @endphp
+                <div class="overflow-x-auto">
+                    <svg viewBox="0 0 {{ $chartW }} {{ $chartH + 30 }}" class="h-60 w-full min-w-[600px]" preserveAspectRatio="none">
+                        @for($i = 1; $i <= 4; $i++)
+                            <line x1="0" x2="{{ $chartW }}" y1="{{ $chartH - ($chartH / 4) * $i }}" y2="{{ $chartH - ($chartH / 4) * $i }}" stroke="#f1f5f9" stroke-width="1"/>
+                        @endfor
+                        @foreach($deliveriesSeries as $i => $d)
+                            @php
+                                $gx = $i * $groupW + (($innerW - $barW) / 2) + 3;
+                                $h = $deliveriesPeak > 0 ? ($d['count'] / $deliveriesPeak) * ($chartH - 6) : 0;
+                            @endphp
+                            <rect x="{{ $gx }}" y="{{ $chartH - $h }}" width="{{ $barW }}" height="{{ $h }}" fill="#10b981" rx="1.5"/>
+                            @if($i % $labelEvery === 0)
+                                <text x="{{ $gx + $barW / 2 }}" y="{{ $chartH + 16 }}" text-anchor="middle" font-size="9" fill="#64748b" font-family="ui-sans-serif,system-ui">{{ $d['date']->format('d') }}</text>
+                            @endif
+                        @endforeach
+                    </svg>
+                </div>
+            @endif
+
+            <x-slot:footer>
+                Peak day: {{ $num($deliveriesPeak) }} {{ \Illuminate\Support\Str::plural('delivery', $deliveriesPeak) }}. Total for the month: {{ $num($deliveredMonth) }}.
+            </x-slot:footer>
+        </x-dash.panel>
+
+        {{-- Petty cash by category (horizontal bars) --}}
+        <x-dash.panel
+            title="Petty cash by category"
+            :subtitle="$money($cashSpent) . ' spent · ' . $anchor->format('F Y')">
+            @php $totalCash = array_sum($cashByCategory); @endphp
+
+            @if($totalCash < 1)
+                <div class="flex h-56 items-center justify-center text-sm text-slate-400">
+                    No petty cash spent in {{ $anchor->format('F Y') }}
+                </div>
+            @else
+                <ul class="space-y-3">
+                    @foreach($cashByCategory as $slug => $amount)
+                        @php
+                            $pct = $cashPeak > 0 ? min(100, ($amount / $cashPeak) * 100) : 0;
+                            $sharePct = $totalCash > 0 ? (int) round(($amount / $totalCash) * 100) : 0;
+                        @endphp
+                        <li>
+                            <div class="flex items-center justify-between text-xs">
+                                <span class="font-medium text-slate-700">{{ $categoryLabels[$slug] ?? Str::of($slug)->replace('_', ' ')->title() }}</span>
+                                <span class="tabular-nums text-slate-500">{{ $money($amount) }} <span class="text-slate-400">· {{ $sharePct }}%</span></span>
+                            </div>
+                            <div class="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+                                <div class="h-full rounded-full bg-orange-400" style="width: {{ $pct }}%"></div>
+                            </div>
+                        </li>
+                    @endforeach
+                </ul>
+            @endif
+
+            <x-slot:footer>
+                <a href="{{ route('admin.overview') }}" class="text-xs font-semibold text-blue-600 hover:text-blue-700">Petty cash overview &rarr;</a>
+            </x-slot:footer>
+        </x-dash.panel>
+    </div>
+
+    {{-- ══════════════════════════════════════════════════════════════ --}}
+    {{-- CUSTOMER LEADERBOARDS                                          --}}
+    {{-- ══════════════════════════════════════════════════════════════ --}}
+    <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
+
+        {{-- By volume -- vehicles delivered --}}
+        <x-dash.panel
+            title="Top customers by volume"
+            :subtitle="'Vehicles delivered · ' . $anchor->format('F Y')"
+            :tight="true">
+            <x-slot:actions>
+                <a href="{{ route('admin.reports.index') }}" class="text-xs font-semibold text-blue-600 hover:text-blue-700">Full report &rarr;</a>
+            </x-slot:actions>
+
+            @if($volumeRows->isEmpty())
+                <div class="px-5 py-10 text-center">
+                    <p class="text-sm font-medium text-slate-500">No deliveries yet in {{ $anchor->format('F Y') }}.</p>
+                </div>
+            @else
+                @php $topVolume = $volumeRows->max('moves'); @endphp
+                <ul class="divide-y divide-slate-100">
+                    @foreach($volumeRows as $i => $row)
+                        @php $pct = $topVolume > 0 ? ($row->moves / $topVolume) * 100 : 0; @endphp
+                        <li class="px-5 py-2.5">
+                            <div class="flex items-center gap-3">
+                                <span class="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-slate-100 text-[11px] font-semibold text-slate-500">{{ $i + 1 }}</span>
+                                <span class="min-w-0 flex-1 truncate text-sm font-medium text-slate-900">{{ $row->company_name }}</span>
+                                <span class="shrink-0 text-sm font-semibold tabular-nums text-slate-900">{{ $num($row->moves) }}</span>
+                            </div>
+                            <div class="mt-1.5 ml-9 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+                                <div class="h-full rounded-full bg-emerald-500" style="width: {{ $pct }}%"></div>
+                            </div>
+                        </li>
+                    @endforeach
+                </ul>
+            @endif
+        </x-dash.panel>
+
+        {{-- By value -- invoiced rand --}}
+        <x-dash.panel
+            title="Top customers by value"
+            :subtitle="'Invoiced this month · ' . $anchor->format('F Y')"
+            :tight="true">
+            <x-slot:actions>
+                <a href="{{ route('admin.dashboard.finance') }}" class="text-xs font-semibold text-blue-600 hover:text-blue-700">Finance &rarr;</a>
+            </x-slot:actions>
+
+            @if($valueRows->isEmpty() || $valueRows->max('invoiced_sum') <= 0)
+                <div class="px-5 py-10 text-center">
+                    <p class="text-sm font-medium text-slate-500">Nothing captured yet in {{ $anchor->format('F Y') }}.</p>
+                    <p class="mt-1 text-xs text-slate-400">Value updates as accounts captures invoice amounts.</p>
+                </div>
+            @else
+                @php $topValue = (float) $valueRows->max('invoiced_sum'); @endphp
+                <ul class="divide-y divide-slate-100">
+                    @foreach($valueRows as $i => $row)
+                        @php $pct = $topValue > 0 ? ((float) $row->invoiced_sum / $topValue) * 100 : 0; @endphp
+                        <li class="px-5 py-2.5">
+                            <div class="flex items-center gap-3">
+                                <span class="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-slate-100 text-[11px] font-semibold text-slate-500">{{ $i + 1 }}</span>
+                                <span class="min-w-0 flex-1 truncate text-sm font-medium text-slate-900">{{ $row->company_name }}</span>
+                                <span class="shrink-0 text-sm font-semibold tabular-nums text-slate-900">{{ $money($row->invoiced_sum) }}</span>
+                            </div>
+                            <div class="mt-1.5 ml-9 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+                                <div class="h-full rounded-full bg-purple-500" style="width: {{ $pct }}%"></div>
+                            </div>
+                        </li>
+                    @endforeach
+                </ul>
+            @endif
+        </x-dash.panel>
+    </div>
+
+    {{-- ══════════════════════════════════════════════════════════════ --}}
+    {{-- SUPPORTING ROW -- licence, at-risk, yesterday digest            --}}
+    {{-- ══════════════════════════════════════════════════════════════ --}}
+    <div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
+
+        {{-- Platform licence for the month --}}
+        <x-dash.panel
+            title="Platform licence"
+            :subtitle="$anchor->format('F Y')">
+            @if($licence)
+                <div class="flex items-baseline justify-between">
+                    <p class="text-3xl font-semibold tabular-nums text-slate-900">{{ $money($licence['total_incl_vat']) }}</p>
+                    <p class="text-xs text-slate-500">incl. VAT</p>
+                </div>
+                <p class="mt-1.5 text-xs text-slate-500">
+                    {{ $num($licence['moves']) }} moves &times; {{ $money($licence['per_move']) }}
+                </p>
+                <x-slot:footer>
+                    <a href="{{ route('admin.billing') }}" class="text-xs font-semibold text-blue-600 hover:text-blue-700">Licence billing &rarr;</a>
+                </x-slot:footer>
+            @else
+                <div class="flex h-24 flex-col items-center justify-center text-center">
+                    <p class="text-sm font-medium text-slate-500">Licence metering is currently disabled</p>
+                    <a href="{{ route('admin.billing') }}" class="mt-1 text-xs font-semibold text-blue-600 hover:text-blue-700">Manage &rarr;</a>
+                </div>
+            @endif
+        </x-dash.panel>
+
+        {{-- At-risk snapshot -- live, not month-scoped --}}
+        <x-dash.panel
+            title="Movements at risk"
+            subtitle="Live · past their stage threshold">
+            <div class="flex items-baseline justify-between">
+                <p class="text-3xl font-semibold tabular-nums {{ $atRisk > 0 ? 'text-rose-700' : 'text-emerald-700' }}">{{ $num($atRisk) }}</p>
+                <p class="text-xs text-slate-500">{{ $atRisk > 0 ? 'needs a look' : 'all clear' }}</p>
             </div>
-        @else
-            <div class="grid grid-cols-1 divide-y divide-slate-100 sm:grid-cols-2 sm:divide-y-0 sm:divide-x">
-                <div class="px-5 py-4">
-                    <p class="mb-2.5 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">Most changed</p>
-                    <ul class="space-y-1.5">
-                        @foreach($digest['actions'] as $action)
+            <p class="mt-1.5 text-xs text-slate-500">
+                Thresholds tuned on the Operations dashboard's settings.
+            </p>
+            <x-slot:footer>
+                <a href="{{ route('admin.dashboard.ops') }}" class="text-xs font-semibold text-blue-600 hover:text-blue-700">Operations dashboard &rarr;</a>
+            </x-slot:footer>
+        </x-dash.panel>
+
+        {{-- What changed yesterday.  A digest -- every count links straight
+             into the audit log with the filter already applied, and the
+             footer carries one-click ranges for the week / month / previous
+             month so the owner never has to touch a date picker. --}}
+        <x-dash.panel
+            title="What changed yesterday"
+            :subtitle="$digest['date']->format('D d M')">
+            @if($digest['total'] === 0)
+                <div class="flex h-24 flex-col items-center justify-center text-center">
+                    <p class="text-sm font-medium text-slate-500">Nothing was recorded yesterday.</p>
+                </div>
+            @else
+                <div class="flex items-baseline justify-between">
+                    <p class="text-3xl font-semibold tabular-nums text-slate-900">{{ $num($digest['total']) }}</p>
+                    <p class="text-xs text-slate-500">{{ \Illuminate\Support\Str::plural('change', $digest['total']) }} &middot; {{ $num($digest['people']) }} {{ \Illuminate\Support\Str::plural('person', $digest['people']) }}</p>
+                </div>
+                @if($digest['actions']->isNotEmpty())
+                    <ul class="mt-3 space-y-1 border-t border-slate-100 pt-3 text-xs">
+                        @foreach($digest['actions']->take(3) as $action)
                             <li>
                                 <a href="{{ $action['href'] }}" class="group flex items-center justify-between gap-3">
-                                    <span class="min-w-0 truncate text-sm text-slate-700 group-hover:text-slate-900">{{ $action['label'] }}</span>
-                                    <span class="shrink-0 text-sm font-semibold tabular-nums text-slate-900">{{ $num($action['count']) }}</span>
+                                    <span class="min-w-0 truncate text-slate-600 group-hover:text-slate-900">{{ $action['label'] }}</span>
+                                    <span class="shrink-0 font-semibold tabular-nums text-slate-900">{{ $num($action['count']) }}</span>
                                 </a>
                             </li>
                         @endforeach
                     </ul>
-                </div>
-
-                <div class="px-5 py-4">
-                    <p class="mb-2.5 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">
-                        Busiest people &middot; {{ $num($digest['people']) }} active
-                    </p>
-                    @if($digest['actors']->isEmpty())
-                        <p class="text-sm text-slate-500">All of yesterday's changes were automated.</p>
-                    @else
-                        <ul class="space-y-1.5">
-                            @foreach($digest['actors'] as $actor)
-                                <li>
-                                    <a href="{{ $actor['href'] }}" class="group flex items-center justify-between gap-3">
-                                        <span class="min-w-0 truncate text-sm text-slate-700 group-hover:text-slate-900">{{ $actor['name'] }}</span>
-                                        <span class="shrink-0 text-sm font-semibold tabular-nums text-slate-900">{{ $num($actor['count']) }}</span>
-                                    </a>
-                                </li>
-                            @endforeach
-                        </ul>
-                    @endif
-                </div>
-            </div>
-        @endif
-
-        <x-slot:footer>
-            <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
-                <span class="text-[11px] font-semibold uppercase tracking-[0.15em] text-slate-400">All changes for</span>
-                @foreach($changeRanges as $r)
-                    <a href="{{ $r['href'] }}" class="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-600 transition-colors hover:border-slate-300 hover:text-slate-900">
-                        {{ $r['label'] }}
-                    </a>
-                @endforeach
-                <a href="{{ route('admin.audit-log') }}" class="text-xs font-semibold text-blue-600 hover:text-blue-700">Full audit log &rarr;</a>
-            </div>
-        </x-slot:footer>
-    </x-dash.panel>
-
-    {{-- ══════════════════════════════════════════════════════════════ --}}
-    {{-- OPERATIONS STRIP                                               --}}
-    {{-- ══════════════════════════════════════════════════════════════ --}}
-    <div>
-        <div class="mb-3 flex items-center justify-between">
-            <div>
-                <h2 class="text-sm font-semibold tracking-tight text-slate-900">Operations</h2>
-                <p class="text-xs text-slate-500">Live pipeline right now &middot; throughput over the last {{ $throughputDays }} days.</p>
-            </div>
-            <a href="{{ route('admin.dashboard.ops') }}" class="text-xs font-semibold text-blue-600 hover:text-blue-700">Operations dashboard &rarr;</a>
-        </div>
-
-        <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
-            <x-dash.kpi
-                label="In flight"
-                :value="$num($activeTotal)"
-                color="blue"
-                :href="route('admin.orders.index')"
-                helper="Movements not yet delivered">
-                <x-slot:icon>
-                    <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="4" x="8" y="2" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></svg>
-                </x-slot:icon>
-            </x-dash.kpi>
-
-            <x-dash.kpi
-                label="On the road"
-                :value="$num($onRoad)"
-                color="teal"
-                :href="route('admin.vehicles.index', ['bucket' => 'live'])"
-                {{-- Plain "and": the helper is echoed through Blade's escaping,
-                     so an &amp; here reaches the page as literal "&amp;". --}}
-                helper="Collected and in transit">
-                <x-slot:icon>
-                    <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 16H9m10 0h3v-3.15a1 1 0 0 0-.84-.99L16 11l-2.7-3.6a1 1 0 0 0-.8-.4H5.24a2 2 0 0 0-1.8 1.1l-.8 1.63A6 6 0 0 0 2 12.42V16h2"/><circle cx="6.5" cy="16.5" r="2.5"/><circle cx="16.5" cy="16.5" r="2.5"/></svg>
-                </x-slot:icon>
-            </x-dash.kpi>
-
-            <x-dash.kpi
-                label="Delivered"
-                :value="$num($deliveredRecent)"
-                color="green"
-                :href="route('admin.deliveries')"
-                :helper="'Last ' . $throughputDays . ' days'">
-                <x-slot:icon>
-                    <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
-                </x-slot:icon>
-            </x-dash.kpi>
-
-            <x-dash.kpi
-                label="At risk"
-                :value="$num($atRisk)"
-                :color="$atRisk > 0 ? 'red' : 'green'"
-                :href="route('admin.dashboard.ops')"
-                :helper="$atRisk > 0 ? 'Past their stage threshold' : 'Everything inside threshold'">
-                <x-slot:icon>
-                    <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
-                </x-slot:icon>
-            </x-dash.kpi>
-        </div>
-    </div>
-
-    {{-- ══════════════════════════════════════════════════════════════ --}}
-    {{-- FINANCE STRIP                                                  --}}
-    {{-- ══════════════════════════════════════════════════════════════ --}}
-    <div>
-        <div class="mb-3 flex items-center justify-between">
-            <div>
-                <h2 class="text-sm font-semibold tracking-tight text-slate-900">Finance</h2>
-                <p class="text-xs text-slate-500">{{ $monthLabel }} &middot; by delivered date.</p>
-            </div>
-            {{-- Reconciliation is linked here as well as from "Waiting on you",
-                 because that row disappears at zero open queries and the owner
-                 still wants the settled-with-explanation history. --}}
-            <div class="flex shrink-0 items-center gap-3">
-                <a href="{{ route('admin.petty-cash.reconciliation') }}" class="text-xs font-semibold text-blue-600 hover:text-blue-700">Reconciliation &rarr;</a>
-                <a href="{{ route('admin.dashboard.finance') }}" class="text-xs font-semibold text-blue-600 hover:text-blue-700">Finance dashboard &rarr;</a>
-            </div>
-        </div>
-
-        <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
-            <x-dash.kpi
-                label="Still to bill"
-                :value="$money($unbilledValue)"
-                :color="$openInvoicing > 0 ? 'orange' : 'green'"
-                :href="route('admin.dashboard.finance')"
-                :helper="$num($openInvoicing) . ' delivered movements this month not yet captured'">
-                <x-slot:icon>
-                    <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-                </x-slot:icon>
-            </x-dash.kpi>
-
-            <x-dash.kpi
-                label="Invoiced"
-                :value="$money($invoicedValue)"
-                color="purple"
-                :href="route('admin.invoices.index')"
-                helper="Captured invoice value this month">
-                <x-slot:icon>
-                    <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" x2="16" y1="13" y2="13"/></svg>
-                </x-slot:icon>
-            </x-dash.kpi>
-
-            <x-dash.kpi
-                label="Petty cash variance"
-                :value="($variance >= 0 ? '+' : '−') . $money(abs($variance))"
-                :color="abs($variance) < 1 ? 'green' : ($variance > 0 ? 'red' : 'amber')"
-                :href="route('admin.overview')"
-                :helper="$variance > 0 ? 'Spent more than issued' : ($variance < 0 ? 'Issued more than spent' : 'Balanced')">
-                <x-slot:icon>
-                    <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="14" x="2" y="5" rx="2"/><line x1="2" x2="22" y1="10" y2="10"/></svg>
-                </x-slot:icon>
-            </x-dash.kpi>
-
-            {{-- Three states, not two: a viewer who isn't entitled to the
-                 licence figure gets no card at all, rather than an "Off" card
-                 that links somewhere they'd be 403'd. The strip drops to three
-                 KPIs for them, which the grid handles. --}}
-            @if($canSeeLicence)
-                @if($licence)
-                    <x-dash.kpi
-                        label="Platform licence"
-                        :value="$money($licence['total_incl_vat'])"
-                        color="indigo"
-                        :href="route('admin.billing')"
-                        :helper="$num($licence['moves']) . ' billable moves incl. VAT'">
-                        <x-slot:icon>
-                            <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
-                        </x-slot:icon>
-                    </x-dash.kpi>
-                @else
-                    <x-dash.kpi
-                        label="Platform licence"
-                        value="Off"
-                        color="slate"
-                        :href="route('admin.billing')"
-                        helper="Licence metering is currently disabled">
-                        <x-slot:icon>
-                            <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
-                        </x-slot:icon>
-                    </x-dash.kpi>
                 @endif
             @endif
-        </div>
+            <x-slot:footer>
+                <div class="flex flex-wrap items-center gap-1.5">
+                    @foreach($changeRanges as $r)
+                        <a href="{{ $r['href'] }}" class="rounded-md border border-slate-200 bg-white px-2 py-0.5 text-[10px] font-semibold text-slate-600 transition-colors hover:border-slate-300 hover:text-slate-900">
+                            {{ $r['label'] }}
+                        </a>
+                    @endforeach
+                    <a href="{{ route('admin.audit-log') }}" class="ml-auto text-xs font-semibold text-blue-600 hover:text-blue-700">Audit log &rarr;</a>
+                </div>
+            </x-slot:footer>
+        </x-dash.panel>
     </div>
 
     {{-- ══════════════════════════════════════════════════════════════ --}}

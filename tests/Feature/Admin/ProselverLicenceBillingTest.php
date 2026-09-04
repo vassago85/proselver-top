@@ -149,25 +149,24 @@ test('the finance dashboard still shows it to the owner', function () {
     $component->assertSee('Platform licence');
 });
 
-test('the owner dashboard withholds the licence figure from super admin', function () {
-    // super_admin can open the owner roll-up but is not entitled to this
-    // number -- and the billing page 403s them, so the card would have been
-    // a dead link as well as a leak.
+test('the owner command centre is closed to super admin, so the licence card cannot leak', function () {
+    // super_admin used to see the owner roll-up but the command centre
+    // rewrite scoped it back to owner + developer -- the same two roles
+    // canViewPlatformLicence() clears.  The 403 covers what the previous
+    // in-page canSeeLicence gate used to.
     billingProselverJob();
 
-    $component = Volt::actingAs(billingUser('super_admin'))->test('admin.dashboard.owner');
-
-    expect($component->viewData('canSeeLicence'))->toBeFalse();
-    expect($component->viewData('licence'))->toBeNull();
-    $component->assertDontSee('Platform licence');
+    $this->actingAs(billingUser('super_admin'))
+        ->get(route('admin.dashboard.owner'))
+        ->assertForbidden();
 });
 
-test('the owner dashboard still shows it to the owner and developer', function (string $slug) {
+test('the owner command centre still shows the licence to the owner and developer', function (string $slug) {
     billingProselverJob();
 
     $component = Volt::actingAs(billingUser($slug))->test('admin.dashboard.owner');
 
-    expect($component->viewData('canSeeLicence'))->toBeTrue();
+    expect($component->viewData('licence'))->not->toBeNull();
     $component->assertSee('Platform licence');
 })->with(['owner', 'developer']);
 

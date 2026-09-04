@@ -59,13 +59,13 @@ test('driver middleware redirects non-drivers to their own home', function () {
 
     // PWA refuses non-driver logins by bouncing them back to the
     // role-appropriate home with a flash message, rather than slamming a
-    // 403 in their face.  For a super_admin that home is the owner
-    // roll-up: the internal dashboard is split three ways (Operations /
-    // Finance / Owner) and resolveInternalDashboardRoute() decides which
-    // one each role lands on.  If you change that mapping, this
-    // expectation moves with it.
+    // 403 in their face.  For a super_admin that home is Operations: the
+    // internal dashboard is split three ways (Operations / Finance /
+    // Owner) and resolveInternalDashboardRoute() decides which one each
+    // role lands on.  Owner is business-oversight only (owner + dev), so
+    // super_admin's home is the live pipeline.
     $response = $middleware->handle($request, fn () => response('ok'));
-    expect($response->isRedirect(route('admin.dashboard.owner')))->toBeTrue();
+    expect($response->isRedirect(route('admin.dashboard.ops')))->toBeTrue();
     expect($response->getSession()->get('pwa_access_denied'))->toContain('Driver app');
 });
 
