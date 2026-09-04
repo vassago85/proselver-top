@@ -1074,17 +1074,30 @@ new #[Layout('components.layouts.app')] class extends Component {
             }
         }
 
-        $litresMtd = collect($data['aggregate'])->sum(fn ($r) => $this->rowLitres($r));
+        // "Litres" only counts fuel products — OS (overnight stay) and
+        // other services carry a MaxAllocation in `Litres` too, but the
+        // unit is nights / units, not litres.  Anything not in the
+        // reconciliation product list is filtered out of the total.
+        $litreProducts = array_map('strtoupper', (array) config('tfn.reconciliation_products', ['D0']));
+        $isLitreProduct = fn ($code) => in_array(strtoupper((string) $code), $litreProducts, true);
 
-        // SubAccountAggregateLitres often returns [] even when the pumps
-        // have been busy (QA returned []; live can too when there is no
-        // sub-account rollup). Fall back to net litres from transactions
-        // since month-start so the tile isn't stuck at 0 L.
-        if ($litresMtd <= 0) {
-            $litresMtd = collect($monthTx)
-                ->reject(fn ($t) => $this->isAccountPayment($t))
-                ->sum(fn ($t) => $this->rowLitres($t));
-        }
+        $aggregateLitres = collect($data['aggregate'])
+            ->filter(fn ($r) => $isLitreProduct($r['ProductCode'] ?? ''))
+            ->sum(fn ($r) => $this->rowLitres($r));
+
+        // Transactions-based total for the same month.  Kept as an
+        // independent source because SubAccountAggregateLitres is often
+        // batched server-side (up to 24h behind) and can lag real fills;
+        // when the transactions total is fresher we surface that instead
+        // of the stale aggregate.  QA has also returned an empty
+        // aggregate rollup when there is no sub-account grouping, so this
+        // is the sole source in that case.
+        $txLitresMtd = collect($monthTx)
+            ->reject(fn ($t) => $this->isAccountPayment($t))
+            ->filter(fn ($t) => $isLitreProduct($t['ProductCode'] ?? ''))
+            ->sum(fn ($t) => $this->rowLitres($t));
+
+        $litresMtd = max($aggregateLitres, $txLitresMtd);
 
         // Volume-weighted average R/L actually paid at the pump this
         // calendar month (Σ|Amount| / ΣLitres on fuel fills). Min/max
@@ -1106,21 +1119,37 @@ new #[Layout('components.layouts.app')] class extends Component {
             ->reject(fn ($t) => $this->isAccountPayment($t))
             ->sum(fn ($t) => abs((float) ($t['Amount'] ?? 0)));
 
-        // Product mix summary (litres by fuel grade this month).
-        $productMix = collect($data['aggregate'])
+        // Product mix summary for the helper under the KPI.  Fuel grades
+        // are in litres; OS is nights; other services are units.  The
+        // view formats each row with the right unit based on the code.
+        //
+        // We prefer the transactions rollup when it's fresher than the
+        // aggregate (same reason $litresMtd does) so the helper agrees
+        // with the headline.
+        $mixFromAggregate = collect($data['aggregate'])
             ->groupBy('ProductCode')
             ->map(fn ($rows) => $rows->sum(fn ($r) => $this->rowLitres($r)))
             ->toArray();
 
-        // When aggregate was empty, rebuild product mix from the same
-        // month-start fallback so the helper under the KPI isn't blank.
-        if ($productMix === [] && $litresMtd > 0) {
-            $productMix = collect($monthTx)
-                ->reject(fn ($t) => $this->isAccountPayment($t))
-                ->filter(fn ($t) => filled($t['ProductCode'] ?? null))
-                ->groupBy('ProductCode')
-                ->map(fn ($rows) => $rows->sum(fn ($r) => $this->rowLitres($r)))
-                ->toArray();
+        $mixFromTx = collect($monthTx)
+            ->reject(fn ($t) => $this->isAccountPayment($t))
+            ->filter(fn ($t) => filled($t['ProductCode'] ?? null))
+            ->groupBy('ProductCode')
+            ->map(fn ($rows) => $rows->sum(fn ($r) => $this->rowLitres($r)))
+            ->toArray();
+
+        // Pick whichever source has more litres for the fuel-product
+        // total; that way a lagging aggregate can't hide fresh fills.
+        $aggregateFuelSum = collect($mixFromAggregate)
+            ->filter(fn ($_v, $k) => $isLitreProduct($k))
+            ->sum();
+        $txFuelSum = collect($mixFromTx)
+            ->filter(fn ($_v, $k) => $isLitreProduct($k))
+            ->sum();
+
+        $productMix = $txFuelSum > $aggregateFuelSum ? $mixFromTx : $mixFromAggregate;
+        if ($productMix === [] && $mixFromTx !== []) {
+            $productMix = $mixFromTx;
         }
 
         $openOrders = collect($data['orders'])
@@ -1385,11 +1414,17 @@ new #[Layout('components.layouts.app')] class extends Component {
                 />
             @endif
         @endif
+        {{-- Litres MTD is fuel-only.  The helper lists every product in
+             the aggregate so ops sees the OS / service load too, but with
+             the right unit -- OS is nights, everything else is litres. --}}
         <x-stat-card
             label="Litres · month-to-date"
             :value="number_format((float) $litresMtd) . ' L'"
             color="emerald"
-            :helper="collect($productMix)->map(fn($l, $c) => $c.': '.number_format($l).' L')->implode(' · ')"
+            :helper="collect($productMix)->map(function ($v, $c) {
+                $unit = strtoupper((string) $c) === 'OS' ? ' night' . (abs($v) === 1.0 ? '' : 's') : ' L';
+                return $c . ': ' . number_format((float) $v) . $unit;
+            })->implode(' · ')"
             helperColor="emerald"
         />
         @if($canSeeFinance)
