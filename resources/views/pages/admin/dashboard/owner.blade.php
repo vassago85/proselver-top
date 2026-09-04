@@ -278,17 +278,20 @@ new #[Layout('components.layouts.app')] class extends Component {
     /**
      * Live fuel snapshot from TFN, with a safe fallback to demo fixtures.
      * Wrapped end-to-end so the dashboard never 500s on a flaky API --
-     * a broken TFN gives us "—" on the tile and a note in the banner,
-     * not a dead page.
+     * a broken TFN degrades the tile rather than killing the page.
      *
-     * The month-aggregate reads whichever month the picker sits on; if
-     * that call fails we degrade the tile to slip-based fuel only.
+     * Two independent litres sources are read: the sub-account aggregate
+     * rollup (server-batched, can lag) and the transactions list since
+     * month-start (fresh but capped at 100 rows).  We keep whichever is
+     * higher so a stale aggregate can't hide new fills -- same reasoning
+     * as the Fuel operations page.
      *
      * @return array{
      *     available: ?float,
      *     balance: ?float,
      *     tfn_litres: ?float,
      *     source: 'live'|'demo',
+     *     configured: bool,
      *     ok: bool
      * }
      */
@@ -306,6 +309,7 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         $balancePayload = null;
         $aggregatePayload = null;
+        $txPayload = [];
         $ok = true;
 
         if ($isLive) {
@@ -321,6 +325,17 @@ new #[Layout('components.layouts.app')] class extends Component {
                 $aggregatePayload = $fixtures->aggregateLitres();
                 $ok = false;
             }
+            // Only pull transactions when scoped to the current month --
+            // TFN's transactions endpoint has a 3-month lookback ceiling
+            // and asking for a prior month here would 400.
+            if ($anchor->equalTo(now()->startOfMonth())) {
+                try {
+                    $txPayload = $client->transactions($anchor->copy()->startOfMonth()->toDateTimeImmutable());
+                } catch (\Throwable $e) {
+                    $txPayload = [];
+                    $ok = false;
+                }
+            }
         } else {
             $balancePayload = $fixtures->balance();
             $aggregatePayload = $fixtures->aggregateLitres();
@@ -333,16 +348,46 @@ new #[Layout('components.layouts.app')] class extends Component {
             ?? $balancePayload['Balance']
             ?? null;
 
-        $litres = 0.0;
+        // Only count reconciliation fuel codes (D0) as "litres" -- OS is
+        // nights, WSH is washes, etc.  Matches the Fuel operations page.
+        $litreProducts = array_map('strtoupper', (array) config('tfn.reconciliation_products', ['D0']));
+        $isLitreCode = fn ($code) => in_array(strtoupper((string) $code), $litreProducts, true);
+
+        $rowLitres = fn (array $r) => (float) (
+            $r['Litres']
+                ?? $r['Quantity']
+                ?? $r['TotalLitres']
+                ?? $r['Volume']
+                ?? 0
+        );
+
+        $aggregateLitres = 0.0;
         foreach ((array) $aggregatePayload as $row) {
-            $litres += (float) ($row['Litres'] ?? 0);
+            if ($isLitreCode($row['ProductCode'] ?? '')) {
+                $aggregateLitres += $rowLitres($row);
+            }
         }
+
+        $txLitres = 0.0;
+        foreach ((array) $txPayload as $row) {
+            if (!$isLitreCode($row['ProductCode'] ?? '')) {
+                continue;
+            }
+            // Payments / credits carry non-zero amounts but no litres.
+            if (($row['TransactionType'] ?? '') === 'Payment') {
+                continue;
+            }
+            $txLitres += $rowLitres($row);
+        }
+
+        $litres = max($aggregateLitres, $txLitres);
 
         return [
             'available' => $available !== null ? (float) $available : null,
             'balance' => $balance !== null ? (float) $balance : null,
-            'tfn_litres' => $litres > 0 ? $litres : null,
+            'tfn_litres' => $isLive ? $litres : null,
             'source' => $isLive ? 'live' : 'demo',
+            'configured' => $isLive,
             'ok' => $ok,
         ];
     }
@@ -799,47 +844,67 @@ new #[Layout('components.layouts.app')] class extends Component {
     {{-- ══════════════════════════════════════════════════════════════ --}}
     <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
 
-        {{-- Petty cash spent MTD --}}
+        {{-- Petty cash spent MTD.  The tile leads with unclaimed money
+             (issued advances with no slips against them yet) because
+             "not claimed back" is the operational reality behind a
+             negative variance -- drivers were handed cash that is
+             sitting off the books.  A positive variance (spent more
+             than issued) is a separate signal, kept in the helper. --}}
+        @php
+            $unclaimed = max(0.0, $cashIssued - $cashSpent);
+            $overspend = max(0.0, $cashSpent - $cashIssued);
+        @endphp
         <x-dash.kpi
             label="Petty cash spent"
             :value="$money($cashSpent)"
-            :color="abs($variance) < 1 ? 'green' : ($variance > 0 ? 'red' : 'amber')"
+            :color="$unclaimed > 100 ? 'amber' : ($overspend > 100 ? 'red' : 'green')"
             :href="route('admin.overview')"
             :trend="$cashTrend"
-            :helper="$money($cashIssued) . ' issued · ' . (abs($variance) < 1 ? 'balanced' : ($variance > 0 ? $money(abs($variance)) . ' over' : $money(abs($variance)) . ' under'))">
+            :helper="$money($cashIssued) . ' issued · '
+                . ($unclaimed > 1 ? $money($unclaimed) . ' unclaimed by drivers'
+                    : ($overspend > 1 ? $money($overspend) . ' spent over issued'
+                    : 'balanced'))">
             <x-slot:icon>
                 <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="14" x="2" y="5" rx="2"/><line x1="2" x2="22" y1="10" y2="10"/></svg>
             </x-slot:icon>
         </x-dash.kpi>
 
-        {{-- Fuel spend MTD -- litres from TFN if we have them, slip rand as helper.
-             When TFN is unreachable we still surface the slip figure so the tile
-             is never blank. --}}
+        {{-- Fuel spend MTD.  Prefers TFN litres when we have them, falls
+             back to cash-slip rand otherwise.  Helper distinguishes three
+             real states -- TFN not configured, TFN unreachable, and TFN
+             connected but the aggregate hasn't caught up yet -- so the
+             owner knows whether to chase Ops or TFN. --}}
         <x-dash.kpi
             label="Fuel MTD"
-            :value="$fuel['tfn_litres'] !== null ? $num($fuel['tfn_litres']) . ' L' : $money($slipFuelMonth)"
+            :value="$fuel['configured'] && $fuel['tfn_litres'] > 0 ? $num($fuel['tfn_litres']) . ' L' : $money($slipFuelMonth)"
             color="orange"
             :href="route('admin.fuel')"
             :trend="$fuelTrend"
-            :helper="$fuel['tfn_litres'] !== null
-                ? 'TFN litres this month · ' . $money($slipFuelMonth) . ' cash fuel slips'
-                : ($fuel['ok'] ? 'From driver fuel slips (TFN not connected)' : 'TFN unreachable — showing cash fuel slips')">
+            :helper="!$fuel['configured']
+                ? 'From driver fuel slips · TFN not configured for this environment'
+                : (!$fuel['ok']
+                    ? 'TFN unreachable — showing cash fuel slips only'
+                    : ($fuel['tfn_litres'] > 0
+                        ? 'From TFN pump activity · ' . $money($slipFuelMonth) . ' cash fuel slips'
+                        : 'TFN connected · no fills captured yet this month'))">
             <x-slot:icon>
                 <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" x2="15" y1="22" y2="22"/><line x1="4" x2="14" y1="9" y2="9"/><path d="M14 22V4a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v18"/><path d="M14 13h2a2 2 0 0 1 2 2v2a2 2 0 0 0 2 2 2 2 0 0 0 2-2V9.83a2 2 0 0 0-.59-1.42L18 5"/></svg>
             </x-slot:icon>
         </x-dash.kpi>
 
-        {{-- Fuel available credit -- live snapshot, not month-scoped. --}}
+        {{-- Fuel available credit -- live snapshot, not month-scoped.
+             "Not configured" (env off) is different from "reachable but
+             stale" (env on, call failed); both are surfaced honestly. --}}
         <x-dash.kpi
             label="Fuel credit available"
             :value="$fuel['available'] !== null ? $money($fuel['available']) : '—'"
             :color="$fuel['available'] === null ? 'slate' : ($fuel['available'] < 20000 ? 'red' : ($fuel['available'] < 50000 ? 'amber' : 'green'))"
             :href="route('admin.fuel')"
-            :helper="$fuel['available'] === null
-                ? 'TFN account not connected'
-                : ($fuel['source'] === 'live' && $fuel['ok']
-                    ? 'On the TFN sub-account right now'
-                    : 'TFN reachable but stale — refresh on the Fuel page')">
+            :helper="!$fuel['configured']
+                ? 'TFN not configured for this environment'
+                : ($fuel['ok']
+                    ? 'Live on the TFN sub-account'
+                    : 'TFN reachable but stale — check the Fuel page')">
             <x-slot:icon>
                 <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="14" x="2" y="5" rx="2"/><path d="M6 15h.01"/><path d="M10 15h.01"/></svg>
             </x-slot:icon>
