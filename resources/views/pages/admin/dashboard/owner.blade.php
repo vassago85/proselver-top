@@ -749,326 +749,307 @@ new #[Layout('components.layouts.app')] class extends Component {
     $money = fn ($v) => 'R ' . number_format((float) $v, 0);
     $num = fn ($v) => number_format((int) $v);
 
-    // Attention rows re-use the alerts palette from the mockup -- a small
-    // dot in the severity colour, and the count rendered in the same
-    // family.  Colours match the site design tokens (rose / amber / slate).
-    $severityStyles = [
-        'high'   => ['dot' => 'bg-rose-500',  'count' => 'text-rose-700'],
-        'medium' => ['dot' => 'bg-amber-500', 'count' => 'text-amber-700'],
-        'low'    => ['dot' => 'bg-slate-400', 'count' => 'text-slate-700'],
+    $fuelSpend = ($fuel['tfn_spend'] ?? 0) > 0 ? (float) $fuel['tfn_spend'] : (float) $slipFuelMonth;
+    $unclaimed = max(0.0, $cashIssued - $cashSpent);
+    $overspend = max(0.0, $cashSpent - $cashIssued);
+
+    $severityDot = [
+        'high'   => 'bg-[#FF4D5A]',
+        'medium' => 'bg-[#F5B942]',
+        'low'    => 'bg-[#8b9bb8]',
     ];
+    $severityCount = [
+        'high'   => 'text-[#FF4D5A]',
+        'medium' => 'text-[#F5B942]',
+        'low'    => 'text-[#c5d0e2]',
+    ];
+
+    $trendArrow = function (?array $t) {
+        if (!$t) return '';
+        $up = ($t['dir'] ?? '') === 'up';
+        $color = $up ? 'text-[#7CFF6B]' : 'text-[#FF4D5A]';
+        $glyph = $up ? '↑' : '↓';
+        return '<span class="ml-2 text-[13px] font-semibold ' . $color . '">' . $glyph . ' ' . e($t['label'] ?? '') . '</span>';
+    };
 @endphp
 
-<div class="space-y-3">
+{{-- Dark Live Ops Wall — content-pane only; sidebar/topbar stay Trident light.
+     Bleeds into the layout padding so the navy well fills the viewport. --}}
+<div class="owner-wall -mx-4 -my-6 sm:-mx-6 lg:-mx-8 lg:-my-8 min-h-[calc(100vh-4rem)] text-white"
+     style="--ow-bg:#0f1424;--ow-card:#1a2238;--ow-edge:#2a3550;--ow-muted:#8b9bb8;--ow-lime:#7CFF6B;--ow-cyan:#3DE7FF;--ow-amber:#F5B942;--ow-red:#FF4D5A;background:radial-gradient(1200px 600px at 10% -10%, #1a2a4a 0%, transparent 55%), radial-gradient(900px 500px at 90% 0%, #152038 0%, transparent 50%), var(--ow-bg);">
 
-    {{-- HERO ---------------------------------------------------------- --}}
-    <x-page-header
-        eyebrow="Owner"
-        title="Business Command Centre"
-        subtitle="What needs attention, what moved, and where the money stands."
-        class="mb-2">
-        <x-slot:actions>
-            <x-button variant="secondary" size="sm" :href="route('admin.reports.index')">Reports</x-button>
-            <x-button variant="secondary" size="sm" :href="route('admin.audit-log')">Audit log</x-button>
-        </x-slot:actions>
-    </x-page-header>
+    <style>
+        .owner-wall .ow-card{background:var(--ow-card);border:1px solid var(--ow-edge);border-radius:12px}
+        .owner-wall .ow-label{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--ow-muted);font-weight:700}
+        .owner-wall .ow-hero{font-size:clamp(2.25rem,3.4vw,3.4rem);line-height:1;font-weight:780;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+        .owner-wall .ow-input{background:#121a2c;border:1px solid var(--ow-edge);color:#fff;border-radius:8px}
+        .owner-wall .ow-input:focus{outline:none;border-color:var(--ow-cyan);box-shadow:0 0 0 1px var(--ow-cyan)}
+        .owner-wall .ow-btn{background:#121a2c;border:1px solid var(--ow-edge);color:#c5d0e2;border-radius:8px;padding:.4rem .75rem;font-size:12px;font-weight:650;transition:all .15s}
+        .owner-wall .ow-btn:hover{border-color:#3d4f6f;color:#fff;background:#182236}
+        .owner-wall .ow-bar{animation:ow-grow .7s ease-out both}
+        @keyframes ow-grow{from{transform:scaleY(0);transform-origin:bottom}to{transform:scaleY(1);transform-origin:bottom}}
+        @keyframes ow-pulse{0%,100%{opacity:1}50%{opacity:.45}}
+        .owner-wall .ow-alert-pulse{animation:ow-pulse 1.6s ease-in-out infinite}
+        .owner-wall ::-webkit-scrollbar-thumb{background:#3d4f6f;border-radius:8px;border:2px solid transparent;background-clip:content-box}
+    </style>
 
-    {{-- PERIOD BAR ---------------------------------------------------- --}}
-    {{-- Compact stepper: previous / month input / next.  Sits directly
-         under the heading so the owner never has to hunt for it, and
-         renders the resolved window on the right in plain English. --}}
-    <div class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm">
-        <div class="flex items-center gap-2">
-            <button type="button" wire:click="stepMonth(-1)"
-                class="inline-flex h-7 w-7 items-center justify-center rounded-md border border-slate-200 text-slate-500 transition hover:bg-slate-50 hover:text-slate-900"
-                aria-label="Previous month">
-                <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
-            </button>
-            <input type="month" wire:model.live="month" max="{{ now()->format('Y-m') }}"
-                class="h-7 rounded-md border-slate-300 px-2 text-xs font-semibold text-slate-900 shadow-sm focus:border-blue-500 focus:ring-blue-500">
-            <button type="button" wire:click="stepMonth(1)" @disabled($atCurrentMonth)
-                class="inline-flex h-7 w-7 items-center justify-center rounded-md border border-slate-200 text-slate-500 transition hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"
-                aria-label="Next month">
-                <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
-            </button>
+    <div class="px-4 sm:px-6 lg:px-8 py-5 lg:py-6 flex flex-col gap-3.5 min-h-[calc(100vh-4rem)]">
+
+        {{-- TOP BAR --}}
+        <div class="flex flex-wrap items-start justify-between gap-3">
+            <div>
+                <p class="ow-label text-[var(--ow-cyan)]">Owner</p>
+                <h1 class="mt-1 text-[26px] sm:text-[30px] font-bold tracking-tight text-white">Business Command Centre</h1>
+                <p class="mt-1 text-[13px] text-[var(--ow-muted)]">What needs attention, what moved, and where the money stands.</p>
+            </div>
+            <div class="flex flex-wrap items-center gap-2">
+                <div class="flex items-center gap-1.5 ow-card px-2 py-1.5">
+                    <button type="button" wire:click="stepMonth(-1)" class="ow-btn !px-2 !py-1" aria-label="Previous month">‹</button>
+                    <input type="month" wire:model.live="month" max="{{ now()->format('Y-m') }}"
+                        class="ow-input h-8 px-2 text-xs font-semibold">
+                    <button type="button" wire:click="stepMonth(1)" @disabled($atCurrentMonth)
+                        class="ow-btn !px-2 !py-1 disabled:opacity-35 disabled:cursor-not-allowed" aria-label="Next month">›</button>
+                </div>
+                <a href="{{ route('admin.reports.index') }}" class="ow-btn">Reports</a>
+                <a href="{{ route('admin.audit-log') }}" class="ow-btn">Audit log</a>
+            </div>
         </div>
-        <p class="text-[11px] font-medium text-slate-500">
-            {{ $from->format('d M Y') }} &ndash; {{ $to->format('d M Y') }} &middot; MTD &middot; delivered-date basis
+
+        <p class="text-[11px] text-[var(--ow-muted)] -mt-1">
+            {{ $from->format('d M Y') }} – {{ $to->format('d M Y') }} · MTD · delivered-date basis
         </p>
-    </div>
 
-    {{-- NEEDS ATTENTION ----------------------------------------------- --}}
-    {{-- Single compact card with severity-dot rows.  Hidden entirely
-         when nothing is outstanding -- an empty alerts panel on the
-         morning check was noise the previous roll-up carried and the
-         owner did not want. --}}
-    @if($attention->isNotEmpty())
-        <section class="rounded-xl border border-slate-200 bg-white shadow-sm">
-            <div class="flex items-center justify-between border-b border-slate-100 px-4 py-2.5">
-                <p class="text-[13px] font-semibold text-slate-900">Needs attention</p>
-                <p class="text-[11px] text-slate-500">{{ $attention->count() }} {{ \Illuminate\Support\Str::plural('item', $attention->count()) }}</p>
-            </div>
-            <ul class="divide-y divide-slate-100">
-                @foreach($attention as $row)
-                    @php $style = $severityStyles[$row['severity']] ?? $severityStyles['low']; @endphp
-                    <li>
-                        <a href="{{ $row['href'] }}" class="grid grid-cols-[10px_1fr_auto] items-center gap-3 px-4 py-2 transition hover:bg-slate-50/70">
-                            <span class="h-1.5 w-1.5 rounded-full {{ $style['dot'] }}"></span>
-                            <span class="min-w-0">
-                                <span class="block truncate text-[12px] font-semibold text-slate-900">{{ $row['label'] }}</span>
-                                <span class="block truncate text-[10.5px] text-slate-500">{{ $row['note'] }}</span>
-                            </span>
-                            <span class="text-[18px] font-bold tabular-nums {{ $style['count'] }}">{{ $num($row['count']) }}</span>
-                        </a>
-                    </li>
-                @endforeach
-            </ul>
-        </section>
-    @endif
+        {{-- MAIN GRID: left stack + tall right rail --}}
+        <div class="grid grid-cols-1 xl:grid-cols-[1fr_320px] gap-3.5 flex-1">
 
-    {{-- KPI STRIP ----------------------------------------------------- --}}
-    {{-- Six compact tiles: delivered / invoiced / still to bill / fuel
-         / petty cash / licence.  Fuel credit lives as helper text on
-         the Fuel MTD tile per the mockup -- it is a balance, not a
-         primary KPI, and a standalone tile was wasteful. --}}
-    @php
-        $unclaimed = max(0.0, $cashIssued - $cashSpent);
-        $overspend = max(0.0, $cashSpent - $cashIssued);
-    @endphp
-    <div class="grid grid-cols-2 gap-2.5 sm:grid-cols-3 xl:grid-cols-6">
+            {{-- LEFT COLUMN --}}
+            <div class="flex flex-col gap-3.5 min-w-0">
 
-        <x-dash.kpi
-            :compact="true"
-            label="Deliveries"
-            :value="$num($deliveredMonth)"
-            color="green"
-            :href="route('admin.deliveries')"
-            :trend="$deliveredTrend"
-            :helper="'ProSelver-executed &middot; ' . $anchor->format('F')" />
+                {{-- HERO ROW: Fuel spend + Deliveries --}}
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                    <a href="{{ route('admin.fuel') }}" class="ow-card p-5 block transition hover:border-[#3d4f6f] group">
+                        <div class="flex items-center justify-between">
+                            <p class="ow-label">Fuel spend MTD</p>
+                            <span class="h-2 w-2 rounded-full bg-[var(--ow-cyan)] group-hover:scale-125 transition"></span>
+                        </div>
+                        <p class="ow-hero mt-4 text-white">
+                            {{ $money($fuelSpend) }}
+                            {!! $trendArrow($fuelTrend) !!}
+                        </p>
+                        <p class="mt-3 text-[12px] text-[var(--ow-muted)]">
+                            @if(($fuel['tfn_litres'] ?? 0) > 0)
+                                <span class="text-[var(--ow-cyan)] font-semibold tabular-nums">{{ $num($fuel['tfn_litres']) }} L</span>
+                                <span class="mx-1.5 opacity-40">·</span>
+                            @endif
+                            @if($fuel['available'] !== null)
+                                credit <span class="text-white font-semibold tabular-nums">{{ $money($fuel['available']) }}</span>
+                            @elseif(($fuel['tfn_spend'] ?? 0) <= 0 && $slipFuelMonth > 0)
+                                from cash fuel slips
+                            @else
+                                TFN pump activity
+                            @endif
+                        </p>
+                    </a>
 
-        <x-dash.kpi
-            :compact="true"
-            label="Invoiced"
-            :value="$money($invoicedValue)"
-            color="purple"
-            :href="route('admin.invoices.index', ['dateFrom' => $from->toDateString(), 'dateTo' => $to->toDateString()])"
-            :trend="$invoicedTrend"
-            helper="Captured invoice value - MTD" />
-
-        <x-dash.kpi
-            :compact="true"
-            label="Still to bill"
-            :value="$money($unbilledValue)"
-            :color="$openInvoicing > 0 ? 'orange' : 'green'"
-            :href="route('admin.dashboard.finance')"
-            :trend="$unbilledTrend"
-            :helper="$num($openInvoicing) . ' delivered movements pending invoice capture'" />
-
-        {{-- Fuel spend MTD: TFN pump Amount (abs) for liquid fuel fills.
-             Litres and available credit ride as helper text so the tile
-             answers "what did we spend" first — matching the mockup. --}}
-        <x-dash.kpi
-            :compact="true"
-            label="Fuel spend MTD"
-            :value="$money(($fuel['tfn_spend'] ?? 0) > 0 ? $fuel['tfn_spend'] : $slipFuelMonth)"
-            color="orange"
-            :href="route('admin.fuel')"
-            :trend="$fuelTrend"
-            :helper="collect([
-                ($fuel['tfn_litres'] ?? 0) > 0 ? ($num($fuel['tfn_litres']) . ' L') : null,
-                $fuel['available'] !== null ? ('credit ' . $money($fuel['available'])) : null,
-                ($fuel['tfn_spend'] ?? 0) <= 0 && $slipFuelMonth > 0 ? 'from cash fuel slips' : null,
-            ])->filter()->implode(' · ') ?: 'No fuel spend captured yet'" />
-
-        <x-dash.kpi
-            :compact="true"
-            label="Petty cash"
-            :value="$money($cashSpent)"
-            :color="$unclaimed > 100 ? 'amber' : ($overspend > 100 ? 'red' : 'green')"
-            :href="route('admin.overview')"
-            :trend="$cashTrend"
-            :helper="$money($cashIssued) . ' issued - '
-                . ($unclaimed > 1 ? $money($unclaimed) . ' unclaimed by drivers'
-                    : ($overspend > 1 ? $money($overspend) . ' spent over issued'
-                    : 'balanced'))" />
-
-        <x-dash.kpi
-            :compact="true"
-            label="Platform licence"
-            :value="$licence ? $money($licence['total_incl_vat']) : '-'"
-            color="blue"
-            :href="route('admin.billing')"
-            :helper="$licence
-                ? $num($licence['moves']) . ' moves x ' . $money($licence['per_move']) . ' - incl. VAT'
-                : 'Licence metering is currently disabled'" />
-    </div>
-
-    {{-- MAIN ROW: 70/30 ----------------------------------------------- --}}
-    {{-- Deliveries mini-chart on the left; billing exceptions on the
-         right.  Chart height capped so the whole page stays inside
-         approximately 1.2 desktop viewports. --}}
-    <div class="grid grid-cols-1 gap-3 lg:grid-cols-[1.7fr_.85fr]">
-
-        <section class="rounded-xl border border-slate-200 bg-white shadow-sm">
-            <div class="flex items-start justify-between border-b border-slate-100 px-4 py-2.5">
-                <div>
-                    <h2 class="text-[13px] font-semibold text-slate-900">Deliveries</h2>
-                    <p class="mt-0.5 text-[10.5px] text-slate-500">{{ $anchor->format('F Y') }} &middot; daily completed movements</p>
-                </div>
-                <a href="{{ route('admin.reports.index') }}" class="text-[10.5px] font-semibold text-blue-600 hover:text-blue-700">Full report &rarr;</a>
-            </div>
-            <div class="px-4 pb-3 pt-2.5">
-                <div class="flex items-baseline gap-4">
-                    <span class="text-[27px] font-bold tabular-nums text-slate-900">{{ $num($deliveredMonth) }}</span>
-                    <span class="text-[11px] text-slate-500">delivered this month</span>
-                    <span class="ml-auto text-[11px] text-slate-500">Peak day: <b class="text-slate-900">{{ $num($deliveriesPeak) }}</b></span>
+                    <a href="{{ route('admin.deliveries') }}" class="ow-card p-5 block transition hover:border-[#3d4f6f] group">
+                        <div class="flex items-center justify-between">
+                            <p class="ow-label">Deliveries</p>
+                            <span class="h-2 w-2 rounded-full bg-[var(--ow-lime)] group-hover:scale-125 transition"></span>
+                        </div>
+                        <p class="ow-hero mt-4 text-white">
+                            {{ $num($deliveredMonth) }}
+                            {!! $trendArrow($deliveredTrend) !!}
+                        </p>
+                        <p class="mt-3 text-[12px] text-[var(--ow-muted)]">
+                            ProSelver-executed · {{ $anchor->format('F') }}
+                            <span class="mx-1.5 opacity-40">·</span>
+                            Peak day <span class="text-white font-semibold tabular-nums">{{ $num($deliveriesPeak) }}</span>
+                        </p>
+                    </a>
                 </div>
 
-                @if($deliveredMonth === 0)
-                    <div class="flex h-[190px] items-center justify-center text-[11px] text-slate-400">No deliveries in {{ $anchor->format('F Y') }}</div>
-                @else
-                    @php
-                        $count = count($deliveriesSeries);
-                        $chartH = 190;
-                        $chartW = max(480, $count * 22);
-                        $groupW = $chartW / max($count, 1);
-                        $barW = max(3, $groupW - 6);
-                        $labelStep = $count >= 30 ? 5 : ($count >= 15 ? 3 : 1);
-                    @endphp
-                    <div class="mt-2 overflow-x-auto">
-                        <svg viewBox="0 0 {{ $chartW }} {{ $chartH + 22 }}" class="h-[210px] w-full min-w-[480px]" preserveAspectRatio="none">
-                            @for($i = 1; $i <= 4; $i++)
-                                <line x1="0" x2="{{ $chartW }}" y1="{{ $chartH - ($chartH / 4) * $i }}" y2="{{ $chartH - ($chartH / 4) * $i }}" stroke="#f1f5f9" stroke-width="1"/>
-                            @endfor
-                            @foreach($deliveriesSeries as $i => $d)
+                {{-- DELIVERIES CHART + MONEY STRIP --}}
+                <div class="grid grid-cols-1 lg:grid-cols-[1.4fr_.9fr] gap-3.5">
+                    <section class="ow-card overflow-hidden flex flex-col">
+                        <div class="flex items-start justify-between px-4 py-3 border-b border-[var(--ow-edge)]">
+                            <div>
+                                <h2 class="text-[13px] font-semibold text-white">Daily deliveries</h2>
+                                <p class="mt-0.5 text-[10.5px] text-[var(--ow-muted)]">{{ $anchor->format('F Y') }} · completed movements</p>
+                            </div>
+                            <a href="{{ route('admin.reports.index') }}" class="text-[10.5px] font-semibold text-[var(--ow-cyan)] hover:underline">Full report →</a>
+                        </div>
+                        <div class="px-4 py-3 flex-1">
+                            @if($deliveredMonth === 0)
+                                <div class="flex h-[180px] items-center justify-center text-[12px] text-[var(--ow-muted)]">No deliveries in {{ $anchor->format('F Y') }}</div>
+                            @else
                                 @php
-                                    $gx = $i * $groupW + (($groupW - $barW) / 2);
-                                    $h = $d['count'] > 0 ? ($d['count'] / $deliveriesPeak) * ($chartH - 6) : 2;
-                                    $fill = $d['count'] > 0 ? '#0aae78' : '#e9eef5';
+                                    $count = count($deliveriesSeries);
+                                    $chartH = 160;
+                                    $chartW = max(420, $count * 18);
+                                    $groupW = $chartW / max($count, 1);
+                                    $barW = max(3, $groupW - 5);
+                                    $labelStep = $count >= 30 ? 5 : ($count >= 15 ? 3 : 1);
                                 @endphp
-                                <rect x="{{ $gx }}" y="{{ $chartH - $h }}" width="{{ $barW }}" height="{{ $h }}" fill="{{ $fill }}" rx="2"/>
-                                @if($i === 0 || ($i + 1) % $labelStep === 0 || $i === $count - 1)
-                                    <text x="{{ $gx + $barW / 2 }}" y="{{ $chartH + 14 }}" text-anchor="middle" font-size="9" fill="#8190a5" font-family="ui-sans-serif,system-ui">{{ $d['date']->format('d') }}</text>
+                                <div class="overflow-x-auto">
+                                    <svg viewBox="0 0 {{ $chartW }} {{ $chartH + 22 }}" class="h-[180px] w-full min-w-[420px]" preserveAspectRatio="none">
+                                        @for($i = 1; $i <= 4; $i++)
+                                            <line x1="0" x2="{{ $chartW }}" y1="{{ $chartH - ($chartH / 4) * $i }}" y2="{{ $chartH - ($chartH / 4) * $i }}" stroke="#2a3550" stroke-width="1"/>
+                                        @endfor
+                                        @foreach($deliveriesSeries as $i => $d)
+                                            @php
+                                                $gx = $i * $groupW + (($groupW - $barW) / 2);
+                                                $h = $d['count'] > 0 ? ($d['count'] / $deliveriesPeak) * ($chartH - 4) : 2;
+                                                $fill = $d['count'] > 0 ? (($i % 2 === 0) ? '#7CFF6B' : '#3DE7FF') : '#243049';
+                                            @endphp
+                                            <rect class="ow-bar" style="animation-delay: {{ min(0.6, $i * 0.012) }}s" x="{{ $gx }}" y="{{ $chartH - $h }}" width="{{ $barW }}" height="{{ $h }}" fill="{{ $fill }}" rx="2"/>
+                                            @if($i === 0 || ($i + 1) % $labelStep === 0 || $i === $count - 1)
+                                                <text x="{{ $gx + $barW / 2 }}" y="{{ $chartH + 14 }}" text-anchor="middle" font-size="9" fill="#8b9bb8" font-family="ui-sans-serif,system-ui">{{ $d['date']->format('d') }}</text>
+                                            @endif
+                                        @endforeach
+                                    </svg>
+                                </div>
+                            @endif
+                        </div>
+                    </section>
+
+                    {{-- Money / ops mini stack --}}
+                    <div class="grid grid-cols-2 gap-2.5 content-start">
+                        <a href="{{ route('admin.invoices.index', ['dateFrom' => $from->toDateString(), 'dateTo' => $to->toDateString()]) }}" class="ow-card p-3.5 block hover:border-[#3d4f6f] transition">
+                            <p class="ow-label">Invoiced</p>
+                            <p class="mt-2 text-[22px] font-bold tabular-nums text-white">{{ $money($invoicedValue) }}</p>
+                            <p class="mt-1 text-[10.5px] text-[var(--ow-muted)]">Captured MTD</p>
+                        </a>
+                        <a href="{{ route('admin.dashboard.finance') }}" class="ow-card p-3.5 block hover:border-[#3d4f6f] transition">
+                            <p class="ow-label">Still to bill</p>
+                            <p class="mt-2 text-[22px] font-bold tabular-nums {{ $openInvoicing > 0 ? 'text-[var(--ow-amber)]' : 'text-[var(--ow-lime)]' }}">{{ $money($unbilledValue) }}</p>
+                            <p class="mt-1 text-[10.5px] text-[var(--ow-muted)]">{{ $num($openInvoicing) }} pending capture</p>
+                        </a>
+                        <a href="{{ route('admin.overview') }}" class="ow-card p-3.5 block hover:border-[#3d4f6f] transition">
+                            <p class="ow-label">Petty cash</p>
+                            <p class="mt-2 text-[22px] font-bold tabular-nums {{ $unclaimed > 100 ? 'text-[var(--ow-amber)]' : ($overspend > 100 ? 'text-[var(--ow-red)]' : 'text-white') }}">{{ $money($cashSpent) }}</p>
+                            <p class="mt-1 text-[10.5px] text-[var(--ow-muted)]">
+                                {{ $money($cashIssued) }} issued
+                                @if($unclaimed > 1)
+                                    · <span class="text-[var(--ow-amber)]">{{ $money($unclaimed) }} unclaimed</span>
+                                @elseif($overspend > 1)
+                                    · <span class="text-[var(--ow-red)]">{{ $money($overspend) }} over</span>
                                 @endif
-                            @endforeach
-                        </svg>
+                            </p>
+                        </a>
+                        <a href="{{ route('admin.billing') }}" class="ow-card p-3.5 block hover:border-[#3d4f6f] transition">
+                            <p class="ow-label">Platform licence</p>
+                            @if($licence)
+                                <p class="mt-2 text-[22px] font-bold tabular-nums text-white">{{ $money($licence['total_incl_vat']) }}</p>
+                                <p class="mt-1 text-[10.5px] text-[var(--ow-muted)]">{{ $num($licence['moves']) }} × {{ $money($licence['per_move']) }} incl. VAT</p>
+                            @else
+                                <p class="mt-2 text-[14px] font-semibold text-[var(--ow-muted)]">Licence metering is currently disabled</p>
+                            @endif
+                        </a>
                     </div>
-                @endif
-            </div>
-        </section>
-
-        {{-- Billing & reconciliation - condensed exception list.
-             Combines the four financially important indicators into one
-             card so the owner reads the money position at a glance. --}}
-        @php
-            $missingNumber = collect($attention)->firstWhere('label', 'Movements missing an invoice number');
-            $reconQueries = collect($attention)->firstWhere('label', 'Open reconciliation queries');
-            $changesPending = collect($attention)->firstWhere('label', 'Booking change requests pending');
-        @endphp
-        <section class="rounded-xl border border-slate-200 bg-white shadow-sm">
-            <div class="flex items-start justify-between border-b border-slate-100 px-4 py-2.5">
-                <div>
-                    <h2 class="text-[13px] font-semibold text-slate-900">Billing &amp; reconciliation</h2>
-                    <p class="mt-0.5 text-[10.5px] text-slate-500">Items affecting cash collection</p>
                 </div>
-            </div>
-            <ul class="px-4 py-1.5 text-[12px]">
-                <li class="flex items-center justify-between border-b border-slate-100 py-2.5">
-                    <a href="{{ route('admin.invoices.index', ['dateFrom' => $from->toDateString(), 'dateTo' => $to->toDateString(), 'completion' => 'all']) }}" class="text-slate-700 hover:text-slate-900">Missing invoice numbers</a>
-                    <span class="font-bold tabular-nums {{ ($missingNumber['count'] ?? 0) > 0 ? 'text-amber-700' : 'text-slate-900' }}">{{ $num($missingNumber['count'] ?? 0) }}</span>
-                </li>
-                <li class="flex items-center justify-between border-b border-slate-100 py-2.5">
-                    <a href="{{ route('admin.petty-cash.reconciliation') }}" class="text-slate-700 hover:text-slate-900">Open reconciliation queries</a>
-                    <span class="font-bold tabular-nums {{ ($reconQueries['count'] ?? 0) > 0 ? 'text-rose-700' : 'text-slate-900' }}">{{ $num($reconQueries['count'] ?? 0) }}</span>
-                </li>
-                <li class="flex items-center justify-between border-b border-slate-100 py-2.5">
-                    <a href="{{ route('admin.change-requests.index') }}" class="text-slate-700 hover:text-slate-900">Booking changes pending</a>
-                    <span class="font-bold tabular-nums {{ ($changesPending['count'] ?? 0) > 0 ? 'text-amber-700' : 'text-slate-900' }}">{{ $num($changesPending['count'] ?? 0) }}</span>
-                </li>
-                <li class="flex items-center justify-between border-b border-slate-100 py-2.5">
-                    <span class="text-slate-700">Invoiced this month</span>
-                    <span class="font-bold tabular-nums text-slate-900">{{ $money($invoicedValue) }}</span>
-                </li>
-                <li class="flex items-center justify-between py-2.5">
-                    <a href="{{ route('admin.fuel') }}" class="text-slate-700 hover:text-slate-900">Fuel credit available</a>
-                    <span class="font-bold tabular-nums text-slate-900">{{ $fuel['available'] !== null ? $money($fuel['available']) : '-' }}</span>
-                </li>
-            </ul>
-        </section>
-    </div>
 
-    {{-- BOTTOM ROW: 65/35 --------------------------------------------- --}}
-    <div class="grid grid-cols-1 gap-3 lg:grid-cols-[1.3fr_.7fr]">
+                {{-- BUSINESS STATUS --}}
+                <section class="ow-card p-3.5">
+                    <div class="flex items-center justify-between mb-3">
+                        <div>
+                            <h2 class="text-[13px] font-semibold text-white">Business status</h2>
+                            <p class="text-[10.5px] text-[var(--ow-muted)]">Owner-level health · yesterday</p>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                        <a href="{{ route('admin.dashboard.ops') }}" class="rounded-lg border border-[var(--ow-edge)] bg-[#121a2c] p-3 hover:border-[#3d4f6f] transition">
+                            <p class="ow-label">At risk</p>
+                            <p class="mt-1.5 text-[22px] font-bold tabular-nums {{ $atRisk > 0 ? 'text-[var(--ow-red)]' : 'text-[var(--ow-lime)]' }}">{{ $num($atRisk) }}</p>
+                            <p class="text-[10.5px] text-[var(--ow-muted)]">{{ $atRisk > 0 ? 'Needs a look' : 'All clear' }}</p>
+                        </a>
+                        <a href="{{ route('admin.audit-log', ['dateFrom' => $digest['date']->toDateString(), 'dateTo' => $digest['date']->toDateString()]) }}" class="rounded-lg border border-[var(--ow-edge)] bg-[#121a2c] p-3 hover:border-[#3d4f6f] transition">
+                            <p class="ow-label">Changes</p>
+                            <p class="mt-1.5 text-[22px] font-bold tabular-nums text-white">{{ $num($digest['total']) }}</p>
+                            <p class="text-[10.5px] text-[var(--ow-muted)]">{{ $num($digest['people']) }} people</p>
+                        </a>
+                        <a href="{{ route('admin.audit-log', ['actionType' => 'updated', 'dateFrom' => $digest['date']->toDateString(), 'dateTo' => $digest['date']->toDateString()]) }}" class="rounded-lg border border-[var(--ow-edge)] bg-[#121a2c] p-3 hover:border-[#3d4f6f] transition">
+                            <p class="ow-label">Updated</p>
+                            <p class="mt-1.5 text-[22px] font-bold tabular-nums text-white">{{ $num($digest['updated']) }}</p>
+                            <p class="text-[10.5px] text-[var(--ow-muted)]">Yesterday</p>
+                        </a>
+                        <a href="{{ route('admin.audit-log', ['actionType' => 'created', 'dateFrom' => $digest['date']->toDateString(), 'dateTo' => $digest['date']->toDateString()]) }}" class="rounded-lg border border-[var(--ow-edge)] bg-[#121a2c] p-3 hover:border-[#3d4f6f] transition">
+                            <p class="ow-label">Created</p>
+                            <p class="mt-1.5 text-[22px] font-bold tabular-nums text-white">{{ $num($digest['created']) }}</p>
+                            <p class="text-[10.5px] text-[var(--ow-muted)]">Yesterday</p>
+                        </a>
+                    </div>
+                </section>
+            </div>
 
-        {{-- Top customers: compact table, no giant progress bars.
-             Sorted by deliveries; captured invoice value shown alongside
-             so the two questions ("who's busiest" / "who paid") answer
-             in one glance instead of two panels. --}}
-        <section class="rounded-xl border border-slate-200 bg-white shadow-sm">
-            <div class="flex items-start justify-between border-b border-slate-100 px-4 py-2.5">
-                <div>
-                    <h2 class="text-[13px] font-semibold text-slate-900">Top customers</h2>
-                    <p class="mt-0.5 text-[10.5px] text-slate-500">{{ $anchor->format('F Y') }} &middot; deliveries and captured invoice value</p>
-                </div>
-                <a href="{{ route('admin.reports.index') }}" class="text-[10.5px] font-semibold text-blue-600 hover:text-blue-700">Customer report &rarr;</a>
-            </div>
-            @if($volumeRows->isEmpty())
-                <div class="px-4 py-8 text-center text-[12px] text-slate-500">No deliveries yet in {{ $anchor->format('F Y') }}.</div>
-            @else
-                <table class="w-full border-collapse">
-                    <thead>
-                        <tr>
-                            <th class="border-b border-slate-100 px-4 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">Customer</th>
-                            <th class="border-b border-slate-100 px-4 py-2 text-right text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">Deliveries</th>
-                            <th class="border-b border-slate-100 px-4 py-2 text-right text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">Invoiced</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        @foreach($volumeRows as $i => $row)
-                            <tr class="border-b border-slate-100 last:border-b-0">
-                                <td class="px-4 py-2.5 text-[11.5px]">
-                                    <span class="mr-2 inline-grid h-[22px] w-[22px] place-items-center rounded-md bg-slate-100 text-[10px] font-semibold text-slate-500">{{ $i + 1 }}</span>
-                                    <span class="font-semibold text-slate-900">{{ $row->company_name }}</span>
-                                </td>
-                                <td class="px-4 py-2.5 text-right text-[11.5px] font-semibold tabular-nums text-slate-900">{{ $num($row->moves) }}</td>
-                                <td class="px-4 py-2.5 text-right text-[11.5px] tabular-nums {{ (float) $row->invoiced_sum > 0 ? 'font-semibold text-slate-900' : 'text-slate-400' }}">{{ (float) $row->invoiced_sum > 0 ? $money($row->invoiced_sum) : '-' }}</td>
-                            </tr>
-                        @endforeach
-                    </tbody>
-                </table>
-            @endif
-        </section>
+            {{-- RIGHT RAIL: attention + top customers --}}
+            <aside class="flex flex-col gap-3.5 min-h-0">
+                <section class="ow-card overflow-hidden flex flex-col {{ $attention->isNotEmpty() && $attention->contains(fn ($r) => $r['severity'] === 'high') ? 'ring-1 ring-[var(--ow-red)]/40' : '' }}">
+                    <div class="flex items-center justify-between px-4 py-3 border-b border-[var(--ow-edge)]">
+                        <div class="flex items-center gap-2">
+                            @if($attention->isNotEmpty())
+                                <span class="ow-alert-pulse inline-flex h-6 w-6 items-center justify-center rounded-full bg-[var(--ow-red)]/15 text-[var(--ow-red)] text-sm font-bold">!</span>
+                            @endif
+                            <div>
+                                <h2 class="text-[13px] font-semibold text-white">Needs attention</h2>
+                                <p class="text-[10.5px] text-[var(--ow-muted)]">
+                                    @if($attention->isEmpty())
+                                        All clear
+                                    @else
+                                        {{ $attention->count() }} {{ \Illuminate\Support\Str::plural('item', $attention->count()) }}
+                                    @endif
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                    @if($attention->isEmpty())
+                        <div class="px-4 py-8 text-center text-[12px] text-[var(--ow-muted)]">Nothing waiting on you.</div>
+                    @else
+                        <ul class="divide-y divide-[var(--ow-edge)] max-h-[280px] overflow-y-auto">
+                            @foreach($attention as $row)
+                                <li>
+                                    <a href="{{ $row['href'] }}" class="grid grid-cols-[8px_1fr_auto] gap-2.5 items-center px-4 py-2.5 hover:bg-white/[0.03] transition">
+                                        <span class="h-1.5 w-1.5 rounded-full {{ $severityDot[$row['severity']] ?? $severityDot['low'] }}"></span>
+                                        <span class="min-w-0">
+                                            <span class="block truncate text-[12px] font-semibold text-white">{{ $row['label'] }}</span>
+                                            <span class="block truncate text-[10px] text-[var(--ow-muted)]">{{ $row['note'] }}</span>
+                                        </span>
+                                        <span class="text-[18px] font-bold tabular-nums {{ $severityCount[$row['severity']] ?? $severityCount['low'] }}">{{ $num($row['count']) }}</span>
+                                    </a>
+                                </li>
+                            @endforeach
+                        </ul>
+                    @endif
+                </section>
 
-        {{-- Business status: 2x2 mini-stat card.  Folds at-risk +
-             yesterday's audit summary into one card, replacing three
-             separate panels the previous page carried. --}}
-        <section class="rounded-xl border border-slate-200 bg-white shadow-sm">
-            <div class="border-b border-slate-100 px-4 py-2.5">
-                <h2 class="text-[13px] font-semibold text-slate-900">Business status</h2>
-                <p class="mt-0.5 text-[10.5px] text-slate-500">Owner-level health check</p>
-            </div>
-            <div class="grid grid-cols-2 gap-2.5 p-3.5">
-                <a href="{{ route('admin.dashboard.ops') }}" class="block rounded-lg border border-slate-100 p-3 transition hover:border-slate-200 hover:bg-slate-50/50">
-                    <p class="text-[10px] font-semibold uppercase tracking-[0.09em] text-slate-500">Movements at risk</p>
-                    <p class="mt-1.5 text-[22px] font-bold tabular-nums {{ $atRisk > 0 ? 'text-rose-600' : 'text-emerald-600' }}">{{ $num($atRisk) }}</p>
-                    <p class="text-[10.5px] text-slate-500">{{ $atRisk > 0 ? 'Needs a look' : 'All clear' }}</p>
-                </a>
-                <a href="{{ route('admin.audit-log', ['dateFrom' => $digest['date']->toDateString(), 'dateTo' => $digest['date']->toDateString()]) }}" class="block rounded-lg border border-slate-100 p-3 transition hover:border-slate-200 hover:bg-slate-50/50">
-                    <p class="text-[10px] font-semibold uppercase tracking-[0.09em] text-slate-500">Changes yesterday</p>
-                    <p class="mt-1.5 text-[22px] font-bold tabular-nums text-slate-900">{{ $num($digest['total']) }}</p>
-                    <p class="text-[10.5px] text-slate-500">{{ $num($digest['people']) }} {{ \Illuminate\Support\Str::plural('person', $digest['people']) }}</p>
-                </a>
-                <a href="{{ route('admin.audit-log', ['actionType' => 'updated', 'dateFrom' => $digest['date']->toDateString(), 'dateTo' => $digest['date']->toDateString()]) }}" class="block rounded-lg border border-slate-100 p-3 transition hover:border-slate-200 hover:bg-slate-50/50">
-                    <p class="text-[10px] font-semibold uppercase tracking-[0.09em] text-slate-500">Updated</p>
-                    <p class="mt-1.5 text-[22px] font-bold tabular-nums text-slate-900">{{ $num($digest['updated']) }}</p>
-                    <p class="text-[10.5px] text-slate-500">Yesterday</p>
-                </a>
-                <a href="{{ route('admin.audit-log', ['actionType' => 'created', 'dateFrom' => $digest['date']->toDateString(), 'dateTo' => $digest['date']->toDateString()]) }}" class="block rounded-lg border border-slate-100 p-3 transition hover:border-slate-200 hover:bg-slate-50/50">
-                    <p class="text-[10px] font-semibold uppercase tracking-[0.09em] text-slate-500">Created</p>
-                    <p class="mt-1.5 text-[22px] font-bold tabular-nums text-slate-900">{{ $num($digest['created']) }}</p>
-                    <p class="text-[10.5px] text-slate-500">Yesterday</p>
-                </a>
-            </div>
-        </section>
+                <section class="ow-card overflow-hidden flex-1 flex flex-col min-h-0">
+                    <div class="flex items-start justify-between px-4 py-3 border-b border-[var(--ow-edge)]">
+                        <div>
+                            <h2 class="text-[13px] font-semibold text-white">Top customers</h2>
+                            <p class="mt-0.5 text-[10.5px] text-[var(--ow-muted)]">{{ $anchor->format('F') }} · deliveries</p>
+                        </div>
+                        <a href="{{ route('admin.reports.index') }}" class="text-[10.5px] font-semibold text-[var(--ow-cyan)] hover:underline">Report →</a>
+                    </div>
+                    @if($volumeRows->isEmpty())
+                        <div class="px-4 py-8 text-center text-[12px] text-[var(--ow-muted)]">No deliveries yet.</div>
+                    @else
+                        <ul class="divide-y divide-[var(--ow-edge)] flex-1">
+                            @foreach($volumeRows as $i => $row)
+                                <li class="flex items-center gap-2.5 px-4 py-2.5">
+                                    <span class="inline-grid h-6 w-6 place-items-center rounded-md bg-[#121a2c] text-[10px] font-bold text-[var(--ow-muted)]">{{ $i + 1 }}</span>
+                                    <span class="min-w-0 flex-1 truncate text-[12px] font-semibold text-white">{{ $row->company_name }}</span>
+                                    <span class="text-[13px] font-bold tabular-nums text-[var(--ow-lime)]">{{ $num($row->moves) }}</span>
+                                </li>
+                            @endforeach
+                        </ul>
+                    @endif
+                </section>
+            </aside>
+        </div>
+
+        {{-- FOOTER STRIP --}}
+        <div class="flex items-center justify-between pt-1 text-[10px] text-[var(--ow-muted)] border-t border-[var(--ow-edge)]/60">
+            <span class="tracking-[0.18em] uppercase font-semibold">Owner Live Ops</span>
+            <span class="tabular-nums" x-data="{ t: '' }" x-init="t = new Date().toLocaleTimeString('en-ZA', {hour:'2-digit',minute:'2-digit'}); setInterval(() => t = new Date().toLocaleTimeString('en-ZA', {hour:'2-digit',minute:'2-digit'}), 15000)" x-text="t"></span>
+        </div>
     </div>
 </div>
