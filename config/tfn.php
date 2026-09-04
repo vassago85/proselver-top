@@ -86,6 +86,8 @@ return [
     // RECONCILIATION is tolerant.
     'reconciliation_products' => [
         'D0',
+        'D1',
+        'D3',
     ],
 
     // Full product code -> label map for display (used when rendering

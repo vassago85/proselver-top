@@ -328,9 +328,16 @@ new #[Layout('components.layouts.app')] class extends Component {
             // Only pull transactions when scoped to the current month --
             // TFN's transactions endpoint has a 3-month lookback ceiling
             // and asking for a prior month here would 400.
+            //
+            // Two pulls, merged: month-start (can be truncated at TFN's
+            // 100-row cap) and the last 24h (keeps today's fills even
+            // when the month page is full).  Same reasoning as the Fuel
+            // operations page Litres MTD tile.
             if ($anchor->equalTo(now()->startOfMonth())) {
                 try {
-                    $txPayload = $client->transactions($anchor->copy()->startOfMonth()->toDateTimeImmutable());
+                    $fromMonth = $client->transactions($anchor->copy()->startOfMonth()->toDateTimeImmutable());
+                    $recent = $client->transactions(now()->subDay()->toDateTimeImmutable());
+                    $txPayload = $this->mergeFuelTransactions($fromMonth, $recent);
                 } catch (\Throwable $e) {
                     $txPayload = [];
                     $ok = false;
@@ -348,9 +355,13 @@ new #[Layout('components.layouts.app')] class extends Component {
             ?? $balancePayload['Balance']
             ?? null;
 
-        // Only count reconciliation fuel codes (D0) as "litres" -- OS is
-        // nights, WSH is washes, etc.  Matches the Fuel operations page.
-        $litreProducts = array_map('strtoupper', (array) config('tfn.reconciliation_products', ['D0']));
+        // Only count liquid fuel as "litres" -- OS is nights, WSH is washes,
+        // etc.  Include every diesel / petrol grade, not just the D0
+        // reconciliation default, so a 500ppm fill still moves the tile.
+        $litreProducts = array_map('strtoupper', array_values(array_unique(array_merge(
+            (array) config('tfn.reconciliation_products', ['D0']),
+            ['D0', 'D1', 'D3', 'ULP93', 'ULP95'],
+        ))));
         $isLitreCode = fn ($code) => in_array(strtoupper((string) $code), $litreProducts, true);
 
         $rowLitres = fn (array $r) => (float) (
@@ -390,6 +401,32 @@ new #[Layout('components.layouts.app')] class extends Component {
             'configured' => $isLive,
             'ok' => $ok,
         ];
+    }
+
+    /**
+     * Union TFN transaction lists keyed by TransactionID so a fill that
+     * appears in both the month-start pull and the recent window is
+     * counted once.  Mirrors Fuel page::mergeTransactions().
+     *
+     * @param  array<int, array<string, mixed>>  ...$lists
+     * @return list<array<string, mixed>>
+     */
+    private function mergeFuelTransactions(array ...$lists): array
+    {
+        $out = [];
+        $anon = 0;
+        foreach ($lists as $list) {
+            foreach ($list as $t) {
+                $key = (string) ($t['TransactionID'] ?? $t['TransactionId'] ?? '');
+                if ($key === '') {
+                    $out['anon:' . $anon++] = $t;
+                    continue;
+                }
+                $out[$key] = $t;
+            }
+        }
+
+        return array_values($out);
     }
 
     /**

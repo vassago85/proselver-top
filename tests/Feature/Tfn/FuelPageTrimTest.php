@@ -290,3 +290,74 @@ test('vehicle picker filter attribute exists on every option (typeahead ready)',
     // The typeahead input exists.
     expect($body)->toContain('Filter by plate, customer, VIN, driver, fleet number');
 });
+
+test('litres MTD includes recent fills that fell off TFN month-start 100-row page', function () {
+    // Reproduce the production stuck-MTD: SubAccountAggregateLitres is
+    // stale, /api/Transactions(month-start) is truncated at 100 rows and
+    // no longer contains today's fills, but the 24h window still does.
+    // Litres MTD must merge both lists so the tile moves when the
+    // transactions table does.
+    $staleMonthPage = [[
+        'TransactionID'       => 'TX-OLD-1',
+        'ProductCode'         => 'D0',
+        'TransactionTypeCode' => 'GP',
+        'CapturedDate'        => now()->startOfMonth()->addDay()->toIso8601String(),
+        'TransactionDate'     => now()->startOfMonth()->addDay()->toIso8601String(),
+        'SupplierName'        => 'Kroonstad',
+        'Amount'              => -22000,
+        'Litres'              => 1000.0,
+    ]];
+    $todaysFill = [[
+        'TransactionID'       => 'TX-NEW-300',
+        'ProductCode'         => 'D0',
+        'TransactionTypeCode' => 'GP',
+        'CapturedDate'        => now()->subHour()->toIso8601String(),
+        'TransactionDate'     => now()->subHour()->toIso8601String(),
+        'SupplierName'        => 'Harrismith',
+        'Amount'              => -6900,
+        'Litres'              => 300.0,
+    ]];
+
+    $fake = new class(app(TfnTokenManager::class), $staleMonthPage, $todaysFill) extends TfnClient {
+        public function __construct(
+            TfnTokenManager $t,
+            private array $monthPage,
+            private array $recentPage,
+        ) {
+            parent::__construct($t);
+        }
+        public function isLive(): bool { return true; }
+        public function ping(): array { return ['status' => 'ok', 'timestamp' => null, 'latency_ms' => 1]; }
+        public function depots(): array { return []; }
+        public function vehicles(): array { return []; }
+        public function pricing(string $p): array { return []; }
+        public function subAccountBalance(): array
+        {
+            return ['AccountBalance' => 25000, 'AccountAvailableBalance' => 25000];
+        }
+        public function subAccountAggregateLitres(?\DateTimeInterface $m = null): array
+        {
+            // Stale aggregate — does not include today's 300 L.
+            return [['ProductCode' => 'D0', 'Litres' => 1000.0]];
+        }
+        public function transactions(?\DateTimeInterface $c = null): array
+        {
+            $after = $c ? \Illuminate\Support\Carbon::instance(\DateTimeImmutable::createFromInterface($c)) : now()->subDay();
+            // Month-start pull = truncated page without today's fill.
+            if ($after->lte(now()->startOfMonth()->addHour())) {
+                return $this->monthPage;
+            }
+            // Short window (24h) still has today's fill.
+            return array_merge($this->monthPage, $this->recentPage);
+        }
+        public function orders(?\DateTimeInterface $m = null): array { return []; }
+    };
+    app()->instance(TfnClient::class, $fake);
+
+    $u = User::factory()->create(['is_active' => true]);
+    $u->assignRole('operations_controller');
+
+    $c = \Livewire\Volt\Volt::actingAs($u)->test('admin.fuel');
+
+    expect((float) $c->viewData('litresMtd'))->toBe(1300.0);
+});

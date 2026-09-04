@@ -860,6 +860,33 @@ new #[Layout('components.layouts.app')] class extends Component {
     }
 
     /**
+     * Union several TFN transaction lists, keyed by TransactionID so a
+     * fill that appears in both the month-start pull and the recent
+     * window is counted once.  Rows without an id are kept (rare, but
+     * dropping a real fill would be worse than a possible double-count).
+     *
+     * @param  array<int, array<string, mixed>>  ...$lists
+     * @return list<array<string, mixed>>
+     */
+    public function mergeTransactions(array ...$lists): array
+    {
+        $out = [];
+        $anon = 0;
+        foreach ($lists as $list) {
+            foreach ($list as $t) {
+                $key = (string) ($t['TransactionID'] ?? $t['TransactionId'] ?? '');
+                if ($key === '') {
+                    $out['anon:' . $anon++] = $t;
+                    continue;
+                }
+                $out[$key] = $t;
+            }
+        }
+
+        return array_values($out);
+    }
+
+    /**
      * Group network pricing: South African provinces first (ops almost
      * never leave SA), then out-of-country. Within each group, cheapest
      * depot first. TFN's /api/Pricing has no province field — we join
@@ -1063,22 +1090,50 @@ new #[Layout('components.layouts.app')] class extends Component {
         // Always load month-start transactions when live: Litres MTD
         // falls back to them when the aggregate endpoint is empty, and
         // the "avg paid /L" KPI is volume-weighted from the same set.
+        //
+        // TFN caps /api/Transactions at 100 rows per request.  Once the
+        // account has more than 100 fills in the month, a month-start
+        // pull returns a truncated page that often excludes today's
+        // fills — while the shorter window list (default 24h) still
+        // has them.  Merge both and dedupe so Litres MTD moves when
+        // the transactions table does.
+        $monthStart = Carbon::now()->startOfMonth();
         $monthTx = $data['transactions'];
         if (!empty($data['live'])) {
             try {
-                $monthTx = app(TfnClient::class)->transactions(
-                    Carbon::now()->startOfMonth()->toDateTimeImmutable()
+                $fromMonth = app(TfnClient::class)->transactions(
+                    $monthStart->toDateTimeImmutable()
                 );
+                $monthTx = $this->mergeTransactions($fromMonth, $data['transactions']);
             } catch (\Throwable) {
                 // Keep the in-window list — better a partial month than nothing.
             }
         }
 
-        // "Litres" only counts fuel products — OS (overnight stay) and
-        // other services carry a MaxAllocation in `Litres` too, but the
-        // unit is nights / units, not litres.  Anything not in the
-        // reconciliation product list is filtered out of the total.
-        $litreProducts = array_map('strtoupper', (array) config('tfn.reconciliation_products', ['D0']));
+        // Drop any prior-month rows that rode in via a 30d window.
+        $monthTx = collect($monthTx)
+            ->filter(function ($t) use ($monthStart) {
+                $raw = $t['CapturedDate'] ?? $t['TransactionDate'] ?? null;
+                if (!$raw) {
+                    return true;
+                }
+                try {
+                    return Carbon::parse($raw)->greaterThanOrEqualTo($monthStart);
+                } catch (\Throwable) {
+                    return true;
+                }
+            })
+            ->values()
+            ->all();
+
+        // Liquid fuel only — OS / W / SHO etc. also carry a Litres field
+        // but the unit is nights / washes, not litres.  Count every diesel
+        // / petrol grade, not just the D0 reconciliation default, so a
+        // 500ppm fill still moves the MTD tile.
+        $litreProducts = array_map('strtoupper', array_values(array_unique(array_merge(
+            (array) config('tfn.reconciliation_products', ['D0']),
+            ['D0', 'D1', 'D3', 'ULP93', 'ULP95'],
+        ))));
         $isLitreProduct = fn ($code) => in_array(strtoupper((string) $code), $litreProducts, true);
 
         $aggregateLitres = collect($data['aggregate'])
