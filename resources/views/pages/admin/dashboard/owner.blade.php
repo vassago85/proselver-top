@@ -290,6 +290,7 @@ new #[Layout('components.layouts.app')] class extends Component {
      *     available: ?float,
      *     balance: ?float,
      *     tfn_litres: ?float,
+     *     tfn_spend: ?float,
      *     source: 'live'|'demo',
      *     configured: bool,
      *     ok: bool
@@ -325,27 +326,26 @@ new #[Layout('components.layouts.app')] class extends Component {
                 $aggregatePayload = $fixtures->aggregateLitres();
                 $ok = false;
             }
-            // Only pull transactions when scoped to the current month --
-            // TFN's transactions endpoint has a 3-month lookback ceiling
-            // and asking for a prior month here would 400.
-            //
-            // Two pulls, merged: month-start (can be truncated at TFN's
-            // 100-row cap) and the last 24h (keeps today's fills even
-            // when the month page is full).  Same reasoning as the Fuel
-            // operations page Litres MTD tile.
-            if ($anchor->equalTo(now()->startOfMonth())) {
-                try {
-                    $fromMonth = $client->transactions($anchor->copy()->startOfMonth()->toDateTimeImmutable());
+            // TFN /api/Transactions: 100-row cap, 3-month lookback.
+            // Month-start pull for the picked month, plus a 24h merge when
+            // viewing the current month so today's fills aren't dropped
+            // once the month page is full (same as Fuel ops Litres MTD).
+            try {
+                $fromMonth = $client->transactions($anchor->copy()->startOfMonth()->toDateTimeImmutable());
+                if ($anchor->equalTo(now()->startOfMonth())) {
                     $recent = $client->transactions(now()->subDay()->toDateTimeImmutable());
                     $txPayload = $this->mergeFuelTransactions($fromMonth, $recent);
-                } catch (\Throwable $e) {
-                    $txPayload = [];
-                    $ok = false;
+                } else {
+                    $txPayload = $fromMonth;
                 }
+            } catch (\Throwable $e) {
+                $txPayload = [];
+                $ok = false;
             }
         } else {
             $balancePayload = $fixtures->balance();
             $aggregatePayload = $fixtures->aggregateLitres();
+            $txPayload = $fixtures->transactions();
         }
 
         $available = $balancePayload['AccountAvailableBalance']
@@ -355,9 +355,8 @@ new #[Layout('components.layouts.app')] class extends Component {
             ?? $balancePayload['Balance']
             ?? null;
 
-        // Only count liquid fuel as "litres" -- OS is nights, WSH is washes,
-        // etc.  Include every diesel / petrol grade, not just the D0
-        // reconciliation default, so a 500ppm fill still moves the tile.
+        // Only count liquid fuel as "litres" / spend -- OS is nights,
+        // WSH is washes, etc.  Include every diesel / petrol grade.
         $litreProducts = array_map('strtoupper', array_values(array_unique(array_merge(
             (array) config('tfn.reconciliation_products', ['D0']),
             ['D0', 'D1', 'D3', 'ULP93', 'ULP95'],
@@ -372,6 +371,9 @@ new #[Layout('components.layouts.app')] class extends Component {
                 ?? 0
         );
 
+        $monthStart = $anchor->copy()->startOfMonth();
+        $monthEnd = $anchor->copy()->endOfMonth();
+
         $aggregateLitres = 0.0;
         foreach ((array) $aggregatePayload as $row) {
             if ($isLitreCode($row['ProductCode'] ?? '')) {
@@ -380,15 +382,42 @@ new #[Layout('components.layouts.app')] class extends Component {
         }
 
         $txLitres = 0.0;
+        $txSpend = 0.0;
         foreach ((array) $txPayload as $row) {
             if (!$isLitreCode($row['ProductCode'] ?? '')) {
                 continue;
             }
-            // Payments / credits carry non-zero amounts but no litres.
-            if (($row['TransactionType'] ?? '') === 'Payment') {
+            // Skip account payments / credits (TFN puts them on the same feed).
+            $type = strtoupper(trim((string) ($row['TransactionTypeCode'] ?? $row['TransactionType'] ?? '')));
+            if (in_array($type, ['CC', 'CD', 'CX', 'PAYMENT'], true)) {
                 continue;
             }
-            $txLitres += $rowLitres($row);
+            if (strtoupper(trim((string) ($row['ProductCode'] ?? ''))) === 'EW') {
+                continue;
+            }
+
+            // Keep the picked month only (24h merge can spill prior days
+            // across a month boundary at month-start).
+            $raw = $row['CapturedDate'] ?? $row['TransactionDate'] ?? null;
+            if ($raw) {
+                try {
+                    $when = Carbon::parse($raw);
+                    if ($when->lt($monthStart) || $when->gt($monthEnd)) {
+                        continue;
+                    }
+                } catch (\Throwable $e) {
+                    // Keep the row if the date is unparseable.
+                }
+            }
+
+            $litres = $rowLitres($row);
+            if ($litres <= 0) {
+                continue;
+            }
+
+            $txLitres += $litres;
+            // TFN convention: purchases are negative Amount; spend is abs().
+            $txSpend += abs((float) ($row['Amount'] ?? 0));
         }
 
         $litres = max($aggregateLitres, $txLitres);
@@ -397,6 +426,9 @@ new #[Layout('components.layouts.app')] class extends Component {
             'available' => $available !== null ? (float) $available : null,
             'balance' => $balance !== null ? (float) $balance : null,
             'tfn_litres' => $isLive ? $litres : null,
+            // Rand spent at the pump this month from TFN fills.  Primary
+            // figure on the Owner Fuel MTD tile; litres ride as helper.
+            'tfn_spend' => $isLive ? $txSpend : null,
             'source' => $isLive ? 'live' : 'demo',
             'configured' => $isLive,
             'ok' => $ok,
@@ -672,7 +704,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             'fuel' => $fuel,
             'slipFuelMonth' => $slipFuelMonth,
             'fuelTrend' => $this->trend(
-                (float) ($fuel['tfn_litres'] ?? $slipFuelMonth),
+                (float) ($fuel['tfn_spend'] ?? $slipFuelMonth),
                 (float) $prevSlipFuel,
             ),
 
@@ -832,22 +864,21 @@ new #[Layout('components.layouts.app')] class extends Component {
             :trend="$unbilledTrend"
             :helper="$num($openInvoicing) . ' delivered movements pending invoice capture'" />
 
-        {{-- Fuel MTD: rand from cash slips (or TFN litres when the
-             sub-account has them), with the TFN credit balance as
-             supporting helper text so it stays on the strip without
-             eating a whole tile. --}}
+        {{-- Fuel spend MTD: TFN pump Amount (abs) for liquid fuel fills.
+             Litres and available credit ride as helper text so the tile
+             answers "what did we spend" first — matching the mockup. --}}
         <x-dash.kpi
             :compact="true"
-            label="Fuel MTD"
-            :value="$fuel['configured'] && $fuel['tfn_litres'] > 0 ? $num($fuel['tfn_litres']) . ' L' : $money($slipFuelMonth)"
+            label="Fuel spend MTD"
+            :value="$money(($fuel['tfn_spend'] ?? 0) > 0 ? $fuel['tfn_spend'] : $slipFuelMonth)"
             color="orange"
             :href="route('admin.fuel')"
             :trend="$fuelTrend"
-            :helper="$fuel['available'] !== null
-                ? ('Fuel credit available: ' . $money($fuel['available']))
-                : (!$fuel['configured']
-                    ? 'From driver fuel slips - TFN not configured'
-                    : 'TFN unreachable - showing cash fuel slips')" />
+            :helper="collect([
+                ($fuel['tfn_litres'] ?? 0) > 0 ? ($num($fuel['tfn_litres']) . ' L') : null,
+                $fuel['available'] !== null ? ('credit ' . $money($fuel['available'])) : null,
+                ($fuel['tfn_spend'] ?? 0) <= 0 && $slipFuelMonth > 0 ? 'from cash fuel slips' : null,
+            ])->filter()->implode(' · ') ?: 'No fuel spend captured yet'" />
 
         <x-dash.kpi
             :compact="true"
