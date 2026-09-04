@@ -357,7 +357,7 @@ new #[Layout('components.layouts.app')] class extends Component {
     ]);
 @endphp
 
-<div class="space-y-6">
+<div class="space-y-3">
 
     <x-page-header
         eyebrow="Finance"
@@ -385,10 +385,10 @@ new #[Layout('components.layouts.app')] class extends Component {
         </x-slot:actions>
     </x-page-header>
 
-    @include('pages.admin._partials.dashboard-tabs')
-
     {{-- Month stepper.  Finance works a month at a time, so this replaces
-         the ops dashboard's multi-filter strip entirely. --}}
+         the ops dashboard's multi-filter strip entirely.  The three-tab
+         switcher used to sit here; it duplicated the sidebar's Overview
+         section (Ops / Finance / Owner) so the strip was removed. --}}
     <div class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
         <div class="flex items-center gap-2">
             <button type="button" wire:click="stepMonth(-1)"
@@ -418,6 +418,7 @@ new #[Layout('components.layouts.app')] class extends Component {
     {{-- ══════════════════════════════════════════════════════════════ --}}
     <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
         <x-dash.kpi
+            :compact="true"
             label="Awaiting invoicing"
             :value="$num($openCount)"
             :color="$openCount > 0 ? 'orange' : 'green'"
@@ -430,6 +431,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         </x-dash.kpi>
 
         <x-dash.kpi
+            :compact="true"
             label="Captured"
             :value="$capturedPct . '%'"
             :color="$capturedPct >= 100 ? 'green' : ($capturedPct >= 50 ? 'teal' : 'amber')"
@@ -441,6 +443,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         </x-dash.kpi>
 
         <x-dash.kpi
+            :compact="true"
             label="Missing invoice no."
             :value="$num($missingNumberCount)"
             :color="$missingNumberCount > 0 ? 'red' : 'green'"
@@ -452,6 +455,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         </x-dash.kpi>
 
         <x-dash.kpi
+            :compact="true"
             label="Invoiced value"
             :value="$money($capturedValue)"
             color="purple"
@@ -463,6 +467,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         </x-dash.kpi>
 
         <x-dash.kpi
+            :compact="true"
             label="Petty cash variance"
             :value="($variance >= 0 ? '+' : '−') . $money(abs($variance))"
             :color="abs($variance) < 1 ? 'green' : ($variance > 0 ? 'red' : 'amber')"
@@ -475,6 +480,7 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         @if($licence)
             <x-dash.kpi
+                :compact="true"
                 label="Platform licence"
                 :value="$money($licence['total_incl_vat'])"
                 color="indigo"
@@ -486,6 +492,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             </x-dash.kpi>
         @else
             <x-dash.kpi
+                :compact="true"
                 label="Driver earnings"
                 :value="$money($driverEarnings)"
                 color="blue"

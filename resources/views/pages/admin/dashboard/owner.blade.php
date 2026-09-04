@@ -393,39 +393,12 @@ new #[Layout('components.layouts.app')] class extends Component {
     }
 
     /**
-     * Range shortcuts into the audit log.  Owner asked to be able to
-     * pull every change for the current week, this month and last month
-     * without touching a date picker.
+     * Yesterday's activity, summarised for the Business status 2x2 grid.
+     * `updated` and `created` are surfaced separately because they are
+     * the two action types the owner reads at a glance every morning;
+     * every other action type is rolled into `total`.
      *
-     * @return list<array{label: string, href: string}>
-     */
-    private function changeRanges(): array
-    {
-        $now = now();
-
-        $ranges = [
-            'Yesterday' => [$now->copy()->subDay()->startOfDay(), $now->copy()->subDay()->endOfDay()],
-            'This week' => [$now->copy()->startOfWeek(), $now->copy()->endOfWeek()],
-            'This month' => [$now->copy()->startOfMonth(), $now->copy()->endOfMonth()],
-            'Last month' => [
-                $now->copy()->subMonthNoOverflow()->startOfMonth(),
-                $now->copy()->subMonthNoOverflow()->endOfMonth(),
-            ],
-        ];
-
-        return collect($ranges)->map(fn ($window, $label) => [
-            'label' => $label,
-            'href' => route('admin.audit-log', [
-                'dateFrom' => $window[0]->toDateString(),
-                'dateTo' => $window[1]->toDateString(),
-            ]),
-        ])->values()->all();
-    }
-
-    /**
-     * Yesterday's activity, summarised. The owner's first question after being
-     * away is "what moved while I wasn't looking", and the audit log answers it
-     * but only if you already know what to filter for.
+     * @return array{date: Carbon, total: int, people: int, updated: int, created: int}
      */
     private function yesterdayDigest(): array
     {
@@ -434,50 +407,21 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         $scoped = fn () => AuditLog::query()->whereBetween('created_at', [$from, $to]);
 
-        $byAction = $scoped()
-            ->selectRaw('action_type, COUNT(*) as cnt')
-            ->groupBy('action_type')
-            ->orderByDesc('cnt')
-            ->orderBy('action_type')
-            ->limit(5)
-            ->get()
-            ->map(fn ($row) => [
-                'label' => Str::of($row->action_type)->replace('_', ' ')->ucfirst()->toString(),
-                'count' => (int) $row->cnt,
-                'href' => route('admin.audit-log', [
-                    'actionType' => $row->action_type,
-                    'dateFrom' => $from->toDateString(),
-                    'dateTo' => $to->toDateString(),
-                ]),
-            ]);
-
-        $actorRows = $scoped()
-            ->whereNotNull('actor_user_id')
-            ->selectRaw('actor_user_id, COUNT(*) as cnt')
-            ->groupBy('actor_user_id')
-            ->orderByDesc('cnt')
-            ->orderBy('actor_user_id')
-            ->limit(3)
-            ->get();
-
-        $names = $actorRows->isEmpty()
-            ? collect()
-            : User::whereIn('id', $actorRows->pluck('actor_user_id'))->pluck('name', 'id');
+        // One pass, three counters -- portable across MySQL / SQLite (the
+        // test connection) and Postgres alike, so this keeps agreeing
+        // with the audit-log page's own totals for the same day.
+        $counts = $scoped()
+            ->selectRaw('COUNT(*) AS total_cnt')
+            ->selectRaw("COUNT(CASE WHEN action_type IN ('updated','update') THEN 1 END) AS updated_cnt")
+            ->selectRaw("COUNT(CASE WHEN action_type IN ('created','create') THEN 1 END) AS created_cnt")
+            ->first();
 
         return [
             'date' => $from,
-            'total' => (int) $scoped()->count(),
+            'total' => (int) ($counts->total_cnt ?? 0),
             'people' => (int) $scoped()->whereNotNull('actor_user_id')->distinct()->count('actor_user_id'),
-            'actions' => $byAction,
-            'actors' => $actorRows->map(fn ($row) => [
-                'name' => $names[$row->actor_user_id] ?? 'Unknown',
-                'count' => (int) $row->cnt,
-                'href' => route('admin.audit-log', [
-                    'actorId' => $row->actor_user_id,
-                    'dateFrom' => $from->toDateString(),
-                    'dateTo' => $to->toDateString(),
-                ]),
-            ]),
+            'updated' => (int) ($counts->updated_cnt ?? 0),
+            'created' => (int) ($counts->created_cnt ?? 0),
         ];
     }
 
@@ -572,9 +516,6 @@ new #[Layout('components.layouts.app')] class extends Component {
         $deliveriesSeries = $this->deliveriesByDay($from, $to);
         $deliveriesPeak = max(1, collect($deliveriesSeries)->max('count') ?? 0);
 
-        $cashByCategory = $this->pettyCashByCategory($from, $to);
-        $cashPeak = max(0.01, max($cashByCategory ?: [0]));
-
         // ─── Customer leaderboards (top 8 for the month) ───────────────
         $volumeRows = Job::query()
             ->where('executor_type', Job::EXECUTOR_PROSELVER)
@@ -583,10 +524,10 @@ new #[Layout('components.layouts.app')] class extends Component {
             ->whereBetween('delivered_at', [$from, $to])
             ->whereNotNull('company_id')
             ->groupBy('company_id')
-            ->selectRaw('company_id, COUNT(*) AS moves')
+            ->selectRaw('company_id, COUNT(*) AS moves, COALESCE(SUM(CASE WHEN invoicing_excluded_at IS NULL THEN invoice_amount END), 0) AS invoiced_sum')
             ->orderByDesc('moves')
             ->orderBy('company_id')
-            ->limit(8)
+            ->limit(5)
             ->get();
 
         $valueRows = Job::query()
@@ -600,10 +541,10 @@ new #[Layout('components.layouts.app')] class extends Component {
             ->selectRaw('company_id, COUNT(*) AS moves, COALESCE(SUM(invoice_amount), 0) AS invoiced_sum')
             ->orderByDesc('invoiced_sum')
             ->orderBy('company_id')
-            ->limit(8)
+            ->limit(5)
             ->get();
 
-        // Batch the name lookup so we hit companies once rather than 16 times.
+        // Batch the name lookup so we hit companies once rather than 10 times.
         $companyIds = $volumeRows->pluck('company_id')->merge($valueRows->pluck('company_id'))->unique();
         $companyNames = $companyIds->isEmpty()
             ? collect()
@@ -717,508 +658,349 @@ new #[Layout('components.layouts.app')] class extends Component {
             'licence' => $licence,
             'atRisk' => $atRisk,
 
-            // Charts
+            // Chart series
             'deliveriesSeries' => $deliveriesSeries,
             'deliveriesPeak' => $deliveriesPeak,
-            'cashByCategory' => $cashByCategory,
-            'cashPeak' => $cashPeak,
 
-            // Leaderboards
+            // Leaderboards (top-5 volume; valueRows kept exposed for tests
+            // and future callers, even though the compact page renders a
+            // single combined table sorted by volume).
             'volumeRows' => $volumeRows,
             'valueRows' => $valueRows,
 
             // Attention + digest
             'attention' => $attention,
             'digest' => $this->yesterdayDigest(),
-            'changeRanges' => $this->changeRanges(),
         ];
     }
 }; ?>
+
 
 @php
     $money = fn ($v) => 'R ' . number_format((float) $v, 0);
     $num = fn ($v) => number_format((int) $v);
 
+    // Attention rows re-use the alerts palette from the mockup -- a small
+    // dot in the severity colour, and the count rendered in the same
+    // family.  Colours match the site design tokens (rose / amber / slate).
     $severityStyles = [
-        'high' => ['dot' => 'bg-rose-500', 'count' => 'text-rose-700'],
+        'high'   => ['dot' => 'bg-rose-500',  'count' => 'text-rose-700'],
         'medium' => ['dot' => 'bg-amber-500', 'count' => 'text-amber-700'],
-        'low' => ['dot' => 'bg-slate-400', 'count' => 'text-slate-700'],
-    ];
-
-    $categoryLabels = [
-        'fuel_slip' => 'Fuel',
-        'toll_slip' => 'Tolls',
-        'food_slip' => 'Food',
-        'accommodation_slip' => 'Accommodation',
-        'parking_slip' => 'Parking',
-        'other' => 'Other',
+        'low'    => ['dot' => 'bg-slate-400', 'count' => 'text-slate-700'],
     ];
 @endphp
 
-<div class="space-y-6">
+<div class="space-y-3">
 
+    {{-- HERO ---------------------------------------------------------- --}}
     <x-page-header
         eyebrow="Owner"
         title="Business Command Centre"
-        subtitle="Where the money and the metal are for {{ $anchor->format('F Y') }}, and what's waiting on you.">
+        subtitle="What needs attention, what moved, and where the money stands."
+        class="mb-2">
         <x-slot:actions>
-            <x-button variant="secondary" size="sm" :href="route('admin.reports.index')">
-                <x-slot:icon>
-                    <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m7 14 4-4 4 4 5-6"/></svg>
-                </x-slot:icon>
-                Reports
-            </x-button>
-            <x-button variant="secondary" size="sm" :href="route('admin.audit-log')">
-                <x-slot:icon>
-                    <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-                </x-slot:icon>
-                Audit log
-            </x-button>
+            <x-button variant="secondary" size="sm" :href="route('admin.reports.index')">Reports</x-button>
+            <x-button variant="secondary" size="sm" :href="route('admin.audit-log')">Audit log</x-button>
         </x-slot:actions>
     </x-page-header>
 
-    @include('pages.admin._partials.dashboard-tabs')
+    {{-- PERIOD BAR ---------------------------------------------------- --}}
+    {{-- Compact stepper: previous / month input / next.  Sits directly
+         under the heading so the owner never has to hunt for it, and
+         renders the resolved window on the right in plain English. --}}
+    <div class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm">
+        <div class="flex items-center gap-2">
+            <button type="button" wire:click="stepMonth(-1)"
+                class="inline-flex h-7 w-7 items-center justify-center rounded-md border border-slate-200 text-slate-500 transition hover:bg-slate-50 hover:text-slate-900"
+                aria-label="Previous month">
+                <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+            </button>
+            <input type="month" wire:model.live="month" max="{{ now()->format('Y-m') }}"
+                class="h-7 rounded-md border-slate-300 px-2 text-xs font-semibold text-slate-900 shadow-sm focus:border-blue-500 focus:ring-blue-500">
+            <button type="button" wire:click="stepMonth(1)" @disabled($atCurrentMonth)
+                class="inline-flex h-7 w-7 items-center justify-center rounded-md border border-slate-200 text-slate-500 transition hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"
+                aria-label="Next month">
+                <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+            </button>
+        </div>
+        <p class="text-[11px] font-medium text-slate-500">
+            {{ $from->format('d M Y') }} &ndash; {{ $to->format('d M Y') }} &middot; MTD &middot; delivered-date basis
+        </p>
+    </div>
 
-    {{-- ══════════════════════════════════════════════════════════════ --}}
-    {{-- WAITING ON YOU                                                 --}}
-    {{-- ══════════════════════════════════════════════════════════════ --}}
-    {{-- First, always. Owner opens the page to answer "is anything
-         blocked on me" before they read money. Renders live counts,
-         never month-scoped. --}}
+    {{-- NEEDS ATTENTION ----------------------------------------------- --}}
+    {{-- Single compact card with severity-dot rows.  Hidden entirely
+         when nothing is outstanding -- an empty alerts panel on the
+         morning check was noise the previous roll-up carried and the
+         owner did not want. --}}
     @if($attention->isNotEmpty())
-        <x-dash.panel
-            title="Waiting on you"
-            :subtitle="$attention->count() . ' ' . \Illuminate\Support\Str::plural('item', $attention->count()) . ' need attention'"
-            :tight="true">
-
+        <section class="rounded-xl border border-slate-200 bg-white shadow-sm">
+            <div class="flex items-center justify-between border-b border-slate-100 px-4 py-2.5">
+                <p class="text-[13px] font-semibold text-slate-900">Needs attention</p>
+                <p class="text-[11px] text-slate-500">{{ $attention->count() }} {{ \Illuminate\Support\Str::plural('item', $attention->count()) }}</p>
+            </div>
             <ul class="divide-y divide-slate-100">
                 @foreach($attention as $row)
                     @php $style = $severityStyles[$row['severity']] ?? $severityStyles['low']; @endphp
                     <li>
-                        <a href="{{ $row['href'] }}" class="flex items-center gap-4 px-5 py-3 transition hover:bg-slate-50/70">
-                            <span class="h-2 w-2 shrink-0 rounded-full {{ $style['dot'] }}"></span>
-                            <span class="min-w-0 flex-1">
-                                <span class="block text-sm font-medium text-slate-900">{{ $row['label'] }}</span>
-                                <span class="mt-0.5 block text-xs text-slate-500">{{ $row['note'] }}</span>
+                        <a href="{{ $row['href'] }}" class="grid grid-cols-[10px_1fr_auto] items-center gap-3 px-4 py-2 transition hover:bg-slate-50/70">
+                            <span class="h-1.5 w-1.5 rounded-full {{ $style['dot'] }}"></span>
+                            <span class="min-w-0">
+                                <span class="block truncate text-[12px] font-semibold text-slate-900">{{ $row['label'] }}</span>
+                                <span class="block truncate text-[10.5px] text-slate-500">{{ $row['note'] }}</span>
                             </span>
-                            <span class="shrink-0 text-2xl font-semibold tabular-nums {{ $style['count'] }}">{{ $num($row['count']) }}</span>
-                            <svg class="h-4 w-4 shrink-0 text-slate-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+                            <span class="text-[18px] font-bold tabular-nums {{ $style['count'] }}">{{ $num($row['count']) }}</span>
                         </a>
                     </li>
                 @endforeach
             </ul>
-        </x-dash.panel>
+        </section>
     @endif
 
-    {{-- ══════════════════════════════════════════════════════════════ --}}
-    {{-- MONTH PICKER                                                   --}}
-    {{-- ══════════════════════════════════════════════════════════════ --}}
-    {{-- Same pattern as the Finance dashboard so the two behave
-         identically -- stepper + native month input, capped at "now". --}}
-    <div class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
-        <div class="flex items-center gap-2">
-            <button type="button" wire:click="stepMonth(-1)"
-                class="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 text-slate-500 transition hover:bg-slate-50 hover:text-slate-900"
-                aria-label="Previous month">
-                <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
-            </button>
+    {{-- KPI STRIP ----------------------------------------------------- --}}
+    {{-- Six compact tiles: delivered / invoiced / still to bill / fuel
+         / petty cash / licence.  Fuel credit lives as helper text on
+         the Fuel MTD tile per the mockup -- it is a balance, not a
+         primary KPI, and a standalone tile was wasteful. --}}
+    @php
+        $unclaimed = max(0.0, $cashIssued - $cashSpent);
+        $overspend = max(0.0, $cashSpent - $cashIssued);
+    @endphp
+    <div class="grid grid-cols-2 gap-2.5 sm:grid-cols-3 xl:grid-cols-6">
 
-            <input type="month" wire:model.live="month" max="{{ now()->format('Y-m') }}"
-                class="rounded-lg border-slate-300 text-sm font-semibold text-slate-900 shadow-sm focus:border-blue-500 focus:ring-blue-500">
-
-            <button type="button" wire:click="stepMonth(1)" @disabled($atCurrentMonth)
-                class="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 text-slate-500 transition hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"
-                aria-label="Next month">
-                <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
-            </button>
-        </div>
-
-        <p class="text-[11px] font-medium text-slate-500">
-            {{ $from->format('d M Y') }} &rarr; {{ $to->format('d M Y') }}
-            &middot; MTD, delivered-date basis
-        </p>
-    </div>
-
-    {{-- ══════════════════════════════════════════════════════════════ --}}
-    {{-- KPI ROW -- money, fuel and metal at a glance, with MoM deltas  --}}
-    {{-- ══════════════════════════════════════════════════════════════ --}}
-    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
-
-        {{-- Petty cash spent MTD.  The tile leads with unclaimed money
-             (issued advances with no slips against them yet) because
-             "not claimed back" is the operational reality behind a
-             negative variance -- drivers were handed cash that is
-             sitting off the books.  A positive variance (spent more
-             than issued) is a separate signal, kept in the helper. --}}
-        @php
-            $unclaimed = max(0.0, $cashIssued - $cashSpent);
-            $overspend = max(0.0, $cashSpent - $cashIssued);
-        @endphp
         <x-dash.kpi
-            label="Petty cash spent"
-            :value="$money($cashSpent)"
-            :color="$unclaimed > 100 ? 'amber' : ($overspend > 100 ? 'red' : 'green')"
-            :href="route('admin.overview')"
-            :trend="$cashTrend"
-            :helper="$money($cashIssued) . ' issued · '
-                . ($unclaimed > 1 ? $money($unclaimed) . ' unclaimed by drivers'
-                    : ($overspend > 1 ? $money($overspend) . ' spent over issued'
-                    : 'balanced'))">
-            <x-slot:icon>
-                <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="14" x="2" y="5" rx="2"/><line x1="2" x2="22" y1="10" y2="10"/></svg>
-            </x-slot:icon>
-        </x-dash.kpi>
-
-        {{-- Fuel spend MTD.  Prefers TFN litres when we have them, falls
-             back to cash-slip rand otherwise.  Helper distinguishes three
-             real states -- TFN not configured, TFN unreachable, and TFN
-             connected but the aggregate hasn't caught up yet -- so the
-             owner knows whether to chase Ops or TFN. --}}
-        <x-dash.kpi
-            label="Fuel MTD"
-            :value="$fuel['configured'] && $fuel['tfn_litres'] > 0 ? $num($fuel['tfn_litres']) . ' L' : $money($slipFuelMonth)"
-            color="orange"
-            :href="route('admin.fuel')"
-            :trend="$fuelTrend"
-            :helper="!$fuel['configured']
-                ? 'From driver fuel slips · TFN not configured for this environment'
-                : (!$fuel['ok']
-                    ? 'TFN unreachable — showing cash fuel slips only'
-                    : ($fuel['tfn_litres'] > 0
-                        ? 'From TFN pump activity · ' . $money($slipFuelMonth) . ' cash fuel slips'
-                        : 'TFN connected · no fills captured yet this month'))">
-            <x-slot:icon>
-                <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" x2="15" y1="22" y2="22"/><line x1="4" x2="14" y1="9" y2="9"/><path d="M14 22V4a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v18"/><path d="M14 13h2a2 2 0 0 1 2 2v2a2 2 0 0 0 2 2 2 2 0 0 0 2-2V9.83a2 2 0 0 0-.59-1.42L18 5"/></svg>
-            </x-slot:icon>
-        </x-dash.kpi>
-
-        {{-- Fuel available credit -- live snapshot, not month-scoped.
-             "Not configured" (env off) is different from "reachable but
-             stale" (env on, call failed); both are surfaced honestly. --}}
-        <x-dash.kpi
-            label="Fuel credit available"
-            :value="$fuel['available'] !== null ? $money($fuel['available']) : '—'"
-            :color="$fuel['available'] === null ? 'slate' : ($fuel['available'] < 20000 ? 'red' : ($fuel['available'] < 50000 ? 'amber' : 'green'))"
-            :href="route('admin.fuel')"
-            :helper="!$fuel['configured']
-                ? 'TFN not configured for this environment'
-                : ($fuel['ok']
-                    ? 'Live on the TFN sub-account'
-                    : 'TFN reachable but stale — check the Fuel page')">
-            <x-slot:icon>
-                <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="14" x="2" y="5" rx="2"/><path d="M6 15h.01"/><path d="M10 15h.01"/></svg>
-            </x-slot:icon>
-        </x-dash.kpi>
-
-        {{-- Vehicles delivered MTD --}}
-        <x-dash.kpi
-            label="Vehicles delivered"
+            :compact="true"
+            label="Deliveries"
             :value="$num($deliveredMonth)"
             color="green"
             :href="route('admin.deliveries')"
             :trend="$deliveredTrend"
-            helper="ProSelver-executed, delivered this month">
-            <x-slot:icon>
-                <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 16H9m10 0h3v-3.15a1 1 0 0 0-.84-.99L16 11l-2.7-3.6a1 1 0 0 0-.8-.4H5.24a2 2 0 0 0-1.8 1.1l-.8 1.63A6 6 0 0 0 2 12.42V16h2"/><circle cx="6.5" cy="16.5" r="2.5"/><circle cx="16.5" cy="16.5" r="2.5"/></svg>
-            </x-slot:icon>
-        </x-dash.kpi>
+            :helper="'ProSelver-executed &middot; ' . $anchor->format('F')" />
 
-        {{-- Invoiced MTD --}}
         <x-dash.kpi
+            :compact="true"
             label="Invoiced"
             :value="$money($invoicedValue)"
             color="purple"
             :href="route('admin.invoices.index', ['dateFrom' => $from->toDateString(), 'dateTo' => $to->toDateString()])"
             :trend="$invoicedTrend"
-            helper="Captured invoice value this month">
-            <x-slot:icon>
-                <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" x2="16" y1="13" y2="13"/></svg>
-            </x-slot:icon>
-        </x-dash.kpi>
+            helper="Captured invoice value - MTD" />
 
-        {{-- Still to bill MTD --}}
         <x-dash.kpi
+            :compact="true"
             label="Still to bill"
             :value="$money($unbilledValue)"
             :color="$openInvoicing > 0 ? 'orange' : 'green'"
             :href="route('admin.dashboard.finance')"
             :trend="$unbilledTrend"
-            :helper="$num($openInvoicing) . ' delivered movements not yet captured'">
-            <x-slot:icon>
-                <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-            </x-slot:icon>
-        </x-dash.kpi>
+            :helper="$num($openInvoicing) . ' delivered movements pending invoice capture'" />
+
+        {{-- Fuel MTD: rand from cash slips (or TFN litres when the
+             sub-account has them), with the TFN credit balance as
+             supporting helper text so it stays on the strip without
+             eating a whole tile. --}}
+        <x-dash.kpi
+            :compact="true"
+            label="Fuel MTD"
+            :value="$fuel['configured'] && $fuel['tfn_litres'] > 0 ? $num($fuel['tfn_litres']) . ' L' : $money($slipFuelMonth)"
+            color="orange"
+            :href="route('admin.fuel')"
+            :trend="$fuelTrend"
+            :helper="$fuel['available'] !== null
+                ? ('Fuel credit available: ' . $money($fuel['available']))
+                : (!$fuel['configured']
+                    ? 'From driver fuel slips - TFN not configured'
+                    : 'TFN unreachable - showing cash fuel slips')" />
+
+        <x-dash.kpi
+            :compact="true"
+            label="Petty cash"
+            :value="$money($cashSpent)"
+            :color="$unclaimed > 100 ? 'amber' : ($overspend > 100 ? 'red' : 'green')"
+            :href="route('admin.overview')"
+            :trend="$cashTrend"
+            :helper="$money($cashIssued) . ' issued - '
+                . ($unclaimed > 1 ? $money($unclaimed) . ' unclaimed by drivers'
+                    : ($overspend > 1 ? $money($overspend) . ' spent over issued'
+                    : 'balanced'))" />
+
+        <x-dash.kpi
+            :compact="true"
+            label="Platform licence"
+            :value="$licence ? $money($licence['total_incl_vat']) : '-'"
+            color="blue"
+            :href="route('admin.billing')"
+            :helper="$licence
+                ? $num($licence['moves']) . ' moves x ' . $money($licence['per_move']) . ' - incl. VAT'
+                : 'Licence metering is currently disabled'" />
     </div>
 
-    {{-- ══════════════════════════════════════════════════════════════ --}}
-    {{-- CHARTS ROW                                                     --}}
-    {{-- ══════════════════════════════════════════════════════════════ --}}
-    <div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
+    {{-- MAIN ROW: 70/30 ----------------------------------------------- --}}
+    {{-- Deliveries mini-chart on the left; billing exceptions on the
+         right.  Chart height capped so the whole page stays inside
+         approximately 1.2 desktop viewports. --}}
+    <div class="grid grid-cols-1 gap-3 lg:grid-cols-[1.7fr_.85fr]">
 
-        {{-- Deliveries per day (inline SVG, same style as Ops activity) --}}
-        <x-dash.panel
-            class="lg:col-span-2"
-            title="Deliveries per day"
-            :subtitle="$anchor->format('F Y') . ' · ProSelver-executed'">
-            <x-slot:actions>
-                <a href="{{ route('admin.reports.index') }}" class="text-xs font-semibold text-blue-600 hover:text-blue-700">Full report &rarr;</a>
-            </x-slot:actions>
-
-            @if($deliveredMonth === 0)
-                <div class="flex h-56 items-center justify-center text-sm text-slate-400">
-                    No deliveries in {{ $anchor->format('F Y') }}
+        <section class="rounded-xl border border-slate-200 bg-white shadow-sm">
+            <div class="flex items-start justify-between border-b border-slate-100 px-4 py-2.5">
+                <div>
+                    <h2 class="text-[13px] font-semibold text-slate-900">Deliveries</h2>
+                    <p class="mt-0.5 text-[10.5px] text-slate-500">{{ $anchor->format('F Y') }} &middot; daily completed movements</p>
                 </div>
-            @else
-                @php
-                    $count = count($deliveriesSeries);
-                    $chartH = 180;
-                    $chartW = max(600, $count * 22);
-                    $groupW = $chartW / max($count, 1);
-                    $innerW = max(1, $groupW - 6);
-                    $barW = max(2, $innerW * 0.7);
-                    $labelEvery = $count > 15 ? (int) ceil($count / 15) : 1;
-                @endphp
-                <div class="overflow-x-auto">
-                    <svg viewBox="0 0 {{ $chartW }} {{ $chartH + 30 }}" class="h-60 w-full min-w-[600px]" preserveAspectRatio="none">
-                        @for($i = 1; $i <= 4; $i++)
-                            <line x1="0" x2="{{ $chartW }}" y1="{{ $chartH - ($chartH / 4) * $i }}" y2="{{ $chartH - ($chartH / 4) * $i }}" stroke="#f1f5f9" stroke-width="1"/>
-                        @endfor
-                        @foreach($deliveriesSeries as $i => $d)
-                            @php
-                                $gx = $i * $groupW + (($innerW - $barW) / 2) + 3;
-                                $h = $deliveriesPeak > 0 ? ($d['count'] / $deliveriesPeak) * ($chartH - 6) : 0;
-                            @endphp
-                            <rect x="{{ $gx }}" y="{{ $chartH - $h }}" width="{{ $barW }}" height="{{ $h }}" fill="#10b981" rx="1.5"/>
-                            @if($i % $labelEvery === 0)
-                                <text x="{{ $gx + $barW / 2 }}" y="{{ $chartH + 16 }}" text-anchor="middle" font-size="9" fill="#64748b" font-family="ui-sans-serif,system-ui">{{ $d['date']->format('d') }}</text>
-                            @endif
-                        @endforeach
-                    </svg>
-                </div>
-            @endif
-
-            <x-slot:footer>
-                Peak day: {{ $num($deliveriesPeak) }} {{ \Illuminate\Support\Str::plural('delivery', $deliveriesPeak) }}. Total for the month: {{ $num($deliveredMonth) }}.
-            </x-slot:footer>
-        </x-dash.panel>
-
-        {{-- Petty cash by category (horizontal bars) --}}
-        <x-dash.panel
-            title="Petty cash by category"
-            :subtitle="$money($cashSpent) . ' spent · ' . $anchor->format('F Y')">
-            @php $totalCash = array_sum($cashByCategory); @endphp
-
-            @if($totalCash < 1)
-                <div class="flex h-56 items-center justify-center text-sm text-slate-400">
-                    No petty cash spent in {{ $anchor->format('F Y') }}
-                </div>
-            @else
-                <ul class="space-y-3">
-                    @foreach($cashByCategory as $slug => $amount)
-                        @php
-                            $pct = $cashPeak > 0 ? min(100, ($amount / $cashPeak) * 100) : 0;
-                            $sharePct = $totalCash > 0 ? (int) round(($amount / $totalCash) * 100) : 0;
-                        @endphp
-                        <li>
-                            <div class="flex items-center justify-between text-xs">
-                                <span class="font-medium text-slate-700">{{ $categoryLabels[$slug] ?? Str::of($slug)->replace('_', ' ')->title() }}</span>
-                                <span class="tabular-nums text-slate-500">{{ $money($amount) }} <span class="text-slate-400">· {{ $sharePct }}%</span></span>
-                            </div>
-                            <div class="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
-                                <div class="h-full rounded-full bg-orange-400" style="width: {{ $pct }}%"></div>
-                            </div>
-                        </li>
-                    @endforeach
-                </ul>
-            @endif
-
-            <x-slot:footer>
-                <a href="{{ route('admin.overview') }}" class="text-xs font-semibold text-blue-600 hover:text-blue-700">Petty cash overview &rarr;</a>
-            </x-slot:footer>
-        </x-dash.panel>
-    </div>
-
-    {{-- ══════════════════════════════════════════════════════════════ --}}
-    {{-- CUSTOMER LEADERBOARDS                                          --}}
-    {{-- ══════════════════════════════════════════════════════════════ --}}
-    <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
-
-        {{-- By volume -- vehicles delivered --}}
-        <x-dash.panel
-            title="Top customers by volume"
-            :subtitle="'Vehicles delivered · ' . $anchor->format('F Y')"
-            :tight="true">
-            <x-slot:actions>
-                <a href="{{ route('admin.reports.index') }}" class="text-xs font-semibold text-blue-600 hover:text-blue-700">Full report &rarr;</a>
-            </x-slot:actions>
-
-            @if($volumeRows->isEmpty())
-                <div class="px-5 py-10 text-center">
-                    <p class="text-sm font-medium text-slate-500">No deliveries yet in {{ $anchor->format('F Y') }}.</p>
-                </div>
-            @else
-                @php $topVolume = $volumeRows->max('moves'); @endphp
-                <ul class="divide-y divide-slate-100">
-                    @foreach($volumeRows as $i => $row)
-                        @php $pct = $topVolume > 0 ? ($row->moves / $topVolume) * 100 : 0; @endphp
-                        <li class="px-5 py-2.5">
-                            <div class="flex items-center gap-3">
-                                <span class="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-slate-100 text-[11px] font-semibold text-slate-500">{{ $i + 1 }}</span>
-                                <span class="min-w-0 flex-1 truncate text-sm font-medium text-slate-900">{{ $row->company_name }}</span>
-                                <span class="shrink-0 text-sm font-semibold tabular-nums text-slate-900">{{ $num($row->moves) }}</span>
-                            </div>
-                            <div class="mt-1.5 ml-9 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
-                                <div class="h-full rounded-full bg-emerald-500" style="width: {{ $pct }}%"></div>
-                            </div>
-                        </li>
-                    @endforeach
-                </ul>
-            @endif
-        </x-dash.panel>
-
-        {{-- By value -- invoiced rand --}}
-        <x-dash.panel
-            title="Top customers by value"
-            :subtitle="'Invoiced this month · ' . $anchor->format('F Y')"
-            :tight="true">
-            <x-slot:actions>
-                <a href="{{ route('admin.dashboard.finance') }}" class="text-xs font-semibold text-blue-600 hover:text-blue-700">Finance &rarr;</a>
-            </x-slot:actions>
-
-            @if($valueRows->isEmpty() || $valueRows->max('invoiced_sum') <= 0)
-                <div class="px-5 py-10 text-center">
-                    <p class="text-sm font-medium text-slate-500">Nothing captured yet in {{ $anchor->format('F Y') }}.</p>
-                    <p class="mt-1 text-xs text-slate-400">Value updates as accounts captures invoice amounts.</p>
-                </div>
-            @else
-                @php $topValue = (float) $valueRows->max('invoiced_sum'); @endphp
-                <ul class="divide-y divide-slate-100">
-                    @foreach($valueRows as $i => $row)
-                        @php $pct = $topValue > 0 ? ((float) $row->invoiced_sum / $topValue) * 100 : 0; @endphp
-                        <li class="px-5 py-2.5">
-                            <div class="flex items-center gap-3">
-                                <span class="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-slate-100 text-[11px] font-semibold text-slate-500">{{ $i + 1 }}</span>
-                                <span class="min-w-0 flex-1 truncate text-sm font-medium text-slate-900">{{ $row->company_name }}</span>
-                                <span class="shrink-0 text-sm font-semibold tabular-nums text-slate-900">{{ $money($row->invoiced_sum) }}</span>
-                            </div>
-                            <div class="mt-1.5 ml-9 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
-                                <div class="h-full rounded-full bg-purple-500" style="width: {{ $pct }}%"></div>
-                            </div>
-                        </li>
-                    @endforeach
-                </ul>
-            @endif
-        </x-dash.panel>
-    </div>
-
-    {{-- ══════════════════════════════════════════════════════════════ --}}
-    {{-- SUPPORTING ROW -- licence, at-risk, yesterday digest            --}}
-    {{-- ══════════════════════════════════════════════════════════════ --}}
-    <div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
-
-        {{-- Platform licence for the month --}}
-        <x-dash.panel
-            title="Platform licence"
-            :subtitle="$anchor->format('F Y')">
-            @if($licence)
-                <div class="flex items-baseline justify-between">
-                    <p class="text-3xl font-semibold tabular-nums text-slate-900">{{ $money($licence['total_incl_vat']) }}</p>
-                    <p class="text-xs text-slate-500">incl. VAT</p>
-                </div>
-                <p class="mt-1.5 text-xs text-slate-500">
-                    {{ $num($licence['moves']) }} moves &times; {{ $money($licence['per_move']) }}
-                </p>
-                <x-slot:footer>
-                    <a href="{{ route('admin.billing') }}" class="text-xs font-semibold text-blue-600 hover:text-blue-700">Licence billing &rarr;</a>
-                </x-slot:footer>
-            @else
-                <div class="flex h-24 flex-col items-center justify-center text-center">
-                    <p class="text-sm font-medium text-slate-500">Licence metering is currently disabled</p>
-                    <a href="{{ route('admin.billing') }}" class="mt-1 text-xs font-semibold text-blue-600 hover:text-blue-700">Manage &rarr;</a>
-                </div>
-            @endif
-        </x-dash.panel>
-
-        {{-- At-risk snapshot -- live, not month-scoped --}}
-        <x-dash.panel
-            title="Movements at risk"
-            subtitle="Live · past their stage threshold">
-            <div class="flex items-baseline justify-between">
-                <p class="text-3xl font-semibold tabular-nums {{ $atRisk > 0 ? 'text-rose-700' : 'text-emerald-700' }}">{{ $num($atRisk) }}</p>
-                <p class="text-xs text-slate-500">{{ $atRisk > 0 ? 'needs a look' : 'all clear' }}</p>
+                <a href="{{ route('admin.reports.index') }}" class="text-[10.5px] font-semibold text-blue-600 hover:text-blue-700">Full report &rarr;</a>
             </div>
-            <p class="mt-1.5 text-xs text-slate-500">
-                Thresholds tuned on the Operations dashboard's settings.
-            </p>
-            <x-slot:footer>
-                <a href="{{ route('admin.dashboard.ops') }}" class="text-xs font-semibold text-blue-600 hover:text-blue-700">Operations dashboard &rarr;</a>
-            </x-slot:footer>
-        </x-dash.panel>
+            <div class="px-4 pb-3 pt-2.5">
+                <div class="flex items-baseline gap-4">
+                    <span class="text-[27px] font-bold tabular-nums text-slate-900">{{ $num($deliveredMonth) }}</span>
+                    <span class="text-[11px] text-slate-500">delivered this month</span>
+                    <span class="ml-auto text-[11px] text-slate-500">Peak day: <b class="text-slate-900">{{ $num($deliveriesPeak) }}</b></span>
+                </div>
 
-        {{-- What changed yesterday.  A digest -- every count links straight
-             into the audit log with the filter already applied, and the
-             footer carries one-click ranges for the week / month / previous
-             month so the owner never has to touch a date picker. --}}
-        <x-dash.panel
-            title="What changed yesterday"
-            :subtitle="$digest['date']->format('D d M')">
-            @if($digest['total'] === 0)
-                <div class="flex h-24 flex-col items-center justify-center text-center">
-                    <p class="text-sm font-medium text-slate-500">Nothing was recorded yesterday.</p>
-                </div>
-            @else
-                <div class="flex items-baseline justify-between">
-                    <p class="text-3xl font-semibold tabular-nums text-slate-900">{{ $num($digest['total']) }}</p>
-                    <p class="text-xs text-slate-500">{{ \Illuminate\Support\Str::plural('change', $digest['total']) }} &middot; {{ $num($digest['people']) }} {{ \Illuminate\Support\Str::plural('person', $digest['people']) }}</p>
-                </div>
-                @if($digest['actions']->isNotEmpty())
-                    <ul class="mt-3 space-y-1 border-t border-slate-100 pt-3 text-xs">
-                        @foreach($digest['actions']->take(3) as $action)
-                            <li>
-                                <a href="{{ $action['href'] }}" class="group flex items-center justify-between gap-3">
-                                    <span class="min-w-0 truncate text-slate-600 group-hover:text-slate-900">{{ $action['label'] }}</span>
-                                    <span class="shrink-0 font-semibold tabular-nums text-slate-900">{{ $num($action['count']) }}</span>
-                                </a>
-                            </li>
-                        @endforeach
-                    </ul>
+                @if($deliveredMonth === 0)
+                    <div class="flex h-[190px] items-center justify-center text-[11px] text-slate-400">No deliveries in {{ $anchor->format('F Y') }}</div>
+                @else
+                    @php
+                        $count = count($deliveriesSeries);
+                        $chartH = 190;
+                        $chartW = max(480, $count * 22);
+                        $groupW = $chartW / max($count, 1);
+                        $barW = max(3, $groupW - 6);
+                        $labelStep = $count >= 30 ? 5 : ($count >= 15 ? 3 : 1);
+                    @endphp
+                    <div class="mt-2 overflow-x-auto">
+                        <svg viewBox="0 0 {{ $chartW }} {{ $chartH + 22 }}" class="h-[210px] w-full min-w-[480px]" preserveAspectRatio="none">
+                            @for($i = 1; $i <= 4; $i++)
+                                <line x1="0" x2="{{ $chartW }}" y1="{{ $chartH - ($chartH / 4) * $i }}" y2="{{ $chartH - ($chartH / 4) * $i }}" stroke="#f1f5f9" stroke-width="1"/>
+                            @endfor
+                            @foreach($deliveriesSeries as $i => $d)
+                                @php
+                                    $gx = $i * $groupW + (($groupW - $barW) / 2);
+                                    $h = $d['count'] > 0 ? ($d['count'] / $deliveriesPeak) * ($chartH - 6) : 2;
+                                    $fill = $d['count'] > 0 ? '#0aae78' : '#e9eef5';
+                                @endphp
+                                <rect x="{{ $gx }}" y="{{ $chartH - $h }}" width="{{ $barW }}" height="{{ $h }}" fill="{{ $fill }}" rx="2"/>
+                                @if($i === 0 || ($i + 1) % $labelStep === 0 || $i === $count - 1)
+                                    <text x="{{ $gx + $barW / 2 }}" y="{{ $chartH + 14 }}" text-anchor="middle" font-size="9" fill="#8190a5" font-family="ui-sans-serif,system-ui">{{ $d['date']->format('d') }}</text>
+                                @endif
+                            @endforeach
+                        </svg>
+                    </div>
                 @endif
-            @endif
-            <x-slot:footer>
-                <div class="flex flex-wrap items-center gap-1.5">
-                    @foreach($changeRanges as $r)
-                        <a href="{{ $r['href'] }}" class="rounded-md border border-slate-200 bg-white px-2 py-0.5 text-[10px] font-semibold text-slate-600 transition-colors hover:border-slate-300 hover:text-slate-900">
-                            {{ $r['label'] }}
-                        </a>
-                    @endforeach
-                    <a href="{{ route('admin.audit-log') }}" class="ml-auto text-xs font-semibold text-blue-600 hover:text-blue-700">Audit log &rarr;</a>
+            </div>
+        </section>
+
+        {{-- Billing & reconciliation - condensed exception list.
+             Combines the four financially important indicators into one
+             card so the owner reads the money position at a glance. --}}
+        @php
+            $missingNumber = collect($attention)->firstWhere('label', 'Movements missing an invoice number');
+            $reconQueries = collect($attention)->firstWhere('label', 'Open reconciliation queries');
+            $changesPending = collect($attention)->firstWhere('label', 'Booking change requests pending');
+        @endphp
+        <section class="rounded-xl border border-slate-200 bg-white shadow-sm">
+            <div class="flex items-start justify-between border-b border-slate-100 px-4 py-2.5">
+                <div>
+                    <h2 class="text-[13px] font-semibold text-slate-900">Billing &amp; reconciliation</h2>
+                    <p class="mt-0.5 text-[10.5px] text-slate-500">Items affecting cash collection</p>
                 </div>
-            </x-slot:footer>
-        </x-dash.panel>
+            </div>
+            <ul class="px-4 py-1.5 text-[12px]">
+                <li class="flex items-center justify-between border-b border-slate-100 py-2.5">
+                    <a href="{{ route('admin.invoices.index', ['dateFrom' => $from->toDateString(), 'dateTo' => $to->toDateString(), 'completion' => 'all']) }}" class="text-slate-700 hover:text-slate-900">Missing invoice numbers</a>
+                    <span class="font-bold tabular-nums {{ ($missingNumber['count'] ?? 0) > 0 ? 'text-amber-700' : 'text-slate-900' }}">{{ $num($missingNumber['count'] ?? 0) }}</span>
+                </li>
+                <li class="flex items-center justify-between border-b border-slate-100 py-2.5">
+                    <a href="{{ route('admin.petty-cash.reconciliation') }}" class="text-slate-700 hover:text-slate-900">Open reconciliation queries</a>
+                    <span class="font-bold tabular-nums {{ ($reconQueries['count'] ?? 0) > 0 ? 'text-rose-700' : 'text-slate-900' }}">{{ $num($reconQueries['count'] ?? 0) }}</span>
+                </li>
+                <li class="flex items-center justify-between border-b border-slate-100 py-2.5">
+                    <a href="{{ route('admin.change-requests.index') }}" class="text-slate-700 hover:text-slate-900">Booking changes pending</a>
+                    <span class="font-bold tabular-nums {{ ($changesPending['count'] ?? 0) > 0 ? 'text-amber-700' : 'text-slate-900' }}">{{ $num($changesPending['count'] ?? 0) }}</span>
+                </li>
+                <li class="flex items-center justify-between border-b border-slate-100 py-2.5">
+                    <span class="text-slate-700">Invoiced this month</span>
+                    <span class="font-bold tabular-nums text-slate-900">{{ $money($invoicedValue) }}</span>
+                </li>
+                <li class="flex items-center justify-between py-2.5">
+                    <a href="{{ route('admin.fuel') }}" class="text-slate-700 hover:text-slate-900">Fuel credit available</a>
+                    <span class="font-bold tabular-nums text-slate-900">{{ $fuel['available'] !== null ? $money($fuel['available']) : '-' }}</span>
+                </li>
+            </ul>
+        </section>
     </div>
 
-    {{-- ══════════════════════════════════════════════════════════════ --}}
-    {{-- GOVERNANCE SHORTCUTS                                           --}}
-    {{-- ══════════════════════════════════════════════════════════════ --}}
-    <x-dash.panel title="Governance" subtitle="The setup and oversight pages an owner curates" :tight="true">
-        <div class="grid grid-cols-1 divide-y divide-slate-100 sm:grid-cols-2 sm:divide-y-0 sm:divide-x lg:grid-cols-4">
-            @php
-                $shortcuts = [
-                    ['label' => 'Team', 'note' => 'Who has access and at what level', 'href' => route('admin.users.index')],
-                    ['label' => 'Companies', 'note' => 'Customers, OEMs and body builders', 'href' => route('admin.companies.index')],
-                    ['label' => 'Cancellation permissions', 'note' => 'Who may cancel a confirmed order', 'href' => route('admin.settings.cancellation')],
-                    ['label' => 'Audit log', 'note' => 'Every change, who made it and when', 'href' => route('admin.audit-log')],
-                ];
-            @endphp
-            @foreach($shortcuts as $s)
-                <a href="{{ $s['href'] }}" class="group flex items-start justify-between gap-3 px-5 py-4 transition hover:bg-slate-50/70">
-                    <span class="min-w-0">
-                        <span class="block text-sm font-medium text-slate-900">{{ $s['label'] }}</span>
-                        <span class="mt-0.5 block text-xs text-slate-500">{{ $s['note'] }}</span>
-                    </span>
-                    <svg class="mt-0.5 h-4 w-4 shrink-0 text-slate-300 transition group-hover:text-slate-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+    {{-- BOTTOM ROW: 65/35 --------------------------------------------- --}}
+    <div class="grid grid-cols-1 gap-3 lg:grid-cols-[1.3fr_.7fr]">
+
+        {{-- Top customers: compact table, no giant progress bars.
+             Sorted by deliveries; captured invoice value shown alongside
+             so the two questions ("who's busiest" / "who paid") answer
+             in one glance instead of two panels. --}}
+        <section class="rounded-xl border border-slate-200 bg-white shadow-sm">
+            <div class="flex items-start justify-between border-b border-slate-100 px-4 py-2.5">
+                <div>
+                    <h2 class="text-[13px] font-semibold text-slate-900">Top customers</h2>
+                    <p class="mt-0.5 text-[10.5px] text-slate-500">{{ $anchor->format('F Y') }} &middot; deliveries and captured invoice value</p>
+                </div>
+                <a href="{{ route('admin.reports.index') }}" class="text-[10.5px] font-semibold text-blue-600 hover:text-blue-700">Customer report &rarr;</a>
+            </div>
+            @if($volumeRows->isEmpty())
+                <div class="px-4 py-8 text-center text-[12px] text-slate-500">No deliveries yet in {{ $anchor->format('F Y') }}.</div>
+            @else
+                <table class="w-full border-collapse">
+                    <thead>
+                        <tr>
+                            <th class="border-b border-slate-100 px-4 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">Customer</th>
+                            <th class="border-b border-slate-100 px-4 py-2 text-right text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">Deliveries</th>
+                            <th class="border-b border-slate-100 px-4 py-2 text-right text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">Invoiced</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach($volumeRows as $i => $row)
+                            <tr class="border-b border-slate-100 last:border-b-0">
+                                <td class="px-4 py-2.5 text-[11.5px]">
+                                    <span class="mr-2 inline-grid h-[22px] w-[22px] place-items-center rounded-md bg-slate-100 text-[10px] font-semibold text-slate-500">{{ $i + 1 }}</span>
+                                    <span class="font-semibold text-slate-900">{{ $row->company_name }}</span>
+                                </td>
+                                <td class="px-4 py-2.5 text-right text-[11.5px] font-semibold tabular-nums text-slate-900">{{ $num($row->moves) }}</td>
+                                <td class="px-4 py-2.5 text-right text-[11.5px] tabular-nums {{ (float) $row->invoiced_sum > 0 ? 'font-semibold text-slate-900' : 'text-slate-400' }}">{{ (float) $row->invoiced_sum > 0 ? $money($row->invoiced_sum) : '-' }}</td>
+                            </tr>
+                        @endforeach
+                    </tbody>
+                </table>
+            @endif
+        </section>
+
+        {{-- Business status: 2x2 mini-stat card.  Folds at-risk +
+             yesterday's audit summary into one card, replacing three
+             separate panels the previous page carried. --}}
+        <section class="rounded-xl border border-slate-200 bg-white shadow-sm">
+            <div class="border-b border-slate-100 px-4 py-2.5">
+                <h2 class="text-[13px] font-semibold text-slate-900">Business status</h2>
+                <p class="mt-0.5 text-[10.5px] text-slate-500">Owner-level health check</p>
+            </div>
+            <div class="grid grid-cols-2 gap-2.5 p-3.5">
+                <a href="{{ route('admin.dashboard.ops') }}" class="block rounded-lg border border-slate-100 p-3 transition hover:border-slate-200 hover:bg-slate-50/50">
+                    <p class="text-[10px] font-semibold uppercase tracking-[0.09em] text-slate-500">Movements at risk</p>
+                    <p class="mt-1.5 text-[22px] font-bold tabular-nums {{ $atRisk > 0 ? 'text-rose-600' : 'text-emerald-600' }}">{{ $num($atRisk) }}</p>
+                    <p class="text-[10.5px] text-slate-500">{{ $atRisk > 0 ? 'Needs a look' : 'All clear' }}</p>
                 </a>
-            @endforeach
-        </div>
-    </x-dash.panel>
+                <a href="{{ route('admin.audit-log', ['dateFrom' => $digest['date']->toDateString(), 'dateTo' => $digest['date']->toDateString()]) }}" class="block rounded-lg border border-slate-100 p-3 transition hover:border-slate-200 hover:bg-slate-50/50">
+                    <p class="text-[10px] font-semibold uppercase tracking-[0.09em] text-slate-500">Changes yesterday</p>
+                    <p class="mt-1.5 text-[22px] font-bold tabular-nums text-slate-900">{{ $num($digest['total']) }}</p>
+                    <p class="text-[10.5px] text-slate-500">{{ $num($digest['people']) }} {{ \Illuminate\Support\Str::plural('person', $digest['people']) }}</p>
+                </a>
+                <a href="{{ route('admin.audit-log', ['actionType' => 'updated', 'dateFrom' => $digest['date']->toDateString(), 'dateTo' => $digest['date']->toDateString()]) }}" class="block rounded-lg border border-slate-100 p-3 transition hover:border-slate-200 hover:bg-slate-50/50">
+                    <p class="text-[10px] font-semibold uppercase tracking-[0.09em] text-slate-500">Updated</p>
+                    <p class="mt-1.5 text-[22px] font-bold tabular-nums text-slate-900">{{ $num($digest['updated']) }}</p>
+                    <p class="text-[10.5px] text-slate-500">Yesterday</p>
+                </a>
+                <a href="{{ route('admin.audit-log', ['actionType' => 'created', 'dateFrom' => $digest['date']->toDateString(), 'dateTo' => $digest['date']->toDateString()]) }}" class="block rounded-lg border border-slate-100 p-3 transition hover:border-slate-200 hover:bg-slate-50/50">
+                    <p class="text-[10px] font-semibold uppercase tracking-[0.09em] text-slate-500">Created</p>
+                    <p class="mt-1.5 text-[22px] font-bold tabular-nums text-slate-900">{{ $num($digest['created']) }}</p>
+                    <p class="text-[10.5px] text-slate-500">Yesterday</p>
+                </a>
+            </div>
+        </section>
+    </div>
 </div>

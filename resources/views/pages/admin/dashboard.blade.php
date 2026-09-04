@@ -622,7 +622,7 @@ new #[Layout('components.layouts.app')] class extends Component
     $num   = fn ($v) => number_format((int) $v);
 @endphp
 
-<div class="space-y-6">
+<div class="space-y-3">
 
     {{-- ══════════════════════════════════════════════════════════════ --}}
     {{-- HEADER                                                         --}}
@@ -653,9 +653,9 @@ new #[Layout('components.layouts.app')] class extends Component
         </x-slot:actions>
     </x-page-header>
 
-    @include('pages.admin._partials.dashboard-tabs')
-
-    {{-- Filter strip --}}
+    {{-- Filter strip.  The three-tab switcher used to sit above this
+         strip; it duplicated the sidebar's Overview section (Ops /
+         Finance / Owner) so it was removed. --}}
     <x-dash.filter-bar>
         <x-dash.filter-date label="From" wire:model.live="dateFrom" minWidth="160px" />
         <x-dash.filter-date label="To"   wire:model.live="dateTo"   minWidth="160px" />
@@ -698,16 +698,13 @@ new #[Layout('components.layouts.app')] class extends Component
     <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
         @foreach($kpis as $k)
             <x-dash.kpi
+                :compact="true"
                 :label="$k['label']"
                 :value="$num($k['value'])"
                 :color="$k['color']"
                 :href="$k['href']"
                 :helper="$k['helper']"
-                :trend="$k['trend']">
-                <x-slot:icon>
-                    <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{!! $k['iconPath'] !!}</svg>
-                </x-slot:icon>
-            </x-dash.kpi>
+                :trend="$k['trend']" />
         @endforeach
     </div>
 

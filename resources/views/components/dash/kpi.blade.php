@@ -34,6 +34,12 @@
     'href' => null,
     'helper' => null,
     'trend' => null,
+    // Compact tiles pack the same information into a ~98px-tall card so
+    // a 6-across strip fits without dominating the viewport.  The icon
+    // slot is intentionally hidden in compact mode -- the accent dot
+    // already colour-codes the tile, and the icon becomes visual noise
+    // at this size.
+    'compact' => false,
 ])
 
 @php
@@ -76,27 +82,34 @@
     $trendClass = isset($trend) && ($trend['dir'] ?? null) === 'down'
         ? 'text-rose-600'
         : 'text-emerald-600';
+
+    $padding = $compact ? 'p-4' : 'p-5';
+    $valueSize = $compact ? 'text-[22px] leading-none' : 'text-3xl';
+    $valueMargin = $compact ? 'mt-2.5' : 'mt-3';
+    $helperMargin = $compact ? 'mt-1' : 'mt-1.5';
 @endphp
 
 @if($href)
     <a href="{{ $href }}"
-       class="group relative block rounded-xl border border-slate-200 bg-white p-5 shadow-sm transition-all hover:border-slate-300 hover:shadow-md hover:-translate-y-0.5">
+       class="group relative block rounded-xl border border-slate-200 bg-white {{ $padding }} shadow-sm transition-all hover:border-slate-300 hover:shadow-md hover:-translate-y-0.5">
 @else
-    <div class="group relative rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+    <div class="group relative rounded-xl border border-slate-200 bg-white {{ $padding }} shadow-sm">
 @endif
 
     <div class="flex items-start justify-between gap-3">
         <div class="flex items-center gap-2 min-w-0">
             <span class="h-1.5 w-1.5 rounded-full {{ $accentDot }}"></span>
-            <p class="text-[11px] font-semibold uppercase tracking-[0.15em] text-slate-500 truncate">{{ $label }}</p>
+            <p class="text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-500 truncate">{{ $label }}</p>
         </div>
-        @isset($icon)
-            <span class="{{ $accentIcon }} transition-colors group-hover:text-slate-500">{{ $icon }}</span>
-        @endisset
+        @if(!$compact)
+            @isset($icon)
+                <span class="{{ $accentIcon }} transition-colors group-hover:text-slate-500">{{ $icon }}</span>
+            @endisset
+        @endif
     </div>
 
-    <div class="mt-3 flex items-baseline gap-2">
-        <span class="text-3xl font-semibold tracking-tight tabular-nums {{ $accentText }}">{{ $value }}</span>
+    <div class="{{ $valueMargin }} flex items-baseline gap-2">
+        <span class="{{ $valueSize }} font-semibold tracking-tight tabular-nums {{ $accentText }}">{{ $value }}</span>
         @if($trend)
             <span class="inline-flex items-center gap-0.5 text-[11px] font-semibold {{ $trendClass }}">
                 <svg viewBox="0 0 24 24" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
@@ -112,7 +125,7 @@
     </div>
 
     @if($helper)
-        <p class="mt-1.5 text-[11px] font-medium text-slate-500 line-clamp-2">{{ $helper }}</p>
+        <p class="{{ $helperMargin }} text-[11px] font-medium text-slate-500 {{ $compact ? 'line-clamp-2' : 'line-clamp-2' }}">{{ $helper }}</p>
     @endif
 
 @if($href)
