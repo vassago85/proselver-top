@@ -17,6 +17,7 @@ use App\Policies\PettyCashEntryPolicy;
 use App\Services\TrackSolid\Client as TrackSolidClient;
 use App\Services\TrackSolid\TrackSolidClientInterface;
 use Illuminate\Support\Facades\Config;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Schema;
@@ -59,6 +60,16 @@ class AppServiceProvider extends ServiceProvider
 
         static::hydrateStorageConfigFromDatabase();
         static::hydrateMailConfigFromDatabase();
+
+        // Persistent login trail — writes to the `login_history` table so
+        // recent sign-ins survive container recreates (nginx access logs
+        // don't).  Registered explicitly rather than via event auto-
+        // discovery so grep for the listener class name finds this line.
+        // The listener wraps every write in try/catch: if the sink breaks
+        // it must NEVER block login.
+        Event::listen(\Illuminate\Auth\Events\Login::class,  [\App\Listeners\LogLoginActivity::class, 'handleLogin']);
+        Event::listen(\Illuminate\Auth\Events\Failed::class, [\App\Listeners\LogLoginActivity::class, 'handleFailed']);
+        Event::listen(\Illuminate\Auth\Events\Logout::class, [\App\Listeners\LogLoginActivity::class, 'handleLogout']);
 
         // Pin Livewire's update endpoint to a stable URL.
         //

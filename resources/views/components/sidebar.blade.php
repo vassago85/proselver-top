@@ -373,6 +373,11 @@
                             <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></x-slot:icon>
                             Audit Log
                         </x-sidebar-link>
+
+                        <x-sidebar-link :href="route('admin.login-history')" :active="request()->routeIs('admin.login-history')">
+                            <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" x2="3" y1="12" y2="12"/></svg></x-slot:icon>
+                            Login History
+                        </x-sidebar-link>
                     </ul>
                 </li>
                 @endif

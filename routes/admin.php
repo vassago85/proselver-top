@@ -224,6 +224,11 @@ Route::get('reports/invoicing', fn () => redirect()->route('admin.invoices.index
 // Audit Log
 Volt::route('audit-log', 'admin.audit-log')->name('audit-log');
 
+// Login History — sign-in / failed / sign-out trail.  Same viewer gate as
+// Audit Log; the component's mount() 403s everyone else.  Backed by the
+// login_history table populated by App\Listeners\LogLoginActivity.
+Volt::route('login-history', 'admin.login-history')->name('login-history');
+
 // Settings
 Volt::route('settings', 'admin.settings.index')->name('settings.index');
 Volt::route('settings/general', 'admin.settings.general')->name('settings.general');
