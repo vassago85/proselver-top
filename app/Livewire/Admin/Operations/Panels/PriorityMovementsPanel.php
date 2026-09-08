@@ -81,10 +81,16 @@ class PriorityMovementsPanel extends Component
             fn () => (new PriorityMovementsQuery())->get($filters),
         );
 
+        // Total overdue = rows where hours_in_stage > stage threshold.
+        // Same predicate the At-risk hero tile uses so the two numbers
+        // can never disagree.
+        $overdueTotal = $data['jobs']->where('is_overdue', true)->count();
+
         return view('livewire.admin.operations.panels.priority-movements', [
-            'lanes'     => $data['lanes'],
-            'jobs'      => $data['jobs'],
-            'updatedAt' => now(),
+            'lanes'        => $data['lanes'],
+            'jobs'         => $data['jobs'],
+            'overdueTotal' => $overdueTotal,
+            'updatedAt'    => now(),
         ]);
     }
 }

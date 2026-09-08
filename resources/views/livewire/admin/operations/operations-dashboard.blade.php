@@ -52,17 +52,30 @@
         <div class="ow-card flex flex-wrap items-center gap-2 px-3 py-2.5">
             <span class="ow-label pr-1">Filter</span>
 
-            {{-- Every filter posts on `change`, not per-keystroke — debounce is
-                 pointless on a native <select> and just delays the re-render. --}}
-            <select wire:model.live="companyId"
-                    class="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[12px] font-medium text-slate-700 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 focus:outline-none">
-                <option value="">All customers</option>
-                @foreach($companies as $c)
-                    @if($c->id)
-                        <option value="{{ $c->id }}">{{ $c->name }}</option>
-                    @endif
-                @endforeach
-            </select>
+            {{-- Customer picker is a searchable combobox — 60+ dupe
+                 customer records mean the native <select> was a
+                 scrolling contest. Company-record dedupe is a
+                 separate follow-up. --}}
+            @php
+                $companyOptions = collect($companies)
+                    ->filter(fn ($c) => (bool) $c->id)
+                    ->map(fn ($c) => ['value' => (string) $c->id, 'label' => (string) $c->name])
+                    ->values()
+                    ->all();
+                $selectedCustomerLabel = $companyId
+                    ? optional(collect($companies)->firstWhere('id', (int) $companyId))->name
+                    : null;
+            @endphp
+            <div class="w-56 min-w-[200px]">
+                <x-searchable-select
+                    wire:model.live="companyId"
+                    :options="$companyOptions"
+                    :selected-label="$selectedCustomerLabel"
+                    placeholder="All customers"
+                    search-placeholder="Search customers…"
+                    empty-text="No matching customer."
+                />
+            </div>
 
             <select wire:model.live="transporterId"
                     class="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[12px] font-medium text-slate-700 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 focus:outline-none">
@@ -124,38 +137,29 @@
             </div>
 
             <div class="grid gap-3.5 lg:grid-cols-4">
-                {{-- Delivered hero --}}
+                {{-- Delivered hero. Progress bar removed — the ratio
+                     "N of M scheduled · %" is the whole story; a fake
+                     0—100 meter added visual weight without meaning. --}}
+                @php
+                    $pct = min(100, $throughput['throughput_pct']);
+                    $pctTone = match(true) {
+                        $pct >= 90 => 'text-emerald-600',
+                        $pct >= 70 => 'text-amber-700',
+                        default    => 'text-rose-600',
+                    };
+                @endphp
                 <div class="ow-card p-5">
                     <p class="ow-label">Delivered</p>
                     <p class="ow-hero mt-2">{{ number_format($throughput['delivered']) }}</p>
                     <p class="mt-1 text-[12px] text-slate-500">
                         of <span class="font-semibold text-slate-700 tabular-nums">{{ number_format($throughput['scheduled']) }}</span> scheduled
+                        · <span class="font-semibold tabular-nums {{ $pctTone }}">{{ $pct }}%</span>
                     </p>
-                    {{-- Throughput meter --}}
-                    @php
-                        $pct = min(100, $throughput['throughput_pct']);
-                        $meterFill = match(true) {
-                            $pct >= 90 => 'bg-emerald-500',
-                            $pct >= 70 => 'bg-amber-500',
-                            default    => 'bg-rose-500',
-                        };
-                        $meterTrack = match(true) {
-                            $pct >= 90 => 'bg-emerald-100',
-                            $pct >= 70 => 'bg-amber-100',
-                            default    => 'bg-rose-100',
-                        };
-                    @endphp
-                    <div class="mt-3 h-2 w-full rounded-full {{ $meterTrack }} overflow-hidden">
-                        <div class="h-full {{ $meterFill }}" style="width: {{ $pct }}%"></div>
-                    </div>
-                    <div class="mt-1 flex justify-between text-[10.5px] text-slate-500">
-                        <span>0</span>
-                        <span class="font-semibold tabular-nums text-slate-700">{{ $pct }}%</span>
-                        <span>100</span>
-                    </div>
                 </div>
 
-                {{-- On-time (with coverage gate) --}}
+                {{-- On-time (with coverage gate). Coverage line only
+                     shows when it's less than 100% — a "coverage 100%"
+                     footnote adds nothing but chart junk. --}}
                 <div class="ow-card p-5">
                     <p class="ow-label">On-time</p>
                     @if($onTime['is_measurable'])
@@ -165,9 +169,11 @@
                             <span class="font-semibold text-slate-700 tabular-nums">{{ number_format($onTime['on_time']) }}</span>
                             of {{ number_format($onTime['measurable']) }} measurable deliveries met their target
                         </p>
-                        <p class="mt-2 text-[10.5px] text-slate-400">
-                            Coverage {{ $onTime['coverage_pct'] }}% ({{ number_format($onTime['measurable']) }} of {{ number_format($onTime['delivered']) }} deliveries)
-                        </p>
+                        @if($onTime['coverage_pct'] < 100)
+                            <p class="mt-2 text-[10.5px] text-slate-400">
+                                Coverage {{ $onTime['coverage_pct'] }}% ({{ number_format($onTime['measurable']) }} of {{ number_format($onTime['delivered']) }} deliveries)
+                            </p>
+                        @endif
                     @else
                         <p class="ow-hero mt-2 text-slate-300 tabular-nums">—</p>
                         <p class="mt-1 text-[12px] text-slate-500">Not measurable this window.</p>
@@ -185,24 +191,20 @@
                     @endif
                 </div>
 
-                {{-- Gap with ageing split --}}
-                <div class="ow-card p-5">
+                {{-- Gap: single number, wrapped in a link that lands
+                     on the exact same rows via ?exception=scheduled_not_delivered.
+                     The 1–7d / 8–30d / 30d+ triplet is gone — those
+                     buckets were rarely acted on and the raw gap is
+                     the number ops actually cares about. --}}
+                <a href="{{ route('admin.orders.index', ['exception' => 'scheduled_not_delivered']) }}"
+                   class="ow-card block p-5 transition-colors hover:border-slate-300">
                     <p class="ow-label">Gap</p>
                     <p class="mt-2 text-[28px] font-bold tabular-nums text-slate-900">{{ number_format($throughput['gap']) }}</p>
-                    <p class="mt-1 text-[12px] text-slate-500">scheduled but not delivered</p>
-                    <dl class="mt-3 grid grid-cols-3 gap-2 text-center">
-                        @foreach([
-                            ['label' => '1–7d',   'value' => $throughput['gap_1_7d'],     'tone' => 'text-amber-700'],
-                            ['label' => '8–30d',  'value' => $throughput['gap_8_30d'],    'tone' => 'text-orange-700'],
-                            ['label' => '30d+',   'value' => $throughput['gap_30d_plus'], 'tone' => 'text-rose-700'],
-                        ] as $slice)
-                            <div class="rounded-lg border border-slate-100 bg-slate-50/70 p-2">
-                                <dd class="text-[16px] font-bold tabular-nums {{ $slice['tone'] }}">{{ number_format($slice['value']) }}</dd>
-                                <dt class="text-[10px] uppercase tracking-wide text-slate-500">{{ $slice['label'] }}</dt>
-                            </div>
-                        @endforeach
-                    </dl>
-                </div>
+                    <p class="mt-1 text-[12px] text-slate-500">
+                        scheduled but not delivered
+                        <span class="ml-1 text-slate-400">→ open</span>
+                    </p>
+                </a>
 
                 {{-- Lane volumes (also visible on the flow chart panel below) --}}
                 <div class="ow-card p-5">
@@ -267,15 +269,23 @@
                     @endif
                 </div>
 
-                {{-- Dwell p50 / p90 by stage --}}
+                {{-- Dwell p50 / p90 by stage. When a stage has fewer
+                     than `trident.min_sample_for_percentiles` rows we
+                     hide the percentiles entirely — one job dressed as
+                     a statistic is worse than an honest count. --}}
+                @php $minSample = (int) config('trident.min_sample_for_percentiles', 5); @endphp
                 <div class="ow-card p-5">
                     <p class="ow-label">Dwell (right now)</p>
-                    <p class="mt-0.5 text-[11px] text-slate-500">Median + 90th percentile hours in each active stage.</p>
+                    <p class="mt-0.5 text-[11px] text-slate-500">
+                        Median + 90th percentile hours in each active stage.
+                        <span class="text-slate-400">Percentiles hidden below n={{ $minSample }}.</span>
+                    </p>
                     <ul class="mt-3 space-y-3">
                         @foreach($dwell as $key => $d)
                             @php
-                                $p50Width = $dwellMax > 0 ? min(100, ($d['p50_hours'] / $dwellMax) * 100) : 0;
-                                $p90Width = $dwellMax > 0 ? min(100, ($d['p90_hours'] / $dwellMax) * 100) : 0;
+                                $hasSample = $d['count'] >= $minSample;
+                                $p50Width = $hasSample && $dwellMax > 0 ? min(100, ($d['p50_hours'] / $dwellMax) * 100) : 0;
+                                $p90Width = $hasSample && $dwellMax > 0 ? min(100, ($d['p90_hours'] / $dwellMax) * 100) : 0;
                                 $tone = match($key) {
                                     'intake'     => 'bg-slate-500',
                                     'ready'      => 'bg-cyan-500',
@@ -288,13 +298,19 @@
                                 <div class="flex items-center justify-between text-[11.5px]">
                                     <span class="font-semibold text-slate-700">{{ $d['label'] }}</span>
                                     <span class="tabular-nums text-slate-500">
-                                        p50 {{ $d['p50_hours'] }}h · p90 {{ $d['p90_hours'] }}h · n={{ $d['count'] }}
+                                        @if($hasSample)
+                                            p50 {{ $d['p50_hours'] }}h · p90 {{ $d['p90_hours'] }}h · n={{ $d['count'] }}
+                                        @else
+                                            {{ $d['count'] }} {{ Str::plural('job', $d['count']) }} in stage
+                                        @endif
                                     </span>
                                 </div>
-                                <div class="mt-1 relative h-2.5 w-full rounded-full bg-slate-100 overflow-hidden">
-                                    <div class="absolute inset-y-0 left-0 {{ $tone }} opacity-30" style="width: {{ $p90Width }}%"></div>
-                                    <div class="absolute inset-y-0 left-0 {{ $tone }}" style="width: {{ $p50Width }}%"></div>
-                                </div>
+                                @if($hasSample)
+                                    <div class="mt-1 relative h-2.5 w-full rounded-full bg-slate-100 overflow-hidden">
+                                        <div class="absolute inset-y-0 left-0 {{ $tone }} opacity-30" style="width: {{ $p90Width }}%"></div>
+                                        <div class="absolute inset-y-0 left-0 {{ $tone }}" style="width: {{ $p50Width }}%"></div>
+                                    </div>
+                                @endif
                             </li>
                         @endforeach
                     </ul>
@@ -325,14 +341,10 @@
                 :region="$region"
                 lazy />
 
-            <div class="grid gap-3.5 xl:grid-cols-[1fr_1.35fr]">
-                <livewire:admin.operations.panels.exceptions-panel
-                    :company-id="$companyId"
-                    :transporter-id="$transporterId"
-                    :brand-id="$brandId"
-                    :region="$region"
-                    lazy />
-
+            {{-- Full-width ops queue. Exceptions panel is gone — its
+                 rows now live inside the queue as Stage badges with
+                 "· {n}h over" when overdue. --}}
+            <div id="ops-queue" class="scroll-mt-6">
                 <livewire:admin.operations.panels.priority-movements-panel
                     :company-id="$companyId"
                     :transporter-id="$transporterId"

@@ -160,6 +160,18 @@ SQL;
                     $w->whereNull('delivered_at')
                       ->orWhere('delivered_at', '<=', $pod);
                 }),
+
+            // The Performance "Gap" tile on the ops dashboard links
+            // here — scheduled but not delivered, excluding cancelled
+            // and completed rows. Matches ThroughputQuery::$gapBase so
+            // clicking the count lands on exactly the summed rows.
+            'scheduled_not_delivered'  => fn ($q) => $q
+                ->whereNotNull('scheduled_date')
+                ->whereNull('delivered_at')
+                ->whereNotIn('status', [
+                    JobStatus::Cancelled->value,
+                    JobStatus::Completed->value,
+                ]),
         ];
     }
 

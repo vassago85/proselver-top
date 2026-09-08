@@ -38,8 +38,11 @@
             default    => 'text-slate-700',
         };
     @endphp
-    <a href="{{ route('admin.orders.index', ['exception' => 'dispatched_not_collected']) }}"
-       class="ow-card relative flex flex-col justify-between p-4 {{ $atRiskBg }} {{ $exceptions['at_risk'] > 0 ? 'ow-alert-pulse' : '' }}">
+    {{-- The At-risk hero is a link to the ops queue rather than the
+         orders filter — the queue is the actual list, and rendering
+         it filtered by "overdue only" is a next step. --}}
+    <a href="#ops-queue"
+       class="ow-card relative flex flex-col justify-between p-4 {{ $atRiskBg }} {{ $atRiskCount > 0 ? 'ow-alert-pulse' : '' }}">
         <div class="flex items-center gap-2">
             <svg class="h-4 w-4 {{ $atRiskAccent }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
@@ -47,8 +50,8 @@
             <p class="ow-label {{ $atRiskAccent }}">At risk</p>
         </div>
         <div>
-            <p class="ow-hero {{ $atRiskAccent }}">{{ number_format($exceptions['at_risk']) }}</p>
-            <p class="mt-1 text-[11px] text-slate-500">distinct union of the six buckets</p>
+            <p class="ow-hero {{ $atRiskAccent }}">{{ number_format($atRiskCount) }}</p>
+            <p class="mt-1 text-[11px] text-slate-500">rows past their stage threshold</p>
         </div>
     </a>
 </div>

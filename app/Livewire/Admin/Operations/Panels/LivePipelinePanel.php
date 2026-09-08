@@ -3,8 +3,8 @@
 namespace App\Livewire\Admin\Operations\Panels;
 
 use App\Domain\Operations\OperationsFilters;
-use App\Domain\Operations\Queries\ExceptionCountsQuery;
 use App\Domain\Operations\Queries\LivePipelineQuery;
+use App\Domain\Operations\Queries\PriorityMovementsQuery;
 use Illuminate\Support\Facades\Cache;
 use Livewire\Attributes\Lazy;
 use Livewire\Attributes\On;
@@ -105,23 +105,26 @@ class LivePipelinePanel extends Component
             fn () => (new LivePipelineQuery())->get($filters),
         );
 
-        $exceptions = Cache::remember(
-            $filters->cacheKey('exceptions'),
+        // At-risk = jobs past their stage threshold on the ops queue.
+        // Same predicate the queue uses for badges, so this tile and
+        // the queue can never disagree by construction.
+        $atRiskCount = Cache::remember(
+            $filters->cacheKey('at_risk_count'),
             (int) config('operations.cache.live_ttl', 30),
-            fn () => (new ExceptionCountsQuery())->get($filters),
+            fn () => (new PriorityMovementsQuery())->overdueCount($filters),
         );
 
         $atRiskLevels = config('operations.at_risk', ['warning_count' => 5, 'critical_count' => 20]);
         $atRiskSeverity = match (true) {
-            $exceptions['at_risk'] === 0                            => 'neutral',
-            $exceptions['at_risk'] >= $atRiskLevels['critical_count'] => 'critical',
-            $exceptions['at_risk'] >= $atRiskLevels['warning_count']  => 'warning',
-            default                                                 => 'warning',
+            $atRiskCount === 0                             => 'neutral',
+            $atRiskCount >= $atRiskLevels['critical_count'] => 'critical',
+            $atRiskCount >= $atRiskLevels['warning_count']  => 'warning',
+            default                                        => 'warning',
         };
 
         return view('livewire.admin.operations.panels.live-pipeline', [
             'pipeline'       => $pipeline,
-            'exceptions'     => $exceptions,
+            'atRiskCount'    => $atRiskCount,
             'atRiskSeverity' => $atRiskSeverity,
             'updatedAt'      => now(),
         ]);

@@ -295,6 +295,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                 'dispatched_not_collected' => 'Dispatched · not collected',
                 'long_in_transit'          => 'Long in transit',
                 'pod_pending'              => 'POD pending',
+                'scheduled_not_delivered'  => 'Scheduled · not delivered (gap)',
             ];
             $exceptionLabel = $exceptionLabels[$exceptionBucket] ?? $exceptionBucket;
         @endphp

@@ -67,4 +67,50 @@ enum StageGroup: string
     {
         return [self::Intake, self::Ready, self::Dispatched, self::OnRoad];
     }
+
+    /**
+     * Config key inside `trident.stage_thresholds.*`. The enum value
+     * (`ready`) and the ops-vocabulary key (`ready_to_dispatch`) are
+     * intentionally different — this map keeps the enum internal and
+     * the config file human-readable.
+     */
+    public function thresholdKey(): ?string
+    {
+        return match ($this) {
+            self::Intake     => 'intake',
+            self::Ready      => 'ready_to_dispatch',
+            self::Dispatched => 'dispatched',
+            self::OnRoad     => 'on_the_road',
+            self::Delivered  => 'pod_pending',
+            self::Closed     => null,
+        };
+    }
+
+    /**
+     * Hours a job may sit in this stage before it is flagged as
+     * overdue on the ops queue. Returns null for groups with no
+     * threshold (Closed).
+     */
+    public function thresholdHours(): ?int
+    {
+        $key = $this->thresholdKey();
+        if ($key === null) {
+            return null;
+        }
+
+        $value = config("trident.stage_thresholds.{$key}");
+        return $value === null ? null : (int) $value;
+    }
+
+    /**
+     * The five groups that appear on the ops queue — pipeline groups
+     * plus Delivered (POD pending). Closed / Cancelled rows never
+     * show up here.
+     *
+     * @return list<self>
+     */
+    public static function queueGroups(): array
+    {
+        return [self::Intake, self::Ready, self::Dispatched, self::OnRoad, self::Delivered];
+    }
 }
