@@ -10,6 +10,7 @@ use App\Models\PettyCashPlan;
 use App\Models\SystemSetting;
 use App\Models\User;
 use App\Services\ProselverLicenceBilling;
+use App\Services\Tfn\FuelMtdSummary;
 use App\Services\Tfn\TfnClient;
 use App\Services\Tfn\TfnDemoFixtures;
 use Illuminate\Support\Carbon;
@@ -420,15 +421,43 @@ new #[Layout('components.layouts.app')] class extends Component {
             $txSpend += abs((float) ($row['Amount'] ?? 0));
         }
 
-        $litres = max($aggregateLitres, $txLitres);
+        // Rand spend goes through FuelMtdSummary so it reads from the
+        // persisted `fuel_fills` table first (SUM(amount) is exact and
+        // survives the 100-row cap on /api/Transactions). If the
+        // scheduler hasn't populated the month yet, the summary falls
+        // back to `aggregateLitres × avg R/L` from this same tx feed —
+        // still a better MTD number than the truncated raw sum.
+        $customerNumber = (string) config('tfn.customer_number', '');
+        $summary = FuelMtdSummary::forMonth(
+            $anchor,
+            $customerNumber,
+            (array) $txPayload,
+            $aggregateLitres,
+        );
+
+        // Prefer the summary's litres when it's authoritative (DB)
+        // OR when the estimate promoted the aggregate rollup; otherwise
+        // keep the max(aggregate, tx) legacy behaviour for cases where
+        // the summary saw nothing new.
+        $litres = $summary->fillCount > 0 || $summary->source === FuelMtdSummary::SOURCE_ESTIMATED
+            ? (float) $summary->litres
+            : max($aggregateLitres, $txLitres);
+
+        // Live spend: DB > estimate > raw tx sum. Only fall back to
+        // demo/null when we truly have no data.
+        $liveSpend = $summary->source === FuelMtdSummary::SOURCE_UNAVAILABLE
+            ? null
+            : (float) $summary->spend;
 
         return [
             'available' => $available !== null ? (float) $available : null,
             'balance' => $balance !== null ? (float) $balance : null,
             'tfn_litres' => $isLive ? $litres : null,
-            // Rand spent at the pump this month from TFN fills.  Primary
-            // figure on the Owner Fuel MTD tile; litres ride as helper.
-            'tfn_spend' => $isLive ? $txSpend : null,
+            // Rand spent at the pump this month.  Primary figure on the
+            // Owner Fuel MTD tile; litres ride as helper.
+            'tfn_spend' => $isLive ? $liveSpend : null,
+            'tfn_spend_source' => $isLive ? $summary->source : null,
+            'tfn_spend_is_estimated' => $isLive && $summary->isEstimated(),
             'source' => $isLive ? 'live' : 'demo',
             'configured' => $isLive,
             'ok' => $ok,
@@ -829,6 +858,11 @@ new #[Layout('components.layouts.app')] class extends Component {
                         <span class="h-2 w-2 rounded-full bg-cyan-500 group-hover:scale-125 transition"></span>
                     </div>
                     <p class="ow-hero mt-4">
+                        {{-- "≈" prefix when we had to estimate spend
+                             from litres × avg R/L (i.e. the DB snapshot
+                             hasn't caught up yet AND the live tx feed
+                             was capped at 100 rows for the month). --}}
+                        @if(!empty($fuel['tfn_spend_is_estimated']))<span class="text-slate-400 mr-1">≈</span>@endif
                         {{ $money($fuelSpend) }}
                         {!! $trendArrow($fuelTrend) !!}
                     </p>
@@ -843,6 +877,13 @@ new #[Layout('components.layouts.app')] class extends Component {
                             from cash fuel slips
                         @else
                             TFN pump activity
+                        @endif
+                        @if(!empty($fuel['tfn_spend_is_estimated']))
+                            <span class="mx-1.5 text-slate-300">·</span>
+                            <span title="Live spend feed is capped at 100 rows / month. Estimate = MTD litres × average R/L. The scheduled snapshot fills fuel_fills every 15 min for an exact number."
+                                  class="inline-flex items-center rounded-md bg-amber-100 px-1.5 py-0.5 text-[10.5px] font-semibold text-amber-800 ring-1 ring-inset ring-amber-200">
+                                est.
+                            </span>
                         @endif
                     </p>
                 </a>
