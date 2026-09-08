@@ -54,9 +54,14 @@ class PriorityMovementsQuery
             ->limit($limit)
             ->get()
             ->map(function (Job $j) {
+                // Carbon 3 returns floats from diffIn*; cast/round to
+                // whole hours + whole days so the blade never renders
+                // "in stage for 6.83559050h". Absolute-value guard
+                // handles the rare clock-skew case where the entry
+                // timestamp is a few seconds in the future.
                 $enteredAt = $j->status_entered_at ?? $j->updated_at;
-                $hoursIn = $enteredAt ? $enteredAt->diffInHours(now()) : 0;
-                $daysIn  = $enteredAt ? (int) $enteredAt->diffInDays(now()) : 0;
+                $hoursIn = $enteredAt ? (int) round(abs($enteredAt->diffInHours(now()))) : 0;
+                $daysIn  = $enteredAt ? (int) floor(abs($enteredAt->diffInDays(now()))) : 0;
                 $j->setAttribute('hours_in_stage', $hoursIn);
                 $j->setAttribute('days_in_stage', $daysIn);
                 // Canonicalise province casing before building the
