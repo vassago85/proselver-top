@@ -206,10 +206,20 @@
                     </p>
                 </a>
 
-                {{-- Lane volumes (also visible on the flow chart panel below) --}}
+                {{-- Lane volumes. Two numbers per row so the widget
+                     stops disagreeing with the ops queue below it:
+                     `jobs` = still dispatchable (Intake + Ready,
+                     the consolidation opportunity the widget exists
+                     for); `in_flight` = Dispatched → POD-pending.
+                     Sum matches the queue's lane row exactly. --}}
                 <div class="ow-card p-5">
                     <p class="ow-label">Top waiting lanes</p>
-                    <p class="mt-1 text-[11px] text-slate-500">Pickup province → destination · consolidate opportunities.</p>
+                    <p class="mt-1 text-[11px] text-slate-500">
+                        Pickup province → destination
+                        <span class="text-slate-400">·</span>
+                        <span class="text-slate-700 font-semibold">awaiting dispatch</span>
+                        <span class="text-slate-400">/ in flight</span>
+                    </p>
                     @if($lanes->isEmpty())
                         <p class="mt-3 text-[13px] text-slate-500">No waiting jobs.</p>
                     @else
@@ -221,7 +231,14 @@
                                         <span class="text-slate-400">→</span>
                                         {{ $lane->destination_province ?? '—' }}
                                     </span>
-                                    <span class="shrink-0 tabular-nums font-bold text-slate-900">{{ $lane->jobs }}</span>
+                                    <span class="shrink-0 tabular-nums font-semibold"
+                                          title="{{ $lane->jobs }} awaiting dispatch (Intake + Ready) · {{ $lane->in_flight }} in flight (Dispatched → POD-pending)">
+                                        <span class="text-slate-900">{{ $lane->jobs }}</span>
+                                        @if($lane->in_flight > 0)
+                                            <span class="text-slate-400 font-normal">/</span>
+                                            <span class="text-slate-500 font-normal">{{ $lane->in_flight }}</span>
+                                        @endif
+                                    </span>
                                 </li>
                             @endforeach
                         </ul>
