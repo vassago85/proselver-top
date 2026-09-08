@@ -96,44 +96,10 @@
             @endif
         </div>
 
-        {{-- ── SECTION: Live ─────────────────────────────────────── --}}
-        <section class="space-y-3">
-            <div class="flex items-center justify-between">
-                <div>
-                    <p class="ow-label">Live pipeline</p>
-                    <p class="mt-0.5 text-[11px] text-slate-500">State right now. Ignores the date range.</p>
-                </div>
-                <div class="flex items-center gap-1.5 text-[10px] text-slate-500">
-                    <span class="ow-live-dot" aria-hidden="true"></span>
-                    <span class="font-semibold tabular-nums uppercase tracking-[.14em]">Auto-refresh · 30s</span>
-                </div>
-            </div>
-
-            <livewire:admin.operations.panels.live-pipeline-panel
-                :company-id="$companyId"
-                :transporter-id="$transporterId"
-                :brand-id="$brandId"
-                :region="$region"
-                lazy />
-
-            <div class="grid gap-3.5 xl:grid-cols-[1fr_1.35fr]">
-                <livewire:admin.operations.panels.exceptions-panel
-                    :company-id="$companyId"
-                    :transporter-id="$transporterId"
-                    :brand-id="$brandId"
-                    :region="$region"
-                    lazy />
-
-                <livewire:admin.operations.panels.priority-movements-panel
-                    :company-id="$companyId"
-                    :transporter-id="$transporterId"
-                    :brand-id="$brandId"
-                    :region="$region"
-                    lazy />
-            </div>
-        </section>
-
         {{-- ── SECTION: Performance ──────────────────────────────── --}}
+        {{-- Performance sits at the top so the answer to "how are we
+             doing this week" is the first thing ops sees on load.
+             Live pipeline (state right now) follows underneath. --}}
         <section class="space-y-3">
             <div class="flex flex-wrap items-center justify-between gap-2">
                 <div>
@@ -333,6 +299,46 @@
                         @endforeach
                     </ul>
                 </div>
+            </div>
+        </section>
+
+        {{-- ── SECTION: Live ─────────────────────────────────────── --}}
+        {{-- Placed below Performance so ops sees the "how are we
+             doing" numbers first, then drills into "what's happening
+             right now" for the fires that need putting out. --}}
+        <section class="space-y-3">
+            <div class="flex items-center justify-between">
+                <div>
+                    <p class="ow-label">Live pipeline</p>
+                    <p class="mt-0.5 text-[11px] text-slate-500">State right now. Ignores the date range.</p>
+                </div>
+                <div class="flex items-center gap-1.5 text-[10px] text-slate-500">
+                    <span class="ow-live-dot" aria-hidden="true"></span>
+                    <span class="font-semibold tabular-nums uppercase tracking-[.14em]">Auto-refresh · 30s</span>
+                </div>
+            </div>
+
+            <livewire:admin.operations.panels.live-pipeline-panel
+                :company-id="$companyId"
+                :transporter-id="$transporterId"
+                :brand-id="$brandId"
+                :region="$region"
+                lazy />
+
+            <div class="grid gap-3.5 xl:grid-cols-[1fr_1.35fr]">
+                <livewire:admin.operations.panels.exceptions-panel
+                    :company-id="$companyId"
+                    :transporter-id="$transporterId"
+                    :brand-id="$brandId"
+                    :region="$region"
+                    lazy />
+
+                <livewire:admin.operations.panels.priority-movements-panel
+                    :company-id="$companyId"
+                    :transporter-id="$transporterId"
+                    :brand-id="$brandId"
+                    :region="$region"
+                    lazy />
             </div>
         </section>
     </div>

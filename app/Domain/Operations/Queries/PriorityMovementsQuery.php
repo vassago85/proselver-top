@@ -3,6 +3,7 @@
 namespace App\Domain\Operations\Queries;
 
 use App\Domain\Operations\OperationsFilters;
+use App\Domain\Operations\ProvinceLabel;
 use App\Enums\JobStatus;
 use App\Enums\StageGroup;
 use App\Models\Job;
@@ -58,11 +59,12 @@ class PriorityMovementsQuery
                 $daysIn  = $enteredAt ? (int) $enteredAt->diffInDays(now()) : 0;
                 $j->setAttribute('hours_in_stage', $hoursIn);
                 $j->setAttribute('days_in_stage', $daysIn);
-                $j->setAttribute('lane_key',
-                    ($j->pickupLocation?->province ?? '—')
-                    . ' → '
-                    . ($j->deliveryLocation?->province ?? '—')
-                );
+                // Canonicalise province casing before building the
+                // lane key, so "Gauteng" and "GAUTENG" collapse to
+                // the same corridor heading. Matches LaneSummaryQuery.
+                $origin      = ProvinceLabel::canonicalise($j->pickupLocation?->province)   ?? '—';
+                $destination = ProvinceLabel::canonicalise($j->deliveryLocation?->province) ?? '—';
+                $j->setAttribute('lane_key', $origin . ' → ' . $destination);
                 return $j;
             });
 
