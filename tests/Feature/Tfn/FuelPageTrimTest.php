@@ -361,3 +361,82 @@ test('litres MTD includes recent fills that fell off TFN month-start 100-row pag
 
     expect((float) $c->viewData('litresMtd'))->toBe(1300.0);
 });
+
+test('product mix counts overnight stays as nights when TFN leaves Litres at 0', function () {
+    // Live OS check-ins are flat-fee GP rows: ProductCode=OS, Litres=0,
+    // Amount=-(overnight fee). Summing Litres leaves the KPI at
+    // "OS: 0 nights" even when drivers checked in. Count each purchase
+    // as one night (or MaxAllocation when present on UtilisedOrders /
+    // Litres).
+    $txs = [
+        [
+            'TransactionID'       => 'TX-D0-1',
+            'ProductCode'         => 'D0',
+            'TransactionTypeCode' => 'GP',
+            'CapturedDate'        => now()->subDays(2)->toIso8601String(),
+            'TransactionDate'     => now()->subDays(2)->toIso8601String(),
+            'SupplierName'        => 'Harrismith',
+            'Amount'              => -5000,
+            'Litres'              => 200.0,
+        ],
+        [
+            'TransactionID'       => 'TX-OS-1',
+            'ProductCode'         => 'OS',
+            'TransactionTypeCode' => 'GP',
+            'CapturedDate'        => now()->subDays(1)->toIso8601String(),
+            'TransactionDate'     => now()->subDays(1)->toIso8601String(),
+            'SupplierName'        => 'Kroonstad Overnight',
+            'Amount'              => -350.0,
+            'Litres'              => 0.0,
+            'UtilisedOrders'      => [],
+        ],
+        [
+            'TransactionID'       => 'TX-OS-2',
+            'ProductCode'         => 'OS',
+            'TransactionTypeCode' => 'GP',
+            'CapturedDate'        => now()->subHours(3)->toIso8601String(),
+            'TransactionDate'     => now()->subHours(3)->toIso8601String(),
+            'SupplierName'        => 'Bloem Overnight',
+            'Amount'              => -420.0,
+            'Litres'              => 0.0,
+            // Two-night pre-auth burnt in one check-in.
+            'UtilisedOrders'      => [['MaxAllocation' => 2]],
+        ],
+    ];
+
+    $fake = new class(app(TfnTokenManager::class), $txs) extends TfnClient {
+        public function __construct(TfnTokenManager $t, private array $txs)
+        {
+            parent::__construct($t);
+        }
+        public function isLive(): bool { return true; }
+        public function ping(): array { return ['status' => 'ok', 'timestamp' => null, 'latency_ms' => 1]; }
+        public function depots(): array { return []; }
+        public function vehicles(): array { return []; }
+        public function pricing(string $p): array { return []; }
+        public function subAccountBalance(): array
+        {
+            return ['AccountBalance' => 25000, 'AccountAvailableBalance' => 25000];
+        }
+        public function subAccountAggregateLitres(?\DateTimeInterface $m = null): array
+        {
+            // Aggregate can lag / omit OS; diesel only so mix prefers txs.
+            return [['ProductCode' => 'D0', 'Litres' => 150.0]];
+        }
+        public function transactions(?\DateTimeInterface $c = null): array
+        {
+            return $this->txs;
+        }
+        public function orders(?\DateTimeInterface $m = null): array { return []; }
+    };
+    app()->instance(TfnClient::class, $fake);
+
+    $u = User::factory()->create(['is_active' => true]);
+    $u->assignRole('operations_controller');
+
+    $c = \Livewire\Volt\Volt::actingAs($u)->test('admin.fuel');
+
+    $mix = $c->viewData('productMix');
+    expect((float) ($mix['OS'] ?? 0))->toBe(3.0); // 1 + 2 nights
+    expect((float) $c->viewData('litresMtd'))->toBe(200.0); // diesel only
+});

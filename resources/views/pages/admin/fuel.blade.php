@@ -860,6 +860,54 @@ new #[Layout('components.layouts.app')] class extends Component {
     }
 
     /**
+     * Natural units for a TFN row. Fuel stays in litres; overnight stay
+     * (OS) is nights. Live OS check-ins are flat-fee GP rows with
+     * Litres=0 and Amount=-(fee), so summing Litres always yields
+     * "OS: 0 nights". Prefer Litres/Quantity when TFN populates them
+     * (order MaxAllocation burnt down), else UtilisedOrders allocation,
+     * else one night per purchase transaction (negative Amount).
+     * Credits/reversals (positive Amount) subtract. Aggregate rollups
+     * without a quantity stay at 0 — do not invent a night there.
+     */
+    public function rowUnits(array $row): float
+    {
+        $code = strtoupper((string) ($row['ProductCode'] ?? ''));
+        if ($code !== 'OS') {
+            return $this->rowLitres($row);
+        }
+
+        $qty = abs($this->rowLitres($row));
+        if ($qty <= 0) {
+            foreach ((array) ($row['UtilisedOrders'] ?? []) as $uo) {
+                if (!is_array($uo)) {
+                    continue;
+                }
+                $qty += abs((float) ($uo['MaxAllocation']
+                    ?? $uo['Litres']
+                    ?? $uo['Quantity']
+                    ?? 0));
+            }
+        }
+        if ($qty <= 0) {
+            $looksLikeTx = isset($row['TransactionID'])
+                || isset($row['TransactionId'])
+                || array_key_exists('Amount', $row);
+            if (!$looksLikeTx || $this->isAccountPayment($row)) {
+                return 0.0;
+            }
+            $qty = 1.0;
+        }
+
+        // TFN convention: purchases decrease balance (negative Amount).
+        $amount = (float) ($row['Amount'] ?? 0);
+        if ($amount > 0) {
+            return -$qty;
+        }
+
+        return $qty;
+    }
+
+    /**
      * Union several TFN transaction lists, keyed by TransactionID so a
      * fill that appears in both the month-start pull and the recent
      * window is counted once.  Rows without an id are kept (rare, but
@@ -1157,10 +1205,11 @@ new #[Layout('components.layouts.app')] class extends Component {
         // Volume-weighted average R/L actually paid at the pump this
         // calendar month (Σ|Amount| / ΣLitres on fuel fills). Min/max
         // are per-fill effective R/L so the helper shows the spread we
-        // really paid, not the network list.
+        // really paid, not the network list. Liquid fuel only — OS/W
+        // flat fees must not dilute the diesel R/L.
         $fuelFills = collect($monthTx)
             ->reject(fn ($t) => $this->isAccountPayment($t))
-            ->filter(fn ($t) => $this->rowLitres($t) > 0);
+            ->filter(fn ($t) => $isLitreProduct($t['ProductCode'] ?? '') && $this->rowLitres($t) > 0);
         $paidLitres = $fuelFills->sum(fn ($t) => $this->rowLitres($t));
         $paidSpend  = $fuelFills->sum(fn ($t) => abs((float) ($t['Amount'] ?? 0)));
         $avgPaidPerLitre = $paidLitres > 0 ? ($paidSpend / $paidLitres) : 0.0;
@@ -1175,22 +1224,25 @@ new #[Layout('components.layouts.app')] class extends Component {
             ->sum(fn ($t) => abs((float) ($t['Amount'] ?? 0)));
 
         // Product mix summary for the helper under the KPI.  Fuel grades
-        // are in litres; OS is nights; other services are units.  The
-        // view formats each row with the right unit based on the code.
+        // are in litres; OS is nights (via rowUnits); other services are
+        // units.  The view formats each row with the right unit based
+        // on the code.
         //
         // We prefer the transactions rollup when it's fresher than the
         // aggregate (same reason $litresMtd does) so the helper agrees
-        // with the headline.
+        // with the headline — then overlay non-fuel codes with
+        // max(tx, aggregate) so OS nights aren't zeroed when diesel
+        // picks the tx mix (live OS rows often have Litres=0).
         $mixFromAggregate = collect($data['aggregate'])
             ->groupBy('ProductCode')
-            ->map(fn ($rows) => $rows->sum(fn ($r) => $this->rowLitres($r)))
+            ->map(fn ($rows) => $rows->sum(fn ($r) => $this->rowUnits($r)))
             ->toArray();
 
         $mixFromTx = collect($monthTx)
             ->reject(fn ($t) => $this->isAccountPayment($t))
             ->filter(fn ($t) => filled($t['ProductCode'] ?? null))
             ->groupBy('ProductCode')
-            ->map(fn ($rows) => $rows->sum(fn ($r) => $this->rowLitres($r)))
+            ->map(fn ($rows) => $rows->sum(fn ($r) => $this->rowUnits($r)))
             ->toArray();
 
         // Pick whichever source has more litres for the fuel-product
@@ -1206,6 +1258,23 @@ new #[Layout('components.layouts.app')] class extends Component {
         if ($productMix === [] && $mixFromTx !== []) {
             $productMix = $mixFromTx;
         }
+
+        foreach (array_unique(array_merge(array_keys($mixFromTx), array_keys($mixFromAggregate))) as $code) {
+            if ($isLitreProduct($code)) {
+                continue;
+            }
+            $productMix[$code] = max(
+                (float) ($mixFromTx[$code] ?? 0),
+                (float) ($mixFromAggregate[$code] ?? 0),
+            );
+        }
+
+        // Drop zero stubs (e.g. OS: 0) so the helper doesn't claim a
+        // product that contributed nothing this month.
+        $productMix = array_filter(
+            $productMix,
+            fn ($v) => abs((float) $v) > 0.0
+        );
 
         $openOrders = collect($data['orders'])
             ->filter(fn ($o) => strcasecmp($o['Status'] ?? '', 'open') === 0)
@@ -1956,8 +2025,17 @@ new #[Layout('components.layouts.app')] class extends Component {
                                 @endif
                             </td>
                             <td class="px-4 py-2.5 text-right text-sm tabular-nums text-slate-900">
-                                @php $txLitresDisplay = $this->rowLitres($t); @endphp
-                                {{ !$isPayment && abs($txLitresDisplay) > 0 ? number_format($txLitresDisplay) . ' L' : '—' }}
+                                @php
+                                    $txCode = strtoupper((string) ($t['ProductCode'] ?? ''));
+                                    $txUnitsDisplay = $txCode === 'OS' ? $this->rowUnits($t) : $this->rowLitres($t);
+                                @endphp
+                                @if($isPayment || abs($txUnitsDisplay) <= 0)
+                                    —
+                                @elseif($txCode === 'OS')
+                                    {{ number_format(abs($txUnitsDisplay)) }} night{{ abs($txUnitsDisplay) === 1.0 ? '' : 's' }}
+                                @else
+                                    {{ number_format($txUnitsDisplay) }} L
+                                @endif
                             </td>
                             @if($canSeeFinance)
                                 <td class="px-4 py-2.5 text-right text-sm tabular-nums {{ $isPayment ? 'font-semibold text-emerald-700' : 'text-slate-900' }}">
