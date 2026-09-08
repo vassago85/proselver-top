@@ -30,9 +30,11 @@ Route::get('dashboard', function () {
     return redirect()->route(resolveInternalDashboardRoute($user));
 })->name('dashboard');
 
-// The Operations dashboard is the original command centre, unchanged and
-// still open to every internal role.
-Volt::route('dashboard/operations', 'admin.dashboard')->name('dashboard.ops');
+// The Operations dashboard is a Livewire class component (not Volt)
+// so its panels can carry the #[Lazy] and #[On] attributes each
+// nested Livewire component needs. Every internal role can reach it.
+Route::get('dashboard/operations', \App\Livewire\Admin\Operations\OperationsDashboard::class)
+    ->name('dashboard.ops');
 
 // Finance dashboard -- accounts, owner, developer, super admin and the
 // operations controller (who owns petty-cash issuing).  The component's

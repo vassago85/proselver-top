@@ -1,5 +1,6 @@
 <?php
 
+use App\Domain\Operations\Queries\ExceptionCountsQuery;
 use App\Models\Job;
 use App\Models\User;
 use Livewire\Volt\Component;
@@ -41,6 +42,20 @@ new #[Layout('components.layouts.app')] class extends Component {
     #[Url(as: 'driver')]
     public ?int $driverId = null;
 
+    /**
+     * Deep-link filter used by the ops dashboard exception buckets.
+     *
+     * Each ExceptionCountsQuery::predicates() key becomes a valid value
+     * here, e.g. `?exception=dispatched_not_collected`. The predicate
+     * is applied as an extra whereGroup on top of the existing filters
+     * so the row count on this page matches the count on the tile.
+     *
+     * Unknown values fall through (no-op), rather than 404, so a
+     * bookmarked URL never poisons the whole page.
+     */
+    #[Url(as: 'exception')]
+    public ?string $exceptionBucket = null;
+
     public function with(): array
     {
         $query = Job::with([
@@ -56,6 +71,8 @@ new #[Layout('components.layouts.app')] class extends Component {
         if ($this->statusFilter) {
             $query->whereIn('status', Job::expandStatusFilter($this->statusFilter));
         }
+
+        $this->applyExceptionScope($query);
 
         // Apply the executor filter only when the operator is browsing
         // (no active search). Searching always spans every executor so
@@ -97,6 +114,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                 $countsQuery->where('driver_user_id', (int) $this->driverId);
             }
         }
+        $this->applyExceptionScope($countsQuery);
         $statusCounts = $countsQuery
             ->selectRaw('status, COUNT(*) as c')
             ->groupBy('status')
@@ -164,6 +182,30 @@ new #[Layout('components.layouts.app')] class extends Component {
         };
     }
 
+    /**
+     * Apply the ops-dashboard exception-bucket deep link, if any. Kept
+     * in one place so the paginated query and the pill counts always
+     * agree: click "6 dispatched not collected" on the dashboard, land
+     * here, and the "6 rows" and the "6 in the status pill" both hold.
+     */
+    protected function applyExceptionScope($query): void
+    {
+        if (! $this->exceptionBucket) {
+            return;
+        }
+
+        $predicates = ExceptionCountsQuery::predicates();
+        $predicate = $predicates[$this->exceptionBucket] ?? null;
+
+        if ($predicate === null) {
+            // Unknown key -- no-op so bookmark decay doesn't blow up
+            // the page.
+            return;
+        }
+
+        $query->where($predicate);
+    }
+
     public function updatedSearch(): void
     {
         $this->resetPage();
@@ -184,6 +226,11 @@ new #[Layout('components.layouts.app')] class extends Component {
         $this->resetPage();
     }
 
+    public function updatedExceptionBucket(): void
+    {
+        $this->resetPage();
+    }
+
     public function setFilter(string $status): void
     {
         $this->statusFilter = $this->statusFilter === $status ? '' : $status;
@@ -196,6 +243,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         $this->statusFilter = '';
         $this->executorFilter = 'proselver';
         $this->driverId = null;
+        $this->exceptionBucket = null;
         $this->resetPage();
     }
 };
@@ -210,7 +258,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         title="Orders"
         :subtitle="number_format($activeCount) . ' active · ' . number_format($totalCount) . ' total in the Phase 1 lifecycle'">
         <x-slot:actions>
-            @if($search || $statusFilter || $driverId)
+            @if($search || $statusFilter || $driverId || $exceptionBucket)
                 <x-button variant="ghost" size="sm" wire:click="clearFilters">
                     <x-slot:icon>
                         <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
@@ -237,6 +285,34 @@ new #[Layout('components.layouts.app')] class extends Component {
             @endif
         </x-slot:actions>
     </x-page-header>
+
+    @if($exceptionBucket)
+        @php
+            $exceptionLabels = [
+                'awaiting_confirmation'    => 'Awaiting customer confirmation',
+                'confirmation_issue'       => 'Confirmation issue unresolved',
+                'ready_no_driver'          => 'Confirmed · no driver',
+                'dispatched_not_collected' => 'Dispatched · not collected',
+                'long_in_transit'          => 'Long in transit',
+                'pod_pending'              => 'POD pending',
+            ];
+            $exceptionLabel = $exceptionLabels[$exceptionBucket] ?? $exceptionBucket;
+        @endphp
+        <div class="mb-3 flex items-center justify-between gap-3 rounded-lg border border-rose-200 bg-rose-50/70 px-4 py-2.5 text-sm text-rose-900">
+            <div class="flex items-center gap-2">
+                <svg class="h-4 w-4 shrink-0 text-rose-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+                </svg>
+                <span class="font-semibold">Exception queue:</span>
+                <span>{{ $exceptionLabel }}</span>
+            </div>
+            <button type="button" wire:click="$set('exceptionBucket', null)"
+                class="inline-flex items-center gap-1.5 rounded-md border border-rose-300/80 bg-white/70 px-2.5 py-1 text-xs font-semibold text-rose-800 hover:bg-white">
+                <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+                Clear
+            </button>
+        </div>
+    @endif
 
     {{-- Quick status filter pills --}}
     <div class="mb-4 flex flex-wrap items-center gap-2">

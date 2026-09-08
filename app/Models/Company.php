@@ -52,6 +52,7 @@ class Company extends Model
         'is_platform_owner',
         'company_group_id',
         'collection_sla_days',
+        'default_sla_hours',
         'address',
         'vat_number',
         'registration_number',
@@ -68,6 +69,7 @@ class Company extends Model
             'is_active' => 'boolean',
             'is_platform_owner' => 'boolean',
             'collection_sla_days' => 'integer',
+            'default_sla_hours' => 'integer',
             'movement_csv_mapping' => 'array',
         ];
     }

@@ -344,6 +344,7 @@ class Job extends Model
         'job_number',
         'job_type',
         'status',
+        'status_entered_at',
         'company_id',
         'executing_company_id',
         'created_by_user_id',
@@ -474,6 +475,8 @@ class Job extends Model
         'collected_at',
         'in_transit_at',
         'delivered_at',
+        'promised_delivery_at',
+        'sla_hours',
         'confirmation_reason',
         'confirmation_note',
         'customer_notes',
@@ -510,6 +513,7 @@ class Job extends Model
             'scheduled_date' => 'date',
             'scheduled_ready_time' => 'datetime',
             'actual_ready_time' => 'datetime',
+            'status_entered_at' => 'datetime',
             'po_amount' => 'decimal:2',
             'po_verified' => 'boolean',
             'po_verified_at' => 'datetime',
@@ -580,6 +584,8 @@ class Job extends Model
             'collected_at' => 'datetime',
             'in_transit_at' => 'datetime',
             'delivered_at' => 'datetime',
+            'promised_delivery_at' => 'datetime',
+            'sla_hours' => 'integer',
             'third_party_expected_date' => 'date',
             'archived_at' => 'datetime',
         ];
@@ -591,6 +597,56 @@ class Job extends Model
             if (empty($job->uuid)) {
                 $job->uuid = (string) Str::uuid();
             }
+
+            // Seed status_entered_at on creation so the dwell clock
+            // starts from the moment the row is born, not the first
+            // time somebody changes the status.
+            if ($job->status !== null && $job->status_entered_at === null) {
+                $job->status_entered_at = now();
+            }
+        });
+
+        // Whenever the status column moves, stamp the dwell clock and
+        // append an entry to the job_status_events ledger. This runs
+        // for BOTH transitionTo() and any forceFill()/->update() call
+        // that touches status, because Eloquent's dirty tracking sees
+        // the attribute change either way.
+        //
+        // Guard against infinite recursion: the event insert itself
+        // is a separate model, not a re-save of this Job.
+        static::updating(function (Job $job) {
+            if (! $job->isDirty('status')) {
+                return;
+            }
+
+            // Preserve an explicitly-set status_entered_at (e.g. the
+            // observer that fires on the same save cycle for the
+            // Auditable trait has already updated it, or a test seeded
+            // an old timestamp on purpose). Otherwise reset to now().
+            if (! $job->isDirty('status_entered_at')) {
+                $job->status_entered_at = now();
+            }
+        });
+
+        static::updated(function (Job $job) {
+            if (! $job->wasChanged('status')) {
+                return;
+            }
+
+            $original = $job->getOriginal('status');
+            $userId   = null;
+            if (function_exists('auth')) {
+                $userId = auth()->id();
+            }
+
+            \App\Models\JobStatusEvent::create([
+                'job_id'      => $job->id,
+                'from_status' => $original,
+                'to_status'   => $job->status,
+                'entered_at'  => $job->status_entered_at ?? now(),
+                'user_id'     => $userId,
+                'meta'        => null,
+            ]);
         });
     }
 
