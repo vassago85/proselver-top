@@ -51,7 +51,8 @@ use Throwable;
 class SnapshotTfnFuelFills extends Command
 {
     protected $signature = 'tfn:snapshot-fills
-                            {--days=3 : How many days back to walk from now}
+                            {--from= : Walk from this date (Y-m-d or ISO8601) instead of --days}
+                            {--days=3 : How many days back to walk from now (ignored when --from is set)}
                             {--slice-hours=24 : Initial slice size when walking the window}
                             {--min-slice-hours=1 : Smallest slice we auto-halve down to}';
 
@@ -67,8 +68,23 @@ class SnapshotTfnFuelFills extends Command
         $days      = max(1, (int) $this->option('days'));
         $slice     = max(1, (int) $this->option('slice-hours'));
         $minSlice  = max(1, (int) $this->option('min-slice-hours'));
-        $walkFrom  = now()->subDays($days);
         $now       = now();
+        $fromOpt   = trim((string) $this->option('from'));
+        if ($fromOpt !== '') {
+            try {
+                $walkFrom = Carbon::parse($fromOpt)->startOfDay();
+            } catch (Throwable) {
+                $this->error("Could not parse --from={$fromOpt}. Use Y-m-d (e.g. 2026-09-01).");
+                return self::FAILURE;
+            }
+        } else {
+            $walkFrom = now()->subDays($days);
+        }
+
+        if ($walkFrom->gte($now)) {
+            $this->error('--from must be before now.');
+            return self::FAILURE;
+        }
 
         $customerNumber = (string) config('tfn.customer_number', '');
         if ($customerNumber === '') {
@@ -89,8 +105,11 @@ class SnapshotTfnFuelFills extends Command
             try {
                 $rows = $client->transactions($windowStart->toDateTimeImmutable());
             } catch (Throwable $e) {
-                $this->error("TFN transactions call failed at {$windowStart->toIso8601String()}: " . $e->getMessage());
-                return self::FAILURE;
+                // A single timed-out slice must not abort the month.
+                // Skip forward and keep writing the days TFN did answer.
+                $this->warn("TFN timed out at {$windowStart->toIso8601String()} — skipping this slice: " . $e->getMessage());
+                $windowStart = $windowEnd->copy();
+                continue;
             }
 
             // Keep only rows that fall inside THIS slice — the TFN
@@ -124,7 +143,10 @@ class SnapshotTfnFuelFills extends Command
             $windowStart = $windowEnd->copy();
         }
 
-        $this->info("TFN fill snapshot complete — saw {$seen} rows, wrote {$written} inside {$days}d window.");
+        $windowLabel = $fromOpt !== ''
+            ? "{$walkFrom->toDateString()} → {$now->toDateString()}"
+            : "{$days}d window";
+        $this->info("TFN fill snapshot complete — saw {$seen} rows, wrote {$written} inside {$windowLabel}.");
         return self::SUCCESS;
     }
 

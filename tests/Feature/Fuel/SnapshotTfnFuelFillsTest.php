@@ -119,6 +119,26 @@ it('drops payment / credit rows and the EW product code', function () {
     expect(FuelFill::first()->transaction_id)->toBe('FUEL-1');
 });
 
+it('accepts --from so a month-to-date backfill does not walk last month', function () {
+    bindFakeTfnClient([tfnRow(['TransactionID' => 'SEP-1'])]);
+
+    $this->artisan('tfn:snapshot-fills --from=2026-09-01')
+        ->expectsOutputToContain('2026-09-01')
+        ->assertSuccessful();
+
+    expect(FuelFill::where('transaction_id', 'SEP-1')->exists())->toBeTrue();
+});
+
+it('rejects an unparseable --from instead of walking a surprise window', function () {
+    bindFakeTfnClient([tfnRow()]);
+
+    $this->artisan('tfn:snapshot-fills --from=not-a-date')
+        ->expectsOutputToContain('Could not parse')
+        ->assertFailed();
+
+    expect(FuelFill::count())->toBe(0);
+});
+
 it('synthesises a deterministic transaction_id when TFN omits one', function () {
     $row = tfnRow(['TransactionID' => null, 'Amount' => -777, 'Litres' => 30]);
     bindFakeTfnClient([$row, $row]);   // same row twice, no TXID
