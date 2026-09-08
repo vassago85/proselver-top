@@ -178,8 +178,12 @@ new #[Layout('components.layouts.app')] class extends Component {
                     $q->whereIn('status', $activeStatuses)
                         ->with([
                             'brand:id,name',
-                            'pickupLocation:id,company_name,city',
-                            'deliveryLocation:id,company_name,city',
+                            // `address` + `province` feed Location::displayLabel(),
+                            // which the driver-workload-card partial uses so
+                            // pickups captured as street-only (no company name)
+                            // still render instead of collapsing to "—".
+                            'pickupLocation:id,company_name,address,city,province',
+                            'deliveryLocation:id,company_name,address,city,province',
                             'company:id,name',
                         ])
                         ->orderByRaw("CASE status

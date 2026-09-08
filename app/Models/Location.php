@@ -116,6 +116,39 @@ class Location extends Model
         return $this->company_name;
     }
 
+    /**
+     * Single-line label safe for compact card / table cells.
+     *
+     * Falls through: company_name -> street address -> "city, province"
+     * -> em-dash. Locations with only a company name look like
+     * "Acme Motors"; locations with only an address look like
+     * "12 Sample Rd, Randburg"; locations with only geo hints look
+     * like "Randburg, Gauteng". Never returns an empty string.
+     *
+     * Used in place of `$job->pickup_address` fallback strings that
+     * referenced non-existent columns on `transport_jobs`, which was
+     * the root cause of the "pickup shows as -" bug on /vehicles.
+     */
+    public function displayLabel(): string
+    {
+        $name = trim((string) $this->company_name);
+        if ($name !== '') {
+            return $name;
+        }
+
+        $addr = trim((string) $this->address);
+        if ($addr !== '') {
+            return $addr;
+        }
+
+        $tail = trim(implode(', ', array_filter([
+            trim((string) $this->city),
+            trim((string) $this->province),
+        ])));
+
+        return $tail !== '' ? $tail : '—';
+    }
+
     public function shortDisplay(): string
     {
         $parts = [$this->company_name];

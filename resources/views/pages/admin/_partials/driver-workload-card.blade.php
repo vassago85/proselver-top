@@ -81,15 +81,15 @@
                 @if($bucket === 'collecting')
                     <svg viewBox="0 0 24 24" class="h-3.5 w-3.5 shrink-0 text-indigo-500" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a8 8 0 0 1 8 8c0 4.5-6 12-8 12S4 14.5 4 10a8 8 0 0 1 8-8z"/><circle cx="12" cy="10" r="3"/></svg>
                     <span class="text-[10px] uppercase tracking-wide text-indigo-600 font-semibold">En route to</span>
-                    <span class="truncate">{{ $job->pickupLocation?->company_name ?: ($job->pickup_address ?: '—') }}</span>
+                    <span class="truncate">{{ $job->pickupLocation?->displayLabel() ?: '—' }}</span>
                     @if($job->pickupLocation?->city)
                         <span class="text-slate-400">·&nbsp;{{ $job->pickupLocation->city }}</span>
                     @endif
                 @else
                     {{-- On-road: show full route --}}
-                    <span class="truncate">{{ $job->pickupLocation?->company_name ?: '—' }}</span>
+                    <span class="truncate">{{ $job->pickupLocation?->displayLabel() ?: '—' }}</span>
                     <svg viewBox="0 0 24 24" class="h-3 w-3 shrink-0 text-slate-400" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><line x1="5" x2="19" y1="12" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
-                    <span class="truncate">{{ $job->deliveryLocation?->company_name ?: '—' }}</span>
+                    <span class="truncate">{{ $job->deliveryLocation?->displayLabel() ?: '—' }}</span>
                 @endif
             </div>
 

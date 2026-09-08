@@ -124,8 +124,14 @@ new #[Layout('components.layouts.app')] class extends Component {
             ->with([
                 'brand:id,name',
                 'company:id,name',
-                'pickupLocation:id,company_name,city,province',
-                'deliveryLocation:id,company_name,city,province',
+                // `address` is included because `displayLabel()` falls
+                // back to the street address when `company_name` is
+                // blank — leaving it out here made the compact card
+                // and driver-workload cells show "—" for every row
+                // whose location was captured as a raw street address
+                // without a business name attached.
+                'pickupLocation:id,company_name,address,city,province',
+                'deliveryLocation:id,company_name,address,city,province',
                 'driver:id,name',
                 'driver.driverProfile:user_id,tracker_id',
             ]);
@@ -542,7 +548,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                         <div class="flex items-center gap-2 text-xs">
                             <div class="min-w-0 flex-1">
                                 <p class="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Pickup</p>
-                                <p class="text-slate-800 truncate">{{ $job->pickupLocation?->company_name ?: ($job->pickup_address ?: '—') }}</p>
+                                <p class="text-slate-800 truncate">{{ $job->pickupLocation?->displayLabel() ?: '—' }}</p>
                                 @if($job->pickupLocation?->city)
                                     <p class="text-[10px] text-slate-400 truncate">{{ $job->pickupLocation->city }}</p>
                                 @endif
@@ -550,7 +556,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                             <svg viewBox="0 0 24 24" class="h-4 w-4 shrink-0 text-slate-300" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><line x1="5" x2="19" y1="12" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
                             <div class="min-w-0 flex-1 text-right">
                                 <p class="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Delivery</p>
-                                <p class="text-slate-800 truncate">{{ $job->deliveryLocation?->company_name ?: ($job->delivery_address ?: '—') }}</p>
+                                <p class="text-slate-800 truncate">{{ $job->deliveryLocation?->displayLabel() ?: '—' }}</p>
                                 @if($job->deliveryLocation?->city)
                                     <p class="text-[10px] text-slate-400 truncate">{{ $job->deliveryLocation->city }}</p>
                                 @endif
@@ -634,7 +640,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                                     @endif
                                 </td>
                                 <td class="px-4 py-2.5 text-xs text-slate-500 truncate max-w-[280px]">
-                                    {{ $job->pickupLocation?->company_name ?: '—' }} → {{ $job->deliveryLocation?->company_name ?: '—' }}
+                                    {{ $job->pickupLocation?->displayLabel() ?: '—' }} → {{ $job->deliveryLocation?->displayLabel() ?: '—' }}
                                 </td>
                                 <td class="px-4 py-2.5 text-xs text-slate-700">
                                     <div class="flex flex-col leading-tight">
