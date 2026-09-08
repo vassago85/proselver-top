@@ -46,10 +46,17 @@ class OnTimeQuery
     {
         [$from, $to] = $this->window($filters);
 
+        // We trust `delivered_at` as the source of truth, NOT the
+        // status column. On this workflow `delivered` is a transient
+        // stage — rows auto-progress to `completed` as soon as POD
+        // is verified, so filtering by `status = 'delivered'` misses
+        // ~99% of actual deliveries. `delivered_at IS NOT NULL` +
+        // NOT IN (cancelled) is the honest predicate.
         $rows = $filters->applyEntityScope(Job::query())
             ->whereNull('transport_jobs.deleted_at')
-            ->where('transport_jobs.status', JobStatus::Delivered->value)
+            ->whereNotNull('transport_jobs.delivered_at')
             ->whereBetween('transport_jobs.delivered_at', [$from, $to])
+            ->whereNotIn('transport_jobs.status', [JobStatus::Cancelled->value])
             ->leftJoin('companies as cust', 'cust.id', '=', 'transport_jobs.company_id')
             ->get([
                 'transport_jobs.id',

@@ -95,6 +95,37 @@ it('publishes an on-time % when coverage meets the threshold', function () {
     expect($data['on_time_pct'])->toBe(75);
 });
 
+it('counts closed-out (completed) rows with a delivered_at timestamp, not just status=delivered', function () {
+    // Production reality: `delivered` is a transient stage. Rows
+    // auto-progress to `completed` as soon as POD is verified, so a
+    // status='delivered' filter misses ~99% of real deliveries.
+    // On-time trusts `delivered_at IS NOT NULL` and only excludes
+    // `cancelled`.
+    $customer = Company::factory()->create(['default_sla_hours' => 48]);
+
+    // 5 delivered rows — 3 already progressed to `completed`, 2 still
+    // at `delivered`. All have collected_at 24h ago and delivered now,
+    // so all 5 should be measurable and on-time against the 48h SLA.
+    for ($i = 0; $i < 3; $i++) {
+        otJob(['status' => Job::STATUS_COMPLETED], $customer);
+    }
+    for ($i = 0; $i < 2; $i++) {
+        otJob(['status' => Job::STATUS_DELIVERED], $customer);
+    }
+
+    // Safety belt: a cancelled row with an accidental delivered_at
+    // must be excluded — it never actually made it.
+    otJob(['status' => Job::STATUS_CANCELLED], $customer);
+
+    $data = (new OnTimeQuery())->get(new OperationsFilters());
+
+    expect($data['delivered'])->toBe(5);
+    expect($data['measurable'])->toBe(5);
+    expect($data['coverage_pct'])->toBe(100);
+    expect($data['is_measurable'])->toBeTrue();
+    expect($data['on_time'])->toBe(5);
+});
+
 it('uses the resolution order promised → per-job SLA → per-company SLA', function () {
     $customer = Company::factory()->create(['default_sla_hours' => 96]);
 
