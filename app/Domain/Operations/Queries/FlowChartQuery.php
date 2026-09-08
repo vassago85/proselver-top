@@ -10,23 +10,51 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 
 /**
- * Cumulative-flow-style throughput per stage group, per day in the
- * performance window.
+ * Daily inflow-per-stage chart across the performance window.
  *
- * WHAT IT REALLY SHOWS
- * --------------------
- * For each day in the range, we count jobs whose current status
- * entered on that day, grouped by StageGroup. The result reads as
- * "how much work moved into each stage each day". A true CFD
- * reconstructs stage populations from the job_status_events history
- * — worth doing once the ledger has a few weeks of data, but until
- * then this daily inflow view is honest and cheap.
+ * WHAT IT SHOWS
+ * -------------
+ * One line per pipeline StageGroup. For each day, we count how many
+ * jobs *entered that stage on that day*, using the per-stage entry
+ * timestamp columns that already live on `transport_jobs`:
+ *
+ *   Intake     -> created_at
+ *   Ready      -> customer_confirmed_at
+ *   Dispatched -> assigned_at
+ *   On the road-> collected_at
+ *
+ * Crucially we do NOT filter by current status. A job that flowed
+ * Intake -> Ready -> Dispatched -> OnRoad -> Delivered inside one
+ * week appears on ALL four lines, one entry per stage on its
+ * transition day. That reads as real throughput.
+ *
+ * The previous implementation filtered by current status and used
+ * `status_entered_at`; both were wrong: it dropped every already-
+ * delivered row from the chart, and `status_entered_at` was
+ * backfilled from `updated_at` for most historical rows, which
+ * bunched all remaining points on the migration day.
+ *
+ * When `job_status_events` has a few weeks of ledger data we can
+ * switch to that; for now the timestamp columns are the honest
+ * source of truth.
  *
  * Returns pre-computed SVG geometry so the Blade template can render
  * paths directly, no chart library required.
  */
 class FlowChartQuery
 {
+    /**
+     * Column that records first entry into each pipeline group. Only
+     * the four pipeline groups appear on the chart — Delivered lives
+     * in the Delivered hero tile, Closed doesn't belong here.
+     */
+    private const STAGE_ENTRY_COLUMN = [
+        'intake'     => 'created_at',
+        'ready'      => 'customer_confirmed_at',
+        'dispatched' => 'assigned_at',
+        'on_road'    => 'collected_at',
+    ];
+
     /**
      * @return array{
      *   window: array{from:string, to:string, days:int},
@@ -45,16 +73,27 @@ class FlowChartQuery
         $groups = StageGroup::pipelineGroups();
 
         // One SELECT per group is intentionally cheap on Postgres and
-        // still linear on SQLite; each query filters by status list +
-        // date range with no joins. Total = 4 queries for the chart,
-        // well under the panel budget.
+        // still linear on SQLite; each query filters on the entry
+        // timestamp column for that stage with no joins. Total = 4
+        // queries for the chart, well under the panel budget.
+        //
+        // No `whereIn('status', ...)` filter: we count *every* row
+        // that entered the stage in the window, not just the rows
+        // still sitting there today.
         $daily = [];
         foreach ($groups as $group) {
+            $column = self::STAGE_ENTRY_COLUMN[$group->value] ?? null;
+            if ($column === null) {
+                $daily[$group->value] = [];
+                continue;
+            }
+
+            $qualified = 'transport_jobs.' . $column;
             $daily[$group->value] = $filters->applyEntityScope(Job::query())
-                ->whereNull('deleted_at')
-                ->whereIn('status', $group->statusValues())
-                ->whereBetween('status_entered_at', [$from, $to])
-                ->selectRaw($this->dateSlot('status_entered_at') . ' as bucket, count(*) as c')
+                ->whereNull('transport_jobs.deleted_at')
+                ->whereNotNull($qualified)
+                ->whereBetween($qualified, [$from, $to])
+                ->selectRaw($this->dateSlot($qualified) . ' as bucket, count(*) as c')
                 ->groupBy('bucket')
                 ->orderBy('bucket')
                 ->pluck('c', 'bucket')
