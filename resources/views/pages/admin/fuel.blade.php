@@ -7,6 +7,7 @@ use App\Services\Tfn\TfnDemoFixtures;
 use App\Services\Tfn\TfnFuelOrderService;
 use Illuminate\Support\Carbon;
 use Livewire\Attributes\Layout;
+use Livewire\Attributes\Lazy;
 use Livewire\Attributes\Url;
 use Livewire\Volt\Component;
 
@@ -27,7 +28,16 @@ use Livewire\Volt\Component;
  * stakeholders. The Blade template does NOT care which source produced
  * the arrays -- shapes match the TFN swagger exactly.
  */
-new #[Layout('components.layouts.app')] class extends Component {
+// #[Lazy]: TFN's CustomerAPI is chatty (balance + aggregate + pricing per
+// product + depots + vehicles + cards + orders + transactions) and each
+// call is a synchronous round trip to an off-network host. On a cold
+// page load that used to keep the layout blank for 3-8 seconds while
+// the browser waited for the whole cascade. With #[Lazy] Livewire
+// returns a skeleton (see placeholder() below) on the initial GET and
+// then issues a follow-up XHR to actually mount + run source() -- the
+// layout paints instantly and the operator sees a "loading" state
+// instead of a hung tab.
+new #[Layout('components.layouts.app')] #[Lazy] class extends Component {
 
     // Form state for placing an order.  Kept as public properties (not
     // wire:model.live) so an accidental Enter mid-typing doesn't fire
@@ -63,6 +73,81 @@ new #[Layout('components.layouts.app')] class extends Component {
     // TFN reads -- on a 1000+ vehicle account that means dozens of
     // extra sequential HTTP round trips per page render.
     private ?array $sourceCache = null;
+
+    /**
+     * Rendered on the initial GET while Livewire fires the deferred
+     * mount+render XHR that actually hits TFN.  Matches the real
+     * page's rough layout (header pill row, KPI strip, three-panel
+     * grid) so the layout doesn't shift when the real content swaps
+     * in.  Alpine's `x-intersect` (attached by Livewire) fires the
+     * lazy-load call the moment the placeholder scrolls into view --
+     * i.e. immediately, since a full-page component's placeholder IS
+     * the viewport.
+     */
+    public function placeholder(): string
+    {
+        return <<<'HTML'
+        <div class="space-y-6" wire:key="tfn-fuel-placeholder">
+            {{-- Header row --}}
+            <div class="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+                <div class="flex flex-wrap items-center gap-3">
+                    <div class="h-6 w-40 animate-pulse rounded bg-slate-200"></div>
+                    <div class="h-5 w-24 animate-pulse rounded-full bg-slate-200"></div>
+                    <div class="h-5 w-16 animate-pulse rounded-full bg-slate-200"></div>
+                </div>
+                <div class="flex items-center gap-2">
+                    <div class="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-500">
+                        <span class="h-2 w-2 animate-pulse rounded-full bg-slate-400"></span>
+                        Loading TFN…
+                    </div>
+                </div>
+            </div>
+
+            {{-- KPI strip --}}
+            <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
+                <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-2">
+                    <div class="h-3 w-20 animate-pulse rounded bg-slate-200"></div>
+                    <div class="h-7 w-28 animate-pulse rounded bg-slate-200"></div>
+                </div>
+                <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-2">
+                    <div class="h-3 w-20 animate-pulse rounded bg-slate-200"></div>
+                    <div class="h-7 w-28 animate-pulse rounded bg-slate-200"></div>
+                </div>
+                <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-2">
+                    <div class="h-3 w-20 animate-pulse rounded bg-slate-200"></div>
+                    <div class="h-7 w-28 animate-pulse rounded bg-slate-200"></div>
+                </div>
+                <div class="hidden lg:block rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-2">
+                    <div class="h-3 w-20 animate-pulse rounded bg-slate-200"></div>
+                    <div class="h-7 w-28 animate-pulse rounded bg-slate-200"></div>
+                </div>
+                <div class="hidden lg:block rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-2">
+                    <div class="h-3 w-20 animate-pulse rounded bg-slate-200"></div>
+                    <div class="h-7 w-28 animate-pulse rounded bg-slate-200"></div>
+                </div>
+            </div>
+
+            {{-- Panels --}}
+            <div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
+                <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-3 lg:col-span-1">
+                    <div class="h-4 w-32 animate-pulse rounded bg-slate-200"></div>
+                    <div class="h-3 w-full animate-pulse rounded bg-slate-100"></div>
+                    <div class="h-3 w-5/6 animate-pulse rounded bg-slate-100"></div>
+                    <div class="h-3 w-3/4 animate-pulse rounded bg-slate-100"></div>
+                    <div class="h-3 w-2/3 animate-pulse rounded bg-slate-100"></div>
+                </div>
+                <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-3 lg:col-span-2">
+                    <div class="h-4 w-40 animate-pulse rounded bg-slate-200"></div>
+                    <div class="h-3 w-full animate-pulse rounded bg-slate-100"></div>
+                    <div class="h-3 w-full animate-pulse rounded bg-slate-100"></div>
+                    <div class="h-3 w-5/6 animate-pulse rounded bg-slate-100"></div>
+                    <div class="h-3 w-3/4 animate-pulse rounded bg-slate-100"></div>
+                    <div class="h-3 w-2/3 animate-pulse rounded bg-slate-100"></div>
+                </div>
+            </div>
+        </div>
+        HTML;
+    }
 
     public function mount(): void
     {

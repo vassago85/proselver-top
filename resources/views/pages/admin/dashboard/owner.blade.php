@@ -16,6 +16,7 @@ use App\Services\Tfn\TfnDemoFixtures;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
 use Livewire\Attributes\Layout;
+use Livewire\Attributes\Lazy;
 use Livewire\Attributes\Url;
 use Livewire\Volt\Component;
 
@@ -43,9 +44,83 @@ use Livewire\Volt\Component;
  * ║  page is coverable by the SQLite test suite.                      ║
  * ╚══════════════════════════════════════════════════════════════════╝
  */
-new #[Layout('components.layouts.app')] class extends Component {
+// #[Lazy]: fuelSnapshot() makes 3-4 sequential HTTPS calls to TFN's
+// CustomerAPI (subAccountBalance + subAccountAggregateLitres + one or
+// two Transactions pulls).  On a cold owner-login that used to keep
+// the dashboard blank for several seconds while the browser waited.
+// With #[Lazy] Livewire returns the placeholder() skeleton on the
+// initial GET and issues a follow-up XHR to actually mount, so the
+// layout paints instantly and every tile fills in together.
+new #[Layout('components.layouts.app')] #[Lazy] class extends Component {
     /** Picked month as YYYY-MM.  Defaults to the current month. */
     #[Url] public string $month = '';
+
+    /**
+     * Skeleton shown on initial GET while Livewire fires the deferred
+     * mount+render XHR that runs the TFN calls.  Approximates the
+     * command-centre layout (header + 4-tile KPI row + wide operating
+     * panel) so the page doesn't jump when the real content arrives.
+     */
+    public function placeholder(): string
+    {
+        return <<<'HTML'
+        <div class="space-y-6" wire:key="owner-dashboard-placeholder">
+            {{-- Header --}}
+            <div class="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+                <div class="space-y-2">
+                    <div class="h-6 w-56 animate-pulse rounded bg-slate-200"></div>
+                    <div class="h-3 w-72 animate-pulse rounded bg-slate-100"></div>
+                </div>
+                <div class="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-500">
+                    <span class="h-2 w-2 animate-pulse rounded-full bg-slate-400"></span>
+                    Loading owner numbers…
+                </div>
+            </div>
+
+            {{-- KPI tiles --}}
+            <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">
+                    <div class="h-3 w-24 animate-pulse rounded bg-slate-200"></div>
+                    <div class="h-8 w-32 animate-pulse rounded bg-slate-200"></div>
+                    <div class="h-3 w-40 animate-pulse rounded bg-slate-100"></div>
+                </div>
+                <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">
+                    <div class="h-3 w-24 animate-pulse rounded bg-slate-200"></div>
+                    <div class="h-8 w-32 animate-pulse rounded bg-slate-200"></div>
+                    <div class="h-3 w-40 animate-pulse rounded bg-slate-100"></div>
+                </div>
+                <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">
+                    <div class="h-3 w-24 animate-pulse rounded bg-slate-200"></div>
+                    <div class="h-8 w-32 animate-pulse rounded bg-slate-200"></div>
+                    <div class="h-3 w-40 animate-pulse rounded bg-slate-100"></div>
+                </div>
+                <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">
+                    <div class="h-3 w-24 animate-pulse rounded bg-slate-200"></div>
+                    <div class="h-8 w-32 animate-pulse rounded bg-slate-200"></div>
+                    <div class="h-3 w-40 animate-pulse rounded bg-slate-100"></div>
+                </div>
+            </div>
+
+            {{-- Operating detail panels --}}
+            <div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
+                <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-3 lg:col-span-2">
+                    <div class="h-4 w-40 animate-pulse rounded bg-slate-200"></div>
+                    <div class="h-3 w-full animate-pulse rounded bg-slate-100"></div>
+                    <div class="h-3 w-full animate-pulse rounded bg-slate-100"></div>
+                    <div class="h-3 w-5/6 animate-pulse rounded bg-slate-100"></div>
+                    <div class="h-3 w-3/4 animate-pulse rounded bg-slate-100"></div>
+                    <div class="h-3 w-2/3 animate-pulse rounded bg-slate-100"></div>
+                </div>
+                <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">
+                    <div class="h-4 w-32 animate-pulse rounded bg-slate-200"></div>
+                    <div class="h-3 w-full animate-pulse rounded bg-slate-100"></div>
+                    <div class="h-3 w-5/6 animate-pulse rounded bg-slate-100"></div>
+                    <div class="h-3 w-3/4 animate-pulse rounded bg-slate-100"></div>
+                </div>
+            </div>
+        </div>
+        HTML;
+    }
 
     public function mount(): void
     {
