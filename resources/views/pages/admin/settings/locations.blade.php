@@ -38,6 +38,16 @@ new #[Layout('components.layouts.app')] class extends Component {
     // the list.
     #[Url(as: 'focus')] public ?int $focusLocationId = null;
 
+    /**
+     * Deep-link return: /admin/settings/locations?focus=123&return=/admin/orders/456
+     * lets ops jump into the edit form from an order page and get back to
+     * that exact URL after saving (or hitting Cancel / Back).  Validated
+     * in mount() to same-origin only so this can't be abused as an open
+     * redirect.  When set the page shows a "Back" banner up top and the
+     * Save button becomes "Save & return".
+     */
+    #[Url(as: 'return')] public ?string $returnUrl = null;
+
     // Add form
     public string $addCompanyId = '';
     public string $addCompanyName = '';
@@ -75,6 +85,57 @@ new #[Layout('components.layouts.app')] class extends Component {
                 $this->startEdit($loc->id);
             }
         }
+
+        // Sanitise the return URL: same-host only.  A path-only value
+        // ("/admin/orders/123") is also fine.  Anything else (external
+        // host, javascript: scheme, etc.) is discarded so an operator
+        // can't be phished into leaving the app via a crafted link.
+        $this->returnUrl = $this->sanitiseReturnUrl($this->returnUrl);
+    }
+
+    /**
+     * Same-origin gate for the ?return= deep-link.  Accepts either an
+     * absolute URL that matches the current request host or a rooted
+     * path ("/foo/bar").  Everything else -> null.
+     */
+    private function sanitiseReturnUrl(?string $url): ?string
+    {
+        $url = trim((string) $url);
+        if ($url === '') {
+            return null;
+        }
+        // Reject anything that looks like a scheme other than http(s).
+        if (preg_match('#^(?!https?://)[a-z][a-z0-9+.-]*:#i', $url)) {
+            return null;
+        }
+        // Rooted path — always in-app.
+        if (str_starts_with($url, '/') && !str_starts_with($url, '//')) {
+            return $url;
+        }
+        $parts = parse_url($url);
+        if ($parts === false || empty($parts['host'])) {
+            return null;
+        }
+        if (strcasecmp($parts['host'], request()->getHost()) !== 0) {
+            return null;
+        }
+        return $url;
+    }
+
+    /**
+     * Redirect back to the referring page with an optional flash message.
+     * Used by both save-and-return and cancel-and-return so the "Back"
+     * banner behaviour is one code path.
+     */
+    private function goBackWithFlash(?string $message = null): void
+    {
+        $target = $this->returnUrl;
+        $this->returnUrl = null;
+        $this->focusLocationId = null;
+        if ($message) {
+            session()->flash('success', $message);
+        }
+        $this->redirect($target, navigate: true);
     }
 
     public function updatingSearch(): void
@@ -279,7 +340,8 @@ new #[Layout('components.layouts.app')] class extends Component {
             'editCustomerEmail'   => 'nullable|email|max:255',
         ]);
 
-        Location::findOrFail($this->editingId)->update([
+        $loc = Location::findOrFail($this->editingId);
+        $loc->update([
             'company_id'       => $this->editCompanyId ?: null,
             'zone_id'          => $this->editZoneId ?: null,
             'company_name'     => $this->editCompanyName,
@@ -295,6 +357,17 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         $this->editingId = null;
         $this->focusLocationId = null;
+        $this->editAddressSuggestions = [];
+
+        // Deep-link flow: jump straight back to the order (or wherever
+        // the ?return= URL points) with a success flash so ops sees the
+        // save landed and doesn't have to click Back manually.
+        if ($this->returnUrl) {
+            $this->goBackWithFlash("Address updated for {$loc->company_name}.");
+            return;
+        }
+
+        session()->flash('success', "Address updated for {$loc->company_name}.");
     }
 
     public function cancelEdit(): void
@@ -302,6 +375,11 @@ new #[Layout('components.layouts.app')] class extends Component {
         $this->editingId = null;
         $this->focusLocationId = null;
         $this->editAddressSuggestions = [];
+        // Same rule as save: if we came in from a ?return= deep-link,
+        // Cancel should also drop the operator back where they were.
+        if ($this->returnUrl) {
+            $this->goBackWithFlash();
+        }
     }
 
     public function toggle(int $id): void
@@ -380,8 +458,39 @@ new #[Layout('components.layouts.app')] class extends Component {
 <div>
     <x-slot:header>Locations</x-slot:header>
 
+    @php
+        // "Deep-link edit" = arrived from an order page via ?focus=&return=.
+        // While the operator is inside that edit form we hide the toolbar
+        // /Add form / Cleanup panel so the page reads as a single focused
+        // task instead of a busy dashboard with a form buried in it.
+        $isDeepLinkEdit = $editingId !== null && $returnUrl !== null;
+    @endphp
+
     <div class="space-y-6">
+        {{-- Deep-link Back banner: only shown when we arrived from another
+             page via ?return=.  Sits at the very top so ops can bail out
+             at any moment without hunting for a link. --}}
+        @if($returnUrl)
+            <div class="flex items-center justify-between gap-3 rounded-xl border border-blue-200 bg-blue-50 px-4 py-2.5">
+                <div class="flex items-center gap-2 text-sm text-blue-900">
+                    <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+                    <span>You opened this from another page — Save or Cancel will take you back.</span>
+                </div>
+                <a href="{{ $returnUrl }}" wire:navigate
+                   class="inline-flex items-center gap-1 rounded-md border border-blue-300 bg-white px-3 py-1.5 text-xs font-semibold text-blue-800 hover:bg-blue-100">
+                    ← Back
+                </a>
+            </div>
+        @endif
+
+        @if(session('success'))
+            <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm text-emerald-800">
+                {{ session('success') }}
+            </div>
+        @endif
+
         {{-- Toolbar --}}
+        @unless($isDeepLinkEdit)
         <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
             <div class="flex flex-col sm:flex-row gap-3 flex-1">
                 <input wire:model.live.debounce.300ms="search" type="text" placeholder="Search name or address…"
@@ -411,9 +520,10 @@ new #[Layout('components.layouts.app')] class extends Component {
                 </button>
             </div>
         </div>
+        @endunless
 
         {{-- Cleanup panel --}}
-        @if($cleanupTab)
+        @if($cleanupTab && !$isDeepLinkEdit)
             <div class="bg-white rounded-xl shadow-sm border border-blue-200 p-6">
                 <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
                     <div>
@@ -530,7 +640,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         @endif
 
         {{-- Add Form --}}
-        @if($showAddForm)
+        @if($showAddForm && !$isDeepLinkEdit)
         <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
             <h3 class="text-lg font-semibold text-gray-900 mb-4">New Location</h3>
             <form wire:submit="add" class="space-y-4">
@@ -709,7 +819,9 @@ new #[Layout('components.layouts.app')] class extends Component {
                     </div>
                 </div>
                 <div class="flex items-center gap-3 pt-2">
-                    <button type="submit" class="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-500 transition">Save</button>
+                    <button type="submit" class="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-500 transition">
+                        {{ $returnUrl ? 'Save & return' : 'Save' }}
+                    </button>
                     <button type="button" wire:click="cancelEdit" class="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition">Cancel</button>
                 </div>
             </form>
@@ -717,6 +829,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         @endif
 
         {{-- Table --}}
+        @unless($isDeepLinkEdit)
         <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
             <div class="overflow-x-auto">
                 <table class="min-w-full divide-y divide-gray-200">
@@ -772,5 +885,6 @@ new #[Layout('components.layouts.app')] class extends Component {
             </div>
             @endif
         </div>
+        @endunless
     </div>
 </div>
