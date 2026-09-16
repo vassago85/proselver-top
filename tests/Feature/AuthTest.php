@@ -1,5 +1,6 @@
 <?php
 
+use App\Models\LoginHistory;
 use App\Models\Role;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -28,6 +29,30 @@ test('user can login with username and password', function () {
         ->assertRedirect('/dashboard');
 
     $this->assertAuthenticated();
+});
+
+test('a successful login writes exactly one login_history row (no discovery double-fire)', function () {
+    $user = User::factory()->create(['username' => 'audituser', 'is_active' => true]);
+    $user->assignRole('super_admin');
+
+    $this->post('/login', ['identity' => 'audituser', 'password' => 'password'])
+        ->assertRedirect('/dashboard');
+
+    expect(LoginHistory::query()->where('event', 'login')->count())->toBe(1);
+    expect(LoginHistory::query()->first())
+        ->user_id->toBe($user->id)
+        ->identity->toBe('audituser')
+        ->event->toBe('login');
+});
+
+test('a failed login writes exactly one login_history failed row', function () {
+    User::factory()->create(['username' => 'audituser', 'is_active' => true]);
+
+    $this->post('/login', ['identity' => 'audituser', 'password' => 'wrong-password'])
+        ->assertSessionHasErrors('identity');
+
+    expect(LoginHistory::query()->where('event', 'failed')->count())->toBe(1);
+    expect(LoginHistory::query()->where('event', 'login')->count())->toBe(0);
 });
 
 test('the identity field also accepts an email address or a phone number', function (string $column, string $value) {

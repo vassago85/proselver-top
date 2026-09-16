@@ -226,3 +226,34 @@ it('dismissStaleGate closes the modal when only non-owned rows remain', function
         ->call('dismissStaleGate')
         ->assertSet('showStaleGate', false);
 });
+
+it('does not re-open the gate on every ops dash visit after closing an others-only list', function () {
+    $me    = opsActor();
+    $other = opsActor();
+
+    staleGateJob($other, JobStatus::Confirmed->value, now()->subDays(12));
+
+    Livewire::actingAs($me)
+        ->test(OperationsDashboard::class)
+        ->assertSet('showStaleGate', true)
+        ->call('dismissStaleGate')
+        ->assertSet('showStaleGate', false);
+
+    // Same session, fresh mount (navigate away → back to ops dash).
+    Livewire::actingAs($me)
+        ->test(OperationsDashboard::class)
+        ->assertSet('showStaleGate', false);
+});
+
+it('still re-opens the gate every visit while I have unresolved owned rows', function () {
+    $me = opsActor();
+    staleGateJob($me, JobStatus::Confirmed->value, now()->subDays(10));
+
+    Livewire::actingAs($me)
+        ->test(OperationsDashboard::class)
+        ->assertSet('showStaleGate', true);
+
+    Livewire::actingAs($me)
+        ->test(OperationsDashboard::class)
+        ->assertSet('showStaleGate', true);
+});

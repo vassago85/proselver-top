@@ -42,17 +42,26 @@ class OperationsDashboard extends Component
     #[Url] public ?string $dateTo   = null;
     #[Url] public string  $preset   = '7d';
 
+    // Session flag: ops has already Closed the visibility-only
+    // (others) list this login. Owned stale rows always re-open the
+    // gate; this key only suppresses the nag when nothing they
+    // created is stuck. Cleared automatically on next login because
+    // Laravel regenerates the session.
+    private const SESSION_STALE_GATE_ACK = 'ops_stale_gate_acked_at';
+
     // ── Stale-action login gate ─────────────────────────────────────
     //
     // The modal blocks landing when the acting user has jobs they
     // created that have sat in the same stage for >=
     // `trident.stale_action_days`. Rows they did NOT create are shown
-    // for context but never block dismiss.
+    // for context but never block dismiss — and after Close, stay
+    // hidden for the rest of this session.
     //
     // `showStaleGate` is set once on mount so a user who's just hit
     // "Wait longer" on their last owned row can close the modal and
-    // reach the dashboard without a race against the query. The gate
-    // re-arms on next page load.
+    // reach the dashboard without a race against the query. Owned
+    // rows re-arm on every page load until actioned; others-only
+    // does not.
     public bool $showStaleGate = false;
 
     // Per-row comment inputs, keyed by job id. Each owned row needs its
@@ -72,8 +81,9 @@ class OperationsDashboard extends Component
         // see the modal when their own rows go stale.
         $actor = auth()->user();
         if ($actor && method_exists($actor, 'isInternal') && $actor->isInternal()) {
-            $data = (new StaleActionJobsQuery())->forUser($actor);
-            $this->showStaleGate = $data['total'] > 0;
+            $this->showStaleGate = $this->shouldShowStaleGate(
+                (new StaleActionJobsQuery())->forUser($actor)
+            );
         }
     }
 
@@ -189,6 +199,9 @@ class OperationsDashboard extends Component
      * next render anyway, so the button pretends not to exist. The
      * server-side guard here also stops a crafted request from
      * bypassing the disabled attribute in the client.
+     *
+     * A successful Close also marks the session so an others-only
+     * list does not pop again on every revisit to this page.
      */
     public function dismissStaleGate(): void
     {
@@ -202,7 +215,28 @@ class OperationsDashboard extends Component
             return;
         }
 
+        session()->put(self::SESSION_STALE_GATE_ACK, now()->toIso8601String());
         $this->showStaleGate = false;
+    }
+
+    /**
+     * Owned stale rows always force the gate. Others-only is a
+     * once-per-session heads-up — after Close (or if already
+     * acknowledged this login), stay out of the way.
+     *
+     * @param  array{owned: Collection, others: Collection, total: int, worst_days: int}  $data
+     */
+    private function shouldShowStaleGate(array $data): bool
+    {
+        if ($data['owned']->isNotEmpty()) {
+            return true;
+        }
+
+        if ($data['others']->isEmpty()) {
+            return false;
+        }
+
+        return ! session()->has(self::SESSION_STALE_GATE_ACK);
     }
 
     public function render()

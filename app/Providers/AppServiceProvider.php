@@ -63,13 +63,14 @@ class AppServiceProvider extends ServiceProvider
 
         // Persistent login trail — writes to the `login_history` table so
         // recent sign-ins survive container recreates (nginx access logs
-        // don't).  Registered explicitly rather than via event auto-
-        // discovery so grep for the listener class name finds this line.
-        // The listener wraps every write in try/catch: if the sink breaks
-        // it must NEVER block login.
-        Event::listen(\Illuminate\Auth\Events\Login::class,  [\App\Listeners\LogLoginActivity::class, 'handleLogin']);
-        Event::listen(\Illuminate\Auth\Events\Failed::class, [\App\Listeners\LogLoginActivity::class, 'handleFailed']);
-        Event::listen(\Illuminate\Auth\Events\Logout::class, [\App\Listeners\LogLoginActivity::class, 'handleLogout']);
+        // don't).  Registered explicitly (record* method names, not
+        // handle*) so Laravel's listener auto-discovery does not ALSO
+        // wire the same callbacks and double every row. The listener
+        // wraps every write in try/catch: if the sink breaks it must
+        // NEVER block login.
+        Event::listen(\Illuminate\Auth\Events\Login::class,  [\App\Listeners\LogLoginActivity::class, 'recordLogin']);
+        Event::listen(\Illuminate\Auth\Events\Failed::class, [\App\Listeners\LogLoginActivity::class, 'recordFailed']);
+        Event::listen(\Illuminate\Auth\Events\Logout::class, [\App\Listeners\LogLoginActivity::class, 'recordLogout']);
 
         // Pin Livewire's update endpoint to a stable URL.
         //

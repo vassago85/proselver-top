@@ -14,9 +14,10 @@ use Throwable;
  * Persists every authentication event into `login_history`.
  *
  * Registered in AppServiceProvider::boot() via three Event::listen() calls
- * (one per event class).  We do NOT put dispatchesEvents-style discovery
- * annotations here because this project doesn't use Laravel's event
- * auto-discovery — everything is wired explicitly for grepability.
+ * (one per event class). Method names intentionally do NOT start with
+ * `handle` — Laravel's listener auto-discovery only wires `handle*` /
+ * `__invoke`, and we already register explicitly. Naming these
+ * `handleLogin` etc. caused every auth event to be written twice.
  *
  * Failure isolation
  * -----------------
@@ -27,7 +28,7 @@ use Throwable;
  */
 class LogLoginActivity
 {
-    public function handleLogin(Login $event): void
+    public function recordLogin(Login $event): void
     {
         try {
             LoginHistory::create([
@@ -45,7 +46,7 @@ class LogLoginActivity
         }
     }
 
-    public function handleFailed(Failed $event): void
+    public function recordFailed(Failed $event): void
     {
         try {
             LoginHistory::create([
@@ -67,7 +68,7 @@ class LogLoginActivity
         }
     }
 
-    public function handleLogout(Logout $event): void
+    public function recordLogout(Logout $event): void
     {
         try {
             LoginHistory::create([

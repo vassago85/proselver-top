@@ -5,11 +5,8 @@ namespace App\Providers;
 use App\Actions\Fortify\ResetUserPassword;
 use App\Actions\Fortify\UpdateUserPassword;
 use App\Models\User;
-use Illuminate\Auth\Events\Failed;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\ServiceProvider;
@@ -40,20 +37,10 @@ class FortifyServiceProvider extends ServiceProvider
                 return $user;
             }
 
-            // Fortify only fires Illuminate\Auth\Events\Failed automatically
-            // when it uses the default Guard::attempt() path.  A custom
-            // authenticateUsing() closure short-circuits that, so we fire it
-            // ourselves — the LogLoginActivity listener needs it to record
-            // failed attempts in login_history.  We keep the credentials
-            // payload minimal (identity only, NEVER the password) so nothing
-            // sensitive leaks into an event that might be picked up by other
-            // listeners later.
-            Event::dispatch(new Failed(
-                Auth::getDefaultDriver(),
-                $user, // may be null if the identity didn't match anyone
-                ['identity' => $identity],
-            ));
-
+            // Do NOT dispatch Failed here — Fortify's AttemptToAuthenticate
+            // already fires Illuminate\Auth\Events\Failed when this callback
+            // returns null. A second dispatch doubles every failed row in
+            // login_history.
             return null;
         });
 
