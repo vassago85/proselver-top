@@ -241,8 +241,14 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     /**
      * Open the "Clean up" flow, honouring the current company filter so
-     * ops can clean one customer's book at a time.  Loads suggestions
-     * eagerly for the incomplete tab.
+     * ops can clean one customer's book at a time.
+     *
+     * IMPORTANT: this method must stay fast.  We used to eager-fetch
+     * Google suggestions for every incomplete row here, which meant one
+     * synchronous API call per stub -- 30 stubs = 15+ seconds of the
+     * button doing "nothing" while Livewire waited for the response.
+     * The panel opens instantly now; suggestions are loaded per-row
+     * on demand via lookupIncomplete().
      */
     public function openCleanup(string $tab): void
     {
@@ -257,17 +263,38 @@ new #[Layout('components.layouts.app')] class extends Component {
             $rows = $service->findIncompleteLocations($companyId);
             $state = [];
             foreach ($rows as $loc) {
-                $query = trim((string) $loc->address);
-                if ($query === '') {
-                    $query = trim((string) $loc->company_name);
-                }
+                // No 'suggestions' key until ops clicks the per-row
+                // "Look up" button.  We seed it as null so the view can
+                // distinguish "not yet fetched" from "fetched, empty".
                 $state[$loc->id] = [
-                    'suggestions' => $query !== '' ? GeocodingService::suggest($query, 4) : [],
+                    'suggestions' => null,
                     'chosen' => null,
                 ];
             }
             $this->cleanupIncomplete = $state;
         }
+    }
+
+    /**
+     * Fetch Google suggestions for ONE incomplete-cleanup row.  Fires
+     * from the per-row "Look up" button so ops only pays the API cost
+     * for rows they actually intend to fix.
+     */
+    public function lookupIncomplete(int $locationId): void
+    {
+        if (!isset($this->cleanupIncomplete[$locationId])) {
+            return;
+        }
+        $loc = Location::find($locationId);
+        if (!$loc) {
+            return;
+        }
+        $query = trim((string) $loc->address);
+        if ($query === '') {
+            $query = trim((string) $loc->company_name);
+        }
+        $this->cleanupIncomplete[$locationId]['suggestions'] =
+            $query !== '' ? GeocodingService::suggest($query, 4) : [];
     }
 
     public function closeCleanup(): void
@@ -506,9 +533,12 @@ new #[Layout('components.layouts.app')] class extends Component {
             </div>
             <div class="flex items-center gap-2">
                 <button wire:click="openCleanup('incomplete')"
-                        class="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition">
+                        wire:loading.attr="disabled"
+                        wire:target="openCleanup"
+                        class="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition disabled:opacity-60">
                     <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>
-                    Clean up
+                    <span wire:loading.remove wire:target="openCleanup">Clean up</span>
+                    <span wire:loading wire:target="openCleanup">Opening…</span>
                     @if($incompleteCount > 0)
                         <span class="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800">{{ $incompleteCount }}</span>
                     @endif
@@ -579,9 +609,26 @@ new #[Layout('components.layouts.app')] class extends Component {
                                                 <span class="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-emerald-800">Updated</span>
                                             @endif
                                         </div>
-                                        @if(!empty($entry['suggestions']))
+                                        @php $suggs = $entry['suggestions']; @endphp
+                                        @if($suggs === null)
+                                            {{-- Not yet fetched.  Ops taps "Look up" to pay
+                                                 the API cost only for the rows they want to fix,
+                                                 keeping the panel snappy no matter how many
+                                                 stubs the book has. --}}
+                                            <div class="mt-2 flex items-center gap-2">
+                                                <button type="button" wire:click="lookupIncomplete({{ $locationId }})"
+                                                        wire:target="lookupIncomplete({{ $locationId }})"
+                                                        class="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50">
+                                                    <svg class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+                                                    <span wire:loading.remove wire:target="lookupIncomplete({{ $locationId }})">Look up suggestions</span>
+                                                    <span wire:loading wire:target="lookupIncomplete({{ $locationId }})">Looking up…</span>
+                                                </button>
+                                                <a href="{{ route('admin.settings.locations', ['focus' => $locationId, 'return' => request()->fullUrl()]) }}" wire:navigate
+                                                   class="text-xs font-medium text-slate-500 hover:text-slate-800">Edit manually →</a>
+                                            </div>
+                                        @elseif(!empty($suggs))
                                             <div class="mt-2 space-y-1">
-                                                @foreach($entry['suggestions'] as $sIdx => $sugg)
+                                                @foreach($suggs as $sIdx => $sugg)
                                                     <button type="button"
                                                             wire:click="applyIncompleteSuggestion({{ $locationId }}, {{ $sIdx }})"
                                                             class="block w-full text-left rounded-md border {{ $entry['chosen'] === $sIdx ? 'border-emerald-300 bg-emerald-50' : 'border-slate-200 bg-white hover:bg-emerald-50 hover:border-emerald-200' }} px-2 py-1.5 text-xs text-slate-700">

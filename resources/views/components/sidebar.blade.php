@@ -325,14 +325,24 @@
                 {{-- CATALOGUE --}}
                 {{-- Brands & Models is exposed here (not only buried under Settings)
                      because operational staff and Owners extend the model list
-                     regularly — every new FAW / Isuzu variant, every new OEM. --}}
-                @if($isDeveloper || $isSuperAdmin || $isOwner)
+                     regularly — every new FAW / Isuzu variant, every new OEM.
+                     Address Book (locations) is the other daily-touch curation
+                     surface — ops fix bulk-import stubs and merge duplicates from
+                     here, so it sits next to Brands rather than two clicks deep
+                     under Settings. --}}
+                @if($isDeveloper || $isSuperAdmin || $isOwner || $isOpsController)
                 <li>
                     <p class="mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">Catalogue</p>
                     <ul role="list" class="space-y-0.5">
+                        @if($isDeveloper || $isSuperAdmin || $isOwner)
                         <x-sidebar-link :href="route('admin.settings.brands')" :active="request()->routeIs('admin.settings.brands')">
                             <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12"/><path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17"/></svg></x-slot:icon>
                             Brands &amp; Models
+                        </x-sidebar-link>
+                        @endif
+                        <x-sidebar-link :href="route('admin.settings.locations')" :active="request()->routeIs('admin.settings.locations')">
+                            <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg></x-slot:icon>
+                            Address Book
                         </x-sidebar-link>
                     </ul>
                 </li>
