@@ -45,4 +45,24 @@ return [
     |
     */
     'min_sample_for_percentiles' => 5,
+
+    /*
+    |--------------------------------------------------------------------------
+    | Stale-action login gate (ops)
+    |--------------------------------------------------------------------------
+    |
+    | The ops dashboard blocks landing when any active queue job has sat
+    | in the same stage without a status change for `stale_action_days`.
+    | Jobs the user created must be actioned (deep-link Cancel/Deliver
+    | on the order page, or "Wait longer" with a comment) before the
+    | modal can be dismissed; jobs created by someone else are visible
+    | but never block dismiss.
+    |
+    | "Wait longer" writes a snooze that suppresses the row for a further
+    | `stale_action_snooze_days` — the row re-appears if the job is still
+    | in the same stage when the snooze expires.
+    |
+    */
+    'stale_action_days'         => 7,
+    'stale_action_snooze_days'  => 7,
 ];

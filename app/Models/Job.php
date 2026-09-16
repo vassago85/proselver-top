@@ -492,6 +492,15 @@ class Job extends Model
         'self_collect_phone',
         'self_collect_id_number',
         'archived_at',
+        // Ops login stale-action gate. When ops "wait longer" on a job
+        // that has sat 7d in the same stage, we stash the snooze horizon
+        // + reason so the same row does not re-nag until the horizon
+        // passes (or a real status transition clears every field, see
+        // the `booted()` hook below).
+        'stale_action_snoozed_until',
+        'stale_action_snooze_comment',
+        'stale_action_snoozed_by_user_id',
+        'stale_action_snoozed_at',
         // BB direct-order owner-approval gate.  Set when a BB places a
         // movement on a vehicle that's on a dealer's stock ledger -- the
         // dealer (owner) has to approve before dispatch can roll.
@@ -588,6 +597,8 @@ class Job extends Model
             'sla_hours' => 'integer',
             'third_party_expected_date' => 'date',
             'archived_at' => 'datetime',
+            'stale_action_snoozed_until' => 'datetime',
+            'stale_action_snoozed_at' => 'datetime',
         ];
     }
 
@@ -626,6 +637,17 @@ class Job extends Model
             if (! $job->isDirty('status_entered_at')) {
                 $job->status_entered_at = now();
             }
+
+            // A real status move resets the stale-action gate for this
+            // job. Without this, a "Wait longer" snooze from Ready-to-
+            // dispatch would survive into Dispatched and swallow the
+            // fresh 7d clock on the next stage. Clear every companion
+            // field so the audit trail on the order timeline is the
+            // sole record of the previous snooze.
+            $job->stale_action_snoozed_until      = null;
+            $job->stale_action_snooze_comment     = null;
+            $job->stale_action_snoozed_by_user_id = null;
+            $job->stale_action_snoozed_at         = null;
         });
 
         static::updated(function (Job $job) {
@@ -1117,6 +1139,75 @@ class Job extends Model
     public function createdBy(): BelongsTo
     {
         return $this->belongsTo(User::class, 'created_by_user_id');
+    }
+
+    /**
+     * The user (usually an ops controller / dispatcher) who last hit
+     * "Wait longer" on the ops login stale-action gate. Cleared on the
+     * next real status transition — see the `booted()` updating hook.
+     */
+    public function staleActionSnoozedBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'stale_action_snoozed_by_user_id');
+    }
+
+    /**
+     * Record a "Wait longer" decision on the ops login stale-action
+     * gate. Writes the snooze horizon + reason + actor onto the job,
+     * appends a `job_events` note so the order timeline shows WHO
+     * pushed the row out and WHY, and logs an audit entry so the
+     * snooze cannot be silently rewritten by a later save.
+     *
+     * The snooze horizon is `now() + trident.stale_action_snooze_days`
+     * (default 7). The next real status move wipes every snooze field
+     * (see `booted()`), so this can only ever suppress the current
+     * stage, never the whole job.
+     */
+    public function snoozeStaleAction(User $by, string $comment): void
+    {
+        $trimmed = trim($comment);
+        if ($trimmed === '') {
+            throw new \InvalidArgumentException('Snooze comment is required.');
+        }
+
+        $days = (int) config('trident.stale_action_snooze_days', 7);
+        $until = now()->addDays(max(1, $days));
+
+        $before = [
+            'stale_action_snoozed_until' => $this->stale_action_snoozed_until?->toIso8601String(),
+        ];
+
+        \Illuminate\Support\Facades\DB::transaction(function () use ($by, $trimmed, $until) {
+            // forceFill so the write survives even when the calling
+            // context has other dirty fields on the model. We do NOT
+            // touch `status`, so the booted() updating hook that
+            // clears snoozes on real transitions cannot fire here.
+            $this->forceFill([
+                'stale_action_snoozed_until'      => $until,
+                'stale_action_snooze_comment'     => $trimmed,
+                'stale_action_snoozed_by_user_id' => $by->id,
+                'stale_action_snoozed_at'         => now(),
+            ])->save();
+
+            $this->events()->create([
+                'event_type' => 'stale_action_snoozed',
+                'event_at'   => now(),
+                'user_id'    => $by->id,
+                'notes'      => 'Wait longer: ' . $trimmed,
+            ]);
+        });
+
+        \App\Services\AuditService::log(
+            'job_stale_action_snoozed',
+            'job',
+            $this->id,
+            $before,
+            [
+                'stale_action_snoozed_until'      => $until->toIso8601String(),
+                'stale_action_snoozed_by_user_id' => $by->id,
+            ],
+            $trimmed,
+        );
     }
 
     /**

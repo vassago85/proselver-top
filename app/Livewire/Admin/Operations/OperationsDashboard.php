@@ -3,10 +3,13 @@
 namespace App\Livewire\Admin\Operations;
 
 use App\Domain\Operations\OperationsFilters;
+use App\Domain\Operations\Queries\StaleActionJobsQuery;
 use App\Domain\Operations\Queries\ThroughputQuery;
 use App\Models\Brand;
 use App\Models\Company;
+use App\Models\Job;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Collection;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\Url;
 use Livewire\Component;
@@ -39,9 +42,39 @@ class OperationsDashboard extends Component
     #[Url] public ?string $dateTo   = null;
     #[Url] public string  $preset   = '7d';
 
+    // ── Stale-action login gate ─────────────────────────────────────
+    //
+    // The modal blocks landing when the acting user has jobs they
+    // created that have sat in the same stage for >=
+    // `trident.stale_action_days`. Rows they did NOT create are shown
+    // for context but never block dismiss.
+    //
+    // `showStaleGate` is set once on mount so a user who's just hit
+    // "Wait longer" on their last owned row can close the modal and
+    // reach the dashboard without a race against the query. The gate
+    // re-arms on next page load.
+    public bool $showStaleGate = false;
+
+    // Per-row comment inputs, keyed by job id. Each owned row needs its
+    // own textarea so ops can queue up several snoozes on one visit
+    // without the comment field jumping between rows.
+    /** @var array<int,string> */
+    public array $staleComments = [];
+
     public function mount(): void
     {
         $this->applyPresetIfNoRange();
+
+        // Only ops-landing internal roles get the gate. Owner and
+        // accounts land on their own dashboards; drivers/customers
+        // never reach this component. This check is intentionally
+        // broad — every user who can reach the ops dashboard should
+        // see the modal when their own rows go stale.
+        $actor = auth()->user();
+        if ($actor && method_exists($actor, 'isInternal') && $actor->isInternal()) {
+            $data = (new StaleActionJobsQuery())->forUser($actor);
+            $this->showStaleGate = $data['total'] > 0;
+        }
     }
 
     /**
@@ -108,8 +141,74 @@ class OperationsDashboard extends Component
         ];
     }
 
+    /**
+     * "Wait longer" on a single stale row. Requires a non-empty comment
+     * on that row (per-job key in `$staleComments`) — an empty snooze
+     * would strip the whole point of the gate, which is a written
+     * record of WHY ops is happy to sit on this for another week.
+     *
+     * The actual write goes through `Job::snoozeStaleAction()` so the
+     * audit trail + timeline note fire from one place, and so this
+     * component stays a thin controller for the modal state.
+     */
+    public function snoozeStale(int $jobId): void
+    {
+        $actor = auth()->user();
+        if (! $actor) {
+            return;
+        }
+
+        $comment = trim((string) ($this->staleComments[$jobId] ?? ''));
+        if ($comment === '') {
+            $this->addError('staleComment.' . $jobId, 'Add a short reason before waiting longer.');
+            return;
+        }
+
+        $job = Job::query()
+            ->whereKey($jobId)
+            ->where('created_by_user_id', $actor->id) // creators only, per plan
+            ->first();
+
+        if (! $job) {
+            // Silently drop: either the job was moved/cancelled by
+            // someone else while the modal was open, or the actor is
+            // not the creator. Either way, the next render pulls a
+            // fresh list and the row disappears.
+            unset($this->staleComments[$jobId]);
+            return;
+        }
+
+        $job->snoozeStaleAction($actor, $comment);
+        unset($this->staleComments[$jobId]);
+        $this->resetErrorBag('staleComment.' . $jobId);
+    }
+
+    /**
+     * Close the modal. Only permitted when the actor has no OWN stale
+     * rows still in play — otherwise we drop back into the modal on
+     * next render anyway, so the button pretends not to exist. The
+     * server-side guard here also stops a crafted request from
+     * bypassing the disabled attribute in the client.
+     */
+    public function dismissStaleGate(): void
+    {
+        $actor = auth()->user();
+        if (! $actor) {
+            return;
+        }
+
+        $data = (new StaleActionJobsQuery())->forUser($actor);
+        if ($data['owned']->isNotEmpty()) {
+            return;
+        }
+
+        $this->showStaleGate = false;
+    }
+
     public function render()
     {
+        $stale = $this->currentStaleData();
+
         return view('livewire.admin.operations.operations-dashboard', [
             'companies'    => Company::query()
                 ->whereIn('type', [Company::TYPE_OEM, Company::TYPE_DEALER, Company::TYPE_CUSTOMER])
@@ -133,7 +232,29 @@ class OperationsDashboard extends Component
             ],
             'windowLabel'  => $this->windowLabel(),
             'filters'      => OperationsFilters::fromArray($this->filtersPayload()),
+            'stale'        => $stale,
         ]);
+    }
+
+    /**
+     * Pulled into its own method so the render + close-guard paths
+     * cannot disagree on what "the current stale set" means.
+     *
+     * @return array{owned: Collection, others: Collection, total: int, worst_days: int}
+     */
+    private function currentStaleData(): array
+    {
+        $actor = auth()->user();
+        if (! $actor || ! method_exists($actor, 'isInternal') || ! $actor->isInternal()) {
+            return [
+                'owned'      => collect(),
+                'others'     => collect(),
+                'total'      => 0,
+                'worst_days' => 0,
+            ];
+        }
+
+        return (new StaleActionJobsQuery())->forUser($actor);
     }
 
     /**
