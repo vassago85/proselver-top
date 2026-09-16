@@ -54,6 +54,31 @@ new #[Layout('components.layouts.app')] class extends Component {
     public array $previewRows = [];
     public array $previewStats = [];
 
+    /**
+     * Confirm-address panel state.  Populated after buildPreview() by
+     * scanning previewRows for pickup/delivery cells that would auto-
+     * create a new location on commit and calling GeocodingService for
+     * each.  Keyed by JobBulkImporter::normaliseAddressKey(rawName).
+     *
+     * Shape per entry:
+     *   [
+     *     'key' => 'anchorautobodybuildersscc',
+     *     'raw' => 'ANCHOR AUTO BODY BUILDERS CC',
+     *     'sides' => ['pickup'],
+     *     'row_count' => 3,
+     *     'suggestions' => [ ['formatted_address' => '...', 'city' => ...], ... ],
+     *     'selection' => [
+     *       'choice' => 'kept' | 'suggestion' | 'custom',
+     *       'index'  => 0,                          // for choice = suggestion
+     *       'address' => '...', 'city' => '...',    // for choice = custom
+     *     ],
+     *   ]
+     */
+    public array $addressConfirmations = [];
+
+    /** Toggle for the confirmation panel details -- collapsed by default when everything is 'kept'. */
+    public bool $showAddressPanel = true;
+
     /** Bulk-set helper: dropdown value for "apply this class to ..." actions on the preview screen. */
     public ?int $bulkVehicleClassId = null;
 
@@ -200,7 +225,86 @@ new #[Layout('components.layouts.app')] class extends Component {
         $this->previewStats = $preview['stats'];
         $this->bulkVehicleClassId = $this->defaultVehicleClassId;
 
+        // Suggest Google-confirmed addresses for every unique pickup /
+        // delivery string that would otherwise auto-create as a stub.
+        // Runs once per unique raw string (dedup on locationKey) so a
+        // 500-row file with 20 unique dealers only makes 20 API calls.
+        $this->addressConfirmations = [];
+        if ($this->autoCreateLocations) {
+            $unmatched = $importer->collectUnmatchedAddresses($this->previewRows);
+            $suggestions = $importer->suggestAddressesFor($unmatched);
+            foreach ($unmatched as $key => $entry) {
+                $this->addressConfirmations[$key] = array_merge($entry, [
+                    'suggestions' => $suggestions[$key] ?? [],
+                    'selection' => [
+                        'choice' => 'kept',
+                    ],
+                ]);
+            }
+        }
+
         $this->step = 'preview';
+    }
+
+    /**
+     * Pick a Google suggestion for one unmatched raw address.  The
+     * choice is remembered on $addressConfirmations and applied at
+     * commit time -- resolveLocation() uses the confirmed address
+     * instead of stubbing raw-name-as-address.
+     */
+    public function chooseAddressSuggestion(string $key, int $index): void
+    {
+        if (!isset($this->addressConfirmations[$key])) {
+            return;
+        }
+        $this->addressConfirmations[$key]['selection'] = [
+            'choice' => 'suggestion',
+            'index' => $index,
+        ];
+    }
+
+    /**
+     * Keep the raw pickup / delivery text as the address -- explicit
+     * opt-out so the operator's decision is recorded (rather than an
+     * unconfirmed row silently using the stub).
+     */
+    public function keepAddressAsTyped(string $key): void
+    {
+        if (!isset($this->addressConfirmations[$key])) {
+            return;
+        }
+        $this->addressConfirmations[$key]['selection'] = ['choice' => 'kept'];
+    }
+
+    /**
+     * Save a custom address (typed via Places autocomplete inside the
+     * confirmation panel).  Called from Alpine when the user selects a
+     * place -- lat/lng are passed through so we don't re-geocode on
+     * commit.
+     */
+    public function saveCustomAddress(
+        string $key,
+        string $address,
+        string $city = '',
+        string $province = '',
+        ?string $latitude = null,
+        ?string $longitude = null,
+    ): void {
+        if (!isset($this->addressConfirmations[$key])) {
+            return;
+        }
+        $address = trim($address);
+        if ($address === '') {
+            return;
+        }
+        $this->addressConfirmations[$key]['selection'] = [
+            'choice' => 'custom',
+            'address' => $address,
+            'city' => $city,
+            'province' => $province,
+            'latitude' => $latitude !== null && $latitude !== '' ? (float) $latitude : null,
+            'longitude' => $longitude !== null && $longitude !== '' ? (float) $longitude : null,
+        ];
     }
 
     /**
@@ -293,6 +397,24 @@ new #[Layout('components.layouts.app')] class extends Component {
      */
     public function commitImport(JobBulkImporter $importer): void
     {
+        // Turn the panel's selection state into the structured shape
+        // JobBulkImporter::resolveLocation() consumes -- one entry per
+        // raw address the operator actually confirmed (either picked a
+        // Google suggestion or typed a custom Places result).  "kept"
+        // selections skip through: their location still lands as a
+        // raw-name stub so ops can fix it later from the cleanup UI.
+        $confirmedForCommit = [];
+        foreach ($this->addressConfirmations as $key => $entry) {
+            $selection = $entry['selection'] ?? [];
+            $normalised = $importer->normaliseAddressConfirmation(
+                $selection,
+                $entry['suggestions'] ?? [],
+            );
+            if ($normalised) {
+                $confirmedForCommit[$key] = $normalised;
+            }
+        }
+
         $result = $importer->commit(
             company: $this->company,
             createdByUserId: auth()->id(),
@@ -301,6 +423,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             defaultVehicleClassId: $this->defaultVehicleClassId,
             options: [
                 'auto_create_locations' => $this->autoCreateLocations,
+                'address_confirmations' => $confirmedForCommit,
             ],
         );
 
@@ -355,6 +478,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             'mapping', 'defaultBrandId', 'defaultVehicleClassId', 'defaultExecutorType',
             'autoCreateLocations', 'includeOnHold', 'rememberMapping',
             'previewRows', 'previewStats', 'commitResult', 'bulkVehicleClassId',
+            'addressConfirmations', 'showAddressPanel',
         ]);
     }
 
@@ -660,6 +784,115 @@ new #[Layout('components.layouts.app')] class extends Component {
                     </button>
                     <button type="button" wire:click="backToMap" class="text-sm font-medium text-slate-500 hover:text-slate-800">Cancel</button>
                 </div>
+
+                {{-- Confirm addresses for new location stubs. --}}
+                @if(!empty($addressConfirmations))
+                    @php
+                        $pendingConfirmCount = 0;
+                        $suggestionAvailable = 0;
+                        foreach ($addressConfirmations as $entry) {
+                            $choice = $entry['selection']['choice'] ?? 'kept';
+                            if ($choice === 'kept' && !empty($entry['suggestions'])) {
+                                $pendingConfirmCount++;
+                            }
+                            if (!empty($entry['suggestions'])) {
+                                $suggestionAvailable++;
+                            }
+                        }
+                    @endphp
+                    <div class="mt-6 rounded-lg border {{ $pendingConfirmCount > 0 ? 'border-amber-300 bg-amber-50' : 'border-slate-200 bg-slate-50' }} p-4">
+                        <div class="flex flex-wrap items-baseline justify-between gap-2">
+                            <div>
+                                <p class="text-xs font-semibold uppercase tracking-wider {{ $pendingConfirmCount > 0 ? 'text-amber-800' : 'text-slate-500' }}">
+                                    Confirm new addresses ({{ count($addressConfirmations) }})
+                                </p>
+                                <p class="mt-1 text-xs text-slate-600">
+                                    These pickup / delivery names are about to be added to your address book.
+                                    @if($suggestionAvailable > 0)
+                                        Pick a Google suggestion so tolls and routes calculate correctly, or type a street address.
+                                    @else
+                                        No Google suggestions were found — type a street address so tolls and routes calculate correctly.
+                                    @endif
+                                    @if($pendingConfirmCount > 0)
+                                        <span class="ml-1 font-semibold text-amber-800">{{ $pendingConfirmCount }} still need confirming.</span>
+                                    @endif
+                                </p>
+                            </div>
+                            <button type="button" wire:click="$toggle('showAddressPanel')" class="text-xs font-medium text-slate-500 hover:text-slate-800">
+                                {{ $showAddressPanel ? 'Hide' : 'Show' }} details
+                            </button>
+                        </div>
+
+                        @if($showAddressPanel)
+                            <div class="mt-4 space-y-3">
+                                @foreach($addressConfirmations as $key => $entry)
+                                    @php
+                                        $selection = $entry['selection'] ?? ['choice' => 'kept'];
+                                        $choice = $selection['choice'] ?? 'kept';
+                                        $chosenIndex = $selection['index'] ?? null;
+                                        $sides = implode(' + ', $entry['sides'] ?? []);
+                                    @endphp
+                                    <div class="rounded-lg border border-slate-200 bg-white p-3">
+                                        <div class="flex flex-wrap items-baseline justify-between gap-2">
+                                            <div>
+                                                <p class="text-sm font-semibold text-slate-900">{{ $entry['raw'] }}</p>
+                                                <p class="text-[11px] uppercase tracking-wider text-slate-500">
+                                                    {{ $sides }} · {{ $entry['row_count'] }} row(s)
+                                                </p>
+                                            </div>
+                                            <span @class([
+                                                'inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider',
+                                                'border-emerald-200 bg-emerald-50 text-emerald-700' => $choice === 'suggestion',
+                                                'border-blue-200 bg-blue-50 text-blue-700' => $choice === 'custom',
+                                                'border-amber-200 bg-amber-50 text-amber-800' => $choice === 'kept' && !empty($entry['suggestions']),
+                                                'border-slate-200 bg-slate-50 text-slate-600' => $choice === 'kept' && empty($entry['suggestions']),
+                                            ])>
+                                                @if($choice === 'suggestion') Google confirmed
+                                                @elseif($choice === 'custom') Custom
+                                                @elseif(!empty($entry['suggestions'])) Not confirmed
+                                                @else Kept as typed
+                                                @endif
+                                            </span>
+                                        </div>
+
+                                        @if(!empty($entry['suggestions']))
+                                            <div class="mt-3 space-y-1">
+                                                @foreach($entry['suggestions'] as $sIdx => $sugg)
+                                                    <label class="flex items-start gap-2 rounded-md border {{ $choice === 'suggestion' && $chosenIndex === $sIdx ? 'border-emerald-300 bg-emerald-50' : 'border-slate-200 hover:bg-slate-50' }} px-2 py-1.5 cursor-pointer">
+                                                        <input type="radio"
+                                                               class="mt-0.5 text-emerald-600 focus:ring-emerald-500"
+                                                               {{ $choice === 'suggestion' && $chosenIndex === $sIdx ? 'checked' : '' }}
+                                                               wire:click="chooseAddressSuggestion('{{ $key }}', {{ $sIdx }})">
+                                                        <span class="text-xs text-slate-700">
+                                                            {{ $sugg['formatted_address'] ?? '—' }}
+                                                        </span>
+                                                    </label>
+                                                @endforeach
+                                            </div>
+                                        @endif
+
+                                        <div class="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-2 items-end"
+                                             x-data="placesAutocompleteInline('{{ $key }}')">
+                                            <div class="sm:col-span-2">
+                                                <label class="block text-[11px] font-medium text-slate-600">Or type / paste a street address</label>
+                                                <input type="text" x-ref="input" placeholder="Start typing to search…"
+                                                       class="mt-1 w-full rounded-lg border border-gray-300 px-2 py-1.5 text-xs focus:border-blue-500 focus:ring-blue-500"
+                                                       value="{{ $choice === 'custom' ? ($selection['address'] ?? '') : '' }}">
+                                            </div>
+                                            <div class="flex items-center gap-2">
+                                                <button type="button"
+                                                        wire:click="keepAddressAsTyped('{{ $key }}')"
+                                                        class="rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50">
+                                                    Keep "{{ mb_strimwidth($entry['raw'], 0, 18, '…') }}"
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                @endforeach
+                            </div>
+                        @endif
+                    </div>
+                @endif
 
                 {{-- Bulk vehicle-class allocator --}}
                 <div class="mt-6 rounded-lg border border-slate-200 bg-slate-50 p-3">

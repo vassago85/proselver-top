@@ -411,6 +411,55 @@
                     });
                 }
             }));
+
+            // Companion to placesAutocomplete for use inside repeaters
+            // (bulk-upload preview, cleanup UI) where each row needs its
+            // own Google Places field but the target isn't a single
+            // wire:model -- instead the picked place is forwarded to a
+            // Livewire action call ("saveCustomAddress") keyed by the
+            // row's identifier.  Keeps the Alpine registration in one
+            // place so the Google Maps script tag doesn't have to know
+            // about every UI that uses it.
+            Alpine.data('placesAutocompleteInline', (key, action = 'saveCustomAddress') => ({
+                init() {
+                    if (window._googlePlacesReady) {
+                        this.$nextTick(() => this.setup());
+                    } else {
+                        window._placesQueue = window._placesQueue || [];
+                        window._placesQueue.push(() => this.setup());
+                    }
+                },
+                setup() {
+                    const input = this.$refs.input;
+                    if (!input || input._autocompleteAttached) return;
+                    input._autocompleteAttached = true;
+
+                    const ac = new google.maps.places.Autocomplete(input, {
+                        componentRestrictions: { country: 'za' },
+                        fields: ['address_components', 'formatted_address', 'geometry'],
+                    });
+
+                    ac.addListener('place_changed', () => {
+                        const place = ac.getPlace();
+                        if (!place.address_components || !place.formatted_address) return;
+
+                        let city = '', province = '';
+                        for (const c of place.address_components) {
+                            if (!city && (c.types.includes('locality') || c.types.includes('sublocality_level_1'))) {
+                                city = c.long_name;
+                            }
+                            if (c.types.includes('administrative_area_level_1')) {
+                                province = c.long_name;
+                            }
+                        }
+
+                        const lat = place.geometry?.location ? String(place.geometry.location.lat()) : null;
+                        const lng = place.geometry?.location ? String(place.geometry.location.lng()) : null;
+
+                        this.$wire.call(action, key, place.formatted_address, city, province, lat, lng);
+                    });
+                }
+            }));
         });
     </script>
     {{-- loading=async is what google.maps recommends as of v3.55 — it

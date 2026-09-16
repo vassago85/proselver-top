@@ -505,6 +505,148 @@ class JobBulkImporter
     }
 
     /**
+     * Walk preview rows and return one entry per unique unmatched
+     * pickup / delivery cell that would trigger auto-create on commit.
+     *
+     * Shape:
+     *   [
+     *     'abc123slug' => [
+     *       'key' => 'abc123slug',           // locationKey()
+     *       'raw' => 'ANCHOR AUTO BODY BUILDERS CC',
+     *       'sides' => ['pickup', 'delivery'],  // which columns produced it
+     *       'row_count' => 5,                // how many preview rows reference it
+     *     ],
+     *     ...
+     *   ]
+     *
+     * Used by the preview UI to build the "Confirm address" panel
+     * without re-running the whole preview pipeline.  Only surfaces
+     * rows that are actually about to auto-create -- rows blocked as
+     * errors / duplicates / on-hold are excluded because their pickup
+     * / delivery text won't be materialised.
+     */
+    public function collectUnmatchedAddresses(array $previewRows): array
+    {
+        $out = [];
+
+        // Statuses that WOULD create a location on commit -- match the
+        // gate in commit() so we only surface addresses ops actually
+        // needs to confirm.
+        $activeStatuses = ['ready', 'warning'];
+
+        foreach ($previewRows as $row) {
+            if (!in_array($row['status'] ?? null, $activeStatuses, true)) {
+                continue;
+            }
+            $parsed = $row['parsed'] ?? [];
+
+            foreach (['pickup' => 'pickup', 'delivery' => 'delivery'] as $side => $prefix) {
+                $raw = $parsed["{$prefix}_raw"] ?? null;
+                $matchId = $parsed["{$prefix}_location_id"] ?? null;
+                $match = $parsed["{$prefix}_match"] ?? null;
+                if ($raw === null || $raw === '' || $matchId || $match) {
+                    continue;
+                }
+
+                $key = $this->locationKey($raw);
+                if ($key === '') {
+                    continue;
+                }
+
+                if (!isset($out[$key])) {
+                    $out[$key] = [
+                        'key' => $key,
+                        'raw' => trim((string) $raw),
+                        'sides' => [],
+                        'row_count' => 0,
+                    ];
+                }
+                if (!in_array($side, $out[$key]['sides'], true)) {
+                    $out[$key]['sides'][] = $side;
+                }
+                $out[$key]['row_count']++;
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * Given the output of collectUnmatchedAddresses(), call the
+     * geocoding suggestion service once per unique raw string and
+     * return a map keyed by locationKey() of suggestion arrays.
+     *
+     * Each value is the raw output of GeocodingService::suggest() --
+     * empty array means "no suggestions available" (Google returned
+     * nothing, key missing, or network failed).  Callers must treat
+     * empty as "just let the operator keep as typed", not as fatal.
+     */
+    public function suggestAddressesFor(array $unmatched, int $limit = 4): array
+    {
+        $out = [];
+        foreach ($unmatched as $key => $entry) {
+            $raw = $entry['raw'] ?? '';
+            if ($raw === '') {
+                $out[$key] = [];
+                continue;
+            }
+            $out[$key] = \App\Services\GeocodingService::suggest($raw, $limit);
+        }
+        return $out;
+    }
+
+    /**
+     * Turn a Volt-form confirmation entry into the structured shape
+     * resolveLocation() consumes.  Centralised here so the customer
+     * and admin bulk-upload pages don't drift.
+     *
+     * $selection is one of:
+     *   - ['choice' => 'kept']         -- keep raw name as address (default)
+     *   - ['choice' => 'suggestion', 'index' => int]  -- pick nth suggestion
+     *   - ['choice' => 'custom', 'address' => str, 'city' => str, ...]
+     *
+     * Returns null when the selection means "no override" (keep-as-typed)
+     * so callers can skip storing empty entries.
+     */
+    public function normaliseAddressConfirmation(array $selection, array $suggestions = []): ?array
+    {
+        $choice = $selection['choice'] ?? null;
+
+        if ($choice === 'suggestion') {
+            $idx = (int) ($selection['index'] ?? -1);
+            $pick = $suggestions[$idx] ?? null;
+            if (!$pick || empty($pick['formatted_address'])) {
+                return null;
+            }
+            return [
+                'address' => (string) $pick['formatted_address'],
+                'city' => $pick['city'] ?? null,
+                'province' => $pick['province'] ?? null,
+                'latitude' => $pick['lat'] ?? null,
+                'longitude' => $pick['lng'] ?? null,
+                'source' => 'suggestion',
+            ];
+        }
+
+        if ($choice === 'custom') {
+            $address = trim((string) ($selection['address'] ?? ''));
+            if ($address === '') {
+                return null;
+            }
+            return [
+                'address' => $address,
+                'city' => isset($selection['city']) && $selection['city'] !== '' ? (string) $selection['city'] : null,
+                'province' => isset($selection['province']) && $selection['province'] !== '' ? (string) $selection['province'] : null,
+                'latitude' => $selection['latitude'] ?? null,
+                'longitude' => $selection['longitude'] ?? null,
+                'source' => 'custom',
+            ];
+        }
+
+        return null;
+    }
+
+    /**
      * Re-evaluate a single preview row's status — used by the Volt component
      * after the operator changes a per-row vehicle class. Wipes any stale
      * "vehicle class needed" error so the row can flip green when fixed.
@@ -736,6 +878,12 @@ class JobBulkImporter
     ): array {
         $autoCreate = (bool) ($options['auto_create_locations'] ?? true);
 
+        // Confirmed suggestions from the preview screen -- keyed by
+        // locationKey() of the raw pickup / delivery cell.  When a raw
+        // name has a confirmation, resolveLocation() uses its structured
+        // address instead of stubbing raw-name-as-address.
+        $addressConfirmations = (array) ($options['address_confirmations'] ?? []);
+
         $created = 0;
         $createdLocations = 0;
         $skipped = 0;
@@ -753,6 +901,7 @@ class JobBulkImporter
             $defaultBrandId,
             $defaultVehicleClassId,
             $autoCreate,
+            $addressConfirmations,
             &$created,
             &$createdLocations,
             &$skipped,
@@ -808,6 +957,7 @@ class JobBulkImporter
                         $row['parsed']['pickup_raw'],
                         $autoCreate,
                         $locationCache,
+                        $addressConfirmations,
                     );
                     [$deliveryId, $createdDelivery] = $this->resolveLocation(
                         $company,
@@ -815,6 +965,7 @@ class JobBulkImporter
                         $row['parsed']['delivery_raw'],
                         $autoCreate,
                         $locationCache,
+                        $addressConfirmations,
                     );
 
                     if (!$pickupId || !$deliveryId) {
@@ -1303,6 +1454,19 @@ class JobBulkImporter
      * The created flag in the second tuple position drives the
      * "created_locations" stat in commit().
      *
+     * $confirmations is a map keyed by locationKey($rawName) of
+     * operator-confirmed structured addresses:
+     *   [
+     *     'address' => '12 Sample Rd, Randburg, 2194, South Africa',
+     *     'city' => 'Randburg',
+     *     'province' => 'Gauteng',
+     *     'latitude' => -26.093,
+     *     'longitude' => 28.005,
+     *   ]
+     * When present, we use those fields on the freshly-created row
+     * instead of stubbing `address = rawName` (which usually can't be
+     * geocoded and breaks route/toll estimation).
+     *
      * @return array{0: ?int, 1: bool}
      */
     private function resolveLocation(
@@ -1311,6 +1475,7 @@ class JobBulkImporter
         ?string $rawName,
         bool $autoCreate,
         array &$locationCache,
+        array $confirmations = [],
     ): array {
         if ($matched) {
             // Remember the preview-resolved match so a later row with the
@@ -1331,19 +1496,44 @@ class JobBulkImporter
             return [$locationCache[$key], false];
         }
 
+        // Operator picked a Google-confirmed address for this raw string
+        // on the preview screen -- use its structured components instead
+        // of the raw-name stub.  This is what stops
+        // "ANCHOR AUTO BODY BUILDERS CC" landing as a coord-less row
+        // that never routes properly.
+        $confirmed = $confirmations[$key] ?? null;
+        $addressLine = trim($rawName);
+        $city = null;
+        $province = null;
+        $latitude = null;
+        $longitude = null;
+        if (is_array($confirmed) && !empty($confirmed['address'])) {
+            $addressLine = trim((string) $confirmed['address']);
+            $city = isset($confirmed['city']) && $confirmed['city'] !== '' ? (string) $confirmed['city'] : null;
+            $province = isset($confirmed['province']) && $confirmed['province'] !== '' ? (string) $confirmed['province'] : null;
+            $latitude = $confirmed['latitude'] ?? null;
+            $longitude = $confirmed['longitude'] ?? null;
+        }
+
         // Default new locations to dealer/body_builder territory rather
         // than plant — most "to" rows are bodybuilders/dealers, and a yard
         // would imply transport-controlled space. Type isn't load-bearing
         // here (just metadata for later filtering); ops can fix it from
         // the address-book UI without re-importing.
+        //
+        // Address is NOT NULL on the locations table.  If the operator
+        // didn't confirm a suggestion we still seed the raw name so the
+        // row can be created; ops can then fix it from the address-book
+        // cleanup UI later.  The Location::saving hook will re-geocode
+        // it on next save.
         $location = Location::create([
             'company_id' => $company->id,
             'company_name' => trim($rawName),
-            // Address is NOT NULL on the locations table; we don't know
-            // the street yet so we seed it with the same name and let ops
-            // fix it from the address-book UI later. The Location::saving
-            // hook will then re-geocode it on next save.
-            'address' => trim($rawName),
+            'address' => $addressLine !== '' ? $addressLine : trim($rawName),
+            'city' => $city,
+            'province' => $province,
+            'latitude' => $latitude,
+            'longitude' => $longitude,
             'type' => Location::TYPE_DEALER,
             'is_active' => true,
         ]);
@@ -1360,6 +1550,17 @@ class JobBulkImporter
      * lower/trim of the raw value when the slug is empty (all punctuation).
      */
     private function locationKey(?string $name): string
+    {
+        return self::normaliseAddressKey($name);
+    }
+
+    /**
+     * Public shape of the internal dedup key.  Livewire components need
+     * to compute the same key for a raw pickup/delivery cell so their
+     * $addressConfirmations map lines up with what commit() looks up
+     * from options['address_confirmations'].
+     */
+    public static function normaliseAddressKey(?string $name): string
     {
         if ($name === null || trim($name) === '') {
             return '';
