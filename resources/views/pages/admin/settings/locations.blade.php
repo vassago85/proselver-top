@@ -22,13 +22,22 @@ new #[Layout('components.layouts.app')] class extends Component {
     public array $addAddressSuggestions = [];
     public array $editAddressSuggestions = [];
 
-    /** Which tab of the "Clean up" flow is open (null = closed). */
-    public ?string $cleanupTab = null;
+    /**
+     * Which tab of the "Clean up" flow is open (null = closed).
+     *
+     * URL-backed so an operator who opens cleanup, deep-links into
+     * "Edit manually", saves, and returns lands right back on the
+     * cleanup panel they were working through -- not on a fresh
+     * address book with the panel closed.  The Edit-manually link
+     * threads this value through as ?cleanup= in the ?return= URL.
+     */
+    #[Url(as: 'cleanup')] public ?string $cleanupTab = null;
 
     /**
      * "Needs address" cleanup state, keyed by location id.  Populated on
-     * openCleanup('incomplete') so the operator can pick straight away
-     * instead of triggering a per-row API call.
+     * openCleanup('incomplete') OR restored in mount() when the URL
+     * carries ?cleanup=incomplete so a save-and-return lands the operator
+     * back on a fully-populated list.
      */
     public array $cleanupIncomplete = [];
 
@@ -91,6 +100,44 @@ new #[Layout('components.layouts.app')] class extends Component {
         // host, javascript: scheme, etc.) is discarded so an operator
         // can't be phished into leaving the app via a crafted link.
         $this->returnUrl = $this->sanitiseReturnUrl($this->returnUrl);
+
+        // Sanitise ?cleanup=: only "incomplete" and "duplicates" are
+        // valid tabs; anything else silently clears so a bad URL param
+        // doesn't leave the panel half-open.
+        if ($this->cleanupTab !== null && !in_array($this->cleanupTab, ['incomplete', 'duplicates'], true)) {
+            $this->cleanupTab = null;
+        }
+
+        // Restore "Needs address" state if the operator returned from
+        // a deep-link save via ?cleanup=incomplete.  Duplicates tab
+        // rebuilds itself in with() on every render, so it needs no
+        // seeding here.
+        if ($this->cleanupTab === 'incomplete') {
+            $this->refreshIncompleteState();
+        }
+    }
+
+    /**
+     * Rebuild $cleanupIncomplete from the current filter scope.  Kept
+     * private so callers don't accidentally re-run the DB scan when
+     * they only wanted to open a tab.
+     */
+    private function refreshIncompleteState(): void
+    {
+        $companyId = $this->filterCompany !== '' ? (int) $this->filterCompany : null;
+        $service = app(LocationMergeService::class);
+        $rows = $service->findIncompleteLocations($companyId);
+        $state = [];
+        foreach ($rows as $loc) {
+            // Suggestions stay null until the operator clicks the
+            // per-row "Look up" button, so opening the panel costs
+            // zero Google API calls no matter how big the book is.
+            $state[$loc->id] = [
+                'suggestions' => null,
+                'chosen' => null,
+            ];
+        }
+        $this->cleanupIncomplete = $state;
     }
 
     /**
@@ -274,20 +321,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         $this->cleanupTab = $tab;
 
         if ($tab === 'incomplete') {
-            $companyId = $this->filterCompany !== '' ? (int) $this->filterCompany : null;
-            $service = app(LocationMergeService::class);
-            $rows = $service->findIncompleteLocations($companyId);
-            $state = [];
-            foreach ($rows as $loc) {
-                // No 'suggestions' key until ops clicks the per-row
-                // "Look up" button.  We seed it as null so the view can
-                // distinguish "not yet fetched" from "fetched, empty".
-                $state[$loc->id] = [
-                    'suggestions' => null,
-                    'chosen' => null,
-                ];
-            }
-            $this->cleanupIncomplete = $state;
+            $this->refreshIncompleteState();
         }
     }
 
@@ -643,8 +677,12 @@ new #[Layout('components.layouts.app')] class extends Component {
                                                      This block is rendered by Livewire's /livewire/update endpoint after
                                                      the operator clicks "Look up suggestions", so request()->fullUrl()
                                                      here returns "/livewire/update" -- which then flows through save's
-                                                     redirect() and 405s because Livewire's route is POST-only. --}}
-                                                <a href="{{ route('admin.settings.locations', ['focus' => $locationId, 'return' => route('admin.settings.locations')]) }}" wire:navigate
+                                                     redirect() and 405s because Livewire's route is POST-only.
+
+                                                     We pass ?cleanup=$cleanupTab so a save-and-return lands the
+                                                     operator back on the same cleanup panel they were working through,
+                                                     not on a fresh, panel-closed address book. --}}
+                                                <a href="{{ route('admin.settings.locations', ['focus' => $locationId, 'return' => route('admin.settings.locations', ['cleanup' => $cleanupTab])]) }}" wire:navigate
                                                    class="text-xs font-medium text-slate-500 hover:text-slate-800">Edit manually →</a>
                                             </div>
                                         @elseif(!empty($suggs))

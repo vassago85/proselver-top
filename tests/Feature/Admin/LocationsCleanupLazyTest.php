@@ -133,3 +133,59 @@ test('openCleanup rejects unknown tabs', function () {
         ->call('openCleanup', 'trash-can')
         ->assertSet('cleanupTab', null);
 });
+
+/**
+ * URL-restore contract: after ops deep-links into an address from the
+ * cleanup panel, saves it, and lands back on
+ * /admin/settings/locations?cleanup=incomplete, they must see the
+ * panel already open on the same tab with the rows re-populated --
+ * NOT a fresh, panel-closed address book.
+ */
+test('mount with ?cleanup=incomplete restores the panel and repopulates rows', function () {
+    $this->actingAs(cleanupAdminUser());
+    $company = Company::factory()->create(['name' => 'FAW SA']);
+    cleanupSeedStubs($company, 4);
+
+    $state = Volt::test('admin.settings.locations', ['cleanupTab' => 'incomplete'])
+        ->assertSet('cleanupTab', 'incomplete')
+        ->get('cleanupIncomplete');
+
+    expect($state)->toHaveCount(4);
+    foreach ($state as $entry) {
+        expect($entry['suggestions'])->toBeNull(); // still lazy!
+    }
+
+    // preventStrayRequests() from beforeEach() still active -- restoring
+    // the panel must NOT trigger any Google API calls, same as opening
+    // it via the button.
+    Http::assertSentCount(0);
+});
+
+test('mount with ?cleanup=duplicates opens the duplicates tab without seeding incomplete', function () {
+    $this->actingAs(cleanupAdminUser());
+    Company::factory()->create(['name' => 'FAW SA']);
+
+    Volt::test('admin.settings.locations', ['cleanupTab' => 'duplicates'])
+        ->assertSet('cleanupTab', 'duplicates')
+        ->assertSet('cleanupIncomplete', []);
+});
+
+test('mount with garbage ?cleanup=trash-can silently clears the panel', function () {
+    $this->actingAs(cleanupAdminUser());
+
+    Volt::test('admin.settings.locations', ['cleanupTab' => 'trash-can'])
+        ->assertSet('cleanupTab', null)
+        ->assertSet('cleanupIncomplete', []);
+});
+
+test('closeCleanup clears cleanupTab so the URL param drops out', function () {
+    $this->actingAs(cleanupAdminUser());
+    $company = Company::factory()->create(['name' => 'FAW SA']);
+    cleanupSeedStubs($company, 2);
+
+    Volt::test('admin.settings.locations', ['cleanupTab' => 'incomplete'])
+        ->assertSet('cleanupTab', 'incomplete')
+        ->call('closeCleanup')
+        ->assertSet('cleanupTab', null)
+        ->assertSet('cleanupIncomplete', []);
+});
