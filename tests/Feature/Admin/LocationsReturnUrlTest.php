@@ -110,6 +110,76 @@ test('open-redirect: javascript: scheme is stripped', function () {
     ])->assertSet('returnUrl', null);
 });
 
+/**
+ * Regression guard for the 405 bug seen on 2026-09-17:
+ *
+ *   1. Ops opens Clean up while on the address book.
+ *   2. That's a Livewire re-render, so a Blade link that uses
+ *      request()->fullUrl() for ?return= embeds /livewire/update.
+ *   3. sanitiseReturnUrl() used to accept /livewire/update because
+ *      it's a same-host rooted path.
+ *   4. Save then redirect()->to('/livewire/update') fires a GET on a
+ *      POST-only endpoint -> 405 Method Not Allowed.
+ *
+ * Any /livewire/* return URL MUST be rejected as null, no matter how
+ * it snuck in (rooted, absolute, upper-case, trailing slash, query
+ * string, etc.).
+ */
+test('open-redirect: /livewire/update rooted path is rejected (405 guard)', function () {
+    $this->actingAs(locationsReturnUrlAdmin());
+    $loc = locationsReturnUrlLocation();
+
+    Volt::test('admin.settings.locations', [
+        'focusLocationId' => $loc->id,
+        'returnUrl' => '/livewire/update',
+    ])->assertSet('returnUrl', null);
+});
+
+test('open-redirect: /livewire/upload-file rooted path is rejected', function () {
+    $this->actingAs(locationsReturnUrlAdmin());
+    $loc = locationsReturnUrlLocation();
+
+    Volt::test('admin.settings.locations', [
+        'focusLocationId' => $loc->id,
+        'returnUrl' => '/livewire/upload-file',
+    ])->assertSet('returnUrl', null);
+});
+
+test('open-redirect: /LIVEWIRE/update rooted path is rejected (case-insensitive)', function () {
+    $this->actingAs(locationsReturnUrlAdmin());
+    $loc = locationsReturnUrlLocation();
+
+    Volt::test('admin.settings.locations', [
+        'focusLocationId' => $loc->id,
+        'returnUrl' => '/LIVEWIRE/update',
+    ])->assertSet('returnUrl', null);
+});
+
+test('open-redirect: same-host absolute /livewire/update is rejected', function () {
+    $this->actingAs(locationsReturnUrlAdmin());
+    $loc = locationsReturnUrlLocation();
+
+    $sameHost = 'http://' . request()->getHost() . '/livewire/update';
+
+    Volt::test('admin.settings.locations', [
+        'focusLocationId' => $loc->id,
+        'returnUrl' => $sameHost,
+    ])->assertSet('returnUrl', null);
+});
+
+test('non-livewire rooted paths still pass (regression guard for over-eager blacklist)', function () {
+    $this->actingAs(locationsReturnUrlAdmin());
+    $loc = locationsReturnUrlLocation();
+
+    // The blacklist must ONLY hit /livewire — legitimate paths that
+    // happen to contain the substring "livewire" (e.g. an internal
+    // page called "livewire-diagnostics") should still pass.
+    Volt::test('admin.settings.locations', [
+        'focusLocationId' => $loc->id,
+        'returnUrl' => '/admin/livewire-diagnostics',
+    ])->assertSet('returnUrl', '/admin/livewire-diagnostics');
+});
+
 test('save from a deep-link redirects back to the return URL', function () {
     $this->actingAs(locationsReturnUrlAdmin());
     $loc = locationsReturnUrlLocation();

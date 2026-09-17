@@ -97,6 +97,12 @@ new #[Layout('components.layouts.app')] class extends Component {
      * Same-origin gate for the ?return= deep-link.  Accepts either an
      * absolute URL that matches the current request host or a rooted
      * path ("/foo/bar").  Everything else -> null.
+     *
+     * We also blacklist Livewire's own XHR endpoints because they only
+     * accept POST -- a redirect to /livewire/update produces a browser
+     * GET and a hard 405.  Any Blade using request()->fullUrl() during
+     * a Livewire re-render would otherwise emit /livewire/update as a
+     * return URL and blow up on save.
      */
     private function sanitiseReturnUrl(?string $url): ?string
     {
@@ -108,6 +114,16 @@ new #[Layout('components.layouts.app')] class extends Component {
         if (preg_match('#^(?!https?://)[a-z][a-z0-9+.-]*:#i', $url)) {
             return null;
         }
+
+        // Extract the path so both rooted-path and absolute-URL branches
+        // can be checked against the /livewire/* blacklist.
+        $path = str_starts_with($url, '/') && !str_starts_with($url, '//')
+            ? $url
+            : (parse_url($url, PHP_URL_PATH) ?: '');
+        if (preg_match('#^/livewire(/|$)#i', $path)) {
+            return null;
+        }
+
         // Rooted path — always in-app.
         if (str_starts_with($url, '/') && !str_starts_with($url, '//')) {
             return $url;
@@ -623,7 +639,12 @@ new #[Layout('components.layouts.app')] class extends Component {
                                                     <span wire:loading.remove wire:target="lookupIncomplete({{ $locationId }})">Look up suggestions</span>
                                                     <span wire:loading wire:target="lookupIncomplete({{ $locationId }})">Looking up…</span>
                                                 </button>
-                                                <a href="{{ route('admin.settings.locations', ['focus' => $locationId, 'return' => request()->fullUrl()]) }}" wire:navigate
+                                                {{-- NB: `return` MUST be a plain route() and NOT request()->fullUrl().
+                                                     This block is rendered by Livewire's /livewire/update endpoint after
+                                                     the operator clicks "Look up suggestions", so request()->fullUrl()
+                                                     here returns "/livewire/update" -- which then flows through save's
+                                                     redirect() and 405s because Livewire's route is POST-only. --}}
+                                                <a href="{{ route('admin.settings.locations', ['focus' => $locationId, 'return' => route('admin.settings.locations')]) }}" wire:navigate
                                                    class="text-xs font-medium text-slate-500 hover:text-slate-800">Edit manually →</a>
                                             </div>
                                         @elseif(!empty($suggs))

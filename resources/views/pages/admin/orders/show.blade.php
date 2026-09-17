@@ -188,8 +188,23 @@ new #[Layout('components.layouts.app')] class extends Component {
     // (pickup, delivery) pair.  See addTollGate() / removeTollGate().
     public ?int $advanceAddPlazaId = null;
 
+    /**
+     * Snapshot of THIS page's URL taken at mount() time, so the six
+     * "Edit pickup / delivery" address-book links can use it as their
+     * ?return= target.  We can NOT compute this in Blade because Blade
+     * runs during Livewire re-renders where request()->fullUrl() is
+     * /livewire/update -- feeding that into ?return= produces a POST-only
+     * URL that 405s when the address book redirects back after save.
+     */
+    public string $backUrl = '';
+
     public function mount(Job $job): void
     {
+        // Capture the real, top-of-page URL once, at the initial GET,
+        // before any wire:click can re-render this component under
+        // /livewire/update.
+        $this->backUrl = url()->current();
+
         $this->job = $job->load([
             'company',
             'pickupLocation',
@@ -3631,7 +3646,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                         <svg class="h-4 w-4 text-green-600" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>
                         Pickup
                         @if($job->pickupLocation && !$pickupHasCoords)
-                            <a href="{{ route('admin.settings.locations', ['focus' => $job->pickup_location_id, 'return' => request()->fullUrl()]) }}"
+                            <a href="{{ route('admin.settings.locations', ['focus' => $job->pickup_location_id, 'return' => $backUrl]) }}"
                                 class="inline-flex items-center gap-1 rounded-full bg-amber-100 text-amber-800 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider hover:bg-amber-200"
                                 title="No latitude/longitude — toll auto-detection won't work for this order until geocoded.">
                                 <svg class="h-2.5 w-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path d="M12 9v2m0 4h.01"/><circle cx="12" cy="12" r="10"/></svg>
@@ -3639,7 +3654,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                             </a>
                         @endif
                         @if($job->pickupLocation)
-                            <a href="{{ route('admin.settings.locations', ['focus' => $job->pickup_location_id, 'return' => request()->fullUrl()]) }}"
+                            <a href="{{ route('admin.settings.locations', ['focus' => $job->pickup_location_id, 'return' => $backUrl]) }}"
                                 class="ml-auto inline-flex items-center gap-1 text-[11px] font-medium text-blue-600 hover:text-blue-800"
                                 title="Open this location in the address book to correct the address or coordinates.">
                                 <svg class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
@@ -3671,7 +3686,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                         <svg class="h-4 w-4 text-red-600" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>
                         Delivery
                         @if($job->deliveryLocation && !$deliveryHasCoords)
-                            <a href="{{ route('admin.settings.locations', ['focus' => $job->delivery_location_id, 'return' => request()->fullUrl()]) }}"
+                            <a href="{{ route('admin.settings.locations', ['focus' => $job->delivery_location_id, 'return' => $backUrl]) }}"
                                 class="inline-flex items-center gap-1 rounded-full bg-amber-100 text-amber-800 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider hover:bg-amber-200"
                                 title="No latitude/longitude — toll auto-detection won't work for this order until geocoded.">
                                 <svg class="h-2.5 w-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path d="M12 9v2m0 4h.01"/><circle cx="12" cy="12" r="10"/></svg>
@@ -3679,7 +3694,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                             </a>
                         @endif
                         @if($job->deliveryLocation)
-                            <a href="{{ route('admin.settings.locations', ['focus' => $job->delivery_location_id, 'return' => request()->fullUrl()]) }}"
+                            <a href="{{ route('admin.settings.locations', ['focus' => $job->delivery_location_id, 'return' => $backUrl]) }}"
                                 class="ml-auto inline-flex items-center gap-1 text-[11px] font-medium text-blue-600 hover:text-blue-800"
                                 title="Open this location in the address book to correct the address or coordinates.">
                                 <svg class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
@@ -4712,13 +4727,13 @@ new #[Layout('components.layouts.app')] class extends Component {
                                 <p class="text-[11px] text-amber-700/80">
                                     Fix from the address book:
                                     @if($advanceTollResult['missing_pickup_coords'] ?? false)
-                                        <a href="{{ route('admin.settings.locations', ['focus' => $advanceTollResult['pickup_location_id'] ?? '', 'return' => request()->fullUrl()]) }}" class="font-semibold underline hover:no-underline">Edit pickup ({{ $job->pickupLocation?->company_name }})</a>
+                                        <a href="{{ route('admin.settings.locations', ['focus' => $advanceTollResult['pickup_location_id'] ?? '', 'return' => $backUrl]) }}" class="font-semibold underline hover:no-underline">Edit pickup ({{ $job->pickupLocation?->company_name }})</a>
                                     @endif
                                     @if(($advanceTollResult['missing_pickup_coords'] ?? false) && ($advanceTollResult['missing_delivery_coords'] ?? false))
                                         ·
                                     @endif
                                     @if($advanceTollResult['missing_delivery_coords'] ?? false)
-                                        <a href="{{ route('admin.settings.locations', ['focus' => $advanceTollResult['delivery_location_id'] ?? '', 'return' => request()->fullUrl()]) }}" class="font-semibold underline hover:no-underline">Edit delivery ({{ $job->deliveryLocation?->company_name }})</a>
+                                        <a href="{{ route('admin.settings.locations', ['focus' => $advanceTollResult['delivery_location_id'] ?? '', 'return' => $backUrl]) }}" class="font-semibold underline hover:no-underline">Edit delivery ({{ $job->deliveryLocation?->company_name }})</a>
                                     @endif
                                 </p>
                                 <p class="text-[10px] text-amber-700/70">Or run <code class="bg-amber-100 px-1 rounded">php artisan locations:geocode</code> on the server to backfill all in one shot.</p>
