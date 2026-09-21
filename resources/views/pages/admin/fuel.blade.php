@@ -6,8 +6,8 @@ use App\Services\Tfn\TfnClient;
 use App\Services\Tfn\TfnDemoFixtures;
 use App\Services\Tfn\TfnFuelOrderService;
 use Illuminate\Support\Carbon;
+use Livewire\Attributes\Defer;
 use Livewire\Attributes\Layout;
-use Livewire\Attributes\Lazy;
 use Livewire\Attributes\Url;
 use Livewire\Volt\Component;
 
@@ -28,16 +28,24 @@ use Livewire\Volt\Component;
  * stakeholders. The Blade template does NOT care which source produced
  * the arrays -- shapes match the TFN swagger exactly.
  */
-// #[Lazy]: TFN's CustomerAPI is chatty (balance + aggregate + pricing per
+// #[Defer]: TFN's CustomerAPI is chatty (balance + aggregate + pricing per
 // product + depots + vehicles + cards + orders + transactions) and each
 // call is a synchronous round trip to an off-network host. On a cold
 // page load that used to keep the layout blank for 3-8 seconds while
-// the browser waited for the whole cascade. With #[Lazy] Livewire
+// the browser waited for the whole cascade. With #[Defer] Livewire
 // returns a skeleton (see placeholder() below) on the initial GET and
-// then issues a follow-up XHR to actually mount + run source() -- the
-// layout paints instantly and the operator sees a "loading" state
-// instead of a hung tab.
-new #[Layout('components.layouts.app')] #[Lazy] class extends Component {
+// then issues a follow-up XHR (via Alpine's `x-init`) to actually mount
+// + run source() -- the layout paints instantly and the operator sees a
+// "loading" state instead of a hung tab.
+//
+// Previously this used #[Lazy], which injects `x-intersect` and depends
+// on Alpine's IntersectionObserver firing. In production the operator
+// reported the skeleton staying up for 30s+ with no Livewire request
+// ever firing -- consistent with the intersection observer not tripping
+// the deferred mount on a full-page component whose placeholder IS the
+// viewport. #[Defer] uses `x-init` instead, which fires unconditionally
+// on hydrate so the follow-up XHR always runs.
+new #[Layout('components.layouts.app')] #[Defer] class extends Component {
 
     // Form state for placing an order.  Kept as public properties (not
     // wire:model.live) so an accidental Enter mid-typing doesn't fire
@@ -65,6 +73,14 @@ new #[Layout('components.layouts.app')] #[Lazy] class extends Component {
     // updates without a full re-render.
     public ?array $ping = null;
 
+    // Populated by with() if the deferred TFN load throws past the
+    // per-endpoint safely() catches (e.g. an OOM in flattenOrders(),
+    // a fatal in pricingBundle(), or a Redis outage). The header
+    // banner then shows the message + a "Retry" button (retryLoad()
+    // below) so the operator isn't left staring at the placeholder
+    // skeleton with no explanation. Empty when the load succeeded.
+    public ?string $loadError = null;
+
     // Per-request memoization for source().  Volt calls this from
     // with() (the render path) and again from any Livewire action
     // that inspects the current vehicle list (placeOrder,
@@ -79,10 +95,11 @@ new #[Layout('components.layouts.app')] #[Lazy] class extends Component {
      * mount+render XHR that actually hits TFN.  Matches the real
      * page's rough layout (header pill row, KPI strip, three-panel
      * grid) so the layout doesn't shift when the real content swaps
-     * in.  Alpine's `x-intersect` (attached by Livewire) fires the
-     * lazy-load call the moment the placeholder scrolls into view --
-     * i.e. immediately, since a full-page component's placeholder IS
-     * the viewport.
+     * in.  Under #[Defer] Livewire attaches Alpine's `x-init` to this
+     * markup so the follow-up XHR fires unconditionally on mount --
+     * unlike #[Lazy]'s `x-intersect`, it does not depend on the
+     * IntersectionObserver tripping when the placeholder is already
+     * the entire viewport.
      */
     public function placeholder(): string
     {
@@ -1210,10 +1227,43 @@ new #[Layout('components.layouts.app')] #[Lazy] class extends Component {
     }
 
     /**
+     * "Retry" button in the error banner. Clears the cached error and
+     * the memoised source payload so the next render re-issues the
+     * upstream TFN reads. Livewire re-runs with() on the same request
+     * because the button click triggers a component update.
+     */
+    public function retryLoad(): void
+    {
+        $this->loadError = null;
+        $this->sourceCache = null;
+    }
+
+    /**
      * Pre-render aggregations. We compute derived values here (rather
      * than in the Blade) so the template stays declarative.
+     *
+     * The whole body is wrapped in a try/catch so any fatal in the
+     * upstream chain (a broken pricing response reshape, a Redis outage
+     * mid-render, a TFN endpoint that starts returning HTML instead of
+     * JSON) leaves the page rendering an actionable error banner + a
+     * retry button rather than 500ing the deferred XHR and stranding
+     * the operator on the skeleton with no explanation. Per-endpoint
+     * failures are still caught inside source() via safely(); this
+     * outer guard only fires when something upstream of that -- or in
+     * the aggregation math below -- explodes.
      */
     public function with(): array
+    {
+        try {
+            return $this->buildViewData();
+        } catch (\Throwable $e) {
+            report($e);
+            $this->loadError = $this->humaniseLoadError($e);
+            return $this->emptyViewData();
+        }
+    }
+
+    private function buildViewData(): array
     {
         $data = $this->source();
 
@@ -1495,10 +1545,92 @@ new #[Layout('components.layouts.app')] #[Lazy] class extends Component {
             'canSeeFinance'  => $this->canSeeFinance(),
         ];
     }
+
+    /**
+     * A safe-empty view payload the Blade can render without null
+     * checks when the deferred load fails. Matches the shape of
+     * buildViewData() so every @foreach / number_format below just
+     * sees an empty list / zero.
+     */
+    private function emptyViewData(): array
+    {
+        return [
+            'live'              => false,
+            'banner'            => null,
+            'balance'           => [],
+            'litresMtd'         => 0.0,
+            'spendToday'        => 0.0,
+            'avgPaidPerLitre'   => 0.0,
+            'paidMinRpl'        => 0.0,
+            'paidMaxRpl'        => 0.0,
+            'paidFillCount'     => 0,
+            'productMix'        => [],
+            'pricing'           => [],
+            'pricingByRegion'   => [],
+            'depots'            => [],
+            'vehicles'          => [],
+            'fleet'             => [],
+            'openOrders'        => [],
+            'utilisedOrders'    => [],
+            'transactions'      => [],
+            'productLabels'     => config('tfn.product_labels', []),
+            'orderableProducts' => config('tfn.orderable_products', []),
+            'canSeeFinance'     => $this->canSeeFinance(),
+        ];
+    }
+
+    /**
+     * TFN faults are the majority case for a with() failure and are
+     * safe to name in the UI ("Reading TFN /api/Vehicles failed: ...").
+     * Everything else is collapsed to a generic message -- the report()
+     * call above still writes the full stack to laravel.log for
+     * diagnosis without leaking internals to the operator.
+     */
+    private function humaniseLoadError(\Throwable $e): string
+    {
+        if ($e instanceof TfnException) {
+            return 'TFN request failed: '.$e->getMessage();
+        }
+        return 'Could not load fuel data. Try again in a moment; if it persists, check laravel.log.';
+    }
 }; ?>
 
 <div class="space-y-6">
     <x-slot:header>TFN Fuel Operations</x-slot:header>
+
+    {{-- ────────── Deferred-load error banner ──────────
+         with() wraps its whole body in try/catch and drops the message
+         here so a fatal upstream of the per-endpoint safely() catches
+         (e.g. pricingBundle explodes on a shape change, Redis outage
+         while decoding the transactions cache, TFN starts returning
+         HTML from /api/Vehicles) surfaces as an actionable error the
+         operator can retry -- instead of a 500 that leaves the
+         placeholder skeleton up with no explanation. --}}
+    @if(!empty($loadError))
+        <div class="flex flex-col gap-3 rounded-xl border border-rose-200 bg-rose-50 p-4 shadow-sm sm:flex-row sm:items-start sm:justify-between">
+            <div class="flex items-start gap-3">
+                <span class="mt-0.5 inline-flex h-5 w-5 items-center justify-center rounded-full bg-rose-100 text-rose-700">
+                    <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg>
+                </span>
+                <div>
+                    <p class="text-sm font-semibold text-rose-900">Fuel data didn't load</p>
+                    <p class="mt-0.5 text-[13px] text-rose-800">{{ $loadError }}</p>
+                </div>
+            </div>
+            <div>
+                <button type="button"
+                        wire:click="retryLoad"
+                        wire:loading.attr="disabled"
+                        wire:target="retryLoad"
+                        class="inline-flex items-center gap-1.5 rounded-lg border border-rose-300 bg-white px-3 py-1.5 text-xs font-semibold text-rose-800 hover:bg-rose-50 disabled:opacity-60">
+                    <svg wire:loading.remove wire:target="retryLoad" class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/></svg>
+                    <svg wire:loading wire:target="retryLoad" class="h-3.5 w-3.5 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+                    <span wire:loading.remove wire:target="retryLoad">Retry</span>
+                    <span wire:loading wire:target="retryLoad">Retrying…</span>
+                </button>
+            </div>
+        </div>
+    @endif
 
     {{-- ────────── Header strip: environment + connection state ────────── --}}
     <div class="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">

@@ -78,7 +78,18 @@
                                     ? 'bg-rose-100 text-rose-700 ring-1 ring-inset ring-rose-200'
                                     : 'bg-slate-100 text-slate-700 ring-1 ring-inset ring-slate-200';
                             @endphp
-                            <li class="grid grid-cols-[1fr_auto] items-center gap-3 px-6 py-2 hover:bg-white">
+                            @php
+                                // "Assignable" = planned status AND
+                                // no driver.  Same predicate the panel
+                                // uses to decide whether to load the
+                                // driver list at all, kept identical
+                                // so we never surface the picker for
+                                // rows the assignDriverInline() guard
+                                // would refuse anyway.
+                                $isAssignable = $job->status === \App\Models\Job::STATUS_PLANNED
+                                    && $job->driver_user_id === null;
+                            @endphp
+                            <li class="grid grid-cols-[1fr_auto] items-center gap-3 px-6 py-2 hover:bg-white" wire:key="ops-queue-{{ $job->id }}">
                                 <a href="{{ route('admin.orders.show', $job) }}" class="min-w-0">
                                     <div class="flex items-center gap-2 text-[12.5px]">
                                         <span class="font-semibold text-slate-900">{{ $job->job_number ?? '#'.$job->id }}</span>
@@ -110,10 +121,39 @@
                                         @endif
                                     </div>
                                 </a>
-                                <a href="{{ route('admin.orders.show', $job) }}"
-                                   class="rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 hover:border-slate-300 hover:text-slate-900">
-                                    Open →
-                                </a>
+                                @if($isAssignable)
+                                    {{-- Inline driver picker on planned-
+                                         no-driver rows: dispatchers no
+                                         longer have to open each order
+                                         to break the "N hours over"
+                                         backlog.  For everything else
+                                         (dispatched, on-road, POD-
+                                         pending, or already-assigned
+                                         planned rows) we fall through
+                                         to "Open →" so the row still
+                                         has a way in. --}}
+                                    <div class="flex items-center gap-1.5">
+                                        <div class="w-40">
+                                            <x-searchable-select
+                                                wire:model="driverSelections.{{ $job->id }}"
+                                                :options="$driverOptions"
+                                                placeholder="Select driver…"
+                                                search-placeholder="Search…"
+                                                empty-text="No driver."
+                                            />
+                                        </div>
+                                        <button type="button"
+                                                wire:click="assignDriverInline({{ $job->id }})"
+                                                class="rounded-md bg-purple-600 px-2 py-1 text-[11px] font-semibold text-white shadow-sm hover:bg-purple-700">
+                                            Assign
+                                        </button>
+                                    </div>
+                                @else
+                                    <a href="{{ route('admin.orders.show', $job) }}"
+                                       class="rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 hover:border-slate-300 hover:text-slate-900">
+                                        Open →
+                                    </a>
+                                @endif
                             </li>
                         @endforeach
                     </ul>

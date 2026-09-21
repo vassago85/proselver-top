@@ -3850,17 +3850,34 @@ new #[Layout('components.layouts.app')] class extends Component {
                     </div>
                 @endif
 
+                @php
+                    // POPIA: mask SA ID and cellphone on the movement
+                    // page. Full values still live in the driver-profile
+                    // edit surface (drivers/edit.blade.php) for the ops
+                    // controller who genuinely needs the raw digits;
+                    // rendering them on every order page is the leak the
+                    // audit flagged. Phone + Cellphone often carry the
+                    // same number in different formats, so collapse to
+                    // one row when they match.
+                    [$driverCell, $phoneIsDup] = \App\Support\PopiaMask::preferredCellphone(
+                        $job->driver->phone,
+                        $dp?->cellphone,
+                    );
+                @endphp
                 <dl class="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
                     <div><dt class="text-gray-500">Name</dt><dd class="font-medium">{{ $job->driver->name }}</dd></div>
-                    @if($job->driver->phone)
-                    <div><dt class="text-gray-500">Phone</dt><dd class="font-medium">{{ $job->driver->phone }}</dd></div>
+                    @if($job->driver->phone || $dp?->cellphone)
+                    <div>
+                        <dt class="text-gray-500">Cellphone</dt>
+                        <dd class="font-medium font-mono" title="Masked for POPIA — full number lives on the driver profile.">{{ $driverCell }}</dd>
+                    </div>
                     @endif
                     @if($dp)
                         @if($dp->id_number)
-                        <div><dt class="text-gray-500">ID Number</dt><dd class="font-medium">{{ $dp->id_number }}</dd></div>
-                        @endif
-                        @if($dp->cellphone)
-                        <div><dt class="text-gray-500">Cellphone</dt><dd class="font-medium">{{ $dp->cellphone }}</dd></div>
+                        <div>
+                            <dt class="text-gray-500">ID Number</dt>
+                            <dd class="font-medium font-mono" title="Masked for POPIA — full ID lives on the driver profile.">{{ \App\Support\PopiaMask::saId($dp->id_number) }}</dd>
+                        </div>
                         @endif
                         @if($dp->tracker_id && !$isInFlight)
                         <div><dt class="text-gray-500">Tracker ID</dt><dd class="font-medium font-mono">{{ $dp->tracker_id }}</dd></div>
@@ -3986,10 +4003,12 @@ new #[Layout('components.layouts.app')] class extends Component {
                             </dd>
                         </div>
                     @endif
-                    <div class="flex items-center gap-1.5">
-                        <dt class="text-gray-400">UUID</dt>
-                        <dd class="font-mono text-[10px] text-gray-500 break-all">{{ $job->uuid }}</dd>
-                    </div>
+                    {{-- UUID intentionally removed 2026-09-19: the job
+                         number is the operational identifier everyone
+                         references, and printing the raw uuid in the
+                         footer is a POPIA / URL-guessing surface with no
+                         customer-support value.  Support can still find
+                         a job via the search / audit log.  --}}
                 </dl>
             </div>
 

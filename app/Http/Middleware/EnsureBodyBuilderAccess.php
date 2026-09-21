@@ -32,7 +32,15 @@ class EnsureBodyBuilderAccess
 
         // Internal ProSelver support — developer + super_admin + ops
         // can preview the BB portal to help triage requests.
-        if ($user->isDeveloper() || $user->isSuperAdmin() || $user->isInternal()) {
+        //
+        // The dev toolbar's "View as" switch (session key
+        // `dev_role_override`) makes a developer pretend to be another
+        // role for every permission check; when it's set we drop the
+        // real-role developer bypass and require the effective role
+        // (internal or super_admin) to still hold.
+        if (($user->isDeveloper() && !session('dev_role_override'))
+            || $user->isSuperAdmin()
+            || $user->isInternal()) {
             return $next($request);
         }
 

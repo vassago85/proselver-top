@@ -4,6 +4,8 @@
     use App\Domain\Operations\Queries\OnTimeQuery;
     use App\Domain\Operations\Queries\FlowChartQuery;
     use App\Domain\Operations\Queries\DwellDistributionQuery;
+    use App\Enums\StageGroup;
+    use App\Models\Job;
 
     // Range-bound queries live in the shell for now. Later phases can
     // pull them into their own lazy panels; the split is architectural,
@@ -17,6 +19,27 @@
     // Longest dwell across all groups drives the shared x-axis on the
     // p50/p90 bar chart so bars in different groups stay comparable.
     $dwellMax = max(1, collect($dwell)->max('max_hours'));
+
+    // Ready-to-dispatch headline: n + p50 + p90 for the STAGE ops
+    // most often stalls on. `Ready` covers both confirmed (waiting to
+    // be planned) and planned (waiting for a driver); we surface a
+    // per-status split alongside the total so the number reconciles
+    // with Planning (confirmed) and Dispatch (planned) at a glance.
+    //
+    // Filtered by the same entity scope the panels below use so a
+    // company / transporter / brand / region pick narrows the
+    // headline too -- otherwise the top-of-page number would silently
+    // disagree with the Ops queue underneath it.
+    $readyDwell         = $dwell[StageGroup::Ready->value] ?? null;
+    $readyThreshold     = (int) config('trident.stage_thresholds.ready_to_dispatch', 8);
+    $readyBaseQuery     = $filters->applyEntityScope(Job::query())
+        ->whereNull('deleted_at')
+        ->where('executor_type', Job::EXECUTOR_PROSELVER);
+    $readyConfirmedCount = (clone $readyBaseQuery)->where('status', Job::STATUS_CONFIRMED)->count();
+    $readyPlannedCount   = (clone $readyBaseQuery)->where('status', Job::STATUS_PLANNED)->count();
+    $readyTotalCount     = $readyConfirmedCount + $readyPlannedCount;
+    $readyMinSample      = (int) config('trident.min_sample_for_percentiles', 5);
+    $readyHasStats       = $readyDwell && ($readyDwell['count'] ?? 0) >= $readyMinSample;
 @endphp
 
 <div>
@@ -204,6 +227,65 @@
                 </a>
             </div>
         </div>
+
+        {{-- ── Ready-to-dispatch headline ─────────────────────────
+             Ready is the stage this business actually stalls on
+             (audit 2026-09-19: p50 54h, p90 109h with 17 jobs
+             waiting) and was previously buried in a below-the-fold
+             card.  Promote it above the entity filter so the number
+             is the first thing the ops controller sees.  Splits the
+             total into "ready to plan" (confirmed) and "planned,
+             awaiting driver" so it reconciles with Planning /
+             Dispatch at a glance -- each figure deep-links to the
+             screen that clears it. --}}
+        <a href="{{ route('admin.planning') }}#awaiting-driver"
+           class="block ow-card overflow-hidden hover:border-slate-300 transition-colors">
+            <div class="grid gap-4 p-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+                <div class="min-w-0">
+                    <p class="ow-label text-blue-600">Headline</p>
+                    <div class="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                        <p class="text-[22px] font-semibold tracking-tight text-slate-900 tabular-nums">
+                            {{ $readyTotalCount }} {{ Str::plural('job', $readyTotalCount) }} ready to dispatch
+                        </p>
+                        @if($readyHasStats)
+                            <span class="text-[13px] font-medium tabular-nums text-slate-700">
+                                p50 <span class="{{ $readyDwell['p50_hours'] > $readyThreshold ? 'text-rose-600 font-semibold' : '' }}">{{ $readyDwell['p50_hours'] }}h</span>
+                                · p90 <span class="{{ $readyDwell['p90_hours'] > $readyThreshold ? 'text-rose-600 font-semibold' : '' }}">{{ $readyDwell['p90_hours'] }}h</span>
+                                · n={{ $readyDwell['count'] }}
+                            </span>
+                        @elseif($readyDwell)
+                            <span class="text-[12px] tabular-nums text-slate-500">
+                                percentiles hidden below n={{ $readyMinSample }}
+                            </span>
+                        @endif
+                    </div>
+                    <p class="mt-1 text-[12px] text-slate-500">
+                        Threshold {{ $readyThreshold }}h. A dwell above threshold means the job has been
+                        waiting on planning or driver assignment longer than the business allows.
+                    </p>
+                </div>
+                <div class="flex flex-wrap items-stretch gap-2 sm:flex-nowrap">
+                    <a href="{{ route('admin.planning') }}"
+                       class="inline-flex flex-col items-start justify-center rounded-lg border border-slate-200 bg-white px-3 py-2 hover:border-slate-300"
+                       onclick="event.stopPropagation()">
+                        <span class="text-[10px] font-semibold uppercase tracking-[.14em] text-slate-500">Ready to plan</span>
+                        <span class="mt-0.5 text-[18px] font-semibold tabular-nums text-slate-900">{{ $readyConfirmedCount }}</span>
+                    </a>
+                    <a href="{{ route('admin.dispatch') }}"
+                       class="inline-flex flex-col items-start justify-center rounded-lg border border-slate-200 bg-white px-3 py-2 hover:border-slate-300"
+                       onclick="event.stopPropagation()">
+                        <span class="text-[10px] font-semibold uppercase tracking-[.14em] text-slate-500">Planned</span>
+                        <span class="mt-0.5 text-[18px] font-semibold tabular-nums text-slate-900">{{ $readyPlannedCount }}</span>
+                    </a>
+                    <a href="#ops-queue"
+                       class="inline-flex flex-col items-start justify-center rounded-lg border border-slate-200 bg-white px-3 py-2 hover:border-slate-300"
+                       onclick="event.stopPropagation()">
+                        <span class="text-[10px] font-semibold uppercase tracking-[.14em] text-slate-500">Ops queue</span>
+                        <span class="mt-0.5 text-[13px] font-semibold text-slate-700">Jump ↓</span>
+                    </a>
+                </div>
+            </div>
+        </a>
 
         {{-- ── Entity filter bar (does not touch the performance date) ── --}}
         <div class="ow-card flex flex-wrap items-center gap-2 px-3 py-2.5">

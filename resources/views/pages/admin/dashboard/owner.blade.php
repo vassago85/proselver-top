@@ -126,7 +126,13 @@ new #[Layout('components.layouts.app')] #[Lazy] class extends Component {
     {
         $u = auth()->user();
 
-        if (!$u || (!$u->isOwner() && !$u->isDeveloper())) {
+        // isOwner() reads effectiveRoles(), so the dev toolbar's "View
+        // as" switch flips it correctly.  isDeveloper() reads the REAL
+        // badge on purpose, but here we want the switch to work in both
+        // directions -- viewing as accounts must lose the owner page,
+        // not silently keep it because the developer badge is still on.
+        $devPreview = $u?->isDeveloper() && !session('dev_role_override');
+        if (!$u || (!$u->isOwner() && !$devPreview)) {
             abort(403, 'The owner command centre is restricted to the business owner.');
         }
 

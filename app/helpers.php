@@ -40,10 +40,13 @@ if (!function_exists('resolveInternalDashboardRoute')) {
         }
 
         // Developer is checked here (rather than only via isDeveloper())
-        // because a developer with the dev toolbar switched to another
-        // role should see that role's dashboard; an unswitched developer
-        // shares the owner's command centre.
-        if ($user->isOwner() || $user->isDeveloper()) {
+        // because an unswitched developer shares the owner's command
+        // centre.  A developer with the dev toolbar switched to another
+        // role (session key `dev_role_override`) should get THAT role's
+        // dashboard — isOwner() already reads effectiveRoles(), so the
+        // switch flows naturally.  We only fall through to the real
+        // developer badge here when no override is active.
+        if ($user->isOwner() || ($user->isDeveloper() && !session('dev_role_override'))) {
             return 'admin.dashboard.owner';
         }
 
@@ -61,7 +64,14 @@ if (!function_exists('resolveUserHomePath')) {
             return route('login');
         }
 
-        if ($user->isInternal() || $user->isDeveloper()) {
+        // isDeveloper() reads the REAL roles (not the dev toolbar's
+        // effective override) on purpose, so an unswitched developer
+        // still gets an internal home.  When they've flipped the "View
+        // as" switch we skip this branch and honour the effective role
+        // below — otherwise a "View as Driver" session would still
+        // resolve to /admin/dashboard/owner and blow past the driver
+        // PWA's middleware on the way in.
+        if ($user->isInternal() || ($user->isDeveloper() && !session('dev_role_override'))) {
             return route(resolveInternalDashboardRoute($user));
         }
         // Body-builder tenants land on their dedicated portal regardless
@@ -70,6 +80,13 @@ if (!function_exists('resolveUserHomePath')) {
         // also true for them — must come BEFORE the customer branch).
         if (method_exists($user, 'companyIsBodyBuilder') && $user->companyIsBodyBuilder()) {
             return route('body-builder.dashboard');
+        }
+        // Driver PWA comes BEFORE the customer branch: a real driver
+        // has no customer-tier roles, but a developer switched to
+        // "View as Driver" also picks up isDriver() via effectiveRoles(),
+        // and we want them on /driver/dashboard, not /customer/dashboard.
+        if ($user->isDriver()) {
+            return route('driver.dashboard');
         }
         // Customer / dealer / OEM tenants all land on the customer
         // portal.  The /dealer/* and /oem/* portals were retired and
@@ -81,9 +98,6 @@ if (!function_exists('resolveUserHomePath')) {
         // /dashboard for an authenticated user => infinite loop.
         if ($user->isCustomer() || $user->isDealer() || $user->isOem()) {
             return route('customer.dashboard');
-        }
-        if ($user->isDriver()) {
-            return route('driver.dashboard');
         }
 
         // Authenticated user with no resolvable home (e.g. a brand new

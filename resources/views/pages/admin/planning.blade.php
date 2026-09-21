@@ -17,6 +17,16 @@ new #[Layout('components.layouts.app')] class extends Component {
     public string $search = '';
     public string $driverSearch = '';
 
+    /**
+     * Per-row driver picker state for the "Awaiting Driver" table.
+     * Keyed by job id so a dispatcher can queue up several selections
+     * on one visit without the pickers jumping between rows.  Mirrors
+     * the same pattern already in use on /admin/dispatch.
+     *
+     * @var array<int,string>
+     */
+    public array $driverSelections = [];
+
     public function updatedSearch(): void
     {
         $this->resetPage();
@@ -108,6 +118,40 @@ new #[Layout('components.layouts.app')] class extends Component {
         $job->transitionTo(Job::STATUS_PLANNED);
 
         session()->flash('success', "Order {$job->job_number} has been moved to planned.");
+    }
+
+    /**
+     * Attach a driver to a planned-but-unassigned order from the
+     * "Awaiting Driver" table inline, so the dispatcher does not have
+     * to navigate into each order detail one at a time to clear a
+     * multi-row backlog.  Mirrors /admin/dispatch::assignDriver() --
+     * status guard, audit trail and flash all flow through
+     * Job::transitionTo() so both surfaces stay in agreement about
+     * what "assigned" means.
+     */
+    public function assignDriverInline(int $jobId): void
+    {
+        $driverId = $this->driverSelections[$jobId] ?? null;
+
+        if (!$driverId) {
+            session()->flash('error', 'Pick a driver first.');
+            return;
+        }
+
+        $job = Job::findOrFail($jobId);
+
+        if (!$job->canTransitionTo(Job::STATUS_DRIVER_ASSIGNED)) {
+            session()->flash('error', "Order {$job->job_number} can't move to driver-assigned from its current status.");
+            return;
+        }
+
+        $driver = User::findOrFail($driverId);
+        $job->driver_user_id = $driver->id;
+        $job->transitionTo(Job::STATUS_DRIVER_ASSIGNED);
+
+        unset($this->driverSelections[$jobId]);
+
+        session()->flash('success', "{$driver->name} assigned to {$job->job_number}.");
     }
 
     /**
@@ -301,6 +345,22 @@ new #[Layout('components.layouts.app')] class extends Component {
 
             $payload['jobs']           = $jobs;
             $payload['awaitingDriver'] = $awaitingDriver;
+
+            // Driver pool for the inline picker in the "Awaiting
+            // Driver" section.  Same source and shape /admin/dispatch
+            // uses so the two surfaces stay in sync (adding a driver
+            // in one shows up in the other on next render).  Only
+            // loaded on the queue tab because the other tabs already
+            // have their own driver query.
+            $drivers = User::whereHas('roles', fn ($q) => $q->where('slug', 'driver'))
+                ->where('is_active', true)
+                ->orderBy('name')
+                ->get(['id', 'name']);
+
+            $payload['driverOptions'] = $drivers->map(fn ($d) => [
+                'value' => (string) $d->id,
+                'label' => $d->name,
+            ])->values()->all();
         } elseif ($this->tab === 'calendar') {
             $payload['calendarDays'] = $this->calendarData();
         } else {
@@ -526,7 +586,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         </div>
 
         {{-- ===================== Section 2: Awaiting driver ===================== --}}
-        <div class="mt-6 bg-white rounded-xl shadow-sm border border-amber-200">
+        <div id="awaiting-driver" class="mt-6 bg-white rounded-xl shadow-sm border border-amber-200 scroll-mt-6">
             <div class="px-6 py-4 border-b border-amber-200 bg-amber-50/40 flex items-center justify-between">
                 <div class="flex items-center gap-3">
                     <span class="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-amber-100 text-amber-700">
@@ -539,7 +599,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             </div>
             <div class="px-6 pt-3 pb-2 text-xs text-amber-800/80">
                 These orders have been planned (or beyond) but no driver has been attached yet.
-                Click the order number to assign one on the order detail page.
+                Pick a driver in the row and hit <strong>Assign</strong> — no need to open the order.
             </div>
             <div class="overflow-x-auto">
                 <table class="min-w-full divide-y divide-gray-200">
@@ -591,11 +651,33 @@ new #[Layout('components.layouts.app')] class extends Component {
                                             Petty Cash Plan
                                         </a>
                                     @endif
-                                    <a href="{{ route('admin.orders.show', $job) }}"
-                                       class="inline-flex items-center gap-1.5 rounded-lg bg-amber-600 px-3.5 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-amber-700 transition-colors">
-                                        <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-                                        Assign Driver
-                                    </a>
+                                    {{-- Inline driver picker: dispatch already
+                                         has this pattern; port here so the
+                                         "Awaiting Driver" backlog can be
+                                         cleared without opening every row. --}}
+                                    @if($job->status === \App\Models\Job::STATUS_PLANNED)
+                                        <div class="w-52">
+                                            <x-searchable-select
+                                                wire:model="driverSelections.{{ $job->id }}"
+                                                :options="$driverOptions"
+                                                placeholder="Select driver…"
+                                                search-placeholder="Search drivers…"
+                                                empty-text="No matching driver."
+                                            />
+                                        </div>
+                                        <button type="button"
+                                                wire:click="assignDriverInline({{ $job->id }})"
+                                                class="inline-flex items-center gap-1.5 rounded-lg bg-amber-600 px-3.5 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-amber-700 transition-colors">
+                                            Assign
+                                        </button>
+                                    @else
+                                        <a href="{{ route('admin.orders.show', $job) }}"
+                                           class="inline-flex items-center gap-1.5 rounded-lg bg-amber-600 px-3.5 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-amber-700 transition-colors"
+                                           title="Row is past 'planned' — open the order to assign.">
+                                            <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                                            Assign Driver
+                                        </a>
+                                    @endif
                                 </div>
                             </td>
                         </tr>

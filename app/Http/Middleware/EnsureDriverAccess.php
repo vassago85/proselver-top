@@ -34,7 +34,17 @@ class EnsureDriverAccess
     {
         $user = $request->user();
 
-        if ($user?->isDeveloper() || $user?->isDriver()) {
+        // Developers get the PWA for free — but only when they are
+        // actually acting as themselves. The dev toolbar's "View as"
+        // switch (session key `dev_role_override`) makes them pretend
+        // to be another role for every permission check; if we still
+        // let them in here on their real developer badge a "View as
+        // Owner" session would still land on the driver PWA. Fall
+        // through to the effective-role isDriver() check in that case.
+        if ($user?->isDriver()) {
+            return $next($request);
+        }
+        if ($user?->isDeveloper() && !session('dev_role_override')) {
             return $next($request);
         }
 
