@@ -134,6 +134,12 @@ new #[Layout('components.layouts.app')] class extends Component {
     // estimator re-runs whenever this changes so the toll list updates
     // live.
     public ?int $advanceTollClassOverride = null;
+    // Set when the dropdown was pre-filled from another trip of the
+    // same model (a saved correction, or a sibling that already has a
+    // class). Stays null when this job already has its own override
+    // or its own vehicle class. Compared against the live selection
+    // so the "same model" note disappears if ops picks a different class.
+    public ?int $advanceTollClassDefaulted = null;
     // Manual toll override.  When ops types a value here it wins over
     // the auto-detected plaza total -- belt-and-braces for the cases
     // where Google's polyline doesn't pass close enough to a plaza
@@ -907,20 +913,31 @@ new #[Layout('components.layouts.app')] class extends Component {
         $this->advanceChangeReason = '';  // always blank on open -- ops re-types each time
         $this->advanceOverrideReason = '';
         $this->advanceFoodWaived = (bool) $this->job->advance_food_waived;
-        // Toll class override: prefer the value previously committed
-        // on this job; otherwise see if we have a remembered correction
-        // for the model name (e.g. "Powerstar VX4035 → Class 3").  Only
-        // applies when the job has no per-trip value of its own -- ops
-        // edits on the current job always win.
+        // This job's own override always wins. Otherwise seed from a
+        // remembered correction for the model. If this order has no
+        // vehicle class either, take the class already used on another
+        // trip of the same model (the queue is often a run of identical
+        // Isuzus) so ops doesn't re-pick Class 3 on every FTS750DWA.
+        // A job that already has a vehicle class keeps Auto, unless a
+        // remembered correction exists -- that correction is the
+        // Powerstar case where the vehicle-class band is wrong.
+        $this->advanceTollClassDefaulted = null;
         if ($this->job->advance_toll_class_override) {
             $this->advanceTollClassOverride = (int) $this->job->advance_toll_class_override;
         } else {
-            // Hint from past trips of the same model -- seeds the
-            // dropdown but is NOT stamped onto the in-memory job
-            // (Livewire would discard the mutation across the request
-            // boundary anyway; the estimator parameter is the single
-            // source of truth from here on).
-            $this->advanceTollClassOverride = ModelTollClassHint::classFor($this->job->model_name);
+            $hint = ModelTollClassHint::classFor($this->job->model_name);
+            $ownToll = $this->job->vehicleClass?->toll_class;
+
+            if ($hint) {
+                $this->advanceTollClassOverride = $hint;
+                $this->advanceTollClassDefaulted = $hint;
+            } elseif (!$ownToll) {
+                $fromModel = ModelTollClassHint::classFromSameModel($this->job);
+                $this->advanceTollClassOverride = $fromModel;
+                $this->advanceTollClassDefaulted = $fromModel;
+            } else {
+                $this->advanceTollClassOverride = null;
+            }
         }
 
         // Same shape for the manual toll override: re-open shows the
@@ -4893,6 +4910,12 @@ new #[Layout('components.layouts.app')] class extends Component {
                                     <option value="3">Class 3 — 3-4 axle</option>
                                     <option value="4">Class 4 — 5+ axle (articulated)</option>
                                 </select>
+                                @if($advanceTollClassDefaulted && (int) ($advanceTollClassOverride ?: 0) === (int) $advanceTollClassDefaulted)
+                                    <span class="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700" title="Defaulted from another {{ $job->model_name }} that already has this class. Change it if this vehicle is different.">
+                                        <svg class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><polyline points="21 3 21 8 16 8"/></svg>
+                                        same {{ $job->model_name }}
+                                    </span>
+                                @endif
                             </label>
                             <button wire:click="recalculateRoute" type="button"
                                 class="text-xs rounded-md border border-gray-200 bg-white px-2.5 py-1 text-gray-700 hover:bg-gray-50">
@@ -4921,9 +4944,6 @@ new #[Layout('components.layouts.app')] class extends Component {
                             </div>
                         @endif
 
-                        @php
-                            $rememberedHint = $job->model_name ? \App\Models\ModelTollClassHint::classFor($job->model_name) : null;
-                        @endphp
                         <p class="text-xs text-gray-500 mb-2">
                             {{ number_format((float) $advanceTollResult['distance_km'], 1) }} km ·
                             {{ (int) floor($advanceTollResult['duration_minutes'] / 60) }}h {{ $advanceTollResult['duration_minutes'] % 60 }}m ·
@@ -4931,7 +4951,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                             @if($advanceTollResult['cached'])
                                 <span class="ml-1 text-gray-400">(cached)</span>
                             @endif
-                            @if($rememberedHint && (int) $rememberedHint === (int) $advanceTollResult['toll_class'])
+                            @if($advanceTollClassDefaulted && (int) $advanceTollClassDefaulted === (int) $advanceTollResult['toll_class'])
                                 <span class="ml-1 inline-flex items-center gap-1 text-emerald-700 font-semibold" title="Remembered from a previous trip with the same model.">
                                     <svg class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><polyline points="21 3 21 8 16 8"/></svg>
                                     remembered

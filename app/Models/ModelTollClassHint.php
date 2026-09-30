@@ -67,6 +67,50 @@ class ModelTollClassHint extends Model
     }
 
     /**
+     * Toll class already used on another trip of the same model.
+     *
+     * Used when the job being opened has no class of its own (no
+     * per-trip override and no vehicle-class toll class) and nobody
+     * has saved an explicit correction yet. An override chosen while
+     * assigning petty cash wins over a vehicle class on the sibling,
+     * because that is the class ops actually confirmed for this model.
+     */
+    public static function classFromSameModel(Job $job): ?int
+    {
+        $key = self::keyFor($job->model_name);
+        if (!$key) {
+            return null;
+        }
+
+        $sameModel = fn () => Job::query()
+            ->where('id', '!=', $job->id)
+            ->whereRaw('UPPER(TRIM(model_name)) = ?', [$key]);
+
+        $override = $sameModel()
+            ->whereBetween('advance_toll_class_override', [1, 4])
+            ->orderByDesc('advance_assigned_at')
+            ->orderByDesc('id')
+            ->value('advance_toll_class_override');
+
+        if ($override) {
+            return (int) $override;
+        }
+
+        $classId = $sameModel()
+            ->whereNotNull('vehicle_class_id')
+            ->orderByDesc('id')
+            ->value('vehicle_class_id');
+
+        if (!$classId) {
+            return null;
+        }
+
+        $toll = (int) VehicleClass::query()->whereKey($classId)->value('toll_class');
+
+        return ($toll >= 1 && $toll <= 4) ? $toll : null;
+    }
+
+    /**
      * Persist a correction.  Called from saveAdvance() when ops set
      * the override dropdown.  Upsert: if we already have a hint for
      * this model the new value wins, the learned timestamp stays put,
