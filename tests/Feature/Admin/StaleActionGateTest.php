@@ -17,7 +17,7 @@
 
 use App\Domain\Operations\Queries\StaleActionJobsQuery;
 use App\Enums\JobStatus;
-use App\Livewire\Admin\Operations\OperationsDashboard;
+use App\Livewire\Admin\StaleActionGate;
 use App\Models\Company;
 use App\Models\Job;
 use App\Models\Location;
@@ -122,7 +122,7 @@ it('snoozeStale writes a comment + ~7d horizon and removes the row from the list
     $mine = staleGateJob($me, JobStatus::Confirmed->value, now()->subDays(10));
 
     Livewire::actingAs($me)
-        ->test(OperationsDashboard::class)
+        ->test(StaleActionGate::class)
         ->assertSet('showStaleGate', true)
         ->set('staleComments.' . $mine->id, 'Customer confirmed collection Monday')
         ->call('snoozeStale', $mine->id);
@@ -194,7 +194,7 @@ it('refuses to snooze without a comment (validation is per-row)', function () {
     $mine = staleGateJob($me, JobStatus::Confirmed->value, now()->subDays(10));
 
     Livewire::actingAs($me)
-        ->test(OperationsDashboard::class)
+        ->test(StaleActionGate::class)
         ->set('staleComments.' . $mine->id, '   ')
         ->call('snoozeStale', $mine->id)
         ->assertHasErrors('staleComment.' . $mine->id);
@@ -208,7 +208,7 @@ it('dismissStaleGate refuses to close while I still have unresolved owned rows',
     staleGateJob($me, JobStatus::Confirmed->value, now()->subDays(10));
 
     Livewire::actingAs($me)
-        ->test(OperationsDashboard::class)
+        ->test(StaleActionGate::class)
         ->assertSet('showStaleGate', true)
         ->call('dismissStaleGate')
         ->assertSet('showStaleGate', true);
@@ -221,7 +221,7 @@ it('dismissStaleGate closes the modal when only non-owned rows remain', function
     staleGateJob($other, JobStatus::Confirmed->value, now()->subDays(12));
 
     Livewire::actingAs($me)
-        ->test(OperationsDashboard::class)
+        ->test(StaleActionGate::class)
         ->assertSet('showStaleGate', true)
         ->call('dismissStaleGate')
         ->assertSet('showStaleGate', false);
@@ -234,14 +234,14 @@ it('does not re-open the gate on every ops dash visit after closing an others-on
     staleGateJob($other, JobStatus::Confirmed->value, now()->subDays(12));
 
     Livewire::actingAs($me)
-        ->test(OperationsDashboard::class)
+        ->test(StaleActionGate::class)
         ->assertSet('showStaleGate', true)
         ->call('dismissStaleGate')
         ->assertSet('showStaleGate', false);
 
     // Same session, fresh mount (navigate away → back to ops dash).
     Livewire::actingAs($me)
-        ->test(OperationsDashboard::class)
+        ->test(StaleActionGate::class)
         ->assertSet('showStaleGate', false);
 });
 
@@ -250,10 +250,58 @@ it('still re-opens the gate every visit while I have unresolved owned rows', fun
     staleGateJob($me, JobStatus::Confirmed->value, now()->subDays(10));
 
     Livewire::actingAs($me)
-        ->test(OperationsDashboard::class)
+        ->test(StaleActionGate::class)
         ->assertSet('showStaleGate', true);
 
     Livewire::actingAs($me)
-        ->test(OperationsDashboard::class)
+        ->test(StaleActionGate::class)
         ->assertSet('showStaleGate', true);
+});
+
+it('suppresses itself on admin.orders.show so deep-links out of the modal are reachable', function () {
+    // The modal's "Open to cancel / deliver →" button deep-links to
+    // admin.orders.show for the exact job that is stale.  If the gate
+    // mounted on that page too it would block the operator from
+    // transitioning the job -- making the modal impossible to satisfy.
+    // StaleActionGate::mount() short-circuits when routeIs('admin.orders.show'),
+    // so this test pins that escape hatch.
+    $me   = opsActor();
+    $mine = staleGateJob($me, JobStatus::Confirmed->value, now()->subDays(10));
+
+    // Sanity: without the route context, the gate DOES fire.
+    Livewire::actingAs($me)
+        ->test(StaleActionGate::class)
+        ->assertSet('showStaleGate', true);
+
+    // Now hit the order page and confirm the gate is suppressed.  We
+    // use a full HTTP get (not Livewire::test) because the suppression
+    // depends on request()->routeIs('admin.orders.show'), which only
+    // resolves inside a real routed request.
+    $this->actingAs($me)
+        ->get(route('admin.orders.show', $mine))
+        ->assertOk()
+        // Modal chrome is unique enough to key on -- assert that
+        // NONE of it made it into the response HTML.
+        ->assertDontSee('with no update for a week')
+        ->assertDontSee('Wait longer (7 days)');
+});
+
+it('never mounts for a non-internal user (customer / driver)', function () {
+    // Belt-and-braces: even if the layout accidentally rendered the
+    // component for the wrong tier, mount() short-circuits before
+    // touching the stale query.  Set up a stale row so the ONLY thing
+    // stopping the gate is the isInternal() check.
+    Role::firstOrCreate(['slug' => 'customer_owner'], ['name' => 'Customer Owner', 'tier' => 'customer']);
+
+    $customer = User::factory()->create(['is_active' => true]);
+    $customer->assignRole('customer_owner');
+
+    // Same customer creates a stale-shaped job.  In real life a
+    // customer never creates a Job directly, but the query is
+    // creator-scoped so this is enough to prove the tier gate.
+    staleGateJob($customer, JobStatus::Confirmed->value, now()->subDays(10));
+
+    Livewire::actingAs($customer)
+        ->test(StaleActionGate::class)
+        ->assertSet('showStaleGate', false);
 });

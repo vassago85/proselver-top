@@ -93,6 +93,25 @@
     </div>
     @endif
 
+    {{-- =================================================================== --}}
+    {{-- STALE-ACTION LOGIN GATE                                              --}}
+    {{-- --------------------------------------------------------------------- --}}
+    {{-- Mounted once for every internal-tier user so any admin page can       --}}
+    {{-- block if the acting user has jobs they created that have sat in the   --}}
+    {{-- same stage for >= trident.stale_action_days (default 7).              --}}
+    {{--                                                                       --}}
+    {{-- Rendered here (not per-page) because after the 2026-09-30 nav cut     --}}
+    {{-- hid the Ops dashboard from ops / dispatch / super_admin, the modal    --}}
+    {{-- had to follow those users to whichever page they actually land on.    --}}
+    {{-- Self-suppresses on admin.orders.show so the "Open to cancel /         --}}
+    {{-- deliver →" deep-links out of the modal can actually reach the order.  --}}
+    {{-- =================================================================== --}}
+    @auth
+        @if(method_exists(auth()->user(), 'isInternal') && auth()->user()->isInternal())
+            <livewire:admin.stale-action-gate />
+        @endif
+    @endauth
+
     <div class="min-h-full {{ session('impersonating_from') ? 'pt-10' : '' }}"
          x-data="{ sidebarOpen: false, userMenu: false }"
          @open-mobile-sidebar.window="sidebarOpen = true"
