@@ -54,17 +54,13 @@ beforeEach(function () {
         Role::firstOrCreate(['slug' => $slug], ['name' => $name, 'tier' => $slug === 'driver' ? 'driver' : 'internal']);
     }
 
-    // Fake the Google Maps HTTP endpoint globally so the Location
-    // saving-hook's silent auto-geocode does NOT accidentally populate
-    // coords during test setup.  Individual tests override with a real
-    // fake when they need suggestions to come back.
+    // API key must exist for the in-modal lookup (openAdvancePanel
+    // auto-prime -> GeocodingService::suggest -> Http::get to Google).
+    // The Location::saving hook ALSO auto-geocodes on write, but
+    // gateJobWithMissingCoords() saves via Model::withoutEvents() so
+    // no HTTP call fires during setup -- keeping Http::fake stubs
+    // reserved for what we actually want the modal to see.
     SystemSetting::set('google_maps_api_key', 'test-key', 'string', 'test');
-    Http::fake([
-        'maps.googleapis.com/maps/api/geocode/json*' => Http::response([
-            'status' => 'ZERO_RESULTS',
-            'results' => [],
-        ], 200),
-    ]);
 });
 
 function gateInternalUser(): User
@@ -88,22 +84,26 @@ function gateJobWithMissingCoords(): Job
     ]);
 
     // Address text is set so the auto-prime in openAdvancePanel has
-    // something to feed to Google.  Coords still start null because
-    // the beforeEach ZERO_RESULTS fake makes the Location::saving
-    // auto-geocode hook return no lat/lng.  Individual tests that need
-    // real geocode results override the Http::fake before actingAs.
-    $pickup = Location::create([
+    // something to feed to Google.  We save via Location::withoutEvents
+    // (with a manual uuid because we're also bypassing the creating
+    // hook that would normally set it) so the saving auto-geocode does
+    // NOT fire -- otherwise it would consume an Http::fake stub in an
+    // unpredictable order, since Http::fake stacks callbacks rather
+    // than replacing them.
+    $pickup = Location::withoutEvents(fn () => Location::create([
+        'uuid' => (string) Str::uuid(),
         'company_id' => null,
         'company_name' => 'Sample Plant',
         'address' => 'Sample Plant, Randburg',
         'is_active' => true,
-    ]);
-    $delivery = Location::create([
+    ]));
+    $delivery = Location::withoutEvents(fn () => Location::create([
+        'uuid' => (string) Str::uuid(),
         'company_id' => null,
         'company_name' => 'Sample Dealership',
         'address' => 'Sample Dealership, Sandton',
         'is_active' => true,
-    ]);
+    ]));
 
     $creator = User::factory()->create();
     $driver = User::factory()->create();
@@ -252,37 +252,18 @@ test('picking a Google suggestion writes coords onto the shared Location and unb
     $component = Volt::test('admin.orders.show', ['job' => $job])
         ->call('openAdvancePanel');
 
-    // Auto-prime should have populated both suggestion arrays.
-    dump([
-        'estimator_status' => $component->get('advanceTollResult.status'),
-        'missing_pickup' => $component->get('advanceTollResult.missing_pickup_coords'),
-        'missing_delivery' => $component->get('advanceTollResult.missing_delivery_coords'),
-        'pickup_input' => $component->get('advanceAddressPickupInput'),
-        'delivery_input' => $component->get('advanceAddressDeliveryInput'),
-        'pickup_attempts' => $component->get('advanceAddressPickupAttempts'),
-        'delivery_attempts' => $component->get('advanceAddressDeliveryAttempts'),
-        'pickup_suggestions_count' => count($component->get('advanceAddressPickupSuggestions')),
-        'delivery_suggestions_count' => count($component->get('advanceAddressDeliverySuggestions')),
-        'pickup_coords_db' => Location::find($job->pickup_location_id)->only(['address', 'latitude', 'longitude']),
-    ]);
+    // Auto-prime should have populated both suggestion arrays -- the
+    // whole "encourage correct data entry" premise is that ops opens
+    // the modal and already sees a Google pin waiting to be clicked.
     expect($component->get('advanceAddressPickupSuggestions'))->not->toBeEmpty()
         ->and($component->get('advanceAddressDeliverySuggestions'))->not->toBeEmpty();
 
     $component->call('pickPickupAddressSuggestion', 0)
-              ->call('pickDeliveryAddressSuggestion', 0);
-
-    // After picks, status must no longer be missing_coords.
-    $status = $component->get('advanceTollResult.status');
-    if ($status === 'missing_coords') {
-        // Emit a diagnostic before the assertion so we can see WHY.
-        dump([
-            'status_after_picks' => $status,
-            'pickup_coords' => Location::find($job->pickup_location_id)->only(['latitude', 'longitude']),
-            'delivery_coords' => Location::find($job->delivery_location_id)->only(['latitude', 'longitude']),
-        ]);
-    }
-
-    $component->set('advanceAccommodation', 250)
+              ->call('pickDeliveryAddressSuggestion', 0)
+              // Both locations now have coords -> estimator status
+              // flips off missing_coords -> save proceeds without any
+              // override.
+              ->set('advanceAccommodation', 250)
               ->call('saveAdvance')
               ->assertHasNoErrors()
               ->assertSet('showAdvancePanel', false);
