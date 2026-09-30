@@ -38,6 +38,17 @@ return [
             'report' => false,
         ],
 
+        // Proof-of-delivery files only. Kept off the main upload disk so
+        // they can live on the extra mounted volume. Path inside the
+        // container is /var/pods when Docker bind-mounts POD_STORAGE_HOST.
+        // Laragon falls back to storage/app/pods.
+        'pods' => [
+            'driver' => 'local',
+            'root' => env('POD_STORAGE_PATH') ?: storage_path('app/pods'),
+            'throw' => true,
+            'report' => false,
+        ],
+
         'public' => [
             'driver' => 'local',
             'root' => storage_path('app/public'),

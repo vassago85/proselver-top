@@ -19,8 +19,8 @@ use Illuminate\Support\Facades\Log;
  *   2. Fall back to `local` with a log warning when the requested remote
  *      disk isn't configured, so dev can still smoke-test uploads without
  *      R2 credentials but operators see the warning in laravel.log.
- *   3. Give one place to change the policy later (e.g. route POD photos to
- *      a different bucket from petty-cash slips).
+ *   3. Keep proof-of-delivery files on the dedicated `pods` disk
+ *      (StorageDisk::forPods()) so they land on the extra mounted volume.
  *
  * Usage:
  *   $disk = StorageDisk::forUploads();
@@ -63,6 +63,16 @@ class StorageDisk
         Log::warning("StorageDisk: FILESYSTEM_DISK='{$requested}' is missing credentials; falling back to 'local'. Uploads will not survive a container rebuild.");
 
         return self::$cachedUploadDisk = 'local';
+    }
+
+    /**
+     * Disk for proof-of-delivery files. Always `pods` — office uploads and
+     * driver POD captures both go here, filed by job number and VIN.
+     * Other paperwork stays on forUploads().
+     */
+    public static function forPods(): string
+    {
+        return 'pods';
     }
 
     /**

@@ -129,72 +129,14 @@ test('normalisePlate collapses every casing / punctuation variant to one canonic
 });
 
 // -----------------------------------------------------------------
-// 2. Order-flow guard: refuses when there is no POS registration
+// 2. Order-flow guard tests removed 2026-09-30 (staff request)
+//    The /admin/fuel "Place a TFN order" form was removed, so the
+//    guard tests that exercised `placeOrder` + `orderRegistration`
+//    no longer have a UI to fire against.  The trade-plate
+//    normalisation and reconciler tests below stay -- they cover
+//    the data-layer contracts that TfnFuelOrderService will still
+//    honour whenever ordering is re-enabled elsewhere.
 // -----------------------------------------------------------------
-
-test('the fuel-order form refuses a vehicle whose driver has no trade plate on file', function () {
-    // Point the page at a fixture vehicle that has neither a
-    // permanent plate nor a driver trade plate, and confirm the
-    // guard message surfaces without any TFN call being attempted.
-    //
-    // We hack the fixture in-place: replace all vehicles with a
-    // single plateless-and-tradeplateless row before hitting the
-    // Volt page.  The page reads from `TfnDemoFixtures` in demo
-    // mode; a service-container override lets us swap the fixture.
-    $this->app->instance(TfnDemoFixtures::class, new class extends TfnDemoFixtures {
-        public function vehicles(): array
-        {
-            return [[
-                'VIN'              => 'PLATELESSVIN0001',
-                'Registration'     => null,
-                'DriverName'       => null,
-                'DriverTradePlate' => null,
-                'CustomerName'     => 'Test OEM',
-                'Brand'            => 'Test',
-                'Model'            => 'M1',
-                'TankSize'         => null,
-                'Status'           => 3,
-                'ExternalNumber'   => '26082599',
-                'PosRegistration'  => null,
-            ]];
-        }
-    });
-
-    // The guard's contract: it returns early WITHOUT resetting the
-    // form and without triggering the demo/live TFN path.  On the
-    // successful demo path `placeOrder()` calls `reset(['orderLitres',
-    // 'orderReference'])`, so `orderLitres` empty proves the demo
-    // branch ran; `orderLitres` still '200' proves the guard tripped
-    // FIRST (before the demo path or any real TFN call).
-    Volt::actingAs(fuelInternal())
-        ->test('admin.fuel')
-        ->set('orderRegistration', 'PLATELESSVIN0001')
-        ->set('orderProductCode', 'D0')
-        ->set('orderLitres', '200')
-        ->set('orderExpiresAt', now()->addDay()->format('Y-m-d\TH:i'))
-        ->call('placeOrder')
-        ->assertHasNoErrors()
-        ->assertSet('orderLitres', '200');  // unchanged -> guard tripped
-});
-
-test('the fuel-order form accepts a vehicle when its driver carries a trade plate', function () {
-    // The default fixtures include an Isuzu NQR500 with no permanent
-    // plate but a driver trade plate ("TPJHB011") -- exactly the
-    // new-from-plant case the guard exists to enable.  The demo
-    // path flashes a "(Demo) Order placed" success, which is what
-    // we assert to prove the guard did NOT trip.
-    // Contract: the demo path runs and resets orderLitres.  The
-    // symmetric proof to the guard test above.
-    Volt::actingAs(fuelInternal())
-        ->test('admin.fuel')
-        ->set('orderRegistration', 'ACVWR75LTG213611')  // Isuzu VIN, plateless, driver trade plate TPJHB011
-        ->set('orderProductCode', 'D0')
-        ->set('orderLitres', '180')
-        ->set('orderExpiresAt', now()->addDay()->format('Y-m-d\TH:i'))
-        ->call('placeOrder')
-        ->assertHasNoErrors()
-        ->assertSet('orderLitres', '');  // reset means the demo path ran
-});
 
 // -----------------------------------------------------------------
 // 3. Reconciler: falls back to the driver's trade plate when a

@@ -544,6 +544,26 @@ new #[Layout('components.layouts.app')] class extends Component {
     @endphp
 
     <div class="space-y-6">
+        {{-- House rules banner (2026-09-30 staff request): make the "one
+             address per customer" convention explicit + point ops at the
+             Clean-up button they might otherwise miss.  Hidden during the
+             ?return= deep-link edit so the banner doesn't crowd a focused
+             single-row task. --}}
+        @unless($isDeepLinkEdit)
+        <div class="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3">
+            <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                <div class="flex items-start gap-2 text-sm text-blue-900">
+                    <svg class="mt-0.5 h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+                    <div class="space-y-0.5">
+                        <p><strong>One address per customer</strong> &mdash; each dealership / OEM branch keeps a single row here that every booking reuses.</p>
+                        <p>If an address is no longer in use, <strong>archive</strong> it (button on each row) rather than delete &mdash; historical orders keep pointing at the row and stay readable, and archived addresses drop out of the new-booking address pickers.</p>
+                        <p>Bulk-import rows without full details or accidental duplicates land in <strong>Clean up</strong> (right) &mdash; fix incomplete addresses there or merge duplicates without breaking any linked orders.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+        @endunless
+
         {{-- Deep-link Back banner: only shown when we arrived from another
              page via ?return=.  Sits at the very top so ops can bail out
              at any moment without hunting for a link. --}}
@@ -585,12 +605,13 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <button wire:click="openCleanup('incomplete')"
                         wire:loading.attr="disabled"
                         wire:target="openCleanup"
-                        class="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition disabled:opacity-60">
+                        title="Fix incomplete address-book entries or merge duplicates without breaking linked orders."
+                        class="inline-flex items-center gap-1.5 rounded-lg border px-4 py-2 text-sm font-semibold transition disabled:opacity-60 {{ $incompleteCount > 0 ? 'border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100' : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50' }}">
                     <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>
                     <span wire:loading.remove wire:target="openCleanup">Clean up</span>
                     <span wire:loading wire:target="openCleanup">Opening…</span>
                     @if($incompleteCount > 0)
-                        <span class="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800">{{ $incompleteCount }}</span>
+                        <span class="inline-flex items-center rounded-full bg-amber-200 px-2 py-0.5 text-[10px] font-semibold text-amber-900">{{ $incompleteCount }}</span>
                     @endif
                 </button>
                 <button wire:click="$toggle('showAddForm')"
@@ -964,14 +985,17 @@ new #[Layout('components.layouts.app')] class extends Component {
                                     @if($loc->is_active)
                                         <span class="inline-flex items-center rounded-full bg-green-50 px-2 py-0.5 text-xs font-medium text-green-700">Active</span>
                                     @else
-                                        <span class="inline-flex items-center rounded-full bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700">Inactive</span>
+                                        <span class="inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700" title="Archived — hidden from new-booking address pickers, historical orders still show it as booked">Archived</span>
                                     @endif
                                 </td>
                                 <td class="px-4 py-3 text-right">
                                     <div class="flex items-center justify-end gap-2">
                                         <button wire:click="startEdit({{ $loc->id }})" class="text-sm text-blue-600 hover:text-blue-800 font-medium">Edit</button>
-                                        <button wire:click="toggle({{ $loc->id }})" class="text-sm {{ $loc->is_active ? 'text-red-600 hover:text-red-800' : 'text-green-600 hover:text-green-800' }} font-medium">
-                                            {{ $loc->is_active ? 'Disable' : 'Enable' }}
+                                        <button
+                                            wire:click="toggle({{ $loc->id }})"
+                                            title="{{ $loc->is_active ? 'Archive this address so it disappears from new-order pickers. Historical orders keep it.' : 'Restore this address so it re-appears in address pickers.' }}"
+                                            class="text-sm {{ $loc->is_active ? 'text-amber-600 hover:text-amber-800' : 'text-green-600 hover:text-green-800' }} font-medium">
+                                            {{ $loc->is_active ? 'Archive' : 'Restore' }}
                                         </button>
                                     </div>
                                 </td>

@@ -269,27 +269,10 @@ test('transactions are attached to the correct fleet row by VehicleRegistration 
     expect($occurrences)->toBeLessThanOrEqual(2);
 });
 
-test('vehicle picker filter attribute exists on every option (typeahead ready)', function () {
-    $vehicles = [
-        ['Registration' => 'AGH818GP', 'FleetNumber' => 'FUEL',     'TankSize' => 1000, 'Status' => 3],
-        ['Registration' => 'MR44JRGP', 'FleetNumber' => '',         'TankSize' => 100,  'Status' => 3],
-    ];
-
-    $fake = fakeTfnClient(compact('vehicles'));
-    app()->instance(TfnClient::class, $fake);
-
-    $u = User::factory()->create(['is_active' => true]);
-    $u->assignRole('operations_controller');
-
-    $body = $this->actingAs($u)->get('/admin/fuel')->assertOk()->getContent();
-
-    // Every option carries a lower-case searchable haystack.
-    expect($body)->toContain('data-search-label="agh818gp fuel"');
-    expect($body)->toContain('data-search-label="mr44jrgp"');
-
-    // The typeahead input exists.
-    expect($body)->toContain('Filter by plate, customer, VIN, driver, fleet number');
-});
+// The vehicle-picker typeahead test was removed 2026-09-30 (staff
+// request): the "Place a TFN order" form the typeahead lived inside
+// was removed from /admin/fuel.  The remaining fleet-grid regressions
+// below still exercise the read-only vehicle table.
 
 test('litres MTD includes recent fills that fell off TFN month-start 100-row page', function () {
     // Reproduce the production stuck-MTD: SubAccountAggregateLitres is

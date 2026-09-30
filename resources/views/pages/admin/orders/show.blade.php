@@ -10,6 +10,7 @@ use App\Models\TollPlaza;
 use App\Models\Trip;
 use App\Models\User;
 use App\Services\AuditService;
+use App\Services\GeocodingService;
 use App\Services\Tfn\Exceptions\TfnException;
 use App\Services\Tfn\TfnFuelOrderService;
 use App\Services\TripCostEstimator;
@@ -187,6 +188,44 @@ new #[Layout('components.layouts.app')] class extends Component {
     // the same plaza re-applies on every future trip of this
     // (pickup, delivery) pair.  See addTollGate() / removeTollGate().
     public ?int $advanceAddPlazaId = null;
+
+    /*
+     * Petty-cash address gate.
+     *
+     * When pickup or delivery has no lat/lng, the estimator returns
+     * status=missing_coords and tolls can't be computed.  Rather than
+     * bouncing ops to Settings -> Locations, the advance modal now
+     * hosts an inline Google Maps lookup: type -> debounced geocode ->
+     * click a suggestion -> lat/lng writes back to the shared Location
+     * (fixing every future trip using it).
+     *
+     * The override ("can't find it") is a last resort:
+     *  - hidden until ops has actually attempted a lookup that
+     *    returned zero matches, OR explicitly clicked "Skip lookup"
+     *  - requires a >= 15-char reason that isn't obvious junk
+     *  - lands in the audit log as advance_address_override_used with
+     *    lookup_attempts so the owner can spot lazy patterns
+     */
+    public string $advanceAddressPickupInput = '';
+    public string $advanceAddressDeliveryInput = '';
+    public array $advanceAddressPickupSuggestions = [];
+    public array $advanceAddressDeliverySuggestions = [];
+    // Attempt counters (bumped on every lookup call, whether user-typed
+    // or auto-primed).  Gates the override reveal: > 0 with empty
+    // suggestions is Google saying "no match", which is the moment we
+    // let ops give up.
+    public int $advanceAddressPickupAttempts = 0;
+    public int $advanceAddressDeliveryAttempts = 0;
+    // "Skip lookup" clicked -- explicit user intent to abandon the
+    // search even before Google returns zero.  Rare, but the escape
+    // hatch has to exist for the "I already know it's not on maps" case.
+    public bool $advanceOverrideRevealed = false;
+    public bool $advanceForceAddressOverride = false;
+    public string $advanceAddressOverrideReason = '';
+    // Which side was just geocoded (pickup / delivery / both) -- powers
+    // the transient green "Address pinned" confirmation block.  Set by
+    // pick*AddressSuggestion(), cleared on modal close / save.
+    public ?string $advanceAddressJustGeocoded = null;
 
     /**
      * Snapshot of THIS page's URL taken at mount() time, so the six
@@ -903,6 +942,28 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         $this->advanceTollResult = $estimator->estimateTolls($this->job, $this->advanceTollClassOverride);
 
+        // Address gate: reset any leftover scratch state, then -- if the
+        // estimator reports missing coords -- seed each input with the
+        // existing address text and auto-fire one lookup for the side(s)
+        // that need it, so ops opens the modal and already sees a Google
+        // suggestion list waiting to be picked.  Zero-click "correct
+        // data entry": no button hunt, no dead first frame.
+        $this->resetAdvanceAddressGateState();
+        if (($this->advanceTollResult['status'] ?? null) === 'missing_coords') {
+            if ($this->advanceTollResult['missing_pickup_coords'] ?? false) {
+                $this->advanceAddressPickupInput = (string) ($this->job->pickupLocation?->address
+                    ?: $this->job->pickupLocation?->company_name
+                    ?: '');
+                $this->lookupPickupAddress();
+            }
+            if ($this->advanceTollResult['missing_delivery_coords'] ?? false) {
+                $this->advanceAddressDeliveryInput = (string) ($this->job->deliveryLocation?->address
+                    ?: $this->job->deliveryLocation?->company_name
+                    ?: '');
+                $this->lookupDeliveryAddress();
+            }
+        }
+
         // Taxi: opt-in.  If this trip had taxi previously enabled keep
         // it on (and keep the saved value); if it's a fresh trip start
         // unticked (R0) so ops makes a deliberate choice.
@@ -932,6 +993,174 @@ new #[Layout('components.layouts.app')] class extends Component {
     public function closeAdvancePanel(): void
     {
         $this->showAdvancePanel = false;
+        $this->resetAdvanceAddressGateState();
+    }
+
+    /**
+     * Wipe the address-gate scratch state.  Called on modal close and
+     * after a successful save so the next open starts clean -- ops
+     * shouldn't see stale suggestions from the previous trip, and the
+     * override reveal / attempt counters must not leak across trips.
+     */
+    private function resetAdvanceAddressGateState(): void
+    {
+        $this->advanceAddressPickupInput = '';
+        $this->advanceAddressDeliveryInput = '';
+        $this->advanceAddressPickupSuggestions = [];
+        $this->advanceAddressDeliverySuggestions = [];
+        $this->advanceAddressPickupAttempts = 0;
+        $this->advanceAddressDeliveryAttempts = 0;
+        $this->advanceOverrideRevealed = false;
+        $this->advanceForceAddressOverride = false;
+        $this->advanceAddressOverrideReason = '';
+        $this->advanceAddressJustGeocoded = null;
+    }
+
+    /**
+     * Fire Google's geocoding API for the pickup input and stash the
+     * suggestion pills.  Bumps the attempt counter every time so the
+     * override reveal logic knows "ops actually tried" -- even the
+     * auto-prime call on modal open counts, which is deliberate: an
+     * auto-prime that returns zero results is the fastest evidence
+     * that the operator can't sensibly find this address.
+     *
+     * Empty query short-circuits to no suggestions so typing then
+     * clearing doesn't spam Google with a blank request; the attempt
+     * still counts because the ops chose to submit nothing.
+     */
+    public function lookupPickupAddress(): void
+    {
+        $q = trim($this->advanceAddressPickupInput);
+        $this->advanceAddressPickupAttempts++;
+        $this->advanceAddressPickupSuggestions = $q === ''
+            ? []
+            : GeocodingService::suggest($q, 5);
+    }
+
+    public function lookupDeliveryAddress(): void
+    {
+        $q = trim($this->advanceAddressDeliveryInput);
+        $this->advanceAddressDeliveryAttempts++;
+        $this->advanceAddressDeliverySuggestions = $q === ''
+            ? []
+            : GeocodingService::suggest($q, 5);
+    }
+
+    /**
+     * Livewire lifecycle hooks: fire on every debounced input change
+     * so ops sees candidates appear as they type -- no "Look up" button
+     * to hunt.  wire:model.live.debounce.600ms on the input is what
+     * drives the update; the hook does the actual geocode.
+     */
+    public function updatedAdvanceAddressPickupInput(): void
+    {
+        $this->lookupPickupAddress();
+    }
+
+    public function updatedAdvanceAddressDeliveryInput(): void
+    {
+        $this->lookupDeliveryAddress();
+    }
+
+    /**
+     * Commit one Google suggestion onto the pickup Location.  This is
+     * the "encourage correct data entry" primary path -- writing the
+     * chosen lat/lng, formatted address, city, province back to the
+     * SHARED Location means every future trip using this address gets
+     * the correction for free.  Re-runs the toll estimate so the modal
+     * shows the newly-computed plaza list immediately.
+     *
+     * before/after diff goes into the audit row so a bad geocode pick
+     * (wrong farm, wrong Randburg) is fully reversible from the log.
+     */
+    public function pickPickupAddressSuggestion(int $index, TripCostEstimator $estimator): void
+    {
+        if (!auth()->user()?->isInternal()) {
+            abort(403);
+        }
+        $pick = $this->advanceAddressPickupSuggestions[$index] ?? null;
+        if (!$pick || !$this->job->pickupLocation) {
+            return;
+        }
+        $location = $this->job->pickupLocation;
+        $before = $location->only(['address', 'city', 'province', 'latitude', 'longitude']);
+        $location->forceFill([
+            'address'   => (string) ($pick['formatted_address'] ?? $location->address),
+            'city'      => $pick['city']     ?? $location->city,
+            'province'  => $pick['province'] ?? $location->province,
+            'latitude'  => $pick['lat']  ?? null,
+            'longitude' => $pick['lng']  ?? null,
+        ])->save();
+
+        $this->job->refresh()->load(['pickupLocation', 'deliveryLocation']);
+        $this->advanceTollResult = $estimator->estimateTolls($this->job, $this->advanceTollClassOverride);
+        $this->advanceAddressPickupSuggestions = [];
+        $this->advanceAddressPickupInput = (string) $location->address;
+        $this->advanceAddressJustGeocoded = $this->composeGeocodedLabel('pickup');
+
+        AuditService::log('advance_address_geocoded', 'location', $location->id, $before, [
+            'via' => 'advance_modal',
+            'side' => 'pickup',
+            'job_id' => $this->job->id,
+            'formatted_address' => $pick['formatted_address'] ?? null,
+            'lat' => $pick['lat'] ?? null,
+            'lng' => $pick['lng'] ?? null,
+        ]);
+    }
+
+    public function pickDeliveryAddressSuggestion(int $index, TripCostEstimator $estimator): void
+    {
+        if (!auth()->user()?->isInternal()) {
+            abort(403);
+        }
+        $pick = $this->advanceAddressDeliverySuggestions[$index] ?? null;
+        if (!$pick || !$this->job->deliveryLocation) {
+            return;
+        }
+        $location = $this->job->deliveryLocation;
+        $before = $location->only(['address', 'city', 'province', 'latitude', 'longitude']);
+        $location->forceFill([
+            'address'   => (string) ($pick['formatted_address'] ?? $location->address),
+            'city'      => $pick['city']     ?? $location->city,
+            'province'  => $pick['province'] ?? $location->province,
+            'latitude'  => $pick['lat']  ?? null,
+            'longitude' => $pick['lng']  ?? null,
+        ])->save();
+
+        $this->job->refresh()->load(['pickupLocation', 'deliveryLocation']);
+        $this->advanceTollResult = $estimator->estimateTolls($this->job, $this->advanceTollClassOverride);
+        $this->advanceAddressDeliverySuggestions = [];
+        $this->advanceAddressDeliveryInput = (string) $location->address;
+        $this->advanceAddressJustGeocoded = $this->composeGeocodedLabel('delivery');
+
+        AuditService::log('advance_address_geocoded', 'location', $location->id, $before, [
+            'via' => 'advance_modal',
+            'side' => 'delivery',
+            'job_id' => $this->job->id,
+            'formatted_address' => $pick['formatted_address'] ?? null,
+            'lat' => $pick['lat'] ?? null,
+            'lng' => $pick['lng'] ?? null,
+        ]);
+    }
+
+    /**
+     * Human-readable label for the green "Address pinned" confirmation.
+     * If BOTH sides were fixed in one modal session, show a combined
+     * label so ops sees the double win.  Otherwise fall back to the
+     * company_name of whichever side was just picked.
+     */
+    private function composeGeocodedLabel(string $sideJustFixed): string
+    {
+        $pickupCoords = $this->job->pickupLocation && $this->job->pickupLocation->latitude && $this->job->pickupLocation->longitude;
+        $deliveryCoords = $this->job->deliveryLocation && $this->job->deliveryLocation->latitude && $this->job->deliveryLocation->longitude;
+
+        if ($pickupCoords && $deliveryCoords) {
+            $pickupName = $this->job->pickupLocation->company_name ?: 'pickup';
+            $deliveryName = $this->job->deliveryLocation->company_name ?: 'delivery';
+            return $pickupName . ' -> ' . $deliveryName;
+        }
+        $side = $sideJustFixed === 'pickup' ? $this->job->pickupLocation : $this->job->deliveryLocation;
+        return (string) ($side?->company_name ?: ('this ' . $sideJustFixed));
     }
 
     /**
@@ -1112,7 +1341,34 @@ new #[Layout('components.layouts.app')] class extends Component {
             'advanceCustomItems.*.label'     => 'nullable|string|max:120',
             'advanceCustomItems.*.amount'    => 'nullable|numeric|min:0|max:1000000',
             'advanceCustomItems.*.needs_slip'=> 'boolean',
+            'advanceAddressOverrideReason'   => 'nullable|string|max:300',
         ]);
+
+        // Address gate.  If the estimator still reports missing coords
+        // at save time, block until either (a) ops has picked a
+        // suggestion above -- which would have flipped the status to
+        // 'ok' -- or (b) ops has ticked the "can't find it" override
+        // AND supplied a substantive reason.  The junk-reason regex
+        // (n/a, none, test, ------, ...) blocks obvious lazy overrides
+        // so the audit log stays useful.
+        if (($this->advanceTollResult['status'] ?? null) === 'missing_coords') {
+            if (!$this->advanceForceAddressOverride) {
+                $this->addError('advanceAddressOverrideReason',
+                    'Pickup or delivery has no coordinates. Pick a Google Maps suggestion above — that will fix it here and for every future trip using this address.');
+                return;
+            }
+            $reason = trim($this->advanceAddressOverrideReason);
+            if (mb_strlen($reason) < 15) {
+                $this->addError('advanceAddressOverrideReason',
+                    'Please explain in at least 15 characters — the owner reviews these overrides.');
+                return;
+            }
+            if (preg_match('/^(n\/?a|none|test|\.+|-+)$/i', $reason)) {
+                $this->addError('advanceAddressOverrideReason',
+                    'Give a real reason (e.g. "customer only supplied a pin", "new farm, no street name yet").');
+                return;
+            }
+        }
 
         // Was this job already issued?  If so the audit trail demands a
         // reason for the change so the owner can see why ops touched
@@ -1254,6 +1510,30 @@ new #[Layout('components.layouts.app')] class extends Component {
             );
         }
 
+        // Record the "address force override" separately -- this is
+        // the "I couldn't find it on Google Maps" escape hatch from the
+        // address gate at the top of this method.  Payload carries the
+        // lookup_attempts counter so the owner can spot patterns like
+        // "ops routinely overrides without ever trying Google" versus
+        // genuine "tried five times, no match".
+        if (($this->advanceTollResult['status'] ?? null) === 'missing_coords' && $this->advanceForceAddressOverride) {
+            AuditService::log(
+                'advance_address_override_used',
+                'job',
+                $this->job->id,
+                null,
+                [
+                    'missing_pickup'       => (bool) ($this->advanceTollResult['missing_pickup_coords'] ?? false),
+                    'missing_delivery'     => (bool) ($this->advanceTollResult['missing_delivery_coords'] ?? false),
+                    'pickup_location_id'   => $this->job->pickup_location_id,
+                    'delivery_location_id' => $this->job->delivery_location_id,
+                    'lookup_attempts'      => $this->advanceAddressPickupAttempts + $this->advanceAddressDeliveryAttempts,
+                    'amount'               => (float) $total,
+                ],
+                trim($this->advanceAddressOverrideReason),
+            );
+        }
+
         // The audit row carries both the diff AND the change reason
         // (when present).  action_type distinguishes the first issue
         // from a re-issue so the boss can filter on "edits" specifically.
@@ -1331,6 +1611,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         ]);
 
         $this->showAdvancePanel = false;
+        $this->resetAdvanceAddressGateState();
         session()->flash('success', 'Driver advance saved: R ' . number_format($total, 2) . ($planLabel ? ' · added to ' . $planLabel : '') . '.');
     }
 
@@ -4621,6 +4902,25 @@ new #[Layout('components.layouts.app')] class extends Component {
                     </div>
 
                     @if($advanceTollResult['status'] === 'ok')
+                        {{-- Positive reinforcement.  Shows only right after
+                             an address was successfully pinned via the
+                             inline Google Maps lookup below -- so ops
+                             sees the win of doing it correctly (tolls
+                             now compute, and every future trip using
+                             this address is fixed for free). --}}
+                        @if($advanceAddressJustGeocoded)
+                            <div class="mb-3 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs text-emerald-900 flex items-start gap-2">
+                                <svg class="mt-0.5 h-4 w-4 shrink-0 text-emerald-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
+                                <div>
+                                    <p class="font-semibold">Address pinned.</p>
+                                    <p class="text-[11px] text-emerald-800/80">
+                                        Tolls now compute automatically for this trip and every future one using
+                                        <strong>{{ $advanceAddressJustGeocoded }}</strong>.
+                                    </p>
+                                </div>
+                            </div>
+                        @endif
+
                         @php
                             $rememberedHint = $job->model_name ? \App\Models\ModelTollClassHint::classFor($job->model_name) : null;
                         @endphp
@@ -4739,24 +5039,104 @@ new #[Layout('components.layouts.app')] class extends Component {
                                 </span>
                             </div>
                         @endif
+                    @elseif(($advanceTollResult['status'] ?? '') === 'missing_coords')
+                        {{-- Address gate.  The primary path is a
+                             prominent inline Google Maps lookup that
+                             auto-fires as ops types; picking a
+                             suggestion writes coords back to the shared
+                             Location (fixing every future trip too).
+                             The override ("can't find it") is hidden
+                             until ops has actually attempted a lookup
+                             that returned zero matches OR they
+                             explicitly clicked "Skip lookup".  See
+                             resetAdvanceAddressGateState() and the
+                             lookup/pick methods in the Volt component
+                             above for the wiring. --}}
+                        <div class="rounded-lg border border-amber-300 bg-amber-50 px-3 py-3 text-xs text-amber-900 space-y-3">
+                            <div class="flex items-start gap-2">
+                                <svg class="mt-0.5 h-4 w-4 shrink-0 text-amber-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+                                <div>
+                                    <p class="font-semibold">Pin this address on Google Maps to compute tolls.</p>
+                                    <p class="text-[11px] text-amber-800/80">Fixing it here also fixes every future trip using this address.</p>
+                                </div>
+                            </div>
+
+                            @if($advanceTollResult['missing_pickup_coords'] ?? false)
+                                @include('pages.admin.orders._partials.advance-address-lookup', [
+                                    'which' => 'pickup',
+                                    'label' => 'Pickup — ' . ($job->pickupLocation?->company_name ?? '—'),
+                                    'input' => 'advanceAddressPickupInput',
+                                    'suggestions' => $advanceAddressPickupSuggestions,
+                                    'lookupAttempts' => $advanceAddressPickupAttempts,
+                                    'pickAction' => 'pickPickupAddressSuggestion',
+                                ])
+                            @endif
+
+                            @if($advanceTollResult['missing_delivery_coords'] ?? false)
+                                @include('pages.admin.orders._partials.advance-address-lookup', [
+                                    'which' => 'delivery',
+                                    'label' => 'Delivery — ' . ($job->deliveryLocation?->company_name ?? '—'),
+                                    'input' => 'advanceAddressDeliveryInput',
+                                    'suggestions' => $advanceAddressDeliverySuggestions,
+                                    'lookupAttempts' => $advanceAddressDeliveryAttempts,
+                                    'pickAction' => 'pickDeliveryAddressSuggestion',
+                                ])
+                            @endif
+
+                            @php
+                                // Override reveal logic.  Two triggers:
+                                //  (a) at least one attempted lookup on
+                                //      a side that still needs coords
+                                //      came back with zero suggestions
+                                //      -- Google agrees it's not
+                                //      findable; give ops the escape
+                                //      hatch.
+                                //  (b) ops explicitly clicked "Skip
+                                //      lookup" -- for the "I already
+                                //      know it's not on maps" case.
+                                $missingPickup = (bool) ($advanceTollResult['missing_pickup_coords'] ?? false);
+                                $missingDelivery = (bool) ($advanceTollResult['missing_delivery_coords'] ?? false);
+                                $pickupZeroed = $missingPickup && $advanceAddressPickupAttempts > 0 && empty($advanceAddressPickupSuggestions);
+                                $deliveryZeroed = $missingDelivery && $advanceAddressDeliveryAttempts > 0 && empty($advanceAddressDeliverySuggestions);
+                                $showOverrideZone = $pickupZeroed || $deliveryZeroed || $advanceOverrideRevealed;
+                            @endphp
+
+                            @if(!$showOverrideZone)
+                                <div>
+                                    <button type="button" wire:click="$set('advanceOverrideRevealed', true)"
+                                            class="text-[11px] italic text-amber-800/80 hover:text-amber-900 underline underline-offset-2">
+                                        Really can't find it? Skip the lookup…
+                                    </button>
+                                </div>
+                            @else
+                                <div class="border-t border-amber-200 pt-2 space-y-2">
+                                    <label class="flex items-start gap-2 cursor-pointer">
+                                        <input type="checkbox"
+                                               wire:model.live="advanceForceAddressOverride"
+                                               class="mt-0.5 rounded border-amber-400 text-amber-700 focus:ring-amber-500">
+                                        <span class="text-[11px] leading-snug">
+                                            <strong>Can't find it on Google Maps.</strong>
+                                            Save without geocoded addresses — tolls won't auto-compute and the owner will see this override in the audit log.
+                                        </span>
+                                    </label>
+                                    @if($advanceForceAddressOverride)
+                                        <textarea wire:model.live.debounce.400ms="advanceAddressOverrideReason"
+                                                  rows="2" maxlength="300"
+                                                  placeholder="Reason (min 15 chars) — e.g. new farm gate, customer only supplied a pin, address does not exist yet"
+                                                  class="w-full rounded border border-amber-400 bg-white px-2 py-1.5 text-xs focus:border-amber-500 focus:ring-amber-500 focus:ring-1"></textarea>
+                                        <p class="text-[10px] text-amber-800/70">
+                                            {{ mb_strlen(trim($advanceAddressOverrideReason)) }}/15 characters minimum.
+                                        </p>
+                                        @error('advanceAddressOverrideReason')
+                                            <p class="text-[11px] text-rose-700 font-semibold">{{ $message }}</p>
+                                        @enderror
+                                    @endif
+                                </div>
+                            @endif
+                        </div>
                     @else
                         <div class="rounded-lg bg-amber-50 border border-amber-200 px-3 py-3 text-xs text-amber-800 space-y-1">
                             <p>{{ $advanceTollResult['message'] }}</p>
-                            @if(($advanceTollResult['status'] ?? '') === 'missing_coords')
-                                <p class="text-[11px] text-amber-700/80">
-                                    Fix from the address book:
-                                    @if($advanceTollResult['missing_pickup_coords'] ?? false)
-                                        <a href="{{ route('admin.settings.locations', ['focus' => $advanceTollResult['pickup_location_id'] ?? '', 'return' => $backUrl]) }}" class="font-semibold underline hover:no-underline">Edit pickup ({{ $job->pickupLocation?->company_name }})</a>
-                                    @endif
-                                    @if(($advanceTollResult['missing_pickup_coords'] ?? false) && ($advanceTollResult['missing_delivery_coords'] ?? false))
-                                        ·
-                                    @endif
-                                    @if($advanceTollResult['missing_delivery_coords'] ?? false)
-                                        <a href="{{ route('admin.settings.locations', ['focus' => $advanceTollResult['delivery_location_id'] ?? '', 'return' => $backUrl]) }}" class="font-semibold underline hover:no-underline">Edit delivery ({{ $job->deliveryLocation?->company_name }})</a>
-                                    @endif
-                                </p>
-                                <p class="text-[10px] text-amber-700/70">Or run <code class="bg-amber-100 px-1 rounded">php artisan locations:geocode</code> on the server to backfill all in one shot.</p>
-                            @endif
                         </div>
                     @endif
 

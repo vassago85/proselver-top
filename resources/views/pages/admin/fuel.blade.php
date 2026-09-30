@@ -4,24 +4,28 @@ use App\Models\TfnFuelOrderPlacement;
 use App\Services\Tfn\Exceptions\TfnException;
 use App\Services\Tfn\TfnClient;
 use App\Services\Tfn\TfnDemoFixtures;
-use App\Services\Tfn\TfnFuelOrderService;
 use Illuminate\Support\Carbon;
 use Livewire\Attributes\Defer;
 use Livewire\Attributes\Layout;
-use Livewire\Attributes\Url;
 use Livewire\Volt\Component;
 
 /**
- * TFN Fuel Operations — single-screen ops + diesel ordering.
+ * TFN Fuel Operations — single-screen ops read-out.
  *
- * Everything an ops controller needs to run a shift against the TFN
- * network in one page:
+ * A read-only dashboard of the TFN account so ops + finance can see what
+ * is happening on the network without leaving TRIDENT:
  *   - Balance / credit / month-to-date litres headline
  *   - Live diesel product pricing
- *   - Place a pre-authorisation order for a specific vehicle
  *   - Recent transactions (from the pump)
- *   - Vehicles with their current virtual card numbers + expiries
- *   - Open pre-authorisation orders (with cancel)
+ *   - Vehicles with open TRIDENT-placed pre-auths + virtual card numbers
+ *   - Recently closed / utilised orders (historical audit)
+ *
+ * Placing new pre-authorisations from this page was removed on staff
+ * request (2026-09-30): ops asked for read-only visibility and for the
+ * ordering flow to be routed elsewhere. The TFN API integration
+ * (`TfnClient`, `TfnFuelOrderService`, `TfnFuelOrderPlacement`) stays
+ * intact so future features (e.g. auto-populating FAW export fuel
+ * columns from network transactions) can still call it.
  *
  * When TFN credentials are absent (or TFN_DEMO_MODE=true) the page reads
  * from `TfnDemoFixtures` so it's fully demonstrable to non-technical
@@ -47,25 +51,6 @@ use Livewire\Volt\Component;
 // on hydrate so the follow-up XHR always runs.
 new #[Layout('components.layouts.app')] #[Defer] class extends Component {
 
-    // Form state for placing an order.  Kept as public properties (not
-    // wire:model.live) so an accidental Enter mid-typing doesn't fire
-    // the request -- the operator explicitly hits "Place Order".
-    //
-    // `orderRegistration` + `orderReference` are URL-bound so any
-    // "Order fuel" deep-link (from the vehicles list, dispatch, trip
-    // detail, etc.) lands here with the form pre-filled. Query keys
-    // are shortened to `vehicle` and `ref` so the URL is human-
-    // readable when it appears in email / Slack / bookmarks.
-    #[Url(as: 'vehicle', except: '')] public string $orderRegistration = '';
-    // Proselver's policy is 50ppm only, and `tfn.orderable_products`
-    // currently contains just D0. Default matches -- if the config
-    // grows we take whichever code is listed first.
-    public string $orderProductCode  = 'D0';
-    public string $orderLitres       = '';
-    public string $orderDepotId      = '';
-    public string $orderExpiresAt    = '';
-    #[Url(as: 'ref', except: '')]     public string $orderReference    = '';
-
     // Filter state for the recent-transactions table.
     public string $txWindow = '24h'; // '24h' | '7d' | '30d'
 
@@ -82,12 +67,11 @@ new #[Layout('components.layouts.app')] #[Defer] class extends Component {
     public ?string $loadError = null;
 
     // Per-request memoization for source().  Volt calls this from
-    // with() (the render path) and again from any Livewire action
-    // that inspects the current vehicle list (placeOrder,
-    // autoPopulateOrderReference, ...).  Without a cache each of
-    // those repeated calls would trigger a fresh sweep of upstream
-    // TFN reads -- on a 1000+ vehicle account that means dozens of
-    // extra sequential HTTP round trips per page render.
+    // with() (the render path) and any Livewire action that inspects
+    // the current vehicle list.  Without a cache repeated calls would
+    // each trigger a fresh sweep of upstream TFN reads -- on a 1000+
+    // vehicle account that means dozens of extra sequential HTTP
+    // round trips per page render.
     private ?array $sourceCache = null;
 
     /**
@@ -170,32 +154,22 @@ new #[Layout('components.layouts.app')] #[Defer] class extends Component {
     {
         // Only internal staff (ops controller, dispatcher, accounts,
         // owner, developer, super admin) should see fuel operations --
-        // customers and dealers must never land here.
+        // customers and dealers must never land here.  The sidebar link
+        // is separately hidden from ops/dispatch per staff request, but
+        // the route stays reachable for owner / developer / accounts
+        // via direct URL.
         if (!auth()->user()?->isInternal() && !auth()->user()?->isDeveloper()) {
             abort(403);
         }
-
-        // Sensible default: order expires end of the fourth day (SAST).
-        // Matches the standard ProSelver ops window Lize uses today for
-        // Lize-style drive-away trips (Beaufort West -> Cape Town leg,
-        // FAW HO -> dealer, etc. -- every real ORD/01/2951/* order on
-        // the account is a four-day window).  Operator can override
-        // before submit.
-        $this->orderExpiresAt = now()->addDays(4)->endOfDay()->format('Y-m-d\TH:i');
     }
 
     /**
      * Whether the current viewer is allowed to see fuel FINANCE data --
      * running balance, credit limit, total spend, per-transaction and
-     * per-order rand amounts.  Ops (controller / dispatcher) should be
-     * able to place pre-authorisation orders without being able to see
-     * the aggregate spend or the account balance -- that stays owner
-     * territory.
-     *
-     * The per-order rand estimate on the place-order form is a
-     * separate concern and stays visible to everyone: it's the cost
-     * of the specific action the operator is about to authorise,
-     * not an aggregate.
+     * per-order rand amounts.  Ops (controller / dispatcher) see the
+     * operational surface (litres, transactions, fleet) without the
+     * aggregate spend or account balance -- that stays owner /
+     * accounts / developer territory.
      */
     public function canSeeFinance(): bool
     {
@@ -508,18 +482,6 @@ new #[Layout('components.layouts.app')] #[Defer] class extends Component {
         session()->flash('success', 'TFN data refreshed.');
     }
 
-    /**
-     * Clear the order form without touching connection state.
-     */
-    public function clearOrderForm(): void
-    {
-        $this->reset(['orderRegistration', 'orderLitres', 'orderReference', 'orderDepotId']);
-        // Reset the product to the first orderable code (D0 today).
-        $this->orderProductCode = (string) (array_key_first(config('tfn.orderable_products', ['D0' => ''])) ?: 'D0');
-        // Match mount()'s four-day default.
-        $this->orderExpiresAt = now()->addDays(4)->endOfDay()->format('Y-m-d\TH:i');
-    }
-
     public function testConnection(): void
     {
         $client = app(TfnClient::class);
@@ -542,333 +504,15 @@ new #[Layout('components.layouts.app')] #[Defer] class extends Component {
         $this->txWindow = in_array($w, ['24h', '7d', '30d'], true) ? $w : '24h';
     }
 
-    public function selectVehicleForOrder(string $registration): void
-    {
-        $this->orderRegistration = $registration;
-        $this->autoPopulateOrderReference();
-    }
-
-    /**
-     * Fires when the operator changes the vehicle in the picker.  We
-     * only use it to auto-populate the Reference field so the form
-     * matches the ProSelver ops convention seen on every real order
-     * against `01/2951` -- see also autoPopulateOrderReference() below.
-     */
-    public function updatedOrderRegistration(): void
-    {
-        $this->autoPopulateOrderReference();
-    }
-
-    /**
-     * Fill in `orderReference` with the "{delivery-or-origin} {VIN}"
-     * pattern ProSelver ops (Lize) uses on every real TFN order today:
-     *
-     *   ISUZU HO ACVNRR75LTN218468
-     *   BIDVEST ISUZU PTA EAST ACVFRR90LTN212673
-     *   FAW HO AAK3534FDTB051552
-     *   WILLIAM HUNT MIDRAND ACVBRRAR0T4209229
-     *
-     * That reference is what feeds ProSelver's month-end reconciliation,
-     * so TRIDENT-placed orders MUST land in the same list looking like
-     * Lize's manual orders or accounts will have two shapes to chase.
-     *
-     * The rule:
-     *   - Never overwrite an existing reference (operator override wins).
-     *   - Prefer a matching in-transit Job's delivery company + VIN.
-     *   - Fall back to fixture data (CustomerName + VIN) so demo mode
-     *     shows a realistic reference for stakeholder walk-throughs.
-     */
-    private function autoPopulateOrderReference(): void
-    {
-        if (!blank($this->orderReference)) {
-            return;
-        }
-        if (blank($this->orderRegistration)) {
-            return;
-        }
-
-        $ref = $this->deriveReferenceFromJob($this->orderRegistration)
-            ?? $this->deriveReferenceFromVehicleFixture($this->orderRegistration);
-
-        if (!blank($ref)) {
-            $this->orderReference = $ref;
-        }
-    }
-
-    /**
-     * Look up a live trip in TRIDENT by whichever identifier the
-     * picker holds (VIN, permanent plate, or driver trade plate) and
-     * emit the ProSelver "{DELIVERY COMPANY} {VIN}" reference for it.
-     */
-    private function deriveReferenceFromJob(string $key): ?string
-    {
-        $canonicalPlate = \App\Models\DriverProfile::normalisePlate($key);
-
-        $job = \App\Models\Job::query()
-            ->with('deliveryLocation:id,company_name')
-            ->where(function ($q) use ($key, $canonicalPlate) {
-                $q->where('vin', $key)
-                  ->orWhere('registration', $key);
-                if (!blank($canonicalPlate)) {
-                    $q->orWhereHas('driver.driverProfile', fn ($qq) => $qq->where('trade_plate', $canonicalPlate));
-                }
-            })
-            // Prefer in-flight trips -- historical ones are noise for
-            // the "place an order" workflow.
-            ->whereIn('status', [
-                \App\Models\Job::STATUS_CONFIRMED,
-                \App\Models\Job::STATUS_PLANNED,
-                \App\Models\Job::STATUS_DRIVER_ASSIGNED,
-                \App\Models\Job::STATUS_READY_FOR_COLLECTION,
-                \App\Models\Job::STATUS_COLLECTED,
-                \App\Models\Job::STATUS_IN_TRANSIT,
-            ])
-            ->orderByDesc('id')
-            ->first();
-
-        if (!$job) {
-            return null;
-        }
-
-        $company = trim((string) ($job->deliveryLocation?->company_name ?? ''));
-        $vin     = trim((string) ($job->vin ?? ''));
-
-        return $this->formatReference($company, $vin);
-    }
-
-    /**
-     * Fallback used when there's no matching Job yet (demo mode, or a
-     * TFN vehicle that arrived on the picker before its Job was
-     * captured in TRIDENT).  Reads from whatever source() already put
-     * in memory -- fixture in demo, TfnClient::vehicles() in live.
-     */
-    private function deriveReferenceFromVehicleFixture(string $key): ?string
-    {
-        $vehicles = $this->source()['vehicles'] ?? [];
-        $veh = collect($vehicles)->firstWhere('VIN', $key)
-            ?? collect($vehicles)->firstWhere('Registration', $key);
-        if (!$veh) {
-            return null;
-        }
-        $company = trim((string) ($veh['CustomerName'] ?? ''));
-        $vin     = trim((string) ($veh['VIN'] ?? ''));
-
-        return $this->formatReference($company, $vin);
-    }
-
-    private function formatReference(string $company, string $vin): ?string
-    {
-        $ref = trim(($company !== '' ? $company . ' ' : '') . $vin);
-        return $ref !== '' ? strtoupper($ref) : null;
-    }
-
-    /**
-     * Best-effort resolve of the driver cellphone TFN should SMS the
-     * voucher to.  Looks up the same in-flight Job the reference
-     * derivation uses; if the trip has an assigned driver we hand
-     * back their phone (User.phone wins, DriverProfile.cellphone is
-     * the fallback -- same rule the Issue-to-Driver modal uses).
-     * Returns an empty string when nothing usable is found; the
-     * service just leaves DriverCellNumber blank and TFN skips SMS.
-     */
-    private function driverCellFor(string $key): string
-    {
-        if ($key === '') {
-            return '';
-        }
-        $canonicalPlate = \App\Models\DriverProfile::normalisePlate($key);
-
-        $job = \App\Models\Job::query()
-            ->with(['driver:id,name,phone', 'driver.driverProfile:id,user_id,cellphone'])
-            ->where(function ($q) use ($key, $canonicalPlate) {
-                $q->where('vin', $key)
-                  ->orWhere('registration', $key);
-                if (!blank($canonicalPlate)) {
-                    $q->orWhereHas('driver.driverProfile', fn ($qq) => $qq->where('trade_plate', $canonicalPlate));
-                }
-            })
-            ->whereIn('status', [
-                \App\Models\Job::STATUS_CONFIRMED,
-                \App\Models\Job::STATUS_PLANNED,
-                \App\Models\Job::STATUS_DRIVER_ASSIGNED,
-                \App\Models\Job::STATUS_READY_FOR_COLLECTION,
-                \App\Models\Job::STATUS_COLLECTED,
-                \App\Models\Job::STATUS_IN_TRANSIT,
-            ])
-            ->orderByDesc('id')
-            ->first();
-
-        return (string) (
-            $job?->driver?->phone
-            ?: $job?->driver?->driverProfile?->cellphone
-            ?: ''
-        );
-    }
-
-    /**
-     * Look up the POS registration for the selected vehicle.  This is
-     * the string TFN puts on every transaction and rejects when blank
-     * or non-alphanumeric -- so we must never send the VIN (which is
-     * what the picker's option value used to hold).
-     *
-     * Rule per TFN + Sikelela (2026-08-28):
-     *   1. If the vehicle has a permanent plate, use it.
-     *   2. Else use the assigned driver's trade plate for this trip.
-     *   3. Else there is no valid registration -- refuse to submit.
-     *
-     * The picker binds `orderRegistration` to a *vehicle key* (VIN
-     * where present, permanent plate otherwise) rather than the POS
-     * registration directly, because a human can identify the vehicle
-     * by its VIN even when the plate belongs to a driver they don't
-     * remember off the top of their head.
-     */
-    private function posRegistrationFor(string $vehicleKey, array $vehicles): ?string
-    {
-        if ($vehicleKey === '') {
-            return null;
-        }
-        $veh = collect($vehicles)->firstWhere('VIN', $vehicleKey)
-            ?? collect($vehicles)->firstWhere('Registration', $vehicleKey)
-            ?? collect($vehicles)->firstWhere('PosRegistration', $vehicleKey);
-        if (!$veh) {
-            return null;
-        }
-        // Prefer the vehicle's own permanent plate; fall back to the
-        // driver's trade plate.  Both are already normalised (upper /
-        // no spaces) by their models on save, but strip defensively in
-        // case the API surface hands us a raw string from elsewhere.
-        $reg = $veh['Registration'] ?? null;
-        if (!blank($reg)) {
-            return \App\Models\DriverProfile::normalisePlate($reg);
-        }
-        $trade = $veh['DriverTradePlate'] ?? null;
-        return blank($trade) ? null : \App\Models\DriverProfile::normalisePlate($trade);
-    }
-
-    /**
-     * Client-side validation only -- TFN does its own business rules
-     * server-side and will 400 with a helpful Message field if the
-     * order breaches the sub-account's limits.
-     */
-    public function placeOrder(): void
-    {
-        $litres = (float) $this->orderLitres;
-
-        if (blank($this->orderRegistration)) {
-            session()->flash('error', 'Pick a vehicle before placing an order.');
-            return;
-        }
-        if (!isset(config('tfn.orderable_products')[$this->orderProductCode])) {
-            session()->flash('error', 'Choose a valid product.');
-            return;
-        }
-
-        $isOvernight = $this->isOvernightProduct();
-        if ($isOvernight) {
-            if ($litres < 1 || $litres > 14) {
-                session()->flash('error', 'Nights must be between 1 and 14.');
-                return;
-            }
-        } elseif ($litres <= 0 || $litres > 2000) {
-            session()->flash('error', 'Litres must be between 1 and 2000.');
-            return;
-        }
-        if (blank($this->orderExpiresAt) || Carbon::parse($this->orderExpiresAt)->isPast()) {
-            session()->flash('error', 'Order expiry must be in the future.');
-            return;
-        }
-
-        // Resolve the string TFN expects on VehicleRegistration.  VINs
-        // are not accepted (Sikelela 2026-08-28) -- so this must be a
-        // permanent plate or the assigned driver's trade plate.
-        $vehicles = $this->source()['vehicles'] ?? [];
-        $posRegistration = $this->posRegistrationFor($this->orderRegistration, $vehicles);
-
-        if (blank($posRegistration)) {
-            session()->flash(
-                'error',
-                'This vehicle has no permanent plate and no driver trade plate on record. '
-                . 'Assign a driver with a trade plate before placing an order — TFN needs a '
-                . 'registration string on every transaction.'
-            );
-            return;
-        }
-
-        // TFN payload build, live/demo dispatch, and local "placed by"
-        // audit are handled by TfnFuelOrderService so the order-show
-        // page can place through the same code path.  We keep the
-        // UI-level validation (litres range, expiry-in-future, product
-        // allow-list, POS-registration guard) here because those are
-        // Volt-form concerns; the service assumes valid inputs.
-        $validEnd   = Carbon::parse($this->orderExpiresAt);
-        $reference  = $this->orderReference ?: '';
-        $driverCell = $this->driverCellFor($this->orderRegistration);
-        $service    = app(TfnFuelOrderService::class);
-
-        try {
-            $result = $service->place(
-                posRegistration: $posRegistration,
-                productCode: $this->orderProductCode,
-                allocation: $litres,
-                expiresAt: $validEnd,
-                customerReference: $reference,
-                driverCellNumber: $driverCell,
-            );
-        } catch (TfnException $e) {
-            // TfnClient::createOrder surfaces TFN's Message field when
-            // the server returns a non-Successful ValidationResult, so
-            // we don't double-prefix -- just show what TFN said.
-            session()->flash('error', $e->getMessage());
-            return;
-        }
-
-        // Speak like ops: "Diesel order placed" beats "Order placed: D0".
-        $productLabel = $isOvernight ? 'Overnight stay' : 'Diesel';
-        $quantity     = $isOvernight
-            ? ((int) $litres) . ' night' . ((int) $litres === 1 ? '' : 's')
-            : ((int) $litres) . ' L';
-        $orderText    = $result['order_number'] !== '' ? sprintf(' (%s)', $result['order_number']) : '';
-        $prefix       = $result['demo'] ? '(Demo) ' : '';
-
-        // TFN returned the voucher code the driver punches into the
-        // pump.  Read it back in the flash so ops can pass it on the
-        // phone right away if the driver is standing at the pump --
-        // the SMS is a fallback, not a hard dependency.
-        $voucher    = (string) ($result['voucher_number'] ?? '');
-        $voucherNote = $voucher !== '' ? ' Voucher: ' . $voucher . '.' : '';
-
-        // TFN sends a voucher SMS to DriverCellNumber when populated.
-        // Surface where it's going so ops can double-check before the
-        // driver phones back asking for the code.
-        if (filled($driverCell)) {
-            $smsNote = $result['demo']
-                ? ' TFN would also SMS it to ' . $driverCell . '.'
-                : ' TFN will also SMS it to the driver on ' . $driverCell . '.';
-        } else {
-            $smsNote = ' No driver cellphone on file — read the voucher above to the driver directly.';
-        }
-
-        session()->flash('success', sprintf(
-            '%s%s order placed%s: %s against %s.%s%s',
-            $prefix,
-            $productLabel,
-            $orderText,
-            $quantity,
-            $posRegistration,
-            $voucherNote,
-            $smsNote,
-        ));
-
-        $this->reset(['orderLitres', 'orderReference']);
-    }
-
-    /**
-     * Overnight stay (OS) uses MaxAllocation as nights, not litres.
-     */
-    public function isOvernightProduct(?string $code = null): bool
-    {
-        return strtoupper((string) ($code ?? $this->orderProductCode)) === 'OS';
-    }
+    // ── The "Place a TFN order" form was removed 2026-09-30 per staff
+    //    request; ops asked for a read-only fuel view.  The associated
+    //    Livewire methods (placeOrder / cancelOrderEntry /
+    //    autoPopulateOrderReference / driverCellFor / posRegistrationFor
+    //    / …) were deleted here.  TfnFuelOrderService and the API
+    //    integration stay intact for future features (e.g. filling FAW
+    //    export fuel columns from network transactions).  If ordering
+    //    is re-enabled, restore from git history at the commit
+    //    predating the "staff request changes" branch.
 
     /**
      * Order numbers TRIDENT has itself placed (local audit).  Used to
@@ -887,21 +531,6 @@ new #[Layout('components.layouts.app')] #[Defer] class extends Component {
             ->filter()
             ->values()
             ->all();
-    }
-
-    public function cancelOrderEntry(string $entryNumber): void
-    {
-        $client = app(TfnClient::class);
-        if (!$client->isLive()) {
-            session()->flash('success', "(Demo) Order entry {$entryNumber} cancelled.");
-            return;
-        }
-        try {
-            $client->deleteOrderEntry($entryNumber);
-            session()->flash('success', "Order entry {$entryNumber} cancelled.");
-        } catch (TfnException $e) {
-            session()->flash('error', 'Could not cancel order: ' . $e->getMessage());
-        }
     }
 
     /**
@@ -1800,12 +1429,15 @@ new #[Layout('components.layouts.app')] #[Defer] class extends Component {
             $priceByDepotProduct[($p['DepotTitle'] ?? '').'|'.$p['ProductCode']] = (float) ($p['PricePerLitre'] ?? 0);
         }
     @endphp
-    <div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        <div class="rounded-xl border border-slate-200 bg-white shadow-sm lg:col-span-1">
-            <div class="border-b border-slate-100 p-4">
-                <h2 class="text-sm font-semibold text-slate-900">Network pricing</h2>
-                <p class="mt-0.5 text-xs text-slate-500">South Africa by province first (cheapest depot in each), then cross-border. Few trips leave SA &mdash; scroll past provinces only when needed.</p>
-            </div>
+    {{-- ────────── Live pricing ──────────
+         The "Place a TFN order" card that used to occupy the second
+         two-thirds of this row was removed on 2026-09-30 per staff
+         request.  Pricing now spans the full row on its own. --}}
+    <div class="rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div class="border-b border-slate-100 p-4">
+            <h2 class="text-sm font-semibold text-slate-900">Network pricing</h2>
+            <p class="mt-0.5 text-xs text-slate-500">South Africa by province first (cheapest depot in each), then cross-border. Few trips leave SA &mdash; scroll past provinces only when needed.</p>
+        </div>
 
             {{-- Range headline per product code (usually just D0) --}}
             @foreach($pricingByProduct as $code => $rows)
@@ -1875,290 +1507,11 @@ new #[Layout('components.layouts.app')] #[Defer] class extends Component {
             </div>
         </div>
 
-        <div class="rounded-xl border border-slate-200 bg-white shadow-sm lg:col-span-2">
-            <div class="border-b border-slate-100 p-4">
-                <div class="flex items-center gap-2">
-                    <svg class="h-4 w-4 text-slate-500" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3h5l2 2v14a2 2 0 0 1-2 2h-5"/><path d="M9 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h4"/><path d="M12 3v18"/><path d="M12 12l3-3"/><path d="M12 12l-3-3"/></svg>
-                    <h2 class="text-sm font-semibold text-slate-900">Place a TFN order</h2>
-                </div>
-                <p class="mt-0.5 text-xs text-slate-500">Pre-authorises diesel at the pump or an overnight stay against a vehicle. The order is burnt down when the driver fuels or checks in.</p>
-            </div>
-
-            <form wire:submit="placeOrder" class="grid grid-cols-1 gap-4 p-4 sm:grid-cols-2">
-                <div class="sm:col-span-2" x-data="{
-                    q: '',
-                    filter() {
-                        const needle = this.q.trim().toLowerCase();
-                        let shown = 0;
-                        Array.from(this.$refs.sel.options).forEach(o => {
-                            if (!o.dataset.searchLabel) return; // keep the placeholder
-                            const match = needle === '' || o.dataset.searchLabel.indexOf(needle) !== -1;
-                            o.hidden = !match;
-                            if (match) shown++;
-                        });
-                        this.$refs.count.textContent = needle === ''
-                            ? (this.$refs.sel.options.length - 1) + ' vehicles'
-                            : shown + ' of ' + (this.$refs.sel.options.length - 1) + ' vehicles';
-                    }
-                }" x-init="filter()">
-                    <div class="mb-1 flex items-baseline justify-between">
-                        <label class="block text-xs font-medium text-slate-700">Vehicle in transit</label>
-                        <span class="text-[10px] text-slate-400" x-ref="count"></span>
-                    </div>
-                    <input type="text" x-model.debounce.100ms="q" @input="filter()" placeholder="Filter by plate, customer, VIN, driver, fleet number..." class="mb-2 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500" />
-                    {{-- Real TFN accounts hold 1000+ vehicles; the select
-                         still contains all of them for placing orders on
-                         cold plates, but options with `hidden` are hidden
-                         from the drop-down by the Alpine filter above. --}}
-                    <select wire:model="orderRegistration" x-ref="sel" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500">
-                        <option value="">— Select a vehicle —</option>
-                        @foreach($vehicles as $v)
-                            @php
-                                // Option value: demo fixtures carry VIN; real
-                                // TFN vehicles carry only Registration.  Guard
-                                // both -- an unguarded $v['VIN'] read on real
-                                // payloads was the original /admin/fuel 500.
-                                $optValue = !empty($v['VIN']) ? $v['VIN'] : ($v['Registration'] ?? '');
-                                // Searchable haystack (all lowercase, all the
-                                // fields an operator might type).  Kept in a
-                                // data attribute so the Alpine filter can grep
-                                // it without touching the visible option text.
-                                $haystack = strtolower(implode(' ', array_filter([
-                                    $v['CustomerName'] ?? null,
-                                    $v['Brand'] ?? null,
-                                    $v['Model'] ?? null,
-                                    $v['VIN'] ?? null,
-                                    $v['Registration'] ?? null,
-                                    $v['DriverTradePlate'] ?? null,
-                                    $v['DriverName'] ?? null,
-                                    $v['ExternalNumber'] ?? null,
-                                    $v['FleetNumber'] ?? null,
-                                ])));
-                            @endphp
-                            <option value="{{ $optValue }}" data-search-label="{{ $haystack }}">
-                                @if(!empty($v['CustomerName'])){{ $v['CustomerName'] }} · @endif{{ trim(($v['Brand'] ?? '').' '.($v['Model'] ?? '')) ?: ($v['FleetNumber'] ?? 'Unknown model') }}
-                                @if(!empty($v['VIN'])) · VIN {{ $v['VIN'] }} @endif
-                                @if(!empty($v['Registration']))
-                                    · plate {{ $v['Registration'] }}
-                                @elseif(!empty($v['DriverTradePlate']))
-                                    · trade plate {{ $v['DriverTradePlate'] }}
-                                @else
-                                    · no registration
-                                @endif
-                                @if(!empty($v['DriverName'])) · {{ $v['DriverName'] }} @endif
-                                @if(!empty($v['ExternalNumber'])) · {{ $v['ExternalNumber'] }} @endif
-                                @if(!empty($v['TankSize'])) · {{ $v['TankSize'] }} L tank @endif
-                            </option>
-                        @endforeach
-                    </select>
-                    <p class="mt-1 text-[10px] text-slate-500">TFN authorises against a registration, not a VIN. When the vehicle has no permanent plate we use the driver's trade plate for the drive-away leg &mdash; if neither is on file, the order is refused before it hits TFN.</p>
-                </div>
-
-                <div>
-                    <label class="mb-1 block text-xs font-medium text-slate-700">Product</label>
-                    <select wire:model.live="orderProductCode" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500">
-                        @foreach($orderableProducts as $code => $label)
-                            <option value="{{ $code }}">{{ $code }} — {{ $label }}</option>
-                        @endforeach
-                    </select>
-                </div>
-
-                <div>
-                    @php $orderingOvernight = $this->isOvernightProduct($orderProductCode); @endphp
-                    <label class="mb-1 block text-xs font-medium text-slate-700">
-                        @if($orderingOvernight)
-                            Nights
-                        @else
-                            Litres
-                            @php
-                                // Show a tank-size hint next to the input when
-                                // we actually know it. Customer trucks off the
-                                // plant often have no tank spec on the delivery
-                                // note -- in that case we don't guess.
-                                $selectedVehicle = collect($vehicles)->firstWhere('VIN', $orderRegistration)
-                                    ?? collect($vehicles)->firstWhere('Registration', $orderRegistration);
-                                $knownTank = $selectedVehicle['TankSize'] ?? null;
-                            @endphp
-                            @if($knownTank)
-                                <span class="text-[10px] font-normal text-slate-400">· tank {{ $knownTank }} L</span>
-                            @elseif($orderRegistration)
-                                <span class="text-[10px] font-normal text-slate-400">· tank size unknown &mdash; confirm with the driver</span>
-                            @endif
-                        @endif
-                    </label>
-                    <input
-                        wire:model.live.debounce.300ms="orderLitres"
-                        type="number"
-                        min="1"
-                        max="{{ $orderingOvernight ? 14 : 2000 }}"
-                        step="1"
-                        placeholder="{{ $orderingOvernight ? 'e.g. 1' : 'e.g. 400' }}"
-                        class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm tabular-nums focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-                    />
-                    @php
-                        $productPrices = collect($pricing)->where('ProductCode', $orderProductCode);
-                        $selectedDepot = collect($depots)->firstWhere('DepotID', $orderDepotId);
-                        $selectedDepotTitle = $selectedDepot['Title'] ?? null;
-                        $depotPrice = $selectedDepotTitle
-                            ? ($priceByDepotProduct[$selectedDepotTitle.'|'.$orderProductCode] ?? null)
-                            : null;
-                        $networkAvg = $productPrices->avg('PricePerLitre') ?? 0;
-                        $selectedPrice = $depotPrice ?? $networkAvg;
-                        $priceSource = $depotPrice ? 'at '.$selectedDepotTitle : 'network avg';
-                        $estimated = ((float) $orderLitres) * (float) $selectedPrice;
-                    @endphp
-                    @if($orderingOvernight)
-                        <p class="mt-1 text-xs text-slate-500">
-                            @if($selectedPrice > 0)
-                                At R {{ number_format((float) $selectedPrice, 2) }}/night <span class="text-slate-400">({{ $priceSource }})</span>, estimated total
-                                <span class="font-semibold text-slate-800 tabular-nums">R {{ number_format($estimated, 2) }}</span>
-                            @else
-                                Overnight fee is confirmed at check-in &mdash; MaxAllocation is the number of nights authorised.
-                            @endif
-                        </p>
-                    @else
-                        <p class="mt-1 text-xs text-slate-500">
-                            At R {{ number_format((float) $selectedPrice, 2) }}/L <span class="text-slate-400">({{ $priceSource }})</span>, estimated total
-                            <span class="font-semibold text-slate-800 tabular-nums">R {{ number_format($estimated, 2) }}</span>
-                        </p>
-                    @endif
-                </div>
-
-                <div>
-                    <label class="mb-1 block text-xs font-medium text-slate-700">Preferred depot <span class="text-slate-400">(optional)</span></label>
-                    <select wire:model="orderDepotId" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500">
-                        <option value="">Any TFN depot</option>
-                        @foreach($depots as $d)
-                            <option value="{{ $d['DepotID'] ?? $d['Number'] ?? '' }}">
-                                {{ $d['Title'] ?? 'Depot' }} @if(!empty($d['Number'])) · #{{ $d['Number'] }} @endif
-                            </option>
-                        @endforeach
-                    </select>
-                </div>
-
-                <div>
-                    <label class="mb-1 block text-xs font-medium text-slate-700">Expires at</label>
-                    <input wire:model="orderExpiresAt" type="datetime-local" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500" />
-                </div>
-
-                <div class="sm:col-span-2">
-                    <label class="mb-1 block text-xs font-medium text-slate-700">Trip / Job reference <span class="text-slate-400">(optional but recommended)</span></label>
-                    <input wire:model="orderReference" type="text" placeholder="e.g. TRIP-JHB-DBN-0812 or job number" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500" />
-                    <p class="mt-1 text-xs text-slate-500">Stored as the order reference so the resulting transaction reconciles cleanly to a Trident trip.</p>
-                </div>
-
-                <div class="sm:col-span-2 flex items-center justify-end gap-2 border-t border-slate-100 pt-4">
-                    <button type="button" wire:click="clearOrderForm" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Clear</button>
-                    <button type="submit" wire:loading.attr="disabled" class="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 disabled:opacity-50">
-                        <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
-                        Place order
-                    </button>
-                </div>
-            </form>
-        </div>
-    </div>
-
-    {{-- ────────── Open pre-authorisation orders ────────── --}}
-    <div class="rounded-xl border border-slate-200 bg-white shadow-sm">
-        <div class="flex items-center justify-between border-b border-slate-100 p-4">
-            <div>
-                <h2 class="text-sm font-semibold text-slate-900">Open pre-authorisation orders</h2>
-                <p class="mt-0.5 text-xs text-slate-500">TRIDENT-placed pre-approvals awaiting the pump. Cancel any order that's no longer valid. Portal-only TFN orders are omitted.</p>
-            </div>
-            <span class="inline-flex items-center rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-medium text-blue-700 ring-1 ring-inset ring-blue-600/20">{{ count($openOrders) }} open</span>
-        </div>
-
-        <div class="overflow-x-auto">
-            <table class="min-w-full divide-y divide-slate-200">
-                <thead class="bg-slate-50">
-                    <tr>
-                        <th class="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Order #</th>
-                        <th class="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Customer</th>
-                        <th class="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">VIN</th>
-                        <th class="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Reg</th>
-                        <th class="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Product</th>
-                        <th class="px-4 py-2.5 text-right text-[11px] font-semibold uppercase tracking-wider text-slate-500">Litres</th>
-                        @if($canSeeFinance)
-                            <th class="px-4 py-2.5 text-right text-[11px] font-semibold uppercase tracking-wider text-slate-500">Amount</th>
-                        @endif
-                        <th class="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Depot</th>
-                        <th class="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Placed</th>
-                        <th class="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Placed by</th>
-                        <th class="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Expires</th>
-                        <th class="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Job #</th>
-                        <th class="px-4 py-2.5 text-right text-[11px] font-semibold uppercase tracking-wider text-slate-500">Actions</th>
-                    </tr>
-                </thead>
-                <tbody class="divide-y divide-slate-100">
-                    @forelse($openOrders as $o)
-                        @php
-                            // Substring match so full OEM names (e.g.
-                            // "Isuzu Motors SA", "FAW South Africa")
-                            // still colour-code correctly.
-                            $customer = strtolower($o['CustomerName'] ?? '');
-                            $customerChip = match(true) {
-                                str_contains($customer, 'faw')       => 'bg-red-50 text-red-700 ring-red-600/20',
-                                str_contains($customer, 'isuzu')     => 'bg-sky-50 text-sky-700 ring-sky-600/20',
-                                str_contains($customer, 'powerstar') => 'bg-indigo-50 text-indigo-700 ring-indigo-600/20',
-                                default                              => 'bg-slate-100 text-slate-700 ring-slate-300',
-                            };
-                            // Short label so "FAW South Africa" fits
-                            // the small chip; full name goes in the
-                            // tooltip.
-                            $customerShort = match(true) {
-                                str_contains($customer, 'faw')       => 'FAW',
-                                str_contains($customer, 'isuzu')     => 'Isuzu',
-                                str_contains($customer, 'powerstar') => 'Powerstar',
-                                default                              => $o['CustomerName'] ?? '',
-                            };
-                        @endphp
-                        <tr class="hover:bg-slate-50/50">
-                            <td class="px-4 py-3 text-sm font-mono text-slate-900">{{ $o['OrderNumber'] ?? '—' }}</td>
-                            <td class="px-4 py-3">
-                                @if(!empty($o['CustomerName']))
-                                    <span class="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ring-1 ring-inset {{ $customerChip }}" title="{{ $o['CustomerName'] }}">{{ $customerShort }}</span>
-                                @else
-                                    <span class="text-slate-400 text-xs">—</span>
-                                @endif
-                            </td>
-                            <td class="px-4 py-3 font-mono text-[11px] text-slate-600">{{ $o['VIN'] ?? '—' }}</td>
-                            <td class="px-4 py-3">
-                                @if(!empty($o['VehicleRegistration']))
-                                    <span class="inline-flex rounded bg-yellow-100 border border-yellow-300 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-yellow-900">{{ $o['VehicleRegistration'] }}</span>
-                                @else
-                                    <span class="text-[11px] italic text-slate-400">no plate</span>
-                                @endif
-                            </td>
-                            <td class="px-4 py-3 text-sm text-slate-700">{{ $o['ProductCode'] ?? '—' }} <span class="text-xs text-slate-400">· {{ $productLabels[$o['ProductCode'] ?? ''] ?? '' }}</span></td>
-                            <td class="px-4 py-3 text-right text-sm tabular-nums text-slate-900">
-                                @if(strtoupper((string) ($o['ProductCode'] ?? '')) === 'OS')
-                                    {{ number_format((float) ($o['Litres'] ?? 0)) }} night(s)
-                                @else
-                                    {{ number_format((float) ($o['Litres'] ?? 0)) }} L
-                                @endif
-                            </td>
-                            @if($canSeeFinance)
-                                <td class="px-4 py-3 text-right text-sm tabular-nums text-slate-900">R {{ number_format((float) ($o['Amount'] ?? 0), 2) }}</td>
-                            @endif
-                            <td class="px-4 py-3 text-sm text-slate-600">{{ $o['DepotTitle'] ?? 'Any' }}</td>
-                            <td class="px-4 py-3 text-xs text-slate-500">{{ \Illuminate\Support\Carbon::parse($o['PlacedAt'] ?? now())->format('d M · H:i') }}</td>
-                            <td class="px-4 py-3 text-xs text-slate-700">{{ $o['PlacedBy'] ?? '—' }}</td>
-                            <td class="px-4 py-3 text-xs text-slate-500">{{ \Illuminate\Support\Carbon::parse($o['ExpiresAt'] ?? now())->format('d M · H:i') }}</td>
-                            <td class="px-4 py-3 text-xs font-mono text-slate-500">{{ $o['Reference'] ?? '—' }}</td>
-                            <td class="px-4 py-3 text-right">
-                                <button wire:click="cancelOrderEntry('{{ $o['EntryNumber'] ?? '' }}')" wire:confirm="Cancel this pre-authorisation? The driver will not be able to fuel against it."
-                                        class="rounded-md border border-rose-200 bg-white px-2 py-1 text-xs font-medium text-rose-700 hover:bg-rose-50">
-                                    Cancel
-                                </button>
-                            </td>
-                        </tr>
-                    @empty
-                        <tr><td colspan="{{ $canSeeFinance ? 14 : 13 }}" class="px-4 py-8 text-center text-sm text-slate-500">No open pre-authorisations. Use the form above to place one.</td></tr>
-                    @endforelse
-                </tbody>
-            </table>
-        </div>
-    </div>
+    {{-- The "Place a TFN order" card and the "Open pre-authorisation
+         orders" table were removed 2026-09-30 (staff request).
+         Historical placements stay reachable via the "Recently closed
+         orders" section further down; TfnFuelOrderService is still
+         wired for future re-use. --}}
 
     {{-- ────────── Recent transactions ────────── --}}
     <div class="rounded-xl border border-slate-200 bg-white shadow-sm">
@@ -2329,7 +1682,6 @@ new #[Layout('components.layouts.app')] #[Defer] class extends Component {
                         <th class="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Card #</th>
                         <th class="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Card expires</th>
                         <th class="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Last transaction</th>
-                        <th class="px-4 py-2.5 text-right text-[11px] font-semibold uppercase tracking-wider text-slate-500">Actions</th>
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-slate-100">
@@ -2418,11 +1770,6 @@ new #[Layout('components.layouts.app')] #[Defer] class extends Component {
                                 @else
                                     <span class="text-slate-400">no recent activity</span>
                                 @endif
-                            </td>
-                            <td class="px-4 py-3 text-right">
-                                <button wire:click="selectVehicleForOrder('{{ $row['registration'] }}')" class="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50">
-                                    Order fuel
-                                </button>
                             </td>
                         </tr>
                     @endforeach

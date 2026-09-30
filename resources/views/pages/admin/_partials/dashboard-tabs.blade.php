@@ -9,7 +9,7 @@
     -- the conditions below mirror each component's mount() gate exactly,
     so we never tease a link that 403s.  Keep them in sync:
 
-        Operations  every internal role
+        Operations  owner, developer  (2026-09-30 staff-request cut)
         Finance     accounts, owner, developer, super admin, ops controller
         Owner       owner, developer
 
@@ -19,7 +19,11 @@
 @php
     $u = auth()->user();
 
-    $canSeeOps = (bool) $u?->isInternal();
+    // Ops dashboard was hidden from ops / dispatch / super_admin /
+    // accounts on 2026-09-30 (staff request); the roll-up numbers
+    // stayed for owner + developer oversight.  Ops staff land on
+    // /admin/orders instead -- see resolveInternalDashboardRoute().
+    $canSeeOps = $u && ($u->isOwner() || $u->isDeveloper());
     $canSeeFinance = $u && (
         $u->isAccounts()
         || $u->isOwner()

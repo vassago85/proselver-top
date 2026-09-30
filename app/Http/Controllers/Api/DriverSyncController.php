@@ -2,11 +2,13 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Exceptions\PodDiskUnavailableException;
 use App\Http\Controllers\Controller;
 use App\Models\Job;
 use App\Models\JobDocument;
 use App\Models\JobEvent;
 use App\Services\ImageNormalizer;
+use App\Services\PodStore;
 use App\Support\StorageDisk;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -145,6 +147,22 @@ class DriverSyncController extends Controller
         // The normaliser is defensive: on any failure it leaves the
         // original file alone so we never block a driver's upload.
         app(ImageNormalizer::class)->normalise($file);
+
+        if ($validated['category'] === JobDocument::CATEGORY_POD) {
+            try {
+                $doc = app(PodStore::class)->store($job, $file, $request->user(), [
+                    'client_uuid' => $validated['client_uuid'],
+                    'captured_at' => $validated['captured_at'] ?? null,
+                    'latitude' => $validated['latitude'] ?? null,
+                    'longitude' => $validated['longitude'] ?? null,
+                    'notes' => $validated['notes'] ?? null,
+                ]);
+            } catch (PodDiskUnavailableException $e) {
+                return response()->json(['error' => $e->getMessage()], 503);
+            }
+
+            return response()->json(['document' => $doc], 201);
+        }
 
         $disk = StorageDisk::forUploads();
         $path = $file->store('jobs/' . $job->uuid . '/documents', $disk);

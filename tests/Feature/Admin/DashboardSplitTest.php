@@ -125,18 +125,25 @@ test('developer lands on the owner command centre', function () {
         ->assertRedirect(route('admin.dashboard.owner'));
 });
 
-test('super admin lands on operations, not the owner command centre', function () {
+test('super admin lands on the orders index instead of the owner command centre', function () {
     // Owner is the business-oversight page; super_admin keeps every other
-    // admin surface but not that one, so their post-login home is Ops.
+    // admin surface but not that one.  Before the 2026-09-30 staff-
+    // request nav cut super_admin landed on the Operations dashboard;
+    // ops asked for that page to be hidden from them, so super_admin now
+    // lands on the Orders index (where a shift is actually run) just
+    // like operations_controller / dispatcher.
     $this->actingAs(dashUser('super_admin'))
         ->get('/admin/dashboard')
-        ->assertRedirect(route('admin.dashboard.ops'));
+        ->assertRedirect(route('admin.orders.index'));
 });
 
-test('operations roles land on the operations dashboard', function (string $slug) {
+test('operations roles land on the orders index (staff-request nav cut)', function (string $slug) {
+    // The Operations dashboard was hidden from ops / dispatch / super_
+    // admin on 2026-09-30 (staff request); their post-login home is
+    // now the Orders index where the shift actually runs.
     $this->actingAs(dashUser($slug))
         ->get('/admin/dashboard')
-        ->assertRedirect(route('admin.dashboard.ops'));
+        ->assertRedirect(route('admin.orders.index'));
 })->with(['operations_controller', 'dispatcher', 'ops_manager']);
 
 test('the resolver is the single source of truth for the post-login home', function () {
@@ -634,29 +641,33 @@ test('owner command centre reports the licence as off when metering is disabled'
 // -----------------------------------------------------------------
 
 test('the dashboard tab strip only offers dashboards the viewer can open', function () {
-    // Owner sees all three.
+    // Owner sees all three (they still have the Ops dash link post-cut).
     $this->actingAs(dashUser('owner'))
         ->get(route('admin.dashboard.owner'))
         ->assertSee(route('admin.dashboard.ops'))
         ->assertSee(route('admin.dashboard.finance'))
         ->assertSee(route('admin.dashboard.owner'));
 
-    // Accounts sees Operations + Finance but never the owner roll-up.
+    // Accounts sees Finance only.  Before the 2026-09-30 staff-request
+    // nav cut they also saw the Operations tab; ops asked for that
+    // dashboard to be hidden from every role except owner/developer.
     $this->actingAs(dashUser('accounts'))
         ->get(route('admin.dashboard.finance'))
         ->assertSee(route('admin.dashboard.finance'))
+        ->assertDontSee(route('admin.dashboard.ops'))
         ->assertDontSee(route('admin.dashboard.owner'));
 
-    // super_admin keeps every admin surface but not the owner command
-    // centre; the strip on Finance must not tease a link that would 403.
+    // super_admin lost the Ops-dash tab in the same 2026-09-30 cut
+    // (still has every other admin surface).  Finance remains reachable
+    // as a tab; Owner is business-oversight only.
     $this->actingAs(dashUser('super_admin'))
         ->get(route('admin.dashboard.finance'))
-        ->assertSee(route('admin.dashboard.ops'))
         ->assertSee(route('admin.dashboard.finance'))
+        ->assertDontSee(route('admin.dashboard.ops'))
         ->assertDontSee(route('admin.dashboard.owner'));
 });
 
-test('the finance pages are reachable via Petty Cash + Customer Invoicing (Phase 2 nav cut)', function () {
+test('the finance pages are reachable via Petty Cash + tab strip (Phase 3 nav cut)', function () {
     // Original intent: the cash pages and Driver Pay must not be buried --
     // they used to have no entry at all, only inline tabs.  Phase 1 of the
     // Finance regroup gave each its own sidebar entry.  Phase 2 of the
@@ -664,21 +675,27 @@ test('the finance pages are reachable via Petty Cash + Customer Invoicing (Phase
     // entry because they already share a tab strip (section-tabs partial);
     // three sibling sidebar entries duplicating the same tabs was noise.
     //
-    // This test now pins the shape we actually want to hold: from Finance
-    // (a page any accounts user can reach), the sidebar reveals Petty Cash
-    // and Customer Invoicing; opening Petty Cash reveals the tab strip
-    // that carries Overview / Reconciliation / Driver Pay.  Together they
-    // guarantee none of the finance pages are ever more than two clicks
-    // from the finance dashboard.
-    // From Finance you can reach Petty Cash and Customer Invoicing via the
-    // sidebar; the Cash Overview / Reconciliation / Driver Pay pages are
-    // also linked from the finance dashboard body (KPI cards + footers).
+    // Phase 3 (2026-09-30 staff request) pulled the Customer Invoicing
+    // sidebar entry from the Accounts view too: accounts capture invoices
+    // via Petty Cash -> Reconciliation, so the dedicated invoicing page
+    // is now owner/developer-only for the FAW-shaped Excel export.
+    //
+    // This test pins the shape we hold after Phase 3: from Finance an
+    // accounts user reaches Petty Cash via the sidebar; opening Petty
+    // Cash reveals the tab strip carrying Overview / Reconciliation /
+    // Driver Pay.  Customer Invoicing must NOT appear in the accounts
+    // sidebar even though the underlying route stays reachable by direct
+    // URL for owner/dev.
+    // Note: the finance dashboard *body* still links to
+    // admin.invoices.index for KPI drill-downs / unbilled rows / the
+    // header "Invoicing" button (rendered "Invoicing", not the sidebar
+    // label "Customer Invoicing").  Phase 3 removed the sidebar shortcut
+    // only, not the underlying route, so we assert on the sidebar label.
     $this->actingAs(dashUser('accounts'))
         ->get(route('admin.dashboard.finance'))
         ->assertSee(route('admin.petty-cash.index'))
-        ->assertSee(route('admin.invoices.index'))
         ->assertSee('Petty Cash')
-        ->assertSee('Customer Invoicing');
+        ->assertDontSee('Customer Invoicing');
 
     // From the Petty Cash queue the tab strip exposes the other three,
     // which is where they belong (they were already in the tab strip
@@ -691,6 +708,13 @@ test('the finance pages are reachable via Petty Cash + Customer Invoicing (Phase
         ->assertSee('Overview')
         ->assertSee('Reconciliation')
         ->assertSee('Driver pay');
+
+    // Owner keeps the Customer Invoicing sidebar entry -- they still need
+    // the FAW-shaped Excel export the page provides.
+    $this->actingAs(dashUser('owner'))
+        ->get(route('admin.dashboard.finance'))
+        ->assertSee(route('admin.invoices.index'))
+        ->assertSee('Customer Invoicing');
 });
 
 test('the sidebar hides the finance dashboard from a dispatcher', function () {

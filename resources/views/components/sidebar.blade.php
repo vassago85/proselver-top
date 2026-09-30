@@ -25,11 +25,24 @@
     // Owner command centre is business-oversight only: owner + developer.
     // super_admin keeps every other admin surface but not this one.
     $canSeeOwnerDash = $isOwner || $isDeveloper;
-    // Customer invoicing is the only Finance link that is per-role gated
-    // in the sidebar now; the Petty Cash tab strip handles the audience
-    // split for Overview / Reconciliation / Driver Pay inside the section
-    // (removed as sidebar duplicates in Phase 2 of the nav cut, 2026-08).
-    $canSeeInvoicing = $isAccounts || $isOwner || $isDeveloper;
+    // Operations dashboard: hidden from ops / dispatch / accounts /
+    // super_admin on staff request (2026-09-30) -- ops asked to land
+    // on Orders instead, and the roll-up numbers on the ops dash are
+    // owner/developer oversight rather than a shift-running screen.
+    // Route redirect in `resolveInternalDashboardRoute()` steers the
+    // hidden roles to /admin/orders after login.
+    $canSeeOpsDash = $isOwner || $isDeveloper;
+    // Customer invoicing sidebar link: owner/developer only (2026-09-30
+    // staff request).  Accounts used to see it too; the page/route
+    // stays reachable by direct URL for owner+dev so they can pull the
+    // FAW-shaped Excel export when needed.  Accounts do the invoicing
+    // capture from the Petty Cash → Reconciliation tab now.
+    $canSeeInvoicing = $isOwner || $isDeveloper;
+    // Fuel · TFN sidebar link: hidden from ops / dispatch (2026-09-30
+    // staff request).  The TFN feature stays wired for owner / dev /
+    // accounts (balances, pricing, transactions, historical orders);
+    // ordering was removed entirely from that page.
+    $canSeeFuelTfn = $isOwner || $isDeveloper || $isSuperAdmin || $isAccounts;
 
     // OEMs hold customer-tier roles for tenanting, so $isCustomer is true.
     // Treat the company type as the source of truth for the *portal* label
@@ -97,10 +110,12 @@
                 <li>
                     <p class="mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">Overview</p>
                     <ul role="list" class="space-y-0.5">
+                        @if($canSeeOpsDash)
                         <x-sidebar-link :href="route('admin.dashboard.ops')" :active="request()->routeIs('admin.dashboard.ops')">
                             <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg></x-slot:icon>
                             Operations
                         </x-sidebar-link>
+                        @endif
 
                         @if($canSeeFinanceDash)
                         <x-sidebar-link :href="route('admin.dashboard.finance')" :active="request()->routeIs('admin.dashboard.finance')">
@@ -209,17 +224,23 @@
                             <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg></x-slot:icon>
                             Damage Reports
                         </x-sidebar-link>
-                        {{-- TFN Fuel Operations — balances, live pricing, place
-                             diesel pre-auth orders, per-vehicle virtual card
-                             status, recent transactions.  Page's mount() is the
-                             source of truth on gating (internal + developer);
-                             we surface the link to every internal role so no
-                             one has to know the URL. Safe pre-go-live: page
-                             renders demo fixtures until TFN_ENABLED=true. --}}
+                        {{-- TFN Fuel Operations — balances, live pricing,
+                             per-vehicle virtual card status, recent
+                             transactions, historical pre-auth orders (read-
+                             only since the 2026-09-30 staff-request trim).
+                             Gated to owner / developer / super_admin /
+                             accounts by `$canSeeFuelTfn`; the page's
+                             `mount()` still enforces isInternal || isDev
+                             as the server-side guard, but sidebar-wise
+                             ops + dispatch no longer see the link.  Safe
+                             pre-go-live: page renders demo fixtures until
+                             TFN_ENABLED=true. --}}
+                        @if($canSeeFuelTfn)
                         <x-sidebar-link :href="route('admin.fuel')" :active="request()->routeIs('admin.fuel')">
                             <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 22V4a1 1 0 0 1 1-1h9a1 1 0 0 1 1 1v18"/><path d="M14 12h2a2 2 0 0 1 2 2v4a2 2 0 0 0 4 0V9l-3-3"/><path d="M3 22h11"/><path d="M6 14h5"/><path d="M6 18h5"/><path d="M6 10h5"/><path d="M6 6h5"/></svg></x-slot:icon>
                             Fuel &middot; TFN
                         </x-sidebar-link>
+                        @endif
                     </ul>
                 </li>
 

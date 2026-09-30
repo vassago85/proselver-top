@@ -11,27 +11,24 @@
 
 if (!function_exists('resolveInternalDashboardRoute')) {
     /**
-     * Which of the three internal dashboards a user belongs on.
+     * Which internal landing route a user gets after login.
      *
-     * The internal dashboard is split three ways -- Operations (live
-     * pipeline), Finance (invoicing / petty cash / driver pay) and the
-     * Owner roll-up.  Each internal role has one natural home:
+     * Historically split three ways -- Operations, Finance, Owner --
+     * with ops / dispatch / super_admin landing on Operations.  Since
+     * the 2026-09-30 staff-request nav cut, the Operations dashboard
+     * is hidden from ops / dispatch / super_admin / accounts and only
+     * owner + developer see it.  Ops staff asked to land on the
+     * Orders index instead, where they actually spend their shift.
      *
      *   accounts                     -> Finance
      *   owner / developer            -> Owner command centre
      *   super_admin / ops controller
-     *     / dispatcher               -> Operations
+     *     / dispatcher               -> Orders index (was Ops dash)
      *
      * This is the single source of truth: both the post-login redirect
      * and the /admin/dashboard compatibility route call it, so they can
      * never disagree.  Returns a route NAME, not a URL, so callers can
      * decide between route() and redirect()->route().
-     *
-     * super_admin used to land on the owner roll-up alongside owner and
-     * developer, but the Owner page is now a business-oversight surface
-     * (money, MTD spend, fuel credit, customer rankings) intentionally
-     * scoped to the business owner and the developer who maintains it.
-     * super_admin keeps full sidebar reach and lands on Operations.
      */
     function resolveInternalDashboardRoute($user): string
     {
@@ -50,7 +47,10 @@ if (!function_exists('resolveInternalDashboardRoute')) {
             return 'admin.dashboard.owner';
         }
 
-        return 'admin.dashboard.ops';
+        // Ops controller / dispatcher / super_admin -- their dashboard
+        // link was removed on 2026-09-30 (staff request); land them on
+        // Orders where they actually run their shift.
+        return 'admin.orders.index';
     }
 }
 

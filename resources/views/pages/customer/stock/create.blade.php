@@ -158,6 +158,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         // load when the user is going to pick just one.
         $bbLocations = $this->body_builder_company_id
             ? Location::where('company_id', $this->body_builder_company_id)
+                ->active()
                 ->orderBy('company_name')
                 ->get(['id', 'company_name', 'city'])
             : collect();
@@ -165,8 +166,13 @@ new #[Layout('components.layouts.app')] class extends Component {
         // Storage = any Location the dealer owns (their own branches /
         // yards).  Third-party storage facilities would need to be
         // added via the locations module first, same as for orders.
+        // Only active (non-archived) addresses -- archived rows stay
+        // linked to historical stock so the existing records read
+        // correctly, but they don't appear in this picker for new
+        // stock intake.
         $storageLocations = Location::query()
             ->where('company_id', $this->company->id)
+            ->active()
             ->orderBy('company_name')
             ->get(['id', 'company_name', 'city']);
 

@@ -65,6 +65,10 @@ services:
       # 500-ing on every upload. Flip to `r2` in .env once R2_* are set
       # and confirmed via `php artisan storage:check --disk=r2`.
       - FILESYSTEM_DISK=${FILESYSTEM_DISK:-local}
+      # POD files. Host folder (the extra mounted disk) is bind-mounted
+      # at /var/pods. Unset POD_STORAGE_HOST falls back to the pods-data
+      # volume so a deploy without the disk still boots.
+      - POD_STORAGE_PATH=/var/pods
       - R2_ACCESS_KEY_ID=${R2_ACCESS_KEY_ID:-}
       - R2_SECRET_ACCESS_KEY=${R2_SECRET_ACCESS_KEY:-}
       - R2_BUCKET=${R2_BUCKET:-}
@@ -104,6 +108,7 @@ services:
     volumes:
       - app-logs:/var/www/html/storage/logs
       - app-storage:/var/www/html/storage/app
+      - ${POD_STORAGE_HOST:-pods-data}:/var/pods
     ports:
       - "${APP_PORT:-8091}:80"
     networks:
@@ -177,6 +182,7 @@ services:
       - R2_BACKUP_BUCKET=${R2_BACKUP_BUCKET:-}
       - R2_BACKUP_ENDPOINT=${R2_BACKUP_ENDPOINT:-}
       - R2_BACKUP_REGION=${R2_BACKUP_REGION:-auto}
+      - POD_STORAGE_PATH=/var/pods
       # TFN — mirrors the app service.  Scheduler needs it for any
       # scheduled reconciliation / vehicle-list refresh commands we
       # add later (nothing today, but flipping this on now costs
@@ -196,6 +202,7 @@ services:
     volumes:
       - app-logs:/var/www/html/storage/logs
       - app-storage:/var/www/html/storage/app
+      - ${POD_STORAGE_HOST:-pods-data}:/var/pods
     networks:
       - proselver-network
     depends_on:
@@ -241,6 +248,7 @@ services:
       - MAIL_FROM_ADDRESS=${MAIL_FROM_ADDRESS:-noreply@tcdc.co.za}
       - MAIL_FROM_NAME=${MAIL_FROM_NAME:-TRIDENT Control & Dispatch Center}
       - FILESYSTEM_DISK=${FILESYSTEM_DISK:-local}
+      - POD_STORAGE_PATH=/var/pods
       - R2_ACCESS_KEY_ID=${R2_ACCESS_KEY_ID:-}
       - R2_SECRET_ACCESS_KEY=${R2_SECRET_ACCESS_KEY:-}
       - R2_BUCKET=${R2_BUCKET:-}
@@ -272,6 +280,7 @@ services:
     volumes:
       - app-logs:/var/www/html/storage/logs
       - app-storage:/var/www/html/storage/app
+      - ${POD_STORAGE_HOST:-pods-data}:/var/pods
     networks:
       - proselver-network
     depends_on:
@@ -289,5 +298,6 @@ networks:
 volumes:
   app-logs:
   app-storage:
+  pods-data:
   db-data:
   redis-data:

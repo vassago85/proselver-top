@@ -21,6 +21,14 @@ echo "Setting permissions..."
 chown -R www-data:www-data /var/www/html/storage /var/www/html/bootstrap/cache
 chmod -R 775 /var/www/html/storage /var/www/html/bootstrap/cache
 
+# POD files live on the extra disk, bind-mounted at /var/pods. Own the
+# mount root only — a recursive chown would walk every stored POD on boot.
+if [ -d /var/pods ]; then
+    echo "Preparing POD disk at /var/pods..."
+    chown www-data:www-data /var/pods 2>/dev/null || echo "POD disk at /var/pods could not be chowned; uploads may fail until www-data can write there."
+    chmod 775 /var/pods 2>/dev/null || true
+fi
+
 # Wait for Postgres so migrations don't fail on a cold start if the DB is
 # still coming up (service_healthy handles most cases; this is belt-and-braces).
 DB_HOST="${DB_HOST:-db}"

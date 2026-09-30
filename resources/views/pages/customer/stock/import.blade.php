@@ -173,12 +173,16 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         $bbLocations = $this->default_bb_company_id
             ? Location::where('company_id', $this->default_bb_company_id)
+                ->active()
                 ->orderBy('company_name')
                 ->get(['id', 'company_name', 'city'])
             : collect();
 
+        // Archived addresses drop out of stock-import pickers so bulk
+        // intake can't accidentally revive a decommissioned yard.
         $storageLocations = $dealer
             ? Location::where('company_id', $dealer->id)
+                ->active()
                 ->orderBy('company_name')
                 ->get(['id', 'company_name', 'city'])
             : collect();

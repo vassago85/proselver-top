@@ -42,10 +42,10 @@ test('/admin/fuel renders 200 for an operations controller in demo mode', functi
     $this->actingAs($u)
         ->get('/admin/fuel')
         ->assertOk()
-        // Real proof the demo data flowed through both fixtures and
-        // the flattener: at least one driver-trade-plate row lands in
-        // the picker / open-orders / transactions blocks.
-        ->assertSee('TPJHB011')
+        // Read-only surface anchors that survive the 2026-09-30 trim
+        // (Place-order form + Open pre-auth table removed).
+        ->assertSee('Network pricing')
+        ->assertSee('Recent transactions')
         // The banner about demo-mode config renders when TFN is off.
         ->assertSee('demo');
 });
@@ -91,10 +91,17 @@ test('/admin/fuel renders 200 when TFN returns real-shaped vehicles (no VIN fiel
     $u = User::factory()->create(['is_active' => true]);
     $u->assignRole('operations_controller');
 
+    // The regression this test guards is "the /admin/fuel page does
+    // NOT 500 when TFN returns vehicles without a VIN field".  Before
+    // the 2026-09-30 trim we anchored on `assertSee('ABC214EC')`
+    // because those regs landed inside the removed "Place a TFN
+    // order" vehicle picker.  With that picker gone, plain 200 is
+    // the surviving proof -- if any downstream consumer of $vehicles
+    // still walks $v['VIN'] unguarded, Laravel promotes the warning
+    // to a fatal and this assertOk() flips red.
     $this->actingAs($u)
         ->get('/admin/fuel')
-        ->assertOk()
-        ->assertSee('ABC214EC');
+        ->assertOk();
 });
 
 test('/admin/invoices renders 200 for accounts even when jobs have no driver', function () {

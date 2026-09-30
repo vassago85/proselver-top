@@ -222,13 +222,16 @@ test('resolveUserHomePath for a developer viewing as an OEM planner lands on the
     expect(resolveUserHomePath($dev))->toBe(route('customer.dashboard'));
 });
 
-test('resolveUserHomePath for a developer viewing as an ops controller lands on operations', function () {
+test('resolveUserHomePath for a developer viewing as an ops controller lands on the orders index', function () {
     // Internal-tier override still uses resolveInternalDashboardRoute();
-    // ops controllers land on Ops (not Owner or Finance).
+    // ops controllers land on the Orders index (not Owner or Finance).
+    // Pre 2026-09-30 they landed on the Operations dashboard, but that
+    // page was hidden from ops/dispatch/super_admin in the staff-request
+    // nav cut, so their home moved to Orders where the shift is run.
     $dev = viewAsDeveloper();
     session(['dev_role_override' => 'operations_controller']);
 
-    expect(resolveUserHomePath($dev))->toBe(route('admin.dashboard.ops'));
+    expect(resolveUserHomePath($dev))->toBe(route('admin.orders.index'));
 });
 
 // -----------------------------------------------------------------
