@@ -277,3 +277,89 @@ test('a real customer owner still reaches the customer dashboard', function () {
         ->get(route('customer.dashboard'))
         ->assertOk();
 });
+
+// -----------------------------------------------------------------
+// 7. "owner OR developer" gates respect the override too
+// -----------------------------------------------------------------
+//
+// Four surfaces are gated on "owner OR developer OR [sometimes
+// super_admin]" rather than tier/portal membership: the Owner command
+// centre, the Operations dashboard, the Customer Invoicing page, and
+// the TFN Fuel page.  Before 2026-10-01 these all used the naive
+// `$u->isOwner() || $u->isDeveloper()` pattern, which short-circuits
+// true for the real developer regardless of the View-as switch -- so
+// a developer previewing as ops_controller / accounts / driver still
+// saw the sidebar link AND, worse, could URL-hop into the page.
+//
+// Owner command centre already had the explicit idiom and is covered
+// by the earlier "viewing as accounts/driver is 403ed" tests.  TFN
+// Fuel + Customer Invoicing are the two that leaked; both now use the
+// `isDeveloperNoOverride()` helper on the HasRoles trait, and these
+// tests lock them down.
+
+test('a developer viewing as an ops controller is 403ed off /admin/fuel', function () {
+    $dev = viewAsDeveloper();
+    session(['dev_role_override' => 'operations_controller']);
+
+    $this->actingAs($dev)
+        ->get(route('admin.fuel'))
+        ->assertForbidden();
+});
+
+test('a developer viewing as accounts is 403ed off /admin/fuel', function () {
+    $dev = viewAsDeveloper();
+    session(['dev_role_override' => 'accounts']);
+
+    $this->actingAs($dev)
+        ->get(route('admin.fuel'))
+        ->assertForbidden();
+});
+
+test('a developer with no override still reaches /admin/fuel', function () {
+    // The TFN page is owner / developer / super_admin only; a plain
+    // developer session must still land on it.
+    $this->actingAs(viewAsDeveloper())
+        ->get(route('admin.fuel'))
+        ->assertOk();
+});
+
+test('a developer viewing as an owner still reaches /admin/fuel', function () {
+    // Owner is in the allow-list, so previewing as owner is the
+    // "safe" direction and must not lock the dev out of the page.
+    $dev = viewAsDeveloper();
+    session(['dev_role_override' => 'owner']);
+
+    $this->actingAs($dev)
+        ->get(route('admin.fuel'))
+        ->assertOk();
+});
+
+test('a developer viewing as an ops controller is 403ed off /admin/invoices', function () {
+    $dev = viewAsDeveloper();
+    session(['dev_role_override' => 'operations_controller']);
+
+    $this->actingAs($dev)
+        ->get(route('admin.invoices.index'))
+        ->assertForbidden();
+});
+
+test('a developer viewing as a driver is 403ed off /admin/invoices', function () {
+    $dev = viewAsDeveloper();
+    session(['dev_role_override' => 'driver']);
+
+    $this->actingAs($dev)
+        ->get(route('admin.invoices.index'))
+        ->assertForbidden();
+});
+
+test('a developer viewing as accounts still reaches /admin/invoices', function () {
+    // Accounts is in the invoicing allow-list (even though the sidebar
+    // link has been hidden from them since 2026-09-30), so previewing
+    // as accounts must not lock a dev out of the page itself.
+    $dev = viewAsDeveloper();
+    session(['dev_role_override' => 'accounts']);
+
+    $this->actingAs($dev)
+        ->get(route('admin.invoices.index'))
+        ->assertOk();
+});

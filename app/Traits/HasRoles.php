@@ -94,6 +94,34 @@ trait HasRoles
         return $this->roles->contains('slug', 'developer');
     }
 
+    /**
+     * Developer badge, BUT only when the dev toolbar's "View as" switch
+     * is NOT active.
+     *
+     * Use this -- not isDeveloper() -- in capability / mount() / sidebar
+     * gates of the form "owner OR developer gets access".  isDeveloper()
+     * deliberately reads the real badge (not effectiveRoles()) so that
+     * the role-switch route itself, canAssignRole(), the "Developer"
+     * label in the UI, and other identity-level readers keep working
+     * when a developer has previewed as someone else.  The side effect
+     * is that any gate written as `$u->isOwner() || $u->isDeveloper()`
+     * silently short-circuits true for the real developer regardless of
+     * View-as, leaking owner-only / finance-only / TFN-only links and
+     * pages to a developer previewing as ops_controller / driver /
+     * accounts / anything.
+     *
+     * This helper is the "no, really, treat them as the role they are
+     * previewing as" variant.  Matches the explicit idiom
+     * `$u->isDeveloper() && !session('dev_role_override')` already used
+     * in `pages/admin/dashboard/owner.blade.php` and the four
+     * portal-access middlewares (EnsureInternalAccess,
+     * EnsureCustomerAccess, EnsureDriverAccess, EnsureBodyBuilderAccess).
+     */
+    public function isDeveloperNoOverride(): bool
+    {
+        return $this->isDeveloper() && !session('dev_role_override');
+    }
+
     public function isSuperAdmin(): bool
     {
         return $this->hasRole('super_admin');

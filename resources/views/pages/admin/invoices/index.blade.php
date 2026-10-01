@@ -74,7 +74,7 @@ new #[Layout('components.layouts.app')] class extends Component {
     public function mount(): void
     {
         $u = auth()->user();
-        if (!$u || (!$u->isAccounts() && !$u->isOwner() && !$u->isDeveloper())) {
+        if (!$u || (!$u->isAccounts() && !$u->isOwner() && !$u->isDeveloperNoOverride())) {
             abort(403, 'Customer invoicing is restricted to accounts.');
         }
 
@@ -157,7 +157,7 @@ new #[Layout('components.layouts.app')] class extends Component {
     public function autofillFuelFromTfn(int $jobId, TfnFuelReconciliationService $svc): void
     {
         $u = auth()->user();
-        if (!$u || (!$u->isAccounts() && !$u->isOwner() && !$u->isDeveloper())) {
+        if (!$u || (!$u->isAccounts() && !$u->isOwner() && !$u->isDeveloperNoOverride())) {
             abort(403);
         }
 
@@ -203,7 +203,7 @@ new #[Layout('components.layouts.app')] class extends Component {
     public function autofillFuelFromTfnAll(TfnFuelReconciliationService $svc): void
     {
         $u = auth()->user();
-        if (!$u || (!$u->isAccounts() && !$u->isOwner() && !$u->isDeveloper())) {
+        if (!$u || (!$u->isAccounts() && !$u->isOwner() && !$u->isDeveloperNoOverride())) {
             abort(403);
         }
 
@@ -315,7 +315,7 @@ new #[Layout('components.layouts.app')] class extends Component {
     public function save(): void
     {
         $u = auth()->user();
-        if (!$u || (!$u->isAccounts() && !$u->isOwner() && !$u->isDeveloper())) {
+        if (!$u || (!$u->isAccounts() && !$u->isOwner() && !$u->isDeveloperNoOverride())) {
             abort(403);
         }
 
@@ -387,7 +387,7 @@ new #[Layout('components.layouts.app')] class extends Component {
     public function toggleExclude(int $jobId, ?string $reason = null): void
     {
         $u = auth()->user();
-        if (!$u || (!$u->isOwner() && !$u->isDeveloper())) {
+        if (!$u || (!$u->isOwner() && !$u->isDeveloperNoOverride())) {
             abort(403, 'Marking a movement as not-required is restricted to owner/developer.');
         }
 
@@ -435,7 +435,7 @@ new #[Layout('components.layouts.app')] class extends Component {
     public function toggleComplete(int $jobId): void
     {
         $u = auth()->user();
-        if (!$u || (!$u->isAccounts() && !$u->isOwner() && !$u->isDeveloper())) {
+        if (!$u || (!$u->isAccounts() && !$u->isOwner() && !$u->isDeveloperNoOverride())) {
             abort(403);
         }
 
@@ -647,7 +647,12 @@ new #[Layout('components.layouts.app')] class extends Component {
         ];
 
         $viewer = auth()->user();
-        $canExclude = $viewer && ($viewer->isOwner() || $viewer->isDeveloper());
+        // isDeveloperNoOverride() (not isDeveloper()) so a developer previewing
+// as accounts / ops_controller does NOT get the "exclude from invoicing"
+// row-action -- isDeveloper() reads the real badge regardless of the
+// dev toolbar's "View as" switch and would otherwise leak the owner-tier
+// control to the previewed role.
+$canExclude = $viewer && ($viewer->isOwner() || $viewer->isDeveloperNoOverride());
 
         return [
             'jobs' => $jobs,

@@ -159,8 +159,18 @@ new #[Layout('components.layouts.app')] #[Defer] class extends Component {
         // hide is backed by a 403 for anyone who guesses the path.
         // Customers / dealers / drivers never reached here anyway via
         // the route group, but we keep the explicit abort as defence.
+        //
+        // The `isDeveloper()` branch is explicitly gated on "no View-as
+        // override active" (via `isDeveloperNoOverride()`) because
+        // `HasRoles::isDeveloper()` reads the REAL badge rather than
+        // effectiveRoles(), so a developer previewing as ops_controller /
+        // accounts / driver would otherwise sail through this gate on
+        // their real badge even though every other `isX()` helper has
+        // flipped to the override role.  Same idiom as
+        // `pages/admin/dashboard/owner.blade.php` and the four
+        // portal-access middlewares.
         $u = auth()->user();
-        if (!$u || (!$u->isOwner() && !$u->isDeveloper() && !$u->isSuperAdmin())) {
+        if (!$u || (!$u->isOwner() && !$u->isDeveloperNoOverride() && !$u->isSuperAdmin())) {
             abort(403);
         }
     }
@@ -181,8 +191,13 @@ new #[Layout('components.layouts.app')] #[Defer] class extends Component {
     {
         $u = auth()->user();
         if (!$u) return false;
+        // Mirror the mount() gate exactly -- including the "no View-as
+        // override" guard on the developer branch (via
+        // isDeveloperNoOverride()) so a developer previewing as another
+        // role doesn't keep the rand columns on screen when every other
+        // role check has flipped.
         return $u->isOwner()
-            || $u->isDeveloper()
+            || $u->isDeveloperNoOverride()
             || $u->isSuperAdmin();
     }
 
