@@ -14,16 +14,30 @@ use Livewire\Volt\Component;
  *
  * Different from the month-end payslip page: this one is a long-horizon
  * audit view designed to spot skimming patterns.  Shows every advance
- * ever issued to the driver, broken down by category (tolls /
- * accommodation / taxi / food), reconciled against the slips the
- * driver actually submitted.  Variance > 0 means cash is unaccounted
- * for; variance that's consistently high in a given category is the
- * tell for collusion between ops and the driver.
+ * ever issued to the driver, broken down by category, with each
+ * category framed by how it actually works in the business:
  *
- * The known skim vector is TAXI: ops policy is "no slip needed" for
- * taxi, so a R500 taxi advance on every trip is R500 of untraceable
- * cash in the driver's pocket -- unless we surface the pattern.  This
- * page flags it explicitly.
+ *   - TOLLS: auto-calculated from the route (RouteCalculationService
+ *     + toll_plazas table).  Driver didn't request them; the number is
+ *     the system's.  Slip evidence is proof-of-payment, so variance
+ *     here means "driver paid the toll but didn't submit the slip" --
+ *     a minor housekeeping issue, not a skim vector.
+ *
+ *   - FOOD: per diem allowance (fixed R/day).  No slips expected --
+ *     drivers don't account for food receipts.  Variance = R0 by
+ *     definition because we never expect a reconciling slip.  Shown
+ *     for context (total R out as allowance) but NOT a red flag.
+ *
+ *   - ACCOMMODATION: evidence-based.  Driver books a bed, slip proves
+ *     it.  Variance > 0 means cash out but no stay recorded.
+ *
+ *   - TAXI: the ONE skim vector per ops' own concern.  Ops types a
+ *     taxi amount when they judge it's required (driver needs to
+ *     cab-it somewhere).  No slip is expected (no-slip policy).  The
+ *     user has specifically flagged "sometimes they have been giving
+ *     the guys taxi money when its not needed" -- so EVERY taxi
+ *     advance deserves scrutiny.  This page lists every taxi-advance
+ *     trip and flags elevated frequency per driver.
  *
  * Access: accounts / owner / developer only -- mount() 403s everyone
  * else, same gate as the payslip.
@@ -178,55 +192,69 @@ new #[Layout('components.layouts.app')] class extends Component {
         ];
 
         // Per-category reconciliation rows for the "where did it go?"
-        // card grid.  Variance = issued - slipped; positive means cash
-        // the driver got but hasn't accounted for.
+        // card grid.  Each category has its own semantic -- see the
+        // class-level docblock for the business rules.
         $categoryRows = [
             [
-                'key'      => 'tolls',
-                'label'    => 'Tolls',
-                'issued'   => $issuedByCategory['tolls'],
-                'slipped'  => $slipTotalByCategory['tolls'],
-                'slips'    => $slipCountByCategory['tolls'],
-                'variance' => $issuedByCategory['tolls'] - $slipTotalByCategory['tolls'],
-                'note'     => 'Toll plazas on route. Variance should be near R0.',
+                'key'       => 'tolls',
+                'label'     => 'Tolls',
+                'kind'      => 'evidence',
+                'issued'    => $issuedByCategory['tolls'],
+                'slipped'   => $slipTotalByCategory['tolls'],
+                'slips'     => $slipCountByCategory['tolls'],
+                'variance'  => $issuedByCategory['tolls'] - $slipTotalByCategory['tolls'],
+                'note'      => 'Auto-calculated from route (toll plazas detected on the pickup→delivery pair). Driver didn\'t request this -- the number comes from the system. Slip evidence is proof-of-payment; variance here is a housekeeping gap, not a skim concern.',
             ],
             [
-                'key'      => 'accommodation',
-                'label'    => 'Accommodation',
-                'issued'   => $issuedByCategory['accommodation'],
-                'slipped'  => $slipTotalByCategory['accommodation'],
-                'slips'    => $slipCountByCategory['accommodation'],
-                'variance' => $issuedByCategory['accommodation'] - $slipTotalByCategory['accommodation'],
-                'note'     => 'Overnight stays. Slip evidence required.',
+                'key'       => 'accommodation',
+                'label'     => 'Accommodation',
+                'kind'      => 'evidence',
+                'issued'    => $issuedByCategory['accommodation'],
+                'slipped'   => $slipTotalByCategory['accommodation'],
+                'slips'     => $slipCountByCategory['accommodation'],
+                'variance'  => $issuedByCategory['accommodation'] - $slipTotalByCategory['accommodation'],
+                'note'      => 'Overnight stays. Driver books a bed, slip proves it. Variance means cash out but no stay logged -- worth questioning.',
             ],
             [
-                'key'      => 'food',
-                'label'    => 'Food',
-                'issued'   => $issuedByCategory['food'],
-                'slipped'  => $slipTotalByCategory['food'],
-                'slips'    => $slipCountByCategory['food'],
-                'variance' => $issuedByCategory['food'] - $slipTotalByCategory['food'],
-                'note'     => 'Meal allowance. Slip evidence required.',
+                'key'       => 'food',
+                'label'     => 'Food (per diem)',
+                'kind'      => 'per_diem',
+                'issued'    => $issuedByCategory['food'],
+                'slipped'   => 0.0,  // per diem allowance -- NO slip reconciliation
+                'slips'     => 0,
+                'variance'  => 0.0,  // zero by definition; shown for context only
+                'note'      => 'Fixed per diem allowance (R/day). Drivers do NOT submit food slips -- this is an allowance, not an expense. Shown for context only; variance is not a meaningful signal here.',
             ],
             [
-                'key'      => 'taxi',
-                'label'    => 'Taxi',
-                'issued'   => $issuedByCategory['taxi'],
-                'slipped'  => 0.0, // no slip category -- "no slip needed" policy
-                'slips'    => 0,
-                'variance' => $issuedByCategory['taxi'], // ALL of it is "variance" by definition
-                'note'     => 'KNOWN SKIM VECTOR: ops policy is "no slip needed" for taxi, so every rand issued here is untraceable. Repeated taxi advances with no operational reason are the pattern to watch for.',
+                'key'       => 'taxi',
+                'label'     => 'Taxi',
+                'kind'      => 'skim_vector',
+                'issued'    => $issuedByCategory['taxi'],
+                'slipped'   => 0.0,  // no-slip-needed policy
+                'slips'     => 0,
+                'variance'  => $issuedByCategory['taxi'],
+                'note'      => 'Only when ops judges a cab is needed. No slip expected. Staff concern: taxi money has been given out when it wasn\'t actually needed. Every taxi advance should be verifiable against a real need -- review the per-trip list below.',
                 'is_skim_risk' => true,
             ],
         ];
 
         // Totals for the summary strip.
-        $issuedTotal = (float) $jobs->sum(fn (Job $j) => (float) ($j->advance_total ?? 0));
-        $slippedTotal = (float) collect($slipTotalByCategory)->sum();
-        // Taxi variance pulled out because it's the "always 100%
-        // untraced" baseline -- the headline variance should exclude
-        // it so other variances stand out.
-        $slippableVariance = ($issuedTotal - $issuedByCategory['taxi']) - $slippedTotal;
+        $issuedTotal   = (float) $jobs->sum(fn (Job $j) => (float) ($j->advance_total ?? 0));
+        $slippedTotal  = (float) collect($slipTotalByCategory)->sum();
+
+        // The ONE honest "unaccounted-for" variance: tolls + accom
+        // issued minus their slips.  Food is per diem (no slips) and
+        // taxi is no-slip-policy, so neither can produce a meaningful
+        // variance -- including them would inflate the number with
+        // things that are never slipped by design.
+        $evidenceVariance = ($issuedByCategory['tolls'] - $slipTotalByCategory['tolls'])
+            + ($issuedByCategory['accommodation'] - $slipTotalByCategory['accommodation']);
+
+        // Taxi exposure headline: total rand of taxi advances in the
+        // window.  Not a variance (there's nothing to compare it
+        // against) -- it's just "how much untraceable cash went out
+        // through the taxi line".  High number = investigate.
+        $taxiExposure = $issuedByCategory['taxi'];
 
         // Trip-status counts for the summary strip.
         $tripsCompleted = $jobs
@@ -254,13 +282,14 @@ new #[Layout('components.layouts.app')] class extends Component {
             ->values();
         $openQueriesTotal = (float) $openQueries->sum(fn (Job $j) => (float) $j->advance_total);
 
-        // Pattern flag: taxi advances issued to this driver.  If the
-        // frequency is high (more than, say, 25% of all advances
-        // include a taxi slice) that's worth questioning given the
-        // "no slip needed" exposure.
-        $tripsWithTaxiAdvance = $jobs
+        // Pattern flag: taxi advances issued to this driver.  Ops has
+        // flagged taxi as the known skim vector (they've been giving
+        // guys taxi money when it wasn't needed), so even a modest
+        // frequency is worth flagging.
+        $taxiTrips = $jobs
             ->filter(fn (Job $j) => (float) ($j->advance_taxi ?? 0) > 0)
-            ->count();
+            ->values();
+        $tripsWithTaxiAdvance = $taxiTrips->count();
         $taxiFrequencyPct = $jobs->count() > 0
             ? round(($tripsWithTaxiAdvance / $jobs->count()) * 100, 1)
             : 0.0;
@@ -271,13 +300,15 @@ new #[Layout('components.layouts.app')] class extends Component {
             'to'                 => $to,
             'issuedTotal'        => $issuedTotal,
             'slippedTotal'       => $slippedTotal,
-            'slippableVariance'  => $slippableVariance,
+            'evidenceVariance'   => $evidenceVariance,
+            'taxiExposure'       => $taxiExposure,
             'categoryRows'       => $categoryRows,
             'tripsCompleted'     => $tripsCompleted,
             'tripsCancelled'     => $tripsCancelled,
             'tripsOpen'          => $tripsOpen,
             'openQueries'        => $openQueries,
             'openQueriesTotal'   => $openQueriesTotal,
+            'taxiTrips'          => $taxiTrips,
             'tripsWithTaxiAdvance' => $tripsWithTaxiAdvance,
             'taxiFrequencyPct'   => $taxiFrequencyPct,
         ];
@@ -334,27 +365,31 @@ new #[Layout('components.layouts.app')] class extends Component {
             </div>
         </div>
 
-        {{-- Headline totals --}}
+        {{-- Headline totals.  Two different "concern" numbers:
+             1. evidenceVariance = tolls + accommodation issued minus
+                their slips.  Only these two categories expect slips,
+                so this is the honest "cash out, no proof" number.
+             2. taxiExposure = total taxi advances.  Not a variance
+                (no slips expected by policy), but the number that
+                ops has specifically asked to be scrutinised. --}}
         <div class="grid grid-cols-2 gap-3 border-b border-slate-100 px-5 py-4 sm:grid-cols-6">
             <div class="rounded-lg border border-amber-200 bg-amber-50 p-3">
                 <p class="text-[10px] font-semibold uppercase tracking-wider text-amber-800">Cash issued</p>
                 <p class="mt-1 text-lg font-bold text-amber-900 tabular-nums">R {{ number_format($issuedTotal, 2) }}</p>
                 <p class="mt-0.5 text-[10px] text-amber-700">across {{ $jobs->count() }} advance{{ $jobs->count() === 1 ? '' : 's' }}</p>
             </div>
-            <div class="rounded-lg border border-slate-200 bg-white p-3">
-                <p class="text-[10px] font-semibold uppercase tracking-wider text-slate-600">Slips submitted</p>
-                <p class="mt-1 text-lg font-bold text-slate-800 tabular-nums">R {{ number_format($slippedTotal, 2) }}</p>
-                <p class="mt-0.5 text-[10px] text-slate-500">reconciliation evidence</p>
+            <div class="rounded-lg border {{ $taxiExposure > 0 ? 'border-rose-300 bg-rose-100' : 'border-slate-200 bg-white' }} p-3">
+                <p class="text-[10px] font-semibold uppercase tracking-wider {{ $taxiExposure > 0 ? 'text-rose-800' : 'text-slate-600' }}">Taxi exposure</p>
+                <p class="mt-1 text-lg font-bold tabular-nums {{ $taxiExposure > 0 ? 'text-rose-900' : 'text-slate-800' }}">R {{ number_format($taxiExposure, 2) }}</p>
+                <p class="mt-0.5 text-[10px] {{ $taxiExposure > 0 ? 'text-rose-700' : 'text-slate-500' }}">
+                    untraceable &middot; review each one
+                </p>
             </div>
-            <div class="rounded-lg border {{ $slippableVariance > 0 ? 'border-rose-200 bg-rose-50' : 'border-emerald-200 bg-emerald-50' }} p-3">
-                <p class="text-[10px] font-semibold uppercase tracking-wider {{ $slippableVariance > 0 ? 'text-rose-800' : 'text-emerald-800' }}">Variance (ex-taxi)</p>
-                <p class="mt-1 text-lg font-bold tabular-nums {{ $slippableVariance > 0 ? 'text-rose-900' : 'text-emerald-900' }}">R {{ number_format($slippableVariance, 2) }}</p>
-                <p class="mt-0.5 text-[10px] {{ $slippableVariance > 0 ? 'text-rose-700' : 'text-emerald-700' }}">
-                    @if($slippableVariance > 0)
-                        unslipped (excl. taxi)
-                    @else
-                        clean
-                    @endif
+            <div class="rounded-lg border {{ $evidenceVariance > 0 ? 'border-amber-200 bg-amber-50' : 'border-emerald-200 bg-emerald-50' }} p-3">
+                <p class="text-[10px] font-semibold uppercase tracking-wider {{ $evidenceVariance > 0 ? 'text-amber-800' : 'text-emerald-800' }}">Toll + accom variance</p>
+                <p class="mt-1 text-lg font-bold tabular-nums {{ $evidenceVariance > 0 ? 'text-amber-900' : 'text-emerald-900' }}">R {{ number_format($evidenceVariance, 2) }}</p>
+                <p class="mt-0.5 text-[10px] {{ $evidenceVariance > 0 ? 'text-amber-700' : 'text-emerald-700' }}">
+                    issued &minus; slipped
                 </p>
             </div>
             <div class="rounded-lg border border-emerald-200 bg-emerald-50 p-3">
@@ -375,30 +410,45 @@ new #[Layout('components.layouts.app')] class extends Component {
         </div>
     </div>
 
-    {{-- Per-category breakdown: where did the cash go? --}}
+    {{-- Per-category breakdown: four cards, each framed by how that
+         category actually works in the business.  Not every category
+         is a reconciliation line -- food is per diem, taxi is a
+         judgement call.  Framing is in each card's "note". --}}
     <div class="rounded-xl border border-slate-200 bg-white shadow-sm">
         <div class="border-b border-slate-100 px-5 py-3">
-            <h3 class="text-sm font-semibold text-slate-900">Breakdown by category &middot; issued vs slipped</h3>
+            <h3 class="text-sm font-semibold text-slate-900">Breakdown by category &middot; what the money was for</h3>
             <p class="text-xs text-slate-500">
-                Each card compares the rand value issued in that category against the rand value of slips the driver submitted.
-                A positive variance means cash issued but not evidenced on paper.
+                Tolls and accommodation expect slip evidence; food is a fixed per diem allowance;
+                taxi is ops-judgment only. Each category is read differently &mdash; see the note on each card.
             </p>
         </div>
         <div class="grid grid-cols-1 gap-3 p-5 sm:grid-cols-2 lg:grid-cols-4">
             @foreach($categoryRows as $cat)
                 @php
-                    $isTaxi = ($cat['is_skim_risk'] ?? false);
-                    $isDirty = !$isTaxi && $cat['variance'] > 0.01;
+                    $kind    = $cat['kind'];
+                    $isTaxi  = $kind === 'skim_vector';
+                    $isPerDiem = $kind === 'per_diem';
+                    $isEvidence = $kind === 'evidence';
+                    $hasVariance = $isEvidence && $cat['variance'] > 0.01;
                     $pct = $cat['issued'] > 0 ? round(($cat['variance'] / $cat['issued']) * 100, 1) : 0;
+
+                    // Border / background per card role
+                    $cardCls = $isTaxi
+                        ? 'border-rose-300 bg-rose-50'
+                        : ($hasVariance
+                            ? 'border-amber-300 bg-amber-50'
+                            : ($isPerDiem ? 'border-slate-200 bg-slate-50' : 'border-slate-200 bg-slate-50'));
                 @endphp
-                <div class="rounded-lg border {{ $isTaxi ? 'border-rose-300 bg-rose-50' : ($isDirty ? 'border-amber-300 bg-amber-50' : 'border-slate-200 bg-slate-50') }} p-3">
+                <div class="rounded-lg border {{ $cardCls }} p-3">
                     <div class="flex items-center justify-between">
-                        <p class="text-[11px] font-semibold uppercase tracking-wider {{ $isTaxi ? 'text-rose-800' : ($isDirty ? 'text-amber-800' : 'text-slate-600') }}">
+                        <p class="text-[11px] font-semibold uppercase tracking-wider {{ $isTaxi ? 'text-rose-800' : ($hasVariance ? 'text-amber-800' : 'text-slate-600') }}">
                             {{ $cat['label'] }}
                         </p>
                         @if($isTaxi)
                             <span class="rounded-full border border-rose-300 bg-rose-100 px-1.5 py-0.5 text-[9px] font-bold uppercase text-rose-800">Skim risk</span>
-                        @elseif($isDirty)
+                        @elseif($isPerDiem)
+                            <span class="rounded-full border border-slate-300 bg-slate-100 px-1.5 py-0.5 text-[9px] font-bold uppercase text-slate-700">Allowance</span>
+                        @elseif($hasVariance)
                             <span class="rounded-full border border-amber-300 bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold uppercase text-amber-800">Unslipped</span>
                         @elseif($cat['issued'] > 0)
                             <span class="rounded-full border border-emerald-300 bg-emerald-100 px-1.5 py-0.5 text-[9px] font-bold uppercase text-emerald-800">Reconciled</span>
@@ -409,29 +459,45 @@ new #[Layout('components.layouts.app')] class extends Component {
                             <span class="text-slate-500">Issued</span>
                             <span class="font-semibold tabular-nums text-slate-900">R {{ number_format($cat['issued'], 2) }}</span>
                         </div>
-                        <div class="flex justify-between">
-                            <span class="text-slate-500">Slipped</span>
-                            <span class="font-semibold tabular-nums text-slate-700">R {{ number_format($cat['slipped'], 2) }}</span>
-                        </div>
-                        <div class="flex justify-between border-t border-slate-200 pt-1 {{ $isTaxi ? 'text-rose-800' : ($isDirty ? 'text-amber-800' : 'text-emerald-700') }}">
-                            <span class="font-semibold">Variance</span>
-                            <span class="font-bold tabular-nums">
-                                R {{ number_format($cat['variance'], 2) }}
-                                @if($cat['issued'] > 0 && !$isTaxi)
-                                    <span class="text-[10px] font-normal">({{ $pct }}%)</span>
-                                @endif
-                            </span>
-                        </div>
+                        @if($isEvidence)
+                            <div class="flex justify-between">
+                                <span class="text-slate-500">Slipped</span>
+                                <span class="font-semibold tabular-nums text-slate-700">R {{ number_format($cat['slipped'], 2) }}</span>
+                            </div>
+                            <div class="flex justify-between border-t border-slate-200 pt-1 {{ $hasVariance ? 'text-amber-800' : 'text-emerald-700' }}">
+                                <span class="font-semibold">Variance</span>
+                                <span class="font-bold tabular-nums">
+                                    R {{ number_format($cat['variance'], 2) }}
+                                    @if($cat['issued'] > 0)
+                                        <span class="text-[10px] font-normal">({{ $pct }}%)</span>
+                                    @endif
+                                </span>
+                            </div>
+                        @elseif($isPerDiem)
+                            <div class="flex justify-between border-t border-slate-200 pt-1 text-slate-600">
+                                <span class="font-semibold">Reconciliation</span>
+                                <span class="text-[11px] italic">Not applicable</span>
+                            </div>
+                        @elseif($isTaxi)
+                            <div class="flex justify-between border-t border-rose-200 pt-1 text-rose-800">
+                                <span class="font-semibold">Untraceable</span>
+                                <span class="font-bold tabular-nums">R {{ number_format($cat['issued'], 2) }}</span>
+                            </div>
+                        @endif
                         <p class="text-[10px] text-slate-600 pt-1">{{ $cat['note'] }}</p>
                     </div>
                 </div>
             @endforeach
         </div>
 
-        {{-- Taxi frequency pattern flag --}}
+        {{-- Taxi frequency pattern flag.  Staff concern is specifically
+             that taxi money has been handed out when not needed, so
+             the thresholds are deliberately strict: any taxi usage at
+             all is already Worth-reviewing, elevated frequency gets
+             a red flag. --}}
         @if($jobs->count() > 0)
             <div class="border-t border-slate-100 px-5 py-3 text-xs">
-                <div class="flex items-center justify-between gap-3">
+                <div class="flex flex-wrap items-center justify-between gap-3">
                     <div>
                         <strong class="text-slate-800">Taxi advance pattern:</strong>
                         <span class="text-slate-600">
@@ -439,23 +505,92 @@ new #[Layout('components.layouts.app')] class extends Component {
                             ({{ $taxiFrequencyPct }}%) included a taxi allocation.
                         </span>
                     </div>
-                    @if($taxiFrequencyPct > 25)
+                    @if($taxiFrequencyPct >= 20)
                         <span class="rounded-full border border-rose-300 bg-rose-50 px-2.5 py-0.5 text-[11px] font-semibold text-rose-700">
-                            Elevated &mdash; worth questioning
+                            Elevated &mdash; investigate pattern
                         </span>
-                    @elseif($taxiFrequencyPct > 10)
+                    @elseif($taxiFrequencyPct > 0)
                         <span class="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-0.5 text-[11px] font-semibold text-amber-800">
-                            Watch
+                            Review each &mdash; see list below
                         </span>
                     @else
                         <span class="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-700">
-                            Within policy expectation
+                            No taxi advances in this window
                         </span>
                     @endif
                 </div>
             </div>
         @endif
     </div>
+
+    {{-- Taxi-advance line-item list (every rand of the skim-vector
+         category laid out trip by trip, so an auditor can click through
+         and ask ops "why did this one need a cab?"). --}}
+    @if($taxiTrips->isNotEmpty())
+        <div class="rounded-xl border border-rose-200 bg-rose-50/50 shadow-sm">
+            <div class="border-b border-rose-200 px-5 py-3">
+                <h3 class="text-sm font-semibold text-rose-900">Taxi advances &middot; review each one</h3>
+                <p class="text-xs text-rose-800">
+                    Every rand of taxi cash issued to {{ $user->name }} in the window.
+                    Each entry should be verifiable against a real operational need (driver had to cab back from a drop-off, etc.).
+                    No slip evidence exists for these amounts.
+                </p>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="w-full text-xs">
+                    <thead class="bg-rose-100 text-[10px] uppercase tracking-wide text-rose-800">
+                        <tr>
+                            <th class="px-3 py-2 text-left">Issued</th>
+                            <th class="px-3 py-2 text-left">Job #</th>
+                            <th class="px-3 py-2 text-left">Route</th>
+                            <th class="px-3 py-2 text-right">Taxi amount</th>
+                            <th class="px-3 py-2 text-left">Trip status</th>
+                            <th class="px-3 py-2 text-left">Issued by</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-rose-200">
+                        @foreach($taxiTrips as $job)
+                            <tr>
+                                <td class="px-3 py-2 text-rose-900">{{ $job->advance_issued_at?->format('d M Y') ?? '—' }}</td>
+                                <td class="px-3 py-2 font-mono text-[11px]">
+                                    <a href="{{ route('admin.orders.show', $job) }}" class="text-blue-700 hover:underline">{{ $job->job_number }}</a>
+                                </td>
+                                <td class="px-3 py-2 text-rose-900">
+                                    {{ $job->pickupLocation?->shortDisplay() ?? '—' }} &rarr; {{ $job->deliveryLocation?->shortDisplay() ?? '—' }}
+                                </td>
+                                <td class="px-3 py-2 text-right tabular-nums font-bold text-rose-900">
+                                    R {{ number_format((float) $job->advance_taxi, 2) }}
+                                </td>
+                                <td class="px-3 py-2">
+                                    @php
+                                        $cancelled = $job->status === Job::STATUS_CANCELLED;
+                                        $delivered = in_array($job->status, [Job::STATUS_DELIVERED, Job::STATUS_COMPLETED, Job::STATUS_INVOICED], true);
+                                    @endphp
+                                    @if($delivered)
+                                        <span class="inline-flex rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">Delivered</span>
+                                    @elseif($cancelled)
+                                        <span class="inline-flex rounded-full border border-slate-300 bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-700">Cancelled</span>
+                                    @else
+                                        <span class="inline-flex rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold text-slate-600">
+                                            {{ $job->phase1StatusLabel() }}
+                                        </span>
+                                    @endif
+                                </td>
+                                <td class="px-3 py-2 text-rose-900">{{ $job->advanceIssuedBy?->name ?? '—' }}</td>
+                            </tr>
+                        @endforeach
+                    </tbody>
+                    <tfoot class="bg-rose-100 text-[11px] font-semibold text-rose-900">
+                        <tr>
+                            <td colspan="3" class="px-3 py-2 text-right">Total taxi exposure</td>
+                            <td class="px-3 py-2 text-right tabular-nums">R {{ number_format($taxiExposure, 2) }}</td>
+                            <td colspan="2"></td>
+                        </tr>
+                    </tfoot>
+                </table>
+            </div>
+        </div>
+    @endif
 
     {{-- Open queries callout, if any --}}
     @if($openQueries->isNotEmpty())

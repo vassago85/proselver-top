@@ -701,22 +701,36 @@ test('cash-audit page 404s if the bound user is not a driver', function () {
         ->assertNotFound();
 });
 
-test('cash-audit breaks the advance down by category and surfaces taxi as a skim risk', function () {
+test('cash-audit breaks the advance down by category respecting food=per-diem, taxi=skim-vector business rules', function () {
+    // Business rules (reflected in the page):
+    //   - Tolls are auto-calculated; slip is proof-of-payment.
+    //     Variance here is a housekeeping gap.
+    //   - Accommodation expects slip evidence; variance = concern.
+    //   - Food is per diem allowance -- NO slip reconciliation.
+    //     Variance is never meaningful for food.
+    //   - Taxi is ops-judgment, no-slip-policy. Every rand is
+    //     untraceable. The user has flagged ops has been giving
+    //     taxi money when not needed.
+    //
     // Scenario:
-    //   - Trip A: delivered, R410 tolls + R0 taxi + R300 food = R710 issued.
-    //     Driver submits R410 toll slips (good) and no food slip.
-    //     -> Food variance R300, taxi variance R0 (none issued).
-    //   - Trip B: delivered, R0 tolls + R500 taxi + R0 food = R500 issued.
-    //     Taxi is "no slip needed" -> R500 of variance by definition.
-    //   - Trip C: cancelled with cash open, R200 tolls = R200 issued.
-    //     -> Shows up in open-queries list.
+    //   - Trip A: delivered, R410 tolls + R300 food = R710 issued.
+    //     Driver submits R410 toll slips, no food slip (which is fine --
+    //     food is per diem, no slip expected).
+    //   - Trip B: delivered, R500 taxi = R500 issued. Pure taxi
+    //     exposure, no reconciliation possible.
+    //   - Trip C: cancelled with open query, R200 tolls = R200 issued.
     //
     // Expected:
-    //   issuedTotal = 710 + 500 + 200 = 1410
-    //   slippedTotal = 410 (only the toll slips)
-    //   slippableVariance = (1410 - 500 taxi) - 410 = 500 (food + open-query tolls)
-    //   openQueriesTotal = 200
-    //   taxi card marked as skim risk, taxi frequency = 33.3%
+    //   issuedTotal     = R1410
+    //   slippedTotal    = R410 (only toll slips)
+    //   evidenceVariance = (tolls_issued - toll_slips)
+    //                    + (accom_issued - accom_slips)
+    //                    = (610 - 410) + (0 - 0) = R200
+    //                    (Trip C tolls were issued but no slip submitted.
+    //                     Food is excluded because food has no slip reconciliation.)
+    //   taxiExposure    = R500
+    //   openQueriesTotal = R200
+    //   taxiFrequencyPct = 33.3% (1 of 3 trips had taxi)
     $accounts = dpUser('accounts');
     $driver = dpDriver(30000);
     $recently = now()->subDays(10);
@@ -760,26 +774,43 @@ test('cash-audit breaks the advance down by category and surfaces taxi as a skim
 
     expect($c->viewData('issuedTotal'))->toBe(1410.0)
         ->and($c->viewData('slippedTotal'))->toBe(410.0)
-        ->and($c->viewData('slippableVariance'))->toBe(500.0) // (1410 - 500 taxi) - 410 slipped
+        ->and($c->viewData('evidenceVariance'))->toBe(200.0) // tolls 610 - 410 slipped; food excluded
+        ->and($c->viewData('taxiExposure'))->toBe(500.0)
         ->and($c->viewData('openQueriesTotal'))->toBe(200.0)
         ->and($c->viewData('openQueries')->count())->toBe(1)
         ->and($c->viewData('tripsCompleted'))->toBe(2)
         ->and($c->viewData('tripsCancelled'))->toBe(1)
-        ->and($c->viewData('taxiFrequencyPct'))->toBe(33.3);
+        ->and($c->viewData('taxiFrequencyPct'))->toBe(33.3)
+        ->and($c->viewData('taxiTrips')->count())->toBe(1);
 
-    // Category rows: find the taxi one and confirm it's flagged as skim risk.
-    $taxi = collect($c->viewData('categoryRows'))->firstWhere('key', 'taxi');
-    expect($taxi['issued'])->toBe(500.0)
-        ->and($taxi['slipped'])->toBe(0.0)
-        ->and($taxi['variance'])->toBe(500.0)
-        ->and($taxi['is_skim_risk'])->toBeTrue();
+    // Category rows: food is kind=per_diem with zero variance (never
+    // meaningful); taxi is kind=skim_vector with all R500 "untraceable".
+    $rowsByKey = collect($c->viewData('categoryRows'))->keyBy('key');
 
-    // The HTTP render must show the headline numbers and the skim-risk
-    // badge, and must link to each trip.
+    expect($rowsByKey['food']['kind'])->toBe('per_diem')
+        ->and($rowsByKey['food']['issued'])->toBe(300.0)
+        ->and($rowsByKey['food']['variance'])->toBe(0.0); // per diem -> never a variance
+
+    expect($rowsByKey['taxi']['kind'])->toBe('skim_vector')
+        ->and($rowsByKey['taxi']['issued'])->toBe(500.0)
+        ->and($rowsByKey['taxi']['is_skim_risk'])->toBeTrue();
+
+    expect($rowsByKey['tolls']['kind'])->toBe('evidence')
+        ->and($rowsByKey['tolls']['issued'])->toBe(610.0)
+        ->and($rowsByKey['tolls']['slipped'])->toBe(410.0)
+        ->and($rowsByKey['tolls']['variance'])->toBe(200.0);
+
+    // The HTTP render must show the headline numbers, the skim-risk
+    // badge, the per-diem "Allowance" badge for food, and the dedicated
+    // taxi-review list.
     $this->get(route('admin.drivers.cash-audit', ['user' => $driver->id]))
         ->assertOk()
         ->assertSee('Cash audit:')
         ->assertSee('Skim risk')
+        ->assertSee('Allowance')           // food card badge
+        ->assertSee('Taxi exposure')       // headline strip
+        ->assertSee('Taxi advances')       // dedicated review section
+        ->assertSee('Food (per diem)')
         ->assertSee($tripA->job_number)
         ->assertSee($tripB->job_number)
         ->assertSee($tripC->job_number)
