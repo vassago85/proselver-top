@@ -679,6 +679,150 @@ test('drivers.pay summary earnings honour per-trip overrides', function () {
 });
 
 // -----------------------------------------------------------------
+// 7b. Driver cash audit forensic view
+// -----------------------------------------------------------------
+
+test('cash-audit page gates to accounts / owner / developer; 403s dispatcher + ops', function () {
+    $driver = dpDriver();
+    $url = route('admin.drivers.cash-audit', ['user' => $driver->id]);
+
+    $this->actingAs(dpUser('dispatcher'))->get($url)->assertForbidden();
+    $this->actingAs(dpUser('operations_controller'))->get($url)->assertForbidden();
+
+    $this->actingAs(dpUser('accounts'))->get($url)->assertOk();
+    $this->actingAs(dpUser('owner'))->get($url)->assertOk();
+    $this->actingAs(dpUser('developer'))->get($url)->assertOk();
+});
+
+test('cash-audit page 404s if the bound user is not a driver', function () {
+    $notDriver = dpUser('operations_controller');
+    $this->actingAs(dpUser('accounts'))
+        ->get(route('admin.drivers.cash-audit', ['user' => $notDriver->id]))
+        ->assertNotFound();
+});
+
+test('cash-audit breaks the advance down by category and surfaces taxi as a skim risk', function () {
+    // Scenario:
+    //   - Trip A: delivered, R410 tolls + R0 taxi + R300 food = R710 issued.
+    //     Driver submits R410 toll slips (good) and no food slip.
+    //     -> Food variance R300, taxi variance R0 (none issued).
+    //   - Trip B: delivered, R0 tolls + R500 taxi + R0 food = R500 issued.
+    //     Taxi is "no slip needed" -> R500 of variance by definition.
+    //   - Trip C: cancelled with cash open, R200 tolls = R200 issued.
+    //     -> Shows up in open-queries list.
+    //
+    // Expected:
+    //   issuedTotal = 710 + 500 + 200 = 1410
+    //   slippedTotal = 410 (only the toll slips)
+    //   slippableVariance = (1410 - 500 taxi) - 410 = 500 (food + open-query tolls)
+    //   openQueriesTotal = 200
+    //   taxi card marked as skim risk, taxi frequency = 33.3%
+    $accounts = dpUser('accounts');
+    $driver = dpDriver(30000);
+    $recently = now()->subDays(10);
+
+    $tripA = dpJob($driver, $recently, [
+        'status'             => Job::STATUS_DELIVERED,
+        'delivered_at'       => $recently,
+        'advance_tolls'      => 410.0,
+        'advance_food'       => 300.0,
+        'advance_total'      => 710.0,
+        'advance_issued_at'  => $recently->copy()->subDay(),
+    ]);
+    $tripB = dpJob($driver, $recently->copy()->addDay(), [
+        'status'             => Job::STATUS_DELIVERED,
+        'delivered_at'       => $recently->copy()->addDay(),
+        'advance_taxi'       => 500.0,
+        'advance_total'      => 500.0,
+        'advance_issued_at'  => $recently->copy()->subDay(),
+    ]);
+    $tripC = dpJob($driver, $recently->copy()->addDays(2), [
+        'status'             => Job::STATUS_CANCELLED,
+        'cancelled_at'       => $recently->copy()->addDays(2),
+        'advance_tolls'      => 200.0,
+        'advance_total'      => 200.0,
+        'advance_issued_at'  => $recently->copy()->subDay(),
+    ]);
+
+    // Driver submitted toll slips for R410 (matches Trip A tolls).
+    PettyCashEntry::create([
+        'driver_user_id' => $driver->id,
+        'job_id'         => $tripA->id,
+        'category'       => PettyCashEntry::CATEGORY_TOLL,
+        'amount_cents'   => 41000,
+        'status'         => PettyCashEntry::STATUS_SUBMITTED,
+        'spent_at'       => $recently,
+    ]);
+
+    $this->actingAs($accounts);
+    $c = Volt::test('admin.drivers.cash-audit', ['user' => $driver])
+        ->call('applyRange', 'all_time');
+
+    expect($c->viewData('issuedTotal'))->toBe(1410.0)
+        ->and($c->viewData('slippedTotal'))->toBe(410.0)
+        ->and($c->viewData('slippableVariance'))->toBe(500.0) // (1410 - 500 taxi) - 410 slipped
+        ->and($c->viewData('openQueriesTotal'))->toBe(200.0)
+        ->and($c->viewData('openQueries')->count())->toBe(1)
+        ->and($c->viewData('tripsCompleted'))->toBe(2)
+        ->and($c->viewData('tripsCancelled'))->toBe(1)
+        ->and($c->viewData('taxiFrequencyPct'))->toBe(33.3);
+
+    // Category rows: find the taxi one and confirm it's flagged as skim risk.
+    $taxi = collect($c->viewData('categoryRows'))->firstWhere('key', 'taxi');
+    expect($taxi['issued'])->toBe(500.0)
+        ->and($taxi['slipped'])->toBe(0.0)
+        ->and($taxi['variance'])->toBe(500.0)
+        ->and($taxi['is_skim_risk'])->toBeTrue();
+
+    // The HTTP render must show the headline numbers and the skim-risk
+    // badge, and must link to each trip.
+    $this->get(route('admin.drivers.cash-audit', ['user' => $driver->id]))
+        ->assertOk()
+        ->assertSee('Cash audit:')
+        ->assertSee('Skim risk')
+        ->assertSee($tripA->job_number)
+        ->assertSee($tripB->job_number)
+        ->assertSee($tripC->job_number)
+        ->assertSee('R 1,410.00')
+        ->assertSee('R 500.00')
+        ->assertSee('R 200.00');
+});
+
+test('cash-audit date range filter narrows to the picked window', function () {
+    $accounts = dpUser('accounts');
+    $driver   = dpDriver();
+
+    // One advance 10 days ago, one 90 days ago.
+    dpJob($driver, now()->subDays(10), [
+        'status'            => Job::STATUS_DELIVERED,
+        'delivered_at'      => now()->subDays(10),
+        'advance_total'     => 300.0,
+        'advance_issued_at' => now()->subDays(10),
+    ]);
+    dpJob($driver, now()->subDays(90), [
+        'status'            => Job::STATUS_DELIVERED,
+        'delivered_at'      => now()->subDays(90),
+        'advance_total'     => 700.0,
+        'advance_issued_at' => now()->subDays(90),
+    ]);
+
+    $this->actingAs($accounts);
+
+    // "This month"-style filter: last 30 days should only catch the recent one.
+    $c = Volt::test('admin.drivers.cash-audit', ['user' => $driver])
+        ->set('from', now()->subDays(30)->toDateString())
+        ->set('to', now()->toDateString());
+
+    expect($c->viewData('issuedTotal'))->toBe(300.0)
+        ->and($c->viewData('jobs')->count())->toBe(1);
+
+    // All-time should pick up both.
+    $c->call('applyRange', 'all_time');
+    expect($c->viewData('issuedTotal'))->toBe(1000.0)
+        ->and($c->viewData('jobs')->count())->toBe(2);
+});
+
+// -----------------------------------------------------------------
 // 8. Petty cash tab strip includes the Bus Tickets tab for ops
 // -----------------------------------------------------------------
 

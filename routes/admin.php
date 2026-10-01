@@ -197,6 +197,14 @@ Volt::route('drivers/pay', 'admin.drivers.pay')->name('drivers.pay');
 // the "View payslip" button on /admin/drivers/pay.  Same gate as the
 // summary -- component mount() 403s anyone else.
 Volt::route('drivers/{user}/payslip', 'admin.drivers.payslip')->name('drivers.payslip');
+// Per-driver forensic cash audit (date-filtered, not month-scoped).
+// Issued-vs-slipped breakdown by category (tolls / accom / taxi /
+// food) across all time -- designed to spot skimming patterns like
+// repeated taxi advances with zero slip submissions (taxi being the
+// "no slip needed" category per ops policy, which is the known
+// skim vector).  Same gate as payslip -- 403 for anyone but
+// accounts / owner / developer.
+Volt::route('drivers/{user}/cash-audit', 'admin.drivers.cash-audit')->name('drivers.cash-audit');
 // Bus-ticket management surface (issue, mark used / voided / charged
 // to driver).  Routed BEFORE drivers/{user}/edit so the literal
 // "bus-tickets" segment doesn't bind as a User id.

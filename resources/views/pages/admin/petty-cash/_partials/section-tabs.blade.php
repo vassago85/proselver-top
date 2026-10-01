@@ -33,10 +33,13 @@
     // reachable via those contextual deep-links only.
     $current = match (true) {
         request()->routeIs('admin.overview') => 'overview',
-        // Driver pay list AND the per-driver payslip both light up the
-        // "Driver pay" tab -- the payslip is a drill-down of the summary.
-        request()->routeIs('admin.drivers.pay')      => 'driver_pay',
-        request()->routeIs('admin.drivers.payslip')  => 'driver_pay',
+        // Driver pay list AND the per-driver payslip AND the per-driver
+        // cash audit all light up the "Driver pay" tab -- payslip is a
+        // drill-down of the summary, cash audit is the forensic view of
+        // the same data.
+        request()->routeIs('admin.drivers.pay')         => 'driver_pay',
+        request()->routeIs('admin.drivers.payslip')     => 'driver_pay',
+        request()->routeIs('admin.drivers.cash-audit')  => 'driver_pay',
         request()->routeIs('admin.drivers.bus-tickets') => 'bus_tickets',
         default => 'slips',
     };

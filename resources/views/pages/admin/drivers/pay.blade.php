@@ -320,10 +320,16 @@ new #[Layout('components.layouts.app')] class extends Component {
                             <td class="px-3 py-2 text-right tabular-nums text-slate-700">R {{ number_format($row['advances'], 2) }}</td>
                             <td class="px-3 py-2 text-right tabular-nums text-slate-700">R {{ number_format($row['spend'], 2) }}</td>
                             <td class="px-3 py-2 text-center">
-                                <a href="{{ route('admin.drivers.payslip', ['user' => $row['id'], 'month' => $month]) }}"
-                                    class="text-[11px] font-medium text-blue-600 hover:text-blue-800 hover:underline">
-                                    View payslip
-                                </a>
+                                <div class="flex flex-col gap-0.5">
+                                    <a href="{{ route('admin.drivers.payslip', ['user' => $row['id'], 'month' => $month]) }}"
+                                        class="text-[11px] font-medium text-blue-600 hover:text-blue-800 hover:underline">
+                                        View payslip
+                                    </a>
+                                    <a href="{{ route('admin.drivers.cash-audit', ['user' => $row['id']]) }}"
+                                        class="text-[10px] font-medium text-rose-700 hover:text-rose-900 hover:underline">
+                                        Cash audit
+                                    </a>
+                                </div>
                             </td>
                         </tr>
                     @empty

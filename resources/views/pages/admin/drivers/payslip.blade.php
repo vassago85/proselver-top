@@ -437,6 +437,11 @@ new #[Layout('components.layouts.app')] class extends Component {
                     <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
                     Download PDF
                 </a>
+                <a href="{{ route('admin.drivers.cash-audit', ['user' => $user->id]) }}"
+                    class="inline-flex items-center gap-1.5 rounded-md border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 shadow-sm hover:bg-rose-100">
+                    <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" x2="16.65" y1="21" y2="16.65"/></svg>
+                    Cash audit
+                </a>
                 <a href="{{ route('admin.drivers.pay', ['month' => $month]) }}"
                     class="text-xs font-medium text-slate-500 hover:text-slate-900">
                     &larr; All drivers
