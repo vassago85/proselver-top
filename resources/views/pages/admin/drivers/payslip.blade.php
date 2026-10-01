@@ -243,14 +243,22 @@ new #[Layout('components.layouts.app')] class extends Component {
             ->where('not_used_outcome', DriverBusTicket::OUTCOME_CHARGED_TO_DRIVER)
             ->sum(fn (DriverBusTicket $t) => $t->amountRand());
 
-        // Petty cash: total EVERY entry allocated to the driver this
-        // month regardless of approval status.  We don't drive the
-        // approval queue (ops don't run it in practice), so the
-        // payslip has to show the full exposure, not a filtered
-        // "approved" subset.  Rejected rows are the only exclusion --
-        // those were refused outright and never represent money that
-        // left the till.
-        $pettyCashAllocated = $pettyCash
+        // Advances issued against this driver's movements this month.
+        // This is the ACTUAL petty cash that left the till for the
+        // driver -- recorded on each transport_jobs row when ops
+        // assigns the advance (advance_total column, decimal rand).
+        // This is distinct from petty-cash slips, which are the
+        // after-the-fact documentation of how the advance was spent.
+        $advancesIssued = (float) $movements->sum(fn (Job $j) => (float) ($j->advance_total ?? 0));
+
+        // Petty cash SLIPS submitted by the driver this month -- the
+        // reconciliation paperwork for the advances above (or for ad-hoc
+        // out-of-pocket spend).  Ops don't drive the approval queue in
+        // practice, so filtering on APPROVED/REIMBURSED would make this
+        // card read R0.  Rejected rows are the only exclusion -- those
+        // were refused outright and never represent money that left the
+        // till.
+        $slipsSubmitted = (float) $pettyCash
             ->where('status', '!=', PettyCashEntry::STATUS_REJECTED)
             ->sum(fn (PettyCashEntry $e) => $e->amountRand());
 
@@ -263,7 +271,8 @@ new #[Layout('components.layouts.app')] class extends Component {
             'grossEarnings'    => (float) $grossEarnings,
             'busDeductions'    => (float) $busDeductions,
             'netPay'           => (float) ($grossEarnings - $busDeductions),
-            'pettyCashAllocated' => (float) $pettyCashAllocated,
+            'advancesIssued'   => $advancesIssued,
+            'slipsSubmitted'   => $slipsSubmitted,
             'from'             => $from,
             'to'               => $to,
             'anchor'           => $anchor,
@@ -355,7 +364,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         </div>
 
         {{-- Totals strip --}}
-        <div class="grid grid-cols-2 gap-3 border-b border-slate-100 px-5 py-4 sm:grid-cols-5">
+        <div class="grid grid-cols-2 gap-3 border-b border-slate-100 px-5 py-4 sm:grid-cols-6">
             <div class="rounded-lg border border-slate-200 bg-slate-50 p-3">
                 <p class="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Movements</p>
                 <p class="mt-1 text-lg font-bold text-slate-900 tabular-nums">{{ $movements->count() }}</p>
@@ -379,9 +388,14 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <p class="mt-1 text-lg font-bold text-blue-900 tabular-nums">R {{ number_format($netPay, 2) }}</p>
             </div>
             <div class="rounded-lg border border-amber-200 bg-amber-50 p-3">
-                <p class="text-[10px] font-semibold uppercase tracking-wider text-amber-800">Petty cash</p>
-                <p class="mt-1 text-lg font-bold text-amber-900 tabular-nums">R {{ number_format($pettyCashAllocated, 2) }}</p>
-                <p class="mt-0.5 text-[10px] text-amber-700">allocated this month</p>
+                <p class="text-[10px] font-semibold uppercase tracking-wider text-amber-800">Petty cash advanced</p>
+                <p class="mt-1 text-lg font-bold text-amber-900 tabular-nums">R {{ number_format($advancesIssued, 2) }}</p>
+                <p class="mt-0.5 text-[10px] text-amber-700">issued to driver per trip</p>
+            </div>
+            <div class="rounded-lg border border-slate-200 bg-white p-3">
+                <p class="text-[10px] font-semibold uppercase tracking-wider text-slate-600">Slips submitted</p>
+                <p class="mt-1 text-lg font-bold text-slate-800 tabular-nums">R {{ number_format($slipsSubmitted, 2) }}</p>
+                <p class="mt-0.5 text-[10px] text-slate-500">reconciliation paperwork</p>
             </div>
         </div>
 
@@ -396,6 +410,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                         <th class="px-3 py-2 text-left">Collection</th>
                         <th class="px-3 py-2 text-left">Delivery</th>
                         <th class="px-3 py-2 text-left">Vehicle</th>
+                        <th class="px-3 py-2 text-right">Advance</th>
                         <th class="px-3 py-2 text-right">Default rate</th>
                         <th class="px-3 py-2 text-right">Pay override</th>
                         <th class="px-3 py-2 text-left">Note</th>
@@ -433,6 +448,16 @@ new #[Layout('components.layouts.app')] class extends Component {
                                         <span class="text-[10px] text-slate-400">{{ $job->registration }}</span>
                                     @endif
                                 </div>
+                            </td>
+                            <td class="px-3 py-2 text-right tabular-nums">
+                                @if($job->advance_total !== null && (float) $job->advance_total > 0)
+                                    <span class="font-semibold text-amber-700">R {{ number_format((float) $job->advance_total, 2) }}</span>
+                                    @if($job->advance_assigned_at)
+                                        <div class="text-[10px] text-amber-600">{{ $job->advance_assigned_at->format('d M') }}</div>
+                                    @endif
+                                @else
+                                    <span class="text-slate-300">—</span>
+                                @endif
                             </td>
                             <td class="px-3 py-2 text-right tabular-nums text-slate-500">
                                 @if($profileRate !== null)
@@ -472,7 +497,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                         </tr>
                     @empty
                         <tr>
-                            <td colspan="9" class="px-3 py-10 text-center text-sm text-slate-500">
+                            <td colspan="10" class="px-3 py-10 text-center text-sm text-slate-500">
                                 No movements delivered by {{ $user->name }} in {{ $anchor->format('F Y') }}.
                             </td>
                         </tr>
@@ -481,8 +506,12 @@ new #[Layout('components.layouts.app')] class extends Component {
                 @if($movements->count() > 0)
                     <tfoot class="bg-slate-50 text-[11px] font-semibold text-slate-700">
                         <tr>
-                            <td colspan="7" class="px-3 py-2 text-right">Gross earnings</td>
-                            <td colspan="2" class="px-3 py-2 text-right tabular-nums text-emerald-700">
+                            <td colspan="6" class="px-3 py-2 text-right">Advances issued</td>
+                            <td class="px-3 py-2 text-right tabular-nums text-amber-700">
+                                R {{ number_format($advancesIssued, 2) }}
+                            </td>
+                            <td colspan="2" class="px-3 py-2 text-right">Gross earnings</td>
+                            <td class="px-3 py-2 text-right tabular-nums text-emerald-700">
                                 R {{ number_format($grossEarnings, 2) }}
                             </td>
                         </tr>
@@ -541,13 +570,14 @@ new #[Layout('components.layouts.app')] class extends Component {
         </div>
     </div>
 
-    {{-- Petty cash --}}
+    {{-- Petty cash slips submitted (reconciliation paperwork) --}}
     <div class="rounded-xl border border-slate-200 bg-white shadow-sm">
         <div class="flex items-center justify-between border-b border-slate-100 px-5 py-3">
             <div>
-                <h3 class="text-sm font-semibold text-slate-900">Petty cash</h3>
+                <h3 class="text-sm font-semibold text-slate-900">Petty cash slips submitted</h3>
                 <p class="text-xs text-slate-500">
-                    Entries submitted by the driver in this window.  Reference only &mdash; approvals happen on the Petty Cash queue.
+                    Receipts and expense entries the driver captured in this window &mdash; the reconciliation
+                    paperwork for the advances above.  Reference only; the payslip net doesn't move with these.
                 </p>
             </div>
             <a href="{{ route('admin.petty-cash.index') }}" class="text-xs font-medium text-blue-600 hover:underline">Open queue &rarr;</a>

@@ -73,25 +73,31 @@
     {{-- Totals strip --}}
     <table class="totals-strip">
         <tr>
-            <td style="width: 20%;">
+            <td style="width: 16.66%;">
                 <div class="muted small">Movements</div>
-                <div class="tabular" style="font-size: 15px; font-weight: bold;">{{ $lines->count() }}</div>
+                <div class="tabular" style="font-size: 14px; font-weight: bold;">{{ $lines->count() }}</div>
             </td>
-            <td style="width: 20%;">
+            <td style="width: 16.66%;">
                 <div class="muted small">Gross earnings</div>
-                <div class="tabular" style="font-size: 15px; font-weight: bold; color: #065f46;">R {{ number_format($grossEarnings, 2) }}</div>
+                <div class="tabular" style="font-size: 14px; font-weight: bold; color: #065f46;">R {{ number_format($grossEarnings, 2) }}</div>
             </td>
-            <td style="width: 20%;">
+            <td style="width: 16.66%;">
                 <div class="muted small">Bus deductions</div>
-                <div class="tabular" style="font-size: 15px; font-weight: bold; color: #991b1b;">R {{ number_format($busDeductions, 2) }}</div>
+                <div class="tabular" style="font-size: 14px; font-weight: bold; color: #991b1b;">R {{ number_format($busDeductions, 2) }}</div>
             </td>
-            <td style="width: 20%;">
+            <td style="width: 16.66%;">
                 <div class="muted small">Net pay</div>
-                <div class="tabular" style="font-size: 15px; font-weight: bold; color: #1e3a8a;">R {{ number_format($netPay, 2) }}</div>
+                <div class="tabular" style="font-size: 14px; font-weight: bold; color: #1e3a8a;">R {{ number_format($netPay, 2) }}</div>
             </td>
-            <td style="width: 20%;">
-                <div class="muted small">Petty cash (ref)</div>
-                <div class="tabular" style="font-size: 15px; font-weight: bold; color: #92400e;">R {{ number_format($pettyCashAllocated, 2) }}</div>
+            <td style="width: 16.66%;">
+                <div class="muted small">Petty cash advanced</div>
+                <div class="tabular" style="font-size: 14px; font-weight: bold; color: #92400e;">R {{ number_format($advancesIssued, 2) }}</div>
+                <div class="muted" style="font-size: 8px;">issued per trip</div>
+            </td>
+            <td style="width: 16.66%;">
+                <div class="muted small">Slips submitted</div>
+                <div class="tabular" style="font-size: 14px; font-weight: bold; color: #334155;">R {{ number_format($slipsSubmitted, 2) }}</div>
+                <div class="muted" style="font-size: 8px;">reconciliation</div>
             </td>
         </tr>
     </table>
@@ -106,6 +112,7 @@
                 <th>From</th>
                 <th>To</th>
                 <th>Vehicle</th>
+                <th class="right">Advance</th>
                 <th class="right">Pay</th>
             </tr>
         </thead>
@@ -125,6 +132,16 @@
                         @endif
                     </td>
                     <td class="right tabular">
+                        @if($job->advance_total !== null && (float) $job->advance_total > 0)
+                            <span style="color: #92400e; font-weight: 600;">R {{ number_format((float) $job->advance_total, 2) }}</span>
+                            @if($job->advance_assigned_at)
+                                <div class="muted" style="font-size: 9px;">{{ $job->advance_assigned_at->format('d M') }}</div>
+                            @endif
+                        @else
+                            <span class="muted">—</span>
+                        @endif
+                    </td>
+                    <td class="right tabular">
                         R {{ number_format($line['pay'], 2) }}
                         @if($line['is_override'])
                             <div><span class="pill pill-green">Override</span></div>
@@ -135,13 +152,14 @@
                     </td>
                 </tr>
             @empty
-                <tr><td colspan="7" class="muted center" style="padding: 20px;">No movements delivered in this window.</td></tr>
+                <tr><td colspan="8" class="muted center" style="padding: 20px;">No movements delivered in this window.</td></tr>
             @endforelse
         </tbody>
         @if($lines->count() > 0)
             <tfoot>
                 <tr>
-                    <td colspan="6" class="right"><strong>Gross earnings</strong></td>
+                    <td colspan="6" class="right"><strong>Totals</strong></td>
+                    <td class="right tabular" style="color: #92400e; font-weight: bold;">R {{ number_format($advancesIssued, 2) }}</td>
                     <td class="right tabular" style="color: #065f46; font-weight: bold;">R {{ number_format($grossEarnings, 2) }}</td>
                 </tr>
             </tfoot>
@@ -205,7 +223,7 @@
         @endif
     </table>
 
-    <h2>Petty cash (reference)</h2>
+    <h2>Petty cash slips submitted (reference)</h2>
     <table>
         <thead>
             <tr>
@@ -268,8 +286,9 @@
                 <div class="muted small">
                     Gross earnings = sum of per-movement pay (per-trip override, else the default rate per movement from your profile).
                     Bus deductions = tickets issued but not used where the cost was charged to the driver.
-                    Petty cash shows the full amount allocated to the driver this month and cancelled trips are listed for
-                    context -- neither affects net pay.
+                    Petty cash advanced = cash issued to the driver per trip; slips submitted = the reconciliation
+                    paperwork the driver captured against those advances.  Neither petty-cash figure, nor cancelled trips,
+                    affect net pay directly &mdash; they're shown for context and audit.
                 </div>
             </td>
             <td style="padding: 0; text-align: right;">

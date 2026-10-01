@@ -24,8 +24,13 @@ use Illuminate\Support\Carbon;
  *   - Bus       = DriverBusTicket rows with travel_date in the
  *                  window; charged_to_driver outcomes are deducted,
  *                  voided ones listed as "no impact".
- *   - Petty cash = reference section; the payslip does NOT subtract
- *                  these.  Reimbursement is tracked separately.
+ *   - Advance   = SUM(transport_jobs.advance_total) across this
+ *                  month's movements -- the actual petty cash that
+ *                  left the till for the driver.  Shown per-trip in
+ *                  the movements table and summed in the totals strip.
+ *   - Slips      = PettyCashEntry rows in the window -- reference
+ *                  only, the reconciliation paperwork for the
+ *                  advance above.
  *   - Cancelled = reference section; included so the driver can see
  *                  why the gross number may be lower than expected.
  */
@@ -109,12 +114,21 @@ class DriverPayslipService
             ->where('status', DriverBusTicket::STATUS_NOT_USED)
             ->where('not_used_outcome', DriverBusTicket::OUTCOME_CHARGED_TO_DRIVER)
             ->sum(fn (DriverBusTicket $t) => $t->amountRand());
-        // Petty cash exposure for this payslip: everything allocated
-        // to the driver this month except flat-out rejections.  The
-        // approval queue isn't driven in practice, so filtering on
-        // APPROVED/REIMBURSED would make the PDF show R0 for drivers
-        // who have real petty cash out against them.
-        $pettyCashAllocated = (float) $pettyCash
+
+        // Advances issued against this driver's movements this month.
+        // This is the ACTUAL petty cash that left the till for the
+        // driver -- recorded on each transport_jobs row when ops
+        // assigns the advance (advance_total column, decimal rand).
+        // Distinct from the slips below, which are after-the-fact
+        // reconciliation paperwork for how the advance was spent.
+        $advancesIssued = (float) $movements->sum(fn (Job $j) => (float) ($j->advance_total ?? 0));
+
+        // Petty cash slips the driver submitted in the window.
+        // Rejected rows excluded (refused outright, no cash moved).
+        // Everything else is counted -- the approval queue isn't driven
+        // in practice so filtering on APPROVED/REIMBURSED would make
+        // the PDF under-report the driver's reconciliation activity.
+        $slipsSubmitted = (float) $pettyCash
             ->where('status', '!=', PettyCashEntry::STATUS_REJECTED)
             ->sum(fn (PettyCashEntry $e) => $e->amountRand());
 
@@ -131,7 +145,8 @@ class DriverPayslipService
             'grossEarnings'     => $grossEarnings,
             'busDeductions'     => $busDeductions,
             'netPay'            => $grossEarnings - $busDeductions,
-            'pettyCashAllocated' => $pettyCashAllocated,
+            'advancesIssued'    => $advancesIssued,
+            'slipsSubmitted'    => $slipsSubmitted,
             'generatedAt'       => now(),
         ])->render();
 

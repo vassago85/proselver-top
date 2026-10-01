@@ -231,6 +231,51 @@ test('payslip gross is 0 and movements is empty for a driver with no in-window j
         ->and($c->viewData('grossEarnings'))->toBe(0.0);
 });
 
+test('payslip surfaces petty-cash advances issued per trip and sums them in the totals strip', function () {
+    // Mirror of the Austin Ntseki scenario from the trip report:
+    // ops issued R710 against a specific delivery (tolls + food) but
+    // the driver never submitted slips.  The payslip must still show
+    // the R710 against that trip and in the "petty cash advanced"
+    // total; otherwise cash goes untracked.
+    $accounts = dpUser('accounts');
+    $driver   = dpDriver(30000);
+    $inMonth  = now()->startOfMonth()->addDays(5);
+
+    // Trip with an advance issued.
+    $withAdvance = dpJob($driver, $inMonth, [
+        'advance_tolls'        => 410.0,
+        'advance_food'         => 300.0,
+        'advance_total'        => 710.0,
+        'advance_assigned_at'  => $inMonth->copy()->subDay(),
+        'advance_assigned_by_user_id' => $accounts->id,
+    ]);
+
+    // Trip with no advance -- confirms null doesn't poison the sum.
+    $withoutAdvance = dpJob($driver, $inMonth->copy()->addDay());
+
+    $this->actingAs($accounts);
+
+    $c = Volt::test('admin.drivers.payslip', ['user' => $driver])
+        ->set('month', $inMonth->format('Y-m'));
+
+    expect($c->viewData('advancesIssued'))->toBe(710.0)
+        ->and($c->viewData('slipsSubmitted'))->toBe(0.0); // no PettyCashEntry rows -> 0
+
+    // The HTTP render must also show the rand amount against the job
+    // -- the user's complaint was that the trip report said R710 but
+    // the payslip said nothing.
+    $this->get(route('admin.drivers.payslip', [
+        'user'  => $driver->id,
+        'month' => $inMonth->format('Y-m'),
+    ]))
+        ->assertOk()
+        ->assertSee($withAdvance->job_number)
+        ->assertSee('R 710.00')
+        ->assertSee('Petty cash advanced');
+
+    unset($withoutAdvance);
+});
+
 // -----------------------------------------------------------------
 // 4. PDF download
 // -----------------------------------------------------------------
