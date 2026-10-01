@@ -41,7 +41,10 @@ Route::get('dashboard/operations', \App\Livewire\Admin\Operations\OperationsDash
 // mount() is the source of truth; everyone else 403s.
 Volt::route('dashboard/finance', 'admin.dashboard.finance')->name('dashboard.finance');
 
-// Owner roll-up -- owner, developer, super admin only.
+// Owner roll-up -- owner + developer only.  super_admin used to land
+// here but was scoped out when this became the business-oversight
+// command centre (see DashboardSplitTest::'owner dashboard is closed
+// to super admin, accounts and ops' + the mount() gate on the page).
 Volt::route('dashboard/owner', 'admin.dashboard.owner')->name('dashboard.owner');
 
 // Petty-cash overview dashboard. Owner, developer, accounts and the

@@ -152,13 +152,15 @@ new #[Layout('components.layouts.app')] #[Defer] class extends Component {
 
     public function mount(): void
     {
-        // Only internal staff (ops controller, dispatcher, accounts,
-        // owner, developer, super admin) should see fuel operations --
-        // customers and dealers must never land here.  The sidebar link
-        // is separately hidden from ops/dispatch per staff request, but
-        // the route stays reachable for owner / developer / accounts
-        // via direct URL.
-        if (!auth()->user()?->isInternal() && !auth()->user()?->isDeveloper()) {
+        // TFN fuel ops is owner / developer / super_admin only
+        // (2026-10-01 staff request).  Previously any internal role
+        // could URL-hop in; ops controller, ops manager, dispatcher
+        // and accounts are now blocked server-side too so the sidebar
+        // hide is backed by a 403 for anyone who guesses the path.
+        // Customers / dealers / drivers never reached here anyway via
+        // the route group, but we keep the explicit abort as defence.
+        $u = auth()->user();
+        if (!$u || (!$u->isOwner() && !$u->isDeveloper() && !$u->isSuperAdmin())) {
             abort(403);
         }
     }
@@ -166,10 +168,14 @@ new #[Layout('components.layouts.app')] #[Defer] class extends Component {
     /**
      * Whether the current viewer is allowed to see fuel FINANCE data --
      * running balance, credit limit, total spend, per-transaction and
-     * per-order rand amounts.  Ops (controller / dispatcher) see the
-     * operational surface (litres, transactions, fleet) without the
-     * aggregate spend or account balance -- that stays owner /
-     * accounts / developer territory.
+     * per-order rand amounts.
+     *
+     * With the 2026-10-01 lockdown the whole page is already restricted
+     * to owner / developer / super_admin, so this gate is now a no-op
+     * (true for every viewer who makes it past mount()).  Kept as a
+     * method rather than inlined so the Blade `@if($canSeeFinance)`
+     * blocks stay readable and we have one place to re-add granularity
+     * if finance is ever let back in with a reduced view.
      */
     public function canSeeFinance(): bool
     {
@@ -177,8 +183,7 @@ new #[Layout('components.layouts.app')] #[Defer] class extends Component {
         if (!$u) return false;
         return $u->isOwner()
             || $u->isDeveloper()
-            || $u->isSuperAdmin()
-            || $u->isAccounts();
+            || $u->isSuperAdmin();
     }
 
     /**

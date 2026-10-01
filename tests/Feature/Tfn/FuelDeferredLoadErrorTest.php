@@ -26,12 +26,13 @@ use Livewire\Volt\Volt;
 uses(RefreshDatabase::class);
 
 beforeEach(function () {
-    Role::firstOrCreate(['slug' => 'operations_controller'], ['name' => 'Ops Controller', 'tier' => 'internal']);
+    // owner is the post-2026-10-01 whitelist role for /admin/fuel.
+    Role::firstOrCreate(['slug' => 'owner'], ['name' => 'Owner', 'tier' => 'internal']);
 });
 
 test('the error banner renders and the KPI strip stays safe when loadError is set', function () {
     $u = User::factory()->create(['is_active' => true]);
-    $u->assignRole('operations_controller');
+    $u->assignRole('owner');
 
     $component = Volt::actingAs($u)->test('admin.fuel');
 
@@ -52,7 +53,7 @@ test('the error banner renders and the KPI strip stays safe when loadError is se
 
 test('retryLoad clears the flag so the banner disappears on the next render', function () {
     $u = User::factory()->create(['is_active' => true]);
-    $u->assignRole('operations_controller');
+    $u->assignRole('owner');
 
     $component = Volt::actingAs($u)->test('admin.fuel');
     $component->set('loadError', 'transient blip');

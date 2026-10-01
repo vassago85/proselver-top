@@ -32,6 +32,11 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 uses(RefreshDatabase::class);
 
 beforeEach(function () {
+    // owner is the post-2026-10-01 whitelist role for /admin/fuel.
+    // operations_controller + accounts both 403 now; they stay seeded
+    // for compatibility with any shared helpers but the alignment tests
+    // below act as `owner` to actually reach the KPIs.
+    Role::firstOrCreate(['slug' => 'owner'], ['name' => 'Owner', 'tier' => 'internal']);
     Role::firstOrCreate(['slug' => 'operations_controller'], ['name' => 'Ops Controller', 'tier' => 'internal']);
     Role::firstOrCreate(['slug' => 'accounts'], ['name' => 'Accounts', 'tier' => 'internal']);
     // Keep the licence meter deterministic.
@@ -61,7 +66,7 @@ test('the Balance KPI reads TFNs real v3 keys and renders a negative balance as 
         }
     });
 
-    $accounts = alignmentUser('accounts');
+    $accounts = alignmentUser('owner');
     $response = $this->actingAs($accounts)->get('/admin/fuel');
     $response->assertOk()
         // The absolute value is shown, sign is conveyed by the label.
@@ -88,7 +93,7 @@ test('the Balance KPI accepts the legacy demo keys too', function () {
         }
     });
 
-    $accounts = alignmentUser('accounts');
+    $accounts = alignmentUser('owner');
     $this->actingAs($accounts)
         ->get('/admin/fuel')
         ->assertOk()
@@ -135,7 +140,7 @@ test('the fuel page renders when TFN pricing rows only carry real v3 keys', func
         }
     });
 
-    $this->actingAs(alignmentUser('operations_controller'))
+    $this->actingAs(alignmentUser('owner'))
         ->get('/admin/fuel')
         ->assertOk()
         // Depot label is derived from SupplierName.

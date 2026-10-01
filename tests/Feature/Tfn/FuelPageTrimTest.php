@@ -63,6 +63,10 @@ function fakeTfnClient(array $overrides = []): TfnClient
 }
 
 beforeEach(function () {
+    // owner is the post-2026-10-01 whitelist role for /admin/fuel.
+    // ops_controller stays seeded because other TFN tests reference it,
+    // and leaving it alongside doesn't harm this file's assertions.
+    Role::firstOrCreate(['slug' => 'owner'], ['name' => 'Owner', 'tier' => 'internal']);
     Role::firstOrCreate(['slug' => 'operations_controller'], ['name' => 'Ops Controller', 'tier' => 'internal']);
     SystemSetting::set(ProselverLicenceBilling::SETTING_ENABLED, true, 'boolean');
 
@@ -115,7 +119,7 @@ test('fleet grid shows only vehicles with an open order, not the whole catalogue
     app()->instance(TfnClient::class, $fake);
 
     $u = User::factory()->create(['is_active' => true]);
-    $u->assignRole('operations_controller');
+    $u->assignRole('owner');
 
     // Live path only tracks orders TRIDENT itself placed.
     foreach (['ORD/01/2951/11291', 'ORD/01/2951/11235'] as $num) {
@@ -159,7 +163,7 @@ test('live fleet stays empty when TFN has vehicles but TRIDENT has placed no ord
     app()->instance(TfnClient::class, $fake);
 
     $u = User::factory()->create(['is_active' => true]);
-    $u->assignRole('operations_controller');
+    $u->assignRole('owner');
 
     $this->actingAs($u)->get('/admin/fuel')
         ->assertOk()
@@ -196,7 +200,7 @@ test('cards are only looked up for vehicles with open orders (not the whole cata
     app()->instance(TfnClient::class, $fake);
 
     $u = User::factory()->create(['is_active' => true]);
-    $u->assignRole('operations_controller');
+    $u->assignRole('owner');
 
     TfnFuelOrderPlacement::query()->create([
         'order_number'         => 'ORD/01/2951/1',
@@ -243,7 +247,7 @@ test('transactions are attached to the correct fleet row by VehicleRegistration 
     app()->instance(TfnClient::class, $fake);
 
     $u = User::factory()->create(['is_active' => true]);
-    $u->assignRole('operations_controller');
+    $u->assignRole('owner');
 
     foreach (['A' => 'AGH818GP', 'B' => 'MR44JRGP'] as $num => $reg) {
         TfnFuelOrderPlacement::query()->create([
@@ -338,7 +342,7 @@ test('litres MTD includes recent fills that fell off TFN month-start 100-row pag
     app()->instance(TfnClient::class, $fake);
 
     $u = User::factory()->create(['is_active' => true]);
-    $u->assignRole('operations_controller');
+    $u->assignRole('owner');
 
     $c = \Livewire\Volt\Volt::actingAs($u)->test('admin.fuel');
 
@@ -415,7 +419,7 @@ test('product mix counts overnight stays as nights when TFN leaves Litres at 0',
     app()->instance(TfnClient::class, $fake);
 
     $u = User::factory()->create(['is_active' => true]);
-    $u->assignRole('operations_controller');
+    $u->assignRole('owner');
 
     $c = \Livewire\Volt\Volt::actingAs($u)->test('admin.fuel');
 

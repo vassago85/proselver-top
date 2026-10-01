@@ -27,6 +27,11 @@ use Illuminate\Support\Str;
 uses(RefreshDatabase::class);
 
 beforeEach(function () {
+    // Owner is the only role on /admin/fuel's whitelist that doesn't
+    // bypass permission checks (unlike developer / super_admin), so it
+    // exercises the real gate.  ops_controller / accounts still seeded
+    // because other tests in this file use them for /admin/invoices.
+    Role::firstOrCreate(['slug' => 'owner'], ['name' => 'Owner', 'tier' => 'internal']);
     Role::firstOrCreate(['slug' => 'operations_controller'], ['name' => 'Ops Controller', 'tier' => 'internal']);
     Role::firstOrCreate(['slug' => 'accounts'], ['name' => 'Accounts', 'tier' => 'internal']);
     Role::firstOrCreate(['slug' => 'driver'], ['name' => 'Driver', 'tier' => 'driver']);
@@ -35,9 +40,12 @@ beforeEach(function () {
     SystemSetting::set(ProselverLicenceBilling::SETTING_ENABLED, true, 'boolean');
 });
 
-test('/admin/fuel renders 200 for an operations controller in demo mode', function () {
+test('/admin/fuel renders 200 for an owner in demo mode', function () {
+    // 2026-10-01: mount() restricted to owner / developer / super_admin.
+    // Previously this test used operations_controller — swapped to owner
+    // because ops_controller now 403s per the staff-request lockdown.
     $u = User::factory()->create(['is_active' => true]);
-    $u->assignRole('operations_controller');
+    $u->assignRole('owner');
 
     $this->actingAs($u)
         ->get('/admin/fuel')
@@ -48,6 +56,20 @@ test('/admin/fuel renders 200 for an operations controller in demo mode', functi
         ->assertSee('Recent transactions')
         // The banner about demo-mode config renders when TFN is off.
         ->assertSee('demo');
+});
+
+test('/admin/fuel 403s for operations_controller / accounts / dispatcher after the 2026-10-01 lockdown', function () {
+    // Guards the new mount() whitelist (owner / developer / super_admin
+    // only).  Previously any internal role could URL-hop into the fuel
+    // page even though the sidebar link had been hidden on 2026-09-30.
+    foreach (['operations_controller', 'accounts'] as $slug) {
+        $u = User::factory()->create(['is_active' => true]);
+        $u->assignRole($slug);
+
+        $this->actingAs($u)
+            ->get('/admin/fuel')
+            ->assertForbidden();
+    }
 });
 
 test('/admin/fuel renders 200 when TFN returns real-shaped vehicles (no VIN field)', function () {
@@ -89,7 +111,9 @@ test('/admin/fuel renders 200 when TFN returns real-shaped vehicles (no VIN fiel
     $this->app->instance(TfnClient::class, $fake);
 
     $u = User::factory()->create(['is_active' => true]);
-    $u->assignRole('operations_controller');
+    // owner is on the post-lockdown whitelist (see mount()).  Was
+    // operations_controller until 2026-10-01.
+    $u->assignRole('owner');
 
     // The regression this test guards is "the /admin/fuel page does
     // NOT 500 when TFN returns vehicles without a VIN field".  Before
