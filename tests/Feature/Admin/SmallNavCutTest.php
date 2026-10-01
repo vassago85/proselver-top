@@ -119,26 +119,30 @@ test('the Drivers roster links across to Driver Operations', function () {
 // Petty Cash tab strip absorbs the three finance duplicates
 // -----------------------------------------------------------------
 
-test('the Petty Cash tab strip exposes Overview / Reconciliation / Driver Pay', function () {
-    // Overview + Reconciliation share canViewPettyCashOverview(); Driver
-    // Pay is accounts/owner/dev only.  Accounts holds both so it's the
-    // right role to prove the whole strip.
+test('the Petty Cash tab strip exposes Overview / Driver Pay', function () {
+    // Overview uses canViewPettyCashOverview(); Driver Pay is
+    // accounts/owner/dev only.  Accounts holds both so it's the right role
+    // to prove the whole strip.  The Reconciliation and Plans · Sign-off
+    // tabs were retired 2026-10-01 (ops stopped running those workflows);
+    // the routes still exist for contextual deep-links from Orders /
+    // Planning / dashboards, but no longer appear in the strip.
     $this->actingAs(navCutUser('accounts'))
         ->get(route('admin.petty-cash.index'))
         ->assertOk()
         ->assertSee(route('admin.overview'))
-        ->assertSee(route('admin.petty-cash.reconciliation'))
         ->assertSee(route('admin.drivers.pay'))
         ->assertSee('Overview')
-        ->assertSee('Reconciliation')
-        ->assertSee('Driver pay');
+        ->assertSee('Driver pay')
+        ->assertDontSee(route('admin.petty-cash.reconciliation'))
+        ->assertDontSee(route('admin.petty-cash.plans'));
 });
 
 test('a dispatcher sees the Slips tab but not the admin-only Petty Cash tabs', function () {
     // Dispatchers can see the queue (all internal roles can) but must not
-    // see Overview / Reconciliation / Driver Pay entries -- they carry
-    // per-trip cost breakdowns and month-end payroll respectively.  Same
-    // gate the retired sidebar entries carried.
+    // see Overview / Driver Pay entries -- they carry per-trip cost
+    // breakdowns and month-end payroll respectively.  Reconciliation /
+    // Plans tabs don't exist in the strip at all now, so dispatcher
+    // doesn't see them either -- asserted here as a regression guard.
     $this->actingAs(navCutUser('dispatcher'))
         ->get(route('admin.petty-cash.index'))
         ->assertOk()

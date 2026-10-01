@@ -495,9 +495,15 @@ test('the audit log can jump to yesterday and to this week', function () {
         ->assertSet('dateTo', now()->endOfWeek()->toDateString());
 });
 
-test('the reconciliation tab appears in the petty cash strip for those who may use it', function () {
+test('the reconciliation tab is no longer surfaced in the petty cash strip', function () {
+    // Retired 2026-10-01: staff confirmed the reconciliation workflow
+    // isn't being driven, so the always-on tab was pulled.  The
+    // page/route stays reachable for the "advance issued, trip
+    // cancelled" cleanup via contextual deep-links from Orders / Owner
+    // / Finance dashboards -- see the "Open reconciliation queries"
+    // attention item that the owner-dash test above still pins.
     $this->actingAs(reconUser('operations_controller'))
         ->get(route('admin.overview'))
         ->assertOk()
-        ->assertSee(route('admin.petty-cash.reconciliation'), false);
+        ->assertDontSee(route('admin.petty-cash.reconciliation'), false);
 });

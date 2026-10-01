@@ -21,23 +21,37 @@
     // the setup areas.  These flags mirror each destination page's own
     // mount() gate so the sidebar never offers a link that 403s -- if you
     // change a page's gate, change the matching flag here.
-    $canSeeFinanceDash = $isAccounts || $isOwner || $isDeveloper || $isSuperAdmin || $isOpsController;
+    //
+    // IMPORTANT: `$isDeveloper` is the REAL developer badge via
+    // `HasRoles::isDeveloper()` — which, unlike every other `isX()`
+    // helper, does NOT read `effectiveRoles()`.  So the moment the dev
+    // toolbar's "View as" switch is set, `$isDeveloper` is still true
+    // even though e.g. `$isOwner` / `$isOpsController` have flipped to
+    // the override role.  A naive `$isX || $isDeveloper` gate therefore
+    // leaks Owner / Invoicing / Fuel-TFN links to a developer previewing
+    // as ops_controller / driver / accounts / anything.  Use
+    // `$isDevNoOverride` (the `isDeveloperNoOverride()` helper on the
+    // HasRoles trait) in gates of the form "owner OR developer gets
+    // access"; keep `$isDeveloper` for identity readers like the
+    // "Developer" portal label a few lines below.
+    $isDevNoOverride = $user->isDeveloperNoOverride();
+
+    $canSeeFinanceDash = $isAccounts || $isOwner || $isDevNoOverride || $isSuperAdmin || $isOpsController;
     // Owner command centre is business-oversight only: owner + developer.
     // super_admin keeps every other admin surface but not this one.
-    $canSeeOwnerDash = $isOwner || $isDeveloper;
+    $canSeeOwnerDash = $isOwner || $isDevNoOverride;
     // Operations dashboard: hidden from ops / dispatch / accounts /
     // super_admin on staff request (2026-09-30) -- ops asked to land
     // on Orders instead, and the roll-up numbers on the ops dash are
     // owner/developer oversight rather than a shift-running screen.
     // Route redirect in `resolveInternalDashboardRoute()` steers the
     // hidden roles to /admin/orders after login.
-    $canSeeOpsDash = $isOwner || $isDeveloper;
+    $canSeeOpsDash = $isOwner || $isDevNoOverride;
     // Customer invoicing sidebar link: owner/developer only (2026-09-30
     // staff request).  Accounts used to see it too; the page/route
     // stays reachable by direct URL for owner+dev so they can pull the
-    // FAW-shaped Excel export when needed.  Accounts do the invoicing
-    // capture from the Petty Cash → Reconciliation tab now.
-    $canSeeInvoicing = $isOwner || $isDeveloper;
+    // FAW-shaped Excel export when needed.
+    $canSeeInvoicing = $isOwner || $isDevNoOverride;
     // Fuel · TFN sidebar link: hidden from ops controller, ops manager,
     // dispatch AND accounts (2026-10-01 staff request).  The TFN feature
     // is owner / developer / super_admin only now — balances, pricing,
@@ -45,7 +59,7 @@
     // not finance workflow.  Ordering was removed entirely from that page
     // on 2026-09-30.  Mount() enforces the same list server-side so
     // typing /admin/fuel into the address bar 403s for the hidden roles.
-    $canSeeFuelTfn = $isOwner || $isDeveloper || $isSuperAdmin;
+    $canSeeFuelTfn = $isOwner || $isDevNoOverride || $isSuperAdmin;
 
     // OEMs hold customer-tier roles for tenanting, so $isCustomer is true.
     // Treat the company type as the source of truth for the *portal* label
@@ -274,23 +288,24 @@
                         </x-sidebar-link>
                         @endif
 
-                        {{-- Petty Cash is one entry, not four.  Cash Overview,
-                             Reconciliation Queries and Driver Pay used to
-                             sit here as sibling entries; the Petty Cash
-                             pages already share a tab strip (section-tabs
-                             partial) so the sidebar duplicates were pure
-                             noise.  The active rule matches every route in
-                             that strip so a user on Overview / Reconciliation
-                             / Plans / Driver Pay still sees "Petty Cash"
-                             lit up here.  Gating on the tab strip stays as
-                             is: canViewPettyCashOverview() hides the three
-                             admin-only tabs from users who shouldn't see
-                             them, driver_pay stays owner/accounts/dev only. --}}
+                        {{-- Petty Cash is one entry, not four.  Cash Overview
+                             and Driver Pay used to sit here as sibling
+                             entries; the Petty Cash pages already share a tab
+                             strip (section-tabs partial) so the sidebar
+                             duplicates were pure noise.  The active rule
+                             matches every route in that strip so a user on
+                             Overview / Driver Pay / Bus Tickets still sees
+                             "Petty Cash" lit up here.  Reconciliation and
+                             Plans · Sign-off still match because they're
+                             reachable via contextual deep-links from Orders /
+                             Planning / dashboards even though the tabs
+                             themselves have been retired. --}}
                         <x-sidebar-link
                             :href="route('admin.petty-cash.index')"
                             :active="request()->routeIs('admin.petty-cash.index')
                                 || request()->routeIs('admin.overview')
                                 || request()->routeIs('admin.petty-cash.reconciliation')
+                                || request()->routeIs('admin.petty-cash.plans')
                                 || request()->routeIs('admin.drivers.pay')
                                 || request()->routeIs('admin.drivers.payslip')
                                 || request()->routeIs('admin.drivers.bus-tickets')">

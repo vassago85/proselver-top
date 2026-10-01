@@ -1,14 +1,13 @@
 {{--
     Cross-page navigation strip for the Petty Cash section.  Sits at
-    the top of each petty-cash page (Slips, Plans · Sign-off, Overview,
-    Reconciliation, Driver pay) so they read as one tool rather than
-    five separate sidebar entries.  The sidebar has a single "Petty
-    Cash" entry that lights up on any of them.
+    the top of each petty-cash page (Slips, Overview, Driver pay, Bus
+    tickets) so they read as one tool rather than four separate sidebar
+    entries.  The sidebar has a single "Petty Cash" entry that lights up
+    on any of them.
 
-    Overview and Reconciliation share one gate --
-    canViewPettyCashOverview() -- so the tabs can never offer a link
-    that then 403s.  Accounts uses both for month-end recon, ops for
-    driver spend and for clearing queries on trips they cancelled.
+    Overview uses canViewPettyCashOverview() for its gate -- accounts
+    plus owner/dev.  Reconciliation shared that gate but the tab has
+    been retired below (see note on $current).
 --}}
 @php
     $u = auth()->user();
@@ -23,15 +22,17 @@
         || $u->hasAnyRole(['super_admin', 'ops_manager', 'dispatcher'])
     );
     $isAccountsOnly = $u && $u->isAccounts() && !$u->isOwner() && !$u->isDeveloper();
-    // NOTE: the Plans · Sign-off tab was retired 2026-10-01. The route
-    // (admin.petty-cash.plans) and page still exist because the Orders
-    // detail, Planning board and Owner command centre deep-link into
-    // them from status copy ("waiting for owner approval"), but we no
-    // longer surface the tab here because the sign-off workflow isn't
-    // being driven in practice.
+    // NOTE: Plans · Sign-off and Reconciliation tabs were retired
+    // 2026-10-01 because neither workflow is being driven in practice.
+    // The routes (admin.petty-cash.plans, admin.petty-cash.reconciliation)
+    // and their pages still exist because the Orders detail, Planning
+    // board, Owner command centre and Finance tiles deep-link into
+    // them -- the "advance issued, trip cancelled" cleanup path in
+    // particular needs the Reconciliation page's openTransfer flow.
+    // What's removed here is the always-on tab entry; the pages are
+    // reachable via those contextual deep-links only.
     $current = match (true) {
         request()->routeIs('admin.overview') => 'overview',
-        request()->routeIs('admin.petty-cash.reconciliation') => 'reconciliation',
         // Driver pay list AND the per-driver payslip both light up the
         // "Driver pay" tab -- the payslip is a drill-down of the summary.
         request()->routeIs('admin.drivers.pay')      => 'driver_pay',
@@ -56,15 +57,6 @@
             @if($u && ($u->isOwner() || $u->isDeveloper()))
                 <span class="inline-flex items-center rounded-full bg-amber-50 border border-amber-200 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-amber-800">Owner</span>
             @endif
-        </a>
-        {{-- Open advances on cancelled trips, and the written explanation for
-             every one already settled. The owner's audit of where the cash
-             went; accounts and ops clear from here as well as the Overview. --}}
-        <a href="{{ route('admin.petty-cash.reconciliation') }}"
-            class="inline-flex items-center gap-2 rounded-lg px-3.5 py-1.5 text-xs font-semibold whitespace-nowrap transition
-            {{ $current === 'reconciliation' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900' }}">
-            <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" x2="12" y1="9" y2="13"/><line x1="12" x2="12.01" y1="17" y2="17"/></svg>
-            Reconciliation
         </a>
     @endif
     @if($canSeeDriverPay)

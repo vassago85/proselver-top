@@ -682,10 +682,12 @@ test('the finance pages are reachable via Petty Cash + tab strip (Phase 3 nav cu
     //
     // This test pins the shape we hold after Phase 3: from Finance an
     // accounts user reaches Petty Cash via the sidebar; opening Petty
-    // Cash reveals the tab strip carrying Overview / Reconciliation /
-    // Driver Pay.  Customer Invoicing must NOT appear in the accounts
-    // sidebar even though the underlying route stays reachable by direct
-    // URL for owner/dev.
+    // Cash reveals the tab strip carrying Overview / Driver Pay (the
+    // Reconciliation and Plans · Sign-off tabs were retired 2026-10-01
+    // after staff confirmed those workflows aren't being driven).
+    // Customer Invoicing must NOT appear in the accounts sidebar even
+    // though the underlying route stays reachable by direct URL for
+    // owner/dev.
     // Note: the finance dashboard *body* still links to
     // admin.invoices.index for KPI drill-downs / unbilled rows / the
     // header "Invoicing" button (rendered "Invoicing", not the sidebar
@@ -697,17 +699,19 @@ test('the finance pages are reachable via Petty Cash + tab strip (Phase 3 nav cu
         ->assertSee('Petty Cash')
         ->assertDontSee('Customer Invoicing');
 
-    // From the Petty Cash queue the tab strip exposes the other three,
-    // which is where they belong (they were already in the tab strip
-    // before Phase 2; the sidebar duplicates were the noise).
+    // From the Petty Cash queue the tab strip exposes Overview and
+    // Driver Pay, which is where they belong (they were already in the
+    // tab strip before Phase 2; the sidebar duplicates were the noise).
+    // Reconciliation / Plans · Sign-off tabs were retired 2026-10-01,
+    // so they must NOT appear in the strip anymore.
     $this->actingAs(dashUser('accounts'))
         ->get(route('admin.petty-cash.index'))
         ->assertSee(route('admin.overview'))
-        ->assertSee(route('admin.petty-cash.reconciliation'))
         ->assertSee(route('admin.drivers.pay'))
         ->assertSee('Overview')
-        ->assertSee('Reconciliation')
-        ->assertSee('Driver pay');
+        ->assertSee('Driver pay')
+        ->assertDontSee(route('admin.petty-cash.reconciliation'))
+        ->assertDontSee(route('admin.petty-cash.plans'));
 
     // Owner keeps the Customer Invoicing sidebar entry -- they still need
     // the FAW-shaped Excel export the page provides.
