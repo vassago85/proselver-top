@@ -243,12 +243,15 @@ new #[Layout('components.layouts.app')] class extends Component {
             ->where('not_used_outcome', DriverBusTicket::OUTCOME_CHARGED_TO_DRIVER)
             ->sum(fn (DriverBusTicket $t) => $t->amountRand());
 
-        $pettyCashApproved = $pettyCash
-            ->whereIn('status', [PettyCashEntry::STATUS_APPROVED, PettyCashEntry::STATUS_REIMBURSED])
-            ->sum(fn (PettyCashEntry $e) => $e->amountRand());
-
-        $pettyCashPending = $pettyCash
-            ->where('status', PettyCashEntry::STATUS_SUBMITTED)
+        // Petty cash: total EVERY entry allocated to the driver this
+        // month regardless of approval status.  We don't drive the
+        // approval queue (ops don't run it in practice), so the
+        // payslip has to show the full exposure, not a filtered
+        // "approved" subset.  Rejected rows are the only exclusion --
+        // those were refused outright and never represent money that
+        // left the till.
+        $pettyCashAllocated = $pettyCash
+            ->where('status', '!=', PettyCashEntry::STATUS_REJECTED)
             ->sum(fn (PettyCashEntry $e) => $e->amountRand());
 
         return [
@@ -260,8 +263,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             'grossEarnings'    => (float) $grossEarnings,
             'busDeductions'    => (float) $busDeductions,
             'netPay'           => (float) ($grossEarnings - $busDeductions),
-            'pettyCashApproved'=> (float) $pettyCashApproved,
-            'pettyCashPending' => (float) $pettyCashPending,
+            'pettyCashAllocated' => (float) $pettyCashAllocated,
             'from'             => $from,
             'to'               => $to,
             'anchor'           => $anchor,
@@ -378,13 +380,8 @@ new #[Layout('components.layouts.app')] class extends Component {
             </div>
             <div class="rounded-lg border border-amber-200 bg-amber-50 p-3">
                 <p class="text-[10px] font-semibold uppercase tracking-wider text-amber-800">Petty cash</p>
-                <p class="mt-1 text-lg font-bold text-amber-900 tabular-nums">R {{ number_format($pettyCashApproved, 2) }}</p>
-                <p class="mt-0.5 text-[10px] text-amber-700">
-                    approved + reimbursed
-                    @if($pettyCashPending > 0)
-                        &middot; R {{ number_format($pettyCashPending, 2) }} pending
-                    @endif
-                </p>
+                <p class="mt-1 text-lg font-bold text-amber-900 tabular-nums">R {{ number_format($pettyCashAllocated, 2) }}</p>
+                <p class="mt-0.5 text-[10px] text-amber-700">allocated this month</p>
             </div>
         </div>
 
@@ -743,6 +740,7 @@ new #[Layout('components.layouts.app')] class extends Component {
     <p class="text-[11px] text-slate-500">
         <strong>How this is calculated:</strong> each movement pays either the per-trip override (if set) or the driver's
         default rate from their profile.  Bus tickets marked <em>charged to driver</em> are deducted; <em>voided</em>
-        tickets are not.  Petty cash and cancelled trips are shown for context and do not affect net pay.
+        tickets are not.  Petty cash shows everything allocated to the driver this month and cancelled trips are listed
+        for context -- neither affects net pay.
     </p>
 </div>

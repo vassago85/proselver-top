@@ -133,12 +133,15 @@ new #[Layout('components.layouts.app')] class extends Component {
             ->get()
             ->keyBy('driver_user_id');
 
-        // Actual driver spend from petty cash: approved + reimbursed
-        // slips created in the month.  Rejected/submitted are excluded
-        // because they don't represent money the business has committed.
+        // Petty cash allocated to each driver in the month.  Ops don't
+        // run the approval queue in practice, so filtering on APPROVED
+        // / REIMBURSED would make this column read R0 for drivers who
+        // have real petty cash out against them.  Rejected rows are
+        // the only exclusion -- those were refused outright and never
+        // represent money that left the till.
         $spendAgg = PettyCashEntry::query()
             ->whereIn('driver_user_id', $driverIds ?: [0])
-            ->whereIn('status', [PettyCashEntry::STATUS_APPROVED, PettyCashEntry::STATUS_REIMBURSED])
+            ->where('status', '!=', PettyCashEntry::STATUS_REJECTED)
             ->whereBetween('created_at', [$from, $to])
             ->groupBy('driver_user_id')
             ->selectRaw('driver_user_id, COALESCE(SUM(amount_cents), 0) AS cents_sum')
@@ -259,9 +262,9 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <p class="mt-1 text-lg font-bold text-blue-900 tabular-nums">R {{ number_format($totals['advances'], 2) }}</p>
             </div>
             <div class="rounded-lg border border-amber-200 bg-amber-50 p-3">
-                <p class="text-[10px] font-semibold uppercase tracking-wider text-amber-800">Petty cash spend</p>
+                <p class="text-[10px] font-semibold uppercase tracking-wider text-amber-800">Petty cash</p>
                 <p class="mt-1 text-lg font-bold text-amber-900 tabular-nums">R {{ number_format($totals['spend'], 2) }}</p>
-                <p class="mt-0.5 text-[10px] text-amber-700">approved + reimbursed</p>
+                <p class="mt-0.5 text-[10px] text-amber-700">allocated this month</p>
             </div>
         </div>
 
@@ -355,8 +358,8 @@ new #[Layout('components.layouts.app')] class extends Component {
                 in delivered / completed / invoiced status.  <strong>Earnings</strong> = sum of per-trip pay (manual override on
                 the payslip page, else the driver's profile rate).  <strong>Bus charged</strong> = bus tickets this month marked
                 "charged to driver".  <strong>Net pay</strong> = earnings &minus; bus deductions.  <strong>Advances</strong> track
-                cash issued in the same window; <strong>Petty cash</strong> is what the driver actually spent (approved +
-                reimbursed slips).  Click <em>View payslip</em> for the full per-trip breakdown.
+                cash issued in the same window; <strong>Petty cash</strong> is the full amount allocated to the driver this
+                month (every slip except flat-out rejections).  Click <em>View payslip</em> for the full per-trip breakdown.
             </p>
         </div>
     </div>

@@ -91,7 +91,7 @@
             </td>
             <td style="width: 20%;">
                 <div class="muted small">Petty cash (ref)</div>
-                <div class="tabular" style="font-size: 15px; font-weight: bold; color: #92400e;">R {{ number_format($pettyCashApproved, 2) }}</div>
+                <div class="tabular" style="font-size: 15px; font-weight: bold; color: #92400e;">R {{ number_format($pettyCashAllocated, 2) }}</div>
             </td>
         </tr>
     </table>
@@ -268,7 +268,8 @@
                 <div class="muted small">
                     Gross earnings = sum of per-movement pay (per-trip override, else the default rate per movement from your profile).
                     Bus deductions = tickets issued but not used where the cost was charged to the driver.
-                    Petty cash and cancelled trips are shown for context only and do not affect net pay.
+                    Petty cash shows the full amount allocated to the driver this month and cancelled trips are listed for
+                    context -- neither affects net pay.
                 </div>
             </td>
             <td style="padding: 0; text-align: right;">

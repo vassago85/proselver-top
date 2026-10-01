@@ -109,8 +109,13 @@ class DriverPayslipService
             ->where('status', DriverBusTicket::STATUS_NOT_USED)
             ->where('not_used_outcome', DriverBusTicket::OUTCOME_CHARGED_TO_DRIVER)
             ->sum(fn (DriverBusTicket $t) => $t->amountRand());
-        $pettyCashApproved = (float) $pettyCash
-            ->whereIn('status', [PettyCashEntry::STATUS_APPROVED, PettyCashEntry::STATUS_REIMBURSED])
+        // Petty cash exposure for this payslip: everything allocated
+        // to the driver this month except flat-out rejections.  The
+        // approval queue isn't driven in practice, so filtering on
+        // APPROVED/REIMBURSED would make the PDF show R0 for drivers
+        // who have real petty cash out against them.
+        $pettyCashAllocated = (float) $pettyCash
+            ->where('status', '!=', PettyCashEntry::STATUS_REJECTED)
             ->sum(fn (PettyCashEntry $e) => $e->amountRand());
 
         $html = view('pdfs.driver-payslip', [
@@ -126,7 +131,7 @@ class DriverPayslipService
             'grossEarnings'     => $grossEarnings,
             'busDeductions'     => $busDeductions,
             'netPay'            => $grossEarnings - $busDeductions,
-            'pettyCashApproved' => $pettyCashApproved,
+            'pettyCashAllocated' => $pettyCashAllocated,
             'generatedAt'       => now(),
         ])->render();
 
