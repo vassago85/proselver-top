@@ -682,22 +682,27 @@ test('drivers.pay summary earnings honour per-trip overrides', function () {
 // 7b. Driver cash audit forensic view
 // -----------------------------------------------------------------
 
-test('cash-audit page gates to OWNER + DEVELOPER ONLY; 403s accounts, ops, super_admin, dispatcher', function () {
-    // The boss has asked that this forensic surface be invisible to
-    // ops and accounts -- not just hidden in nav, but hard-403 at the
-    // URL so neither role can even know the audit exists.
+test('cash-audit page is owner and developer only; everyone else gets a 404', function () {
+    // 404, not a named 403, so accounts / ops / super_admin never see
+    // a page that tells them the audit exists.
     $driver = dpDriver();
     $url = route('admin.drivers.cash-audit', ['user' => $driver->id]);
 
-    $this->actingAs(dpUser('dispatcher'))->get($url)->assertForbidden();
-    $this->actingAs(dpUser('operations_controller'))->get($url)->assertForbidden();
-    $this->actingAs(dpUser('ops_manager'))->get($url)->assertForbidden();
-    $this->actingAs(dpUser('super_admin'))->get($url)->assertForbidden();
-    $this->actingAs(dpUser('accounts'))->get($url)->assertForbidden();
+    foreach (['dispatcher', 'operations_controller', 'ops_manager', 'super_admin', 'accounts'] as $slug) {
+        $this->actingAs(dpUser($slug))
+            ->get($url)
+            ->assertNotFound()
+            ->assertDontSee('Cash audit');
+    }
 
-    // Owner + developer only.
     $this->actingAs(dpUser('owner'))->get($url)->assertOk();
     $this->actingAs(dpUser('developer'))->get($url)->assertOk();
+
+    session(['dev_role_override' => 'operations_controller']);
+    $this->actingAs(dpUser('developer'))
+        ->get($url)
+        ->assertNotFound()
+        ->assertDontSee('Cash audit');
 });
 
 test('cash-audit link does not appear on drivers.pay for accounts (only for owner / developer)', function () {
@@ -719,6 +724,21 @@ test('cash-audit link does not appear on drivers.pay for accounts (only for owne
         ->assertOk()
         ->assertSee('View payslip')
         ->assertSee('Cash audit');
+
+    // Developer acting as ops is ops: no pay page, so no audit link.
+    session(['dev_role_override' => 'operations_controller']);
+    $this->actingAs(dpUser('developer'))
+        ->get(route('admin.drivers.pay'))
+        ->assertForbidden()
+        ->assertDontSee('Cash audit');
+
+    // Developer acting as accounts still has the pay page, without the audit.
+    session(['dev_role_override' => 'accounts']);
+    $this->actingAs(dpUser('developer'))
+        ->get(route('admin.drivers.pay'))
+        ->assertOk()
+        ->assertSee('View payslip')
+        ->assertDontSee('Cash audit');
 });
 
 test('cash-audit button does not appear on the per-driver payslip for accounts (only for owner / developer)', function () {
@@ -735,6 +755,19 @@ test('cash-audit button does not appear on the per-driver payslip for accounts (
         ->assertOk()
         ->assertSee('Download PDF')
         ->assertSee('Cash audit');
+
+    session(['dev_role_override' => 'operations_controller']);
+    $this->actingAs(dpUser('developer'))
+        ->get(route('admin.drivers.payslip', ['user' => $driver->id]))
+        ->assertForbidden()
+        ->assertDontSee('Cash audit');
+
+    session(['dev_role_override' => 'accounts']);
+    $this->actingAs(dpUser('developer'))
+        ->get(route('admin.drivers.payslip', ['user' => $driver->id]))
+        ->assertOk()
+        ->assertSee('Download PDF')
+        ->assertDontSee('Cash audit');
 });
 
 test('cash-audit page 404s if the bound user is not a driver', function () {

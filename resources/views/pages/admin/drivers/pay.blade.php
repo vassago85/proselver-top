@@ -40,7 +40,7 @@ new #[Layout('components.layouts.app')] class extends Component {
     public function mount(): void
     {
         $u = auth()->user();
-        if (!$u || (!$u->isAccounts() && !$u->isOwner() && !$u->isDeveloper())) {
+        if (!$u || (!$u->isAccounts() && !$u->isOwner() && !$u->isDeveloperNoOverride())) {
             abort(403, 'Driver pay report is restricted to accounts.');
         }
 
@@ -329,7 +329,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                                          Accounts and ops must not even see the link exists --
                                          the boss has asked that this surface stay invisible
                                          so ops can't game around the audit.  URL also 403s. --}}
-                                    @if(auth()->user()?->isOwner() || auth()->user()?->isDeveloper())
+                                    @if(auth()->user()?->canViewDriverCashAudit())
                                         <a href="{{ route('admin.drivers.cash-audit', ['user' => $row['id']]) }}"
                                             class="text-[10px] font-medium text-rose-700 hover:text-rose-900 hover:underline">
                                             Cash audit

@@ -65,7 +65,7 @@ new #[Layout('components.layouts.app')] class extends Component {
     private function assertAuthorised(): void
     {
         $u = auth()->user();
-        if (!$u || (!$u->isAccounts() && !$u->isOwner() && !$u->isDeveloper())) {
+        if (!$u || (!$u->isAccounts() && !$u->isOwner() && !$u->isDeveloperNoOverride())) {
             abort(403, 'Payslips are restricted to accounts.');
         }
     }
@@ -440,7 +440,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                 {{-- Cash audit button is OWNER + DEVELOPER ONLY.  The
                      boss has asked that accounts and ops don't even see
                      this surface exists -- URL also 403s. --}}
-                @if(auth()->user()?->isOwner() || auth()->user()?->isDeveloper())
+                @if(auth()->user()?->canViewDriverCashAudit())
                     <a href="{{ route('admin.drivers.cash-audit', ['user' => $user->id]) }}"
                         class="inline-flex items-center gap-1.5 rounded-md border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 shadow-sm hover:bg-rose-100">
                         <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" x2="16.65" y1="21" y2="16.65"/></svg>

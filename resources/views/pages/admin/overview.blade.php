@@ -24,7 +24,7 @@ use Livewire\Volt\Component;
  *   4. Needs-attention panel — pending slips waiting on ops, drivers
  *      missing cellphones (can't be paid), trips over-budget.
  *   5. Category breakdown with inline bars.
- *   6. Top variance trips.
+ *   6. Biggest cash trips (largest issued or spent amount).
  *   7. Per-driver totals with bank-send readiness check.
  *   8. Scan incentive earnings.
  *
@@ -319,7 +319,10 @@ new #[Layout('components.layouts.app')] class extends Component {
         ];
         $maxCategoryValue = max(1.0, max(array_merge(array_values($categorySpend), array_values($categoryIssued))));
 
-        // -- Variance trips --
+        // -- Biggest cash trips --
+        // Ranked by the larger of issued and spent. Signed variance
+        // (spent − issued) puts balanced or zero-cash trips first and
+        // hides the advances that actually moved money.
         $jobIdsInWindow = (clone $advanceQ)->pluck('id');
         $spendPerJob = PettyCashEntry::query()
             ->whereIn('job_id', $jobIdsInWindow)
@@ -328,7 +331,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             ->select('job_id', DB::raw('SUM(amount_cents) as cents'))
             ->pluck('cents', 'job_id');
 
-        $topVariance = Job::query()
+        $cashTrips = Job::query()
             ->whereIn('id', $jobIdsInWindow)
             ->with(['company:id,name', 'driver:id,name', 'pickupLocation:id,company_name', 'deliveryLocation:id,company_name'])
             ->get()
@@ -336,15 +339,19 @@ new #[Layout('components.layouts.app')] class extends Component {
                 $spent = (float) (($spendPerJob[$job->id] ?? 0) / 100);
                 $issued = (float) ($job->advance_total ?? 0);
                 $job->setAttribute('_spent', $spent);
+                $job->setAttribute('_amount', max($issued, $spent));
                 $job->setAttribute('_variance', round($spent - $issued, 2));
                 $job->setAttribute('_overage', $spent > $issued + 0.5);
                 return $job;
-            })
-            ->sortByDesc('_variance')
+            });
+
+        $overageCount = $cashTrips->where('_overage', true)->count();
+
+        $topVariance = $cashTrips
+            ->filter(fn ($job) => $job->_amount > 0.5)
+            ->sortByDesc('_amount')
             ->take(10)
             ->values();
-
-        $overageCount = $topVariance->where('_overage', true)->count();
 
         // -- Per-driver --
         $driverRollup = (clone $slipsQ)
@@ -733,9 +740,9 @@ new #[Layout('components.layouts.app')] class extends Component {
         </div>
     </section>
 
-    {{-- ──────────────  Top variance trips  ────────────── --}}
+    {{-- ──────────────  Biggest cash trips  ────────────── --}}
     <section class="mb-5">
-        <h2 class="text-sm font-semibold text-slate-700 mb-2">Biggest variance trips</h2>
+        <h2 class="text-sm font-semibold text-slate-700 mb-2">Biggest cash trips</h2>
         <div class="rounded-xl bg-white border border-slate-200 overflow-hidden">
             @if($topVariance->isEmpty())
                 <p class="p-6 text-center text-sm text-slate-500">No advances issued in this range.</p>
@@ -764,9 +771,9 @@ new #[Layout('components.layouts.app')] class extends Component {
                                     </span>
                                 </td>
                                 <td class="px-4 py-2 text-slate-600">{{ $job->driver?->name ?? '—' }}</td>
-                                <td class="px-4 py-2 text-right tabular-nums">R {{ number_format((float) $job->advance_total, 2) }}</td>
-                                <td class="px-4 py-2 text-right tabular-nums">R {{ number_format((float) $job->_spent, 2) }}</td>
-                                <td class="px-4 py-2 text-right tabular-nums font-semibold {{ $job->_variance > 0 ? 'text-rose-700' : 'text-emerald-700' }}">
+                                <td class="px-4 py-2 text-right tabular-nums font-semibold text-slate-900">R {{ number_format((float) $job->advance_total, 2) }}</td>
+                                <td class="px-4 py-2 text-right tabular-nums font-semibold text-slate-900">R {{ number_format((float) $job->_spent, 2) }}</td>
+                                <td class="px-4 py-2 text-right tabular-nums text-slate-500">
                                     {{ $job->_variance > 0 ? '+' : '' }}R {{ number_format((float) $job->_variance, 2) }}
                                 </td>
                             </tr>

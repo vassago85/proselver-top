@@ -202,8 +202,8 @@ Volt::route('drivers/{user}/payslip', 'admin.drivers.payslip')->name('drivers.pa
 // food) across all time -- designed to spot skimming patterns like
 // repeated taxi advances with zero slip submissions (taxi being the
 // "no slip needed" category per ops policy, which is the known
-// skim vector).  Same gate as payslip -- 403 for anyone but
-// accounts / owner / developer.
+// skim vector).  Owner and developer only.  Every other role,
+// including a developer previewing as someone else, gets a 404.
 Volt::route('drivers/{user}/cash-audit', 'admin.drivers.cash-audit')->name('drivers.cash-audit');
 // Bus-ticket management surface (issue, mark used / voided / charged
 // to driver).  Routed BEFORE drivers/{user}/edit so the literal

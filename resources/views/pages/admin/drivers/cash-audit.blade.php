@@ -44,7 +44,7 @@ use Livewire\Volt\Component;
  * boss has specifically asked that ops and accounts cannot see it or
  * even know it exists.  Entry points on /admin/drivers/pay and the
  * per-driver payslip header are hidden with the same owner/dev gate;
- * if an accounts user types the URL directly they get a hard 403.
+ * any other role that types the URL gets a 404.
  *
  * Scope: all-time by default, with an optional date-from/date-to
  * filter so an auditor can zoom in on a specific window.
@@ -71,13 +71,12 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     private function assertAuthorised(): void
     {
-        // Owner + developer ONLY.  Not accounts, not ops, not super_admin.
-        // The boss has asked that this surface stay invisible to ops and
-        // accounts so they can't game around the audit.  Any other role
-        // typing the URL directly gets a hard 403.
+        // Owner + developer only, judged on the role they are acting as.
+        // Anyone else gets a plain 404 so the page does not announce
+        // that an audit exists.
         $u = auth()->user();
-        if (!$u || (!$u->isOwner() && !$u->isDeveloper())) {
-            abort(403, 'The cash audit is restricted to the owner.');
+        if (!$u || !$u->canViewDriverCashAudit()) {
+            abort(404);
         }
     }
 

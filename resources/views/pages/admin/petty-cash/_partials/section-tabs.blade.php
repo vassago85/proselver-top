@@ -12,7 +12,7 @@
 @php
     $u = auth()->user();
     $canSeeOverview = $u && $u->canViewPettyCashOverview();
-    $canSeeDriverPay = $u && ($u->isOwner() || $u->isDeveloper() || $u->isAccounts());
+    $canSeeDriverPay = $u && ($u->isOwner() || $u->isDeveloperNoOverride() || $u->isAccounts());
     // Bus tickets: ops + accounts + owner / dev (same spirit as the
     // operational petty-cash queue -- ops books the ticket, accounts
     // reconciles the outcome on the payslip).

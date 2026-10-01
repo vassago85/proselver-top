@@ -21,7 +21,7 @@ class DriverPayslipController extends Controller
     public function download(Request $request, User $user, DriverPayslipService $service)
     {
         $actor = $request->user();
-        if (!$actor || (!$actor->isAccounts() && !$actor->isOwner() && !$actor->isDeveloper())) {
+        if (!$actor || (!$actor->isAccounts() && !$actor->isOwner() && !$actor->isDeveloperNoOverride())) {
             abort(403, 'Payslips are restricted to accounts.');
         }
 

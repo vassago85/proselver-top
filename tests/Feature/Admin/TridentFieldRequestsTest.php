@@ -239,6 +239,61 @@ test('overview month range picks the requested calendar month', function () {
         ->and($win['to']->format('Y-m-d'))->toBe($picked->copy()->endOfMonth()->format('Y-m-d'));
 });
 
+test('overview biggest cash trips ranks by amount, not variance', function () {
+    $accounts = tfrUserWithRole('accounts');
+    $driver = tfrDriver();
+    $this->actingAs($accounts);
+
+    // Zero cash sits in the window but must not crowd the list.
+    tfrProselverJob([
+        'job_number' => 'JOB-ZERO',
+        'advance_total' => 0,
+        'advance_assigned_at' => now(),
+    ]);
+
+    // Balanced small trip. Signed variance is 0, which used to sort first.
+    $small = tfrProselverJob([
+        'job_number' => 'JOB-SMALL',
+        'advance_total' => 100,
+        'advance_assigned_at' => now(),
+    ]);
+    PettyCashEntry::create([
+        'job_id' => $small->id,
+        'driver_user_id' => $driver->id,
+        'category' => PettyCashEntry::CATEGORY_FUEL,
+        'amount_cents' => 10000,
+        'status' => PettyCashEntry::STATUS_APPROVED,
+    ]);
+
+    // Large advance, nothing spent yet. Variance is largely negative.
+    tfrProselverJob([
+        'job_number' => 'JOB-ISSUED',
+        'advance_total' => 8000,
+        'advance_assigned_at' => now(),
+    ]);
+
+    // Spend bigger than the advance. Amount is the spend, not the variance.
+    $spent = tfrProselverJob([
+        'job_number' => 'JOB-SPENT',
+        'advance_total' => 200,
+        'advance_assigned_at' => now(),
+    ]);
+    PettyCashEntry::create([
+        'job_id' => $spent->id,
+        'driver_user_id' => $driver->id,
+        'category' => PettyCashEntry::CATEGORY_TOLL,
+        'amount_cents' => 450000,
+        'status' => PettyCashEntry::STATUS_APPROVED,
+    ]);
+
+    $c = Volt::test('admin.overview');
+    $rows = $c->viewData('topVariance');
+
+    expect($rows->pluck('job_number')->all())->toBe(['JOB-ISSUED', 'JOB-SPENT', 'JOB-SMALL'])
+        ->and($c->html())->toContain('Biggest cash trips')
+        ->and($c->html())->not->toContain('Biggest variance trips');
+});
+
 // -----------------------------------------------------------------
 // 3. Driver rate + pay report
 // -----------------------------------------------------------------

@@ -248,6 +248,20 @@ trait HasRoles
     }
 
     /**
+     * Forensic per-driver cash audit. Owner and developer only — not
+     * accounts, ops, or super_admin.
+     *
+     * Goes through hasAnyRole rather than isDeveloper() so a developer
+     * previewing as operations loses the link and the page. isDeveloper()
+     * reads the real badge and would keep the audit on screen while they
+     * are acting as ops.
+     */
+    public function canViewDriverCashAudit(): bool
+    {
+        return $this->hasAnyRole(['owner', 'developer']);
+    }
+
+    /**
      * May reach the petty-cash oversight pages: the Overview dashboard and the
      * reconciliation report. Accounts owns month-end recon, ops needs driver
      * spend per movement, and the owner signs off. Previously this list was
