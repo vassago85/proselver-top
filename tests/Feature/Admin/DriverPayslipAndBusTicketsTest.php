@@ -231,6 +231,70 @@ test('payslip gross is 0 and movements is empty for a driver with no in-window j
         ->and($c->viewData('grossEarnings'))->toBe(0.0);
 });
 
+test('payslip surfaces petty-cash on cancelled trips split by open vs cleared', function () {
+    // The audit question is "where did the money go?" -- a cancelled
+    // trip that had an advance must be reconciled another way
+    // (refunded, transferred to a replacement vehicle, or absorbed
+    // with a written explanation).  The payslip must show the
+    // reconciliation state per cancelled row so cash can't vanish.
+    $accounts = dpUser('accounts');
+    $driver   = dpDriver(30000);
+    $inMonth  = now()->startOfMonth()->addDays(5);
+
+    // Cancelled trip #1: advance issued, cleared with a note.
+    $clearedJob = dpJob($driver, $inMonth, [
+        'status'                               => Job::STATUS_CANCELLED,
+        'cancelled_at'                         => $inMonth,
+        'advance_total'                        => 500.0,
+        'advance_issued_at'                    => $inMonth->copy()->subDay(),
+        'issued_cancellation_cleared_at'       => $inMonth->copy()->addDay(),
+        'issued_cancellation_cleared_by_user_id' => $accounts->id,
+        'issued_cancellation_cleared_note'     => 'Driver returned the cash at the depot.',
+    ]);
+
+    // Cancelled trip #2: advance issued, STILL open.
+    $openJob = dpJob($driver, $inMonth->copy()->addDay(), [
+        'status'            => Job::STATUS_CANCELLED,
+        'cancelled_at'      => $inMonth->copy()->addDay(),
+        'advance_total'     => 710.0,
+        'advance_issued_at' => $inMonth,
+    ]);
+
+    // Cancelled trip #3: no advance -- shouldn't appear in totals.
+    dpJob($driver, $inMonth->copy()->addDays(2), [
+        'status'       => Job::STATUS_CANCELLED,
+        'cancelled_at' => $inMonth->copy()->addDays(2),
+    ]);
+
+    $this->actingAs($accounts);
+
+    $c = Volt::test('admin.drivers.payslip', ['user' => $driver])
+        ->set('month', $inMonth->format('Y-m'));
+
+    // Totals: R500 + R710 = R1210 out across cancelled trips; only
+    // R710 is still open.
+    expect($c->viewData('cancelledAdvanceTotal'))->toBe(1210.0)
+        ->and($c->viewData('cancelledAdvanceOpen'))->toBe(710.0)
+        ->and($c->viewData('cancelled')->count())->toBe(3);
+
+    // The HTTP render must show:
+    //   - R500 + R710 amounts against the two cancelled rows
+    //   - the "Open query" indicator for the unresolved R710
+    //   - the written explanation from the cleared row
+    $this->get(route('admin.drivers.payslip', [
+        'user'  => $driver->id,
+        'month' => $inMonth->format('Y-m'),
+    ]))
+        ->assertOk()
+        ->assertSee($openJob->job_number)
+        ->assertSee($clearedJob->job_number)
+        ->assertSee('R 710.00')
+        ->assertSee('R 500.00')
+        ->assertSee('Open query')
+        ->assertSee('Driver returned the cash at the depot.')
+        ->assertSee('Where did it go?');
+});
+
 test('payslip surfaces petty-cash advances issued per trip and sums them in the totals strip', function () {
     // Mirror of the Austin Ntseki scenario from the trip report:
     // ops issued R710 against a specific delivery (tolls + food) but

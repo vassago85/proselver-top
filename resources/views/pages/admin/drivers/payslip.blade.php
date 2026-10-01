@@ -192,8 +192,15 @@ new #[Layout('components.layouts.app')] class extends Component {
         }
 
         // 2. Cancelled trips the driver was on in this month.  Shows
-        //    context only -- no payslip impact, just so accounts can
-        //    see why the gross number is lower than they expected.
+        //    context + the petty-cash reconciliation state so accounts
+        //    can see where the money went for every cancelled trip
+        //    the driver had cash out against.  Three states per row:
+        //      - no advance issued -> informational only
+        //      - advance issued and cleared -> who / when / explanation
+        //      - advance issued and NOT cleared -> open query (red)
+        //    The transfer counterpart (advance moved onto a replacement
+        //    vehicle instead of refunded) is eager-loaded so we can
+        //    show "Transferred to JOB-XXXXX" rather than just "cleared".
         $cancelled = Job::query()
             ->where('driver_user_id', $this->user->id)
             ->where('status', Job::STATUS_CANCELLED)
@@ -202,6 +209,8 @@ new #[Layout('components.layouts.app')] class extends Component {
                 'pickupLocation:id,company_name,city',
                 'deliveryLocation:id,company_name,city',
                 'brand:id,name',
+                'issuedCancellationClearedBy:id,name',
+                'advanceTransferredToJob:id,job_number',
             ])
             ->orderBy('cancelled_at')
             ->get();
@@ -251,6 +260,20 @@ new #[Layout('components.layouts.app')] class extends Component {
         // after-the-fact documentation of how the advance was spent.
         $advancesIssued = (float) $movements->sum(fn (Job $j) => (float) ($j->advance_total ?? 0));
 
+        // Petty cash out on cancelled trips -- separate from
+        // $advancesIssued because the trip never happened, so this is
+        // cash that MUST be accounted for in some other way (refunded,
+        // transferred to a replacement job, or absorbed as a loss with
+        // a written explanation).  Split into total vs still-open so
+        // accounts can see at a glance whether anything needs chasing.
+        $cancelledAdvanceTotal = (float) $cancelled->sum(fn (Job $j) => (float) ($j->advance_total ?? 0));
+        $cancelledAdvanceOpen  = (float) $cancelled
+            ->filter(fn (Job $j) =>
+                (float) ($j->advance_total ?? 0) > 0
+                && is_null($j->issued_cancellation_cleared_at)
+            )
+            ->sum(fn (Job $j) => (float) $j->advance_total);
+
         // Petty cash SLIPS submitted by the driver this month -- the
         // reconciliation paperwork for the advances above (or for ad-hoc
         // out-of-pocket spend).  Ops don't drive the approval queue in
@@ -273,6 +296,8 @@ new #[Layout('components.layouts.app')] class extends Component {
             'netPay'           => (float) ($grossEarnings - $busDeductions),
             'advancesIssued'   => $advancesIssued,
             'slipsSubmitted'   => $slipsSubmitted,
+            'cancelledAdvanceTotal' => $cancelledAdvanceTotal,
+            'cancelledAdvanceOpen'  => $cancelledAdvanceOpen,
             'from'             => $from,
             'to'               => $to,
             'anchor'           => $anchor,
@@ -434,6 +459,17 @@ new #[Layout('components.layouts.app')] class extends Component {
                             </td>
                             <td class="px-3 py-2 text-slate-700">
                                 {{ $job->delivered_at?->format('d M Y') ?? '—' }}
+                                @php
+                                    $statusLabel = match ($job->status) {
+                                        Job::STATUS_DELIVERED => 'Delivered',
+                                        Job::STATUS_COMPLETED => 'Completed',
+                                        Job::STATUS_INVOICED  => 'Invoiced',
+                                        default               => ucfirst($job->status),
+                                    };
+                                @endphp
+                                <div class="mt-0.5 inline-flex rounded-full border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-emerald-700">
+                                    {{ $statusLabel }}
+                                </div>
                             </td>
                             <td class="px-3 py-2 text-slate-700">
                                 {{ $job->pickupLocation?->shortDisplay() ?? '—' }}
@@ -521,16 +557,32 @@ new #[Layout('components.layouts.app')] class extends Component {
         </div>
     </div>
 
-    {{-- Cancelled trips --}}
+    {{-- Cancelled trips + their petty-cash resolution --}}
     <div class="rounded-xl border border-slate-200 bg-white shadow-sm">
-        <div class="flex items-center justify-between border-b border-slate-100 px-5 py-3">
+        <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-3">
             <div>
-                <h3 class="text-sm font-semibold text-slate-900">Cancelled trips</h3>
+                <h3 class="text-sm font-semibold text-slate-900">Cancelled trips &middot; petty cash reconciliation</h3>
                 <p class="text-xs text-slate-500">
-                    Movements this driver was assigned to that were cancelled in the window.  Reference only &mdash; no payslip impact.
+                    If an advance went out and the trip didn't run, the money has to be accounted for &mdash;
+                    refunded, transferred to a replacement vehicle, or written off with a reason.
+                    Open rows mean the money is still unaccounted for.
                 </p>
             </div>
-            <span class="rounded-full bg-slate-100 px-2.5 py-0.5 text-[11px] font-semibold text-slate-600">{{ $cancelled->count() }}</span>
+            <div class="flex items-center gap-2">
+                @if($cancelledAdvanceOpen > 0)
+                    <span class="rounded-full border border-rose-200 bg-rose-50 px-2.5 py-0.5 text-[11px] font-semibold text-rose-700">
+                        Open: R {{ number_format($cancelledAdvanceOpen, 2) }}
+                    </span>
+                @endif
+                @if($cancelledAdvanceTotal > 0)
+                    <span class="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-0.5 text-[11px] font-semibold text-amber-800">
+                        Total out: R {{ number_format($cancelledAdvanceTotal, 2) }}
+                    </span>
+                @endif
+                <span class="rounded-full bg-slate-100 px-2.5 py-0.5 text-[11px] font-semibold text-slate-600">
+                    {{ $cancelled->count() }} trip{{ $cancelled->count() === 1 ? '' : 's' }}
+                </span>
+            </div>
         </div>
         <div class="overflow-x-auto">
             <table class="w-full text-xs">
@@ -541,12 +593,19 @@ new #[Layout('components.layouts.app')] class extends Component {
                         <th class="px-3 py-2 text-left">Collection</th>
                         <th class="px-3 py-2 text-left">Delivery</th>
                         <th class="px-3 py-2 text-left">Vehicle</th>
-                        <th class="px-3 py-2 text-left">Reason</th>
+                        <th class="px-3 py-2 text-right">Petty cash issued</th>
+                        <th class="px-3 py-2 text-left">Where did it go?</th>
+                        <th class="px-3 py-2 text-left">Cancellation reason</th>
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-slate-100">
                     @forelse($cancelled as $job)
-                        <tr>
+                        @php
+                            $advance = (float) ($job->advance_total ?? 0);
+                            $cleared = !is_null($job->issued_cancellation_cleared_at);
+                            $transferred = !is_null($job->advance_transferred_to_job_id);
+                        @endphp
+                        <tr class="{{ $advance > 0 && !$cleared ? 'bg-rose-50/60' : '' }}">
                             <td class="px-3 py-2 text-slate-700">{{ $job->cancelled_at?->format('d M Y') ?? '—' }}</td>
                             <td class="px-3 py-2 font-mono text-[11px] text-slate-700">
                                 <a href="{{ route('admin.orders.show', $job) }}" class="text-blue-600 hover:underline">{{ $job->job_number }}</a>
@@ -556,16 +615,84 @@ new #[Layout('components.layouts.app')] class extends Component {
                             <td class="px-3 py-2 text-slate-700">
                                 {{ trim(($job->brand?->name ?? '') . ' ' . ($job->model_name ?? '')) ?: '—' }}
                             </td>
+                            <td class="px-3 py-2 text-right tabular-nums">
+                                @if($advance > 0)
+                                    <span class="font-semibold {{ $cleared ? 'text-slate-700' : 'text-rose-700' }}">
+                                        R {{ number_format($advance, 2) }}
+                                    </span>
+                                @else
+                                    <span class="text-slate-300">—</span>
+                                @endif
+                            </td>
+                            <td class="px-3 py-2 text-xs">
+                                @if($advance <= 0)
+                                    <span class="text-slate-400">No advance issued</span>
+                                @elseif($transferred)
+                                    <span class="inline-flex items-center rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[10px] font-semibold text-blue-800">
+                                        Transferred &rarr; {{ $job->advanceTransferredToJob?->job_number ?? '—' }}
+                                    </span>
+                                    @if($job->issuedCancellationClearedBy)
+                                        <div class="mt-0.5 text-[10px] text-slate-500">
+                                            by {{ $job->issuedCancellationClearedBy->name }}
+                                            @if($job->issued_cancellation_cleared_at)
+                                                &middot; {{ $job->issued_cancellation_cleared_at->format('d M') }}
+                                            @endif
+                                        </div>
+                                    @endif
+                                @elseif($cleared)
+                                    <span class="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-800">
+                                        Cleared
+                                    </span>
+                                    @if($job->issuedCancellationClearedBy)
+                                        <div class="mt-0.5 text-[10px] text-slate-500">
+                                            by {{ $job->issuedCancellationClearedBy->name }}
+                                            @if($job->issued_cancellation_cleared_at)
+                                                &middot; {{ $job->issued_cancellation_cleared_at->format('d M') }}
+                                            @endif
+                                        </div>
+                                    @endif
+                                    @if($job->issued_cancellation_cleared_note)
+                                        <div class="mt-0.5 text-[10px] text-slate-600 italic">
+                                            "{{ $job->issued_cancellation_cleared_note }}"
+                                        </div>
+                                    @endif
+                                @else
+                                    <span class="inline-flex items-center rounded-full border border-rose-300 bg-rose-100 px-2 py-0.5 text-[10px] font-semibold text-rose-800">
+                                        Open query &middot; R {{ number_format($advance, 2) }}
+                                    </span>
+                                    <a href="{{ route('admin.petty-cash.reconciliation', ['openTransfer' => $job->id]) }}"
+                                        class="mt-0.5 block text-[10px] font-medium text-blue-600 hover:underline">
+                                        Resolve &rarr;
+                                    </a>
+                                @endif
+                            </td>
                             <td class="px-3 py-2 text-slate-600">{{ $job->cancellation_reason ?? '—' }}</td>
                         </tr>
                     @empty
                         <tr>
-                            <td colspan="6" class="px-3 py-6 text-center text-sm text-slate-500">
+                            <td colspan="8" class="px-3 py-6 text-center text-sm text-slate-500">
                                 No cancelled trips in this window.
                             </td>
                         </tr>
                     @endforelse
                 </tbody>
+                @if($cancelledAdvanceTotal > 0)
+                    <tfoot class="bg-slate-50 text-[11px] font-semibold text-slate-700">
+                        <tr>
+                            <td colspan="5" class="px-3 py-2 text-right">Petty cash out on cancelled trips</td>
+                            <td class="px-3 py-2 text-right tabular-nums text-amber-700">
+                                R {{ number_format($cancelledAdvanceTotal, 2) }}
+                            </td>
+                            <td colspan="2" class="px-3 py-2 text-left">
+                                @if($cancelledAdvanceOpen > 0)
+                                    <span class="text-rose-700">Still open: R {{ number_format($cancelledAdvanceOpen, 2) }}</span>
+                                @else
+                                    <span class="text-emerald-700">All reconciled</span>
+                                @endif
+                            </td>
+                        </tr>
+                    </tfoot>
+                @endif
             </table>
         </div>
     </div>

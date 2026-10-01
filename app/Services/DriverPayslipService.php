@@ -87,6 +87,8 @@ class DriverPayslipService
                 'pickupLocation:id,company_name,city',
                 'deliveryLocation:id,company_name,city',
                 'brand:id,name',
+                'issuedCancellationClearedBy:id,name',
+                'advanceTransferredToJob:id,job_number',
             ])
             ->orderBy('cancelled_at')
             ->get();
@@ -123,6 +125,19 @@ class DriverPayslipService
         // reconciliation paperwork for how the advance was spent.
         $advancesIssued = (float) $movements->sum(fn (Job $j) => (float) ($j->advance_total ?? 0));
 
+        // Petty cash on cancelled trips (where the trip never ran).
+        // Must be reconciled another way -- refunded, transferred to a
+        // replacement vehicle, or absorbed with a written reason.
+        // "Open" subset = cancelled rows with an advance where
+        // issued_cancellation_cleared_at is still NULL.
+        $cancelledAdvanceTotal = (float) $cancelled->sum(fn (Job $j) => (float) ($j->advance_total ?? 0));
+        $cancelledAdvanceOpen  = (float) $cancelled
+            ->filter(fn (Job $j) =>
+                (float) ($j->advance_total ?? 0) > 0
+                && is_null($j->issued_cancellation_cleared_at)
+            )
+            ->sum(fn (Job $j) => (float) $j->advance_total);
+
         // Petty cash slips the driver submitted in the window.
         // Rejected rows excluded (refused outright, no cash moved).
         // Everything else is counted -- the approval queue isn't driven
@@ -147,6 +162,8 @@ class DriverPayslipService
             'netPay'            => $grossEarnings - $busDeductions,
             'advancesIssued'    => $advancesIssued,
             'slipsSubmitted'    => $slipsSubmitted,
+            'cancelledAdvanceTotal' => $cancelledAdvanceTotal,
+            'cancelledAdvanceOpen'  => $cancelledAdvanceOpen,
             'generatedAt'       => now(),
         ])->render();
 

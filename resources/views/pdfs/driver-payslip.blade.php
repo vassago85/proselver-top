@@ -252,30 +252,105 @@
     </table>
 
     @if($cancelled->count() > 0)
-        <h2>Cancelled trips (reference)</h2>
+        <h2>Cancelled trips &middot; petty cash reconciliation</h2>
+        <div class="muted small" style="margin-bottom: 6px;">
+            Any advance issued for a trip that didn't run must be reconciled -- refunded, transferred, or
+            written off with a reason.  Rows flagged as <strong>Open query</strong> are still unaccounted for.
+            @if($cancelledAdvanceOpen > 0)
+                <strong style="color: #991b1b;">
+                    Open: R {{ number_format($cancelledAdvanceOpen, 2) }} across unresolved rows.
+                </strong>
+            @endif
+        </div>
         <table>
             <thead>
                 <tr>
                     <th>Cancelled</th>
                     <th>Job #</th>
-                    <th>From</th>
-                    <th>To</th>
+                    <th>From &rarr; To</th>
                     <th>Vehicle</th>
-                    <th>Reason</th>
+                    <th class="right">Petty cash</th>
+                    <th>Where did it go?</th>
+                    <th>Cancellation reason</th>
                 </tr>
             </thead>
             <tbody>
                 @foreach($cancelled as $job)
+                    @php
+                        $advance = (float) ($job->advance_total ?? 0);
+                        $cleared = !is_null($job->issued_cancellation_cleared_at);
+                        $transferred = !is_null($job->advance_transferred_to_job_id);
+                    @endphp
                     <tr class="row">
                         <td class="small">{{ $job->cancelled_at?->format('d M Y') ?? '—' }}</td>
                         <td class="small">{{ $job->job_number }}</td>
-                        <td class="small">{{ $job->pickupLocation?->shortDisplay() ?? '—' }}</td>
-                        <td class="small">{{ $job->deliveryLocation?->shortDisplay() ?? '—' }}</td>
+                        <td class="small">
+                            {{ $job->pickupLocation?->shortDisplay() ?? '—' }}
+                            &rarr; {{ $job->deliveryLocation?->shortDisplay() ?? '—' }}
+                        </td>
                         <td class="small">{{ trim(($job->brand?->name ?? '') . ' ' . ($job->model_name ?? '')) ?: '—' }}</td>
+                        <td class="right tabular">
+                            @if($advance > 0)
+                                <span style="color: {{ $cleared ? '#334155' : '#991b1b' }}; font-weight: 600;">
+                                    R {{ number_format($advance, 2) }}
+                                </span>
+                            @else
+                                <span class="muted">—</span>
+                            @endif
+                        </td>
+                        <td class="small">
+                            @if($advance <= 0)
+                                <span class="muted">No advance issued</span>
+                            @elseif($transferred)
+                                <span class="pill pill-blue">
+                                    Transferred &rarr; {{ $job->advanceTransferredToJob?->job_number ?? '—' }}
+                                </span>
+                                @if($job->issuedCancellationClearedBy)
+                                    <div class="muted" style="font-size: 9px;">
+                                        by {{ $job->issuedCancellationClearedBy->name }}
+                                        @if($job->issued_cancellation_cleared_at)
+                                            &middot; {{ $job->issued_cancellation_cleared_at->format('d M') }}
+                                        @endif
+                                    </div>
+                                @endif
+                            @elseif($cleared)
+                                <span class="pill pill-green">Cleared</span>
+                                @if($job->issuedCancellationClearedBy)
+                                    <div class="muted" style="font-size: 9px;">
+                                        by {{ $job->issuedCancellationClearedBy->name }}
+                                        @if($job->issued_cancellation_cleared_at)
+                                            &middot; {{ $job->issued_cancellation_cleared_at->format('d M') }}
+                                        @endif
+                                    </div>
+                                @endif
+                                @if($job->issued_cancellation_cleared_note)
+                                    <div class="muted" style="font-size: 9px; font-style: italic;">
+                                        "{{ $job->issued_cancellation_cleared_note }}"
+                                    </div>
+                                @endif
+                            @else
+                                <span class="pill pill-red">Open query &middot; R {{ number_format($advance, 2) }}</span>
+                            @endif
+                        </td>
                         <td class="small">{{ $job->cancellation_reason ?? '—' }}</td>
                     </tr>
                 @endforeach
             </tbody>
+            @if($cancelledAdvanceTotal > 0)
+                <tfoot>
+                    <tr>
+                        <td colspan="4" class="right"><strong>Petty cash out on cancelled trips</strong></td>
+                        <td class="right tabular" style="color: #92400e; font-weight: bold;">R {{ number_format($cancelledAdvanceTotal, 2) }}</td>
+                        <td colspan="2" class="small">
+                            @if($cancelledAdvanceOpen > 0)
+                                <strong style="color: #991b1b;">Still open: R {{ number_format($cancelledAdvanceOpen, 2) }}</strong>
+                            @else
+                                <strong style="color: #065f46;">All reconciled</strong>
+                            @endif
+                        </td>
+                    </tr>
+                </tfoot>
+            @endif
         </table>
     @endif
 
