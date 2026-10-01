@@ -388,6 +388,14 @@ class Job extends Model
         'cost_fuel',
         'cost_tolls',
         'cost_driver',
+        // Per-trip override of the driver's rate_per_movement_cents. Set
+        // on the /admin/drivers/{user}/payslip page; nullable so the
+        // profile rate stays authoritative unless accounts explicitly
+        // overrides it for this one job.
+        'driver_pay_amount',
+        'driver_pay_note',
+        'driver_pay_set_by_user_id',
+        'driver_pay_set_at',
         'cost_accommodation',
         'cost_other',
         'total_cost',
@@ -542,6 +550,8 @@ class Job extends Model
             'cost_fuel' => 'decimal:2',
             'cost_tolls' => 'decimal:2',
             'cost_driver' => 'decimal:2',
+            'driver_pay_amount' => 'decimal:2',
+            'driver_pay_set_at' => 'datetime',
             'cost_accommodation' => 'decimal:2',
             'cost_other' => 'decimal:2',
             'total_cost' => 'decimal:2',
@@ -854,6 +864,35 @@ class Job extends Model
         $this->margin_percent = $sellBeforeVat > 0
             ? round(($this->gross_profit / $sellBeforeVat) * 100, 2)
             : 0;
+    }
+
+    /**
+     * Driver remuneration for this one job, in rand.
+     *
+     * Resolution order used by the month-end payslip:
+     *
+     *   1. Explicit per-trip override (driver_pay_amount) set on the
+     *      /admin/drivers/{user}/payslip page.  Non-null, including 0,
+     *      wins -- a deliberate R0 (e.g. training run) must not fall
+     *      back to the profile rate.
+     *   2. Driver profile's rate_per_movement_cents (one movement =
+     *      this job).  Converted from cents to rand.
+     *   3. 0 -- no override and no profile rate = pay this job at
+     *      nothing on the payslip and surface a warning in the UI so
+     *      accounts spots the missing data.
+     */
+    public function driverPayForPayslip(): float
+    {
+        if ($this->driver_pay_amount !== null) {
+            return (float) $this->driver_pay_amount;
+        }
+
+        $rateCents = $this->driver?->driverProfile?->rate_per_movement_cents;
+        if ($rateCents !== null) {
+            return (float) $rateCents / 100;
+        }
+
+        return 0.0;
     }
 
     public function company(): BelongsTo
@@ -1256,6 +1295,17 @@ class Job extends Model
     public function advanceAssignedBy(): BelongsTo
     {
         return $this->belongsTo(User::class, 'advance_assigned_by_user_id');
+    }
+
+    /**
+     * Accounts user who most recently overrode this job's per-trip
+     * driver pay on the payslip page.  Used by the payslip UI to show
+     * "override by Jane · 12 Oct" next to the amount so there's a
+     * provenance trail without opening the audit log.
+     */
+    public function driverPaySetBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'driver_pay_set_by_user_id');
     }
 
     public function advancePlan(): BelongsTo

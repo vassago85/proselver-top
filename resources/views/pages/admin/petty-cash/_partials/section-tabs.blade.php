@@ -14,12 +14,24 @@
     $u = auth()->user();
     $canSeeOverview = $u && $u->canViewPettyCashOverview();
     $canSeeDriverPay = $u && ($u->isOwner() || $u->isDeveloper() || $u->isAccounts());
+    // Bus tickets: ops + accounts + owner / dev (same spirit as the
+    // operational petty-cash queue -- ops books the ticket, accounts
+    // reconciles the outcome on the payslip).
+    $canSeeBusTickets = $u && (
+        $u->isOwner() || $u->isDeveloper() || $u->isAccounts()
+        || $u->isOperationsController()
+        || $u->hasAnyRole(['super_admin', 'ops_manager', 'dispatcher'])
+    );
     $isAccountsOnly = $u && $u->isAccounts() && !$u->isOwner() && !$u->isDeveloper();
     $current = match (true) {
         request()->routeIs('admin.petty-cash.plans') => 'plans',
         request()->routeIs('admin.overview') => 'overview',
         request()->routeIs('admin.petty-cash.reconciliation') => 'reconciliation',
-        request()->routeIs('admin.drivers.pay') => 'driver_pay',
+        // Driver pay list AND the per-driver payslip both light up the
+        // "Driver pay" tab -- the payslip is a drill-down of the summary.
+        request()->routeIs('admin.drivers.pay')      => 'driver_pay',
+        request()->routeIs('admin.drivers.payslip')  => 'driver_pay',
+        request()->routeIs('admin.drivers.bus-tickets') => 'bus_tickets',
         default => 'slips',
     };
 @endphp
@@ -62,6 +74,14 @@
             {{ $current === 'driver_pay' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900' }}">
             <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
             Driver pay
+        </a>
+    @endif
+    @if($canSeeBusTickets)
+        <a href="{{ route('admin.drivers.bus-tickets') }}"
+            class="inline-flex items-center gap-2 rounded-lg px-3.5 py-1.5 text-xs font-semibold whitespace-nowrap transition
+            {{ $current === 'bus_tickets' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900' }}">
+            <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6v6"/><path d="M16 6v6"/><rect x="4" y="3" width="16" height="16" rx="2"/><path d="M4 11h16"/><circle cx="8" cy="17" r="1.3"/><circle cx="16" cy="17" r="1.3"/></svg>
+            Bus tickets
         </a>
     @endif
 </nav>

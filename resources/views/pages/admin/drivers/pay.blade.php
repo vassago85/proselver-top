@@ -1,5 +1,6 @@
 <?php
 
+use App\Models\DriverBusTicket;
 use App\Models\Job;
 use App\Models\PettyCashEntry;
 use App\Models\User;
@@ -83,12 +84,35 @@ new #[Layout('components.layouts.app')] class extends Component {
         // delivered_at inside the window, and status in the
         // delivered/completed/invoiced buckets (i.e. we don't count
         // cancelled or recalled trips).
+        //
+        // We also sum driver_pay_amount so earnings can account for
+        // per-trip overrides set on the payslip page.  The expression
+        // "SUM(COALESCE(driver_pay_amount, 0))" is the override pot;
+        // the "overridden_moves" count tells us how many of this
+        // month's rides are overridden so the fallback-to-rate calc
+        // can skip them.
         $moveAgg = Job::query()
             ->whereIn('driver_user_id', $driverIds ?: [0])
             ->whereIn('status', [Job::STATUS_DELIVERED, Job::STATUS_COMPLETED, Job::STATUS_INVOICED])
             ->whereBetween('delivered_at', [$from, $to])
             ->groupBy('driver_user_id')
-            ->selectRaw('driver_user_id, COUNT(*) AS moves, COALESCE(SUM(total_cost), 0) AS cost_sum')
+            ->selectRaw('driver_user_id,
+                COUNT(*) AS moves,
+                COALESCE(SUM(total_cost), 0) AS cost_sum,
+                COALESCE(SUM(driver_pay_amount), 0) AS override_sum,
+                SUM(CASE WHEN driver_pay_amount IS NOT NULL THEN 1 ELSE 0 END) AS overridden_moves')
+            ->get()
+            ->keyBy('driver_user_id');
+
+        // Bus-ticket deductions in the month, grouped by driver.  Only
+        // rows explicitly charged to the driver count toward the net
+        // pay; voided tickets are the company's loss.
+        $busAgg = DriverBusTicket::query()
+            ->whereIn('driver_user_id', $driverIds ?: [0])
+            ->whereBetween('travel_date', [$from, $to])
+            ->chargedToDriver()
+            ->groupBy('driver_user_id')
+            ->selectRaw('driver_user_id, COALESCE(SUM(amount_cents), 0) AS cents_sum')
             ->get()
             ->keyBy('driver_user_id');
 
@@ -122,7 +146,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             ->keyBy('driver_user_id');
 
         // Stitch the per-driver rows together.
-        $rows = $drivers->map(function (User $d) use ($moveAgg, $advAgg, $spendAgg) {
+        $rows = $drivers->map(function (User $d) use ($moveAgg, $advAgg, $spendAgg, $busAgg) {
             $rateCents = $d->driverProfile?->rate_per_movement_cents;
             $rate = $rateCents === null ? null : (float) $rateCents / 100;
 
@@ -130,29 +154,46 @@ new #[Layout('components.layouts.app')] class extends Component {
             $moves = (int) ($move->moves ?? 0);
             $cost  = (float) ($move->cost_sum ?? 0);
 
+            // Earnings = sum of per-trip overrides (actual values) +
+            // profile rate for the remaining non-overridden moves.
+            // Rows without a rate AND without any overrides show null
+            // so the "set a rate" warning still fires.
+            $overrideSum   = (float) ($move->override_sum ?? 0);
+            $overriddenN   = (int)   ($move->overridden_moves ?? 0);
+            $remainingN    = max(0, $moves - $overriddenN);
+            $rateForRest   = $rate !== null ? $rate * $remainingN : 0.0;
+            if ($rate === null && $overrideSum === 0.0 && $moves > 0) {
+                $earnings = null; // no rate set + no overrides -> flag it
+            } else {
+                $earnings = $overrideSum + $rateForRest;
+            }
+
             $advances = (float) ($advAgg->get($d->id)->adv_sum ?? 0);
             $spend    = (float) ($spendAgg->get($d->id)->cents_sum ?? 0) / 100;
-
-            $earnings = $rate !== null ? $rate * $moves : null;
+            $busCharged = (float) ($busAgg->get($d->id)->cents_sum ?? 0) / 100;
 
             return [
-                'id'       => $d->id,
-                'name'     => $d->name,
-                'rate'     => $rate,
-                'moves'    => $moves,
-                'earnings' => $earnings,
-                'cost'     => $cost,
-                'advances' => $advances,
-                'spend'    => $spend,
+                'id'          => $d->id,
+                'name'        => $d->name,
+                'rate'        => $rate,
+                'moves'       => $moves,
+                'earnings'    => $earnings,
+                'cost'        => $cost,
+                'advances'    => $advances,
+                'spend'       => $spend,
+                'bus_charged' => $busCharged,
+                'net_pay'     => $earnings !== null ? max(0.0, $earnings - $busCharged) : null,
             ];
         });
 
         $totals = [
-            'moves'    => (int) $rows->sum('moves'),
-            'earnings' => (float) $rows->sum(fn ($r) => $r['earnings'] ?? 0),
-            'cost'     => (float) $rows->sum('cost'),
-            'advances' => (float) $rows->sum('advances'),
-            'spend'    => (float) $rows->sum('spend'),
+            'moves'       => (int) $rows->sum('moves'),
+            'earnings'    => (float) $rows->sum(fn ($r) => $r['earnings'] ?? 0),
+            'cost'        => (float) $rows->sum('cost'),
+            'advances'    => (float) $rows->sum('advances'),
+            'spend'       => (float) $rows->sum('spend'),
+            'bus_charged' => (float) $rows->sum('bus_charged'),
+            'net_pay'     => (float) $rows->sum(fn ($r) => $r['net_pay'] ?? 0),
         ];
 
         return [
@@ -193,21 +234,27 @@ new #[Layout('components.layouts.app')] class extends Component {
         </div>
 
         {{-- Headline totals --}}
-        <div class="grid grid-cols-2 gap-3 border-b border-slate-100 px-5 py-4 sm:grid-cols-5">
+        <div class="grid grid-cols-2 gap-3 border-b border-slate-100 px-5 py-4 sm:grid-cols-6">
             <div class="rounded-lg border border-slate-200 bg-slate-50 p-3">
                 <p class="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Completed movements</p>
                 <p class="mt-1 text-lg font-bold text-slate-900 tabular-nums">{{ $totals['moves'] }}</p>
             </div>
             <div class="rounded-lg border border-emerald-200 bg-emerald-50 p-3">
-                <p class="text-[10px] font-semibold uppercase tracking-wider text-emerald-700">Driver earnings</p>
+                <p class="text-[10px] font-semibold uppercase tracking-wider text-emerald-700">Gross earnings</p>
                 <p class="mt-1 text-lg font-bold text-emerald-900 tabular-nums">R {{ number_format($totals['earnings'], 2) }}</p>
+                <p class="mt-0.5 text-[10px] text-emerald-700">rate + per-trip overrides</p>
             </div>
-            <div class="rounded-lg border border-slate-200 bg-white p-3">
-                <p class="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Movement cost</p>
-                <p class="mt-1 text-lg font-bold text-slate-900 tabular-nums">R {{ number_format($totals['cost'], 2) }}</p>
-                <p class="mt-0.5 text-[10px] text-slate-400">from job total_cost</p>
+            <div class="rounded-lg border border-rose-200 bg-rose-50 p-3">
+                <p class="text-[10px] font-semibold uppercase tracking-wider text-rose-700">Bus deductions</p>
+                <p class="mt-1 text-lg font-bold text-rose-900 tabular-nums">R {{ number_format($totals['bus_charged'], 2) }}</p>
+                <p class="mt-0.5 text-[10px] text-rose-700">tickets charged to driver</p>
             </div>
             <div class="rounded-lg border border-blue-200 bg-blue-50 p-3">
+                <p class="text-[10px] font-semibold uppercase tracking-wider text-blue-700">Net pay</p>
+                <p class="mt-1 text-lg font-bold text-blue-900 tabular-nums">R {{ number_format($totals['net_pay'], 2) }}</p>
+                <p class="mt-0.5 text-[10px] text-blue-700">earnings &minus; bus</p>
+            </div>
+            <div class="rounded-lg border border-blue-200 bg-white p-3">
                 <p class="text-[10px] font-semibold uppercase tracking-wider text-blue-700">Advances issued</p>
                 <p class="mt-1 text-lg font-bold text-blue-900 tabular-nums">R {{ number_format($totals['advances'], 2) }}</p>
             </div>
@@ -227,10 +274,11 @@ new #[Layout('components.layouts.app')] class extends Component {
                         <th class="px-3 py-2 text-right">Rate / move</th>
                         <th class="px-3 py-2 text-right">Movements</th>
                         <th class="px-3 py-2 text-right">Earnings</th>
-                        <th class="px-3 py-2 text-right">Movement cost</th>
+                        <th class="px-3 py-2 text-right">Bus charged</th>
+                        <th class="px-3 py-2 text-right">Net pay</th>
                         <th class="px-3 py-2 text-right">Advances</th>
                         <th class="px-3 py-2 text-right">Petty cash</th>
-                        <th class="px-3 py-2 text-center">Detail</th>
+                        <th class="px-3 py-2 text-center">Payslip</th>
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-slate-100">
@@ -247,24 +295,37 @@ new #[Layout('components.layouts.app')] class extends Component {
                             <td class="px-3 py-2 text-right tabular-nums text-slate-800 font-semibold">{{ $row['moves'] }}</td>
                             <td class="px-3 py-2 text-right tabular-nums">
                                 @if($row['earnings'] === null)
-                                    <span class="text-slate-400" title="Set a rate to compute earnings">—</span>
+                                    <span class="text-slate-400" title="Set a rate (or per-trip override) to compute earnings">—</span>
                                 @else
                                     <span class="font-semibold text-emerald-700">R {{ number_format($row['earnings'], 2) }}</span>
                                 @endif
                             </td>
-                            <td class="px-3 py-2 text-right tabular-nums text-slate-700">R {{ number_format($row['cost'], 2) }}</td>
+                            <td class="px-3 py-2 text-right tabular-nums">
+                                @if($row['bus_charged'] > 0)
+                                    <span class="text-rose-700">R {{ number_format($row['bus_charged'], 2) }}</span>
+                                @else
+                                    <span class="text-slate-400">—</span>
+                                @endif
+                            </td>
+                            <td class="px-3 py-2 text-right tabular-nums">
+                                @if($row['net_pay'] === null)
+                                    <span class="text-slate-400">—</span>
+                                @else
+                                    <span class="font-semibold text-blue-700">R {{ number_format($row['net_pay'], 2) }}</span>
+                                @endif
+                            </td>
                             <td class="px-3 py-2 text-right tabular-nums text-slate-700">R {{ number_format($row['advances'], 2) }}</td>
                             <td class="px-3 py-2 text-right tabular-nums text-slate-700">R {{ number_format($row['spend'], 2) }}</td>
                             <td class="px-3 py-2 text-center">
-                                <a href="{{ route('admin.drivers.edit', $row['id']) }}"
+                                <a href="{{ route('admin.drivers.payslip', ['user' => $row['id'], 'month' => $month]) }}"
                                     class="text-[11px] font-medium text-blue-600 hover:text-blue-800 hover:underline">
-                                    Edit profile
+                                    View payslip
                                 </a>
                             </td>
                         </tr>
                     @empty
                         <tr>
-                            <td colspan="8" class="px-3 py-10 text-center text-sm text-slate-500">
+                            <td colspan="9" class="px-3 py-10 text-center text-sm text-slate-500">
                                 No active platform drivers.
                             </td>
                         </tr>
@@ -277,7 +338,8 @@ new #[Layout('components.layouts.app')] class extends Component {
                             <td class="px-3 py-2"></td>
                             <td class="px-3 py-2 text-right tabular-nums">{{ $totals['moves'] }}</td>
                             <td class="px-3 py-2 text-right tabular-nums text-emerald-700">R {{ number_format($totals['earnings'], 2) }}</td>
-                            <td class="px-3 py-2 text-right tabular-nums">R {{ number_format($totals['cost'], 2) }}</td>
+                            <td class="px-3 py-2 text-right tabular-nums text-rose-700">R {{ number_format($totals['bus_charged'], 2) }}</td>
+                            <td class="px-3 py-2 text-right tabular-nums text-blue-700">R {{ number_format($totals['net_pay'], 2) }}</td>
                             <td class="px-3 py-2 text-right tabular-nums">R {{ number_format($totals['advances'], 2) }}</td>
                             <td class="px-3 py-2 text-right tabular-nums">R {{ number_format($totals['spend'], 2) }}</td>
                             <td class="px-3 py-2"></td>
@@ -290,10 +352,11 @@ new #[Layout('components.layouts.app')] class extends Component {
         <div class="border-t border-slate-100 px-5 py-3 text-[11px] text-slate-500">
             <p>
                 <strong>Movements</strong> = jobs assigned to the driver whose delivered_at falls in {{ $anchor->format('F Y') }},
-                in delivered / completed / invoiced status.  <strong>Earnings</strong> = movements &times; rate from the driver
-                profile.  <strong>Movement cost</strong> comes from job total_cost -- if a driver shows movements with R0 cost, the
-                job hasn't been costed yet.  <strong>Advances</strong> track cash issued in the same window; <strong>Petty
-                cash</strong> is what the driver actually spent (approved + reimbursed slips).
+                in delivered / completed / invoiced status.  <strong>Earnings</strong> = sum of per-trip pay (manual override on
+                the payslip page, else the driver's profile rate).  <strong>Bus charged</strong> = bus tickets this month marked
+                "charged to driver".  <strong>Net pay</strong> = earnings &minus; bus deductions.  <strong>Advances</strong> track
+                cash issued in the same window; <strong>Petty cash</strong> is what the driver actually spent (approved +
+                reimbursed slips).  Click <em>View payslip</em> for the full per-trip breakdown.
             </p>
         </div>
     </div>

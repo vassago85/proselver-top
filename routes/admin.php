@@ -192,6 +192,19 @@ Volt::route('drivers/operations', 'admin.drivers.operations')->name('drivers.ope
 // component mount() 403s anyone else.  Bundled with the Petty Cash tab strip
 // because it's the same monthly recon workflow.
 Volt::route('drivers/pay', 'admin.drivers.pay')->name('drivers.pay');
+// Per-driver monthly payslip detail (editable per-trip remuneration,
+// cancelled trips, petty cash, bus-ticket deductions).  Linked from
+// the "View payslip" button on /admin/drivers/pay.  Same gate as the
+// summary -- component mount() 403s anyone else.
+Volt::route('drivers/{user}/payslip', 'admin.drivers.payslip')->name('drivers.payslip');
+// Bus-ticket management surface (issue, mark used / voided / charged
+// to driver).  Routed BEFORE drivers/{user}/edit so the literal
+// "bus-tickets" segment doesn't bind as a User id.
+Volt::route('drivers/bus-tickets', 'admin.drivers.bus-tickets')->name('drivers.bus-tickets');
+// Downloadable PDF of a driver's payslip for a given month. Same gate
+// as the Volt page; the closure in web.php handles the DomPDF stream.
+Route::get('drivers/{user}/payslip/pdf', [\App\Http\Controllers\Admin\DriverPayslipController::class, 'download'])
+    ->name('drivers.payslip.pdf');
 Volt::route('drivers/create', 'admin.drivers.create')->name('drivers.create');
 Volt::route('drivers/{user}/edit', 'admin.drivers.edit')->name('drivers.edit');
 
