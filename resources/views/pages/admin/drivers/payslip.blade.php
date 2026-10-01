@@ -225,6 +225,54 @@ new #[Layout('components.layouts.app')] class extends Component {
             ->orderByDesc('spent_at')
             ->get();
 
+        // 3b. Open petty-cash exposure against this driver -- ALL
+        //     TIME, not month-scoped.  These are two cases:
+        //       - trip assigned + cash issued + trip never delivered
+        //         (status still open, could be any status except
+        //          DELIVERED / COMPLETED / INVOICED / CANCELLED)
+        //       - trip cancelled + cash issued + reconciliation query
+        //         still open (issued_cancellation_cleared_at IS NULL)
+        //     Both bucket mean money left the till and hasn't been
+        //     formally accounted for yet.  The month-scoped Cancelled
+        //     trips section above shows the per-month context; this
+        //     one shows the standing exposure across all time so an
+        //     old unresolved amount can't quietly age out of view.
+        //
+        //     excludingTransferredAdvances drops the receiving side of
+        //     a transferred advance so the same physical cash-out is
+        //     not shown twice.
+        //
+        //     NOTE: this uses the CURRENT driver_user_id, so a job
+        //     that was reassigned away from this driver won't appear.
+        //     We don't currently stamp "originally issued to" on
+        //     transport_jobs; adding that is a schema change.
+        $openCashExposure = Job::query()
+            ->where('driver_user_id', $this->user->id)
+            ->whereNotNull('advance_issued_at')
+            ->where('advance_total', '>', 0)
+            ->excludingTransferredAdvances()
+            ->where(function ($q) {
+                // Open live trips (not yet delivered, not cancelled)
+                $q->whereNotIn('status', [
+                    Job::STATUS_DELIVERED,
+                    Job::STATUS_COMPLETED,
+                    Job::STATUS_INVOICED,
+                    Job::STATUS_CANCELLED,
+                ])
+                // ... OR cancelled trips with an unresolved query
+                ->orWhere(function ($q) {
+                    $q->where('status', Job::STATUS_CANCELLED)
+                      ->whereNull('issued_cancellation_cleared_at');
+                });
+            })
+            ->with([
+                'pickupLocation:id,company_name,city',
+                'deliveryLocation:id,company_name,city',
+                'brand:id,name',
+            ])
+            ->orderByDesc('advance_issued_at')
+            ->get();
+
         // 4. Bus tickets with a travel_date in the month.  Resolved
         //    "charged to driver" rows are the deduction line on the
         //    totals footer.
@@ -285,6 +333,12 @@ new #[Layout('components.layouts.app')] class extends Component {
             ->where('status', '!=', PettyCashEntry::STATUS_REJECTED)
             ->sum(fn (PettyCashEntry $e) => $e->amountRand());
 
+        // Running total of petty cash still out against this driver
+        // across all time -- the live exposure number accounts cares
+        // about at month-end.
+        $openCashTotal = (float) $openCashExposure
+            ->sum(fn (Job $j) => (float) ($j->advance_total ?? 0));
+
         return [
             'movements'        => $movements,
             'cancelled'        => $cancelled,
@@ -298,6 +352,8 @@ new #[Layout('components.layouts.app')] class extends Component {
             'slipsSubmitted'   => $slipsSubmitted,
             'cancelledAdvanceTotal' => $cancelledAdvanceTotal,
             'cancelledAdvanceOpen'  => $cancelledAdvanceOpen,
+            'openCashExposure' => $openCashExposure,
+            'openCashTotal'    => $openCashTotal,
             'from'             => $from,
             'to'               => $to,
             'anchor'           => $anchor,
@@ -690,6 +746,137 @@ new #[Layout('components.layouts.app')] class extends Component {
                                     <span class="text-emerald-700">All reconciled</span>
                                 @endif
                             </td>
+                        </tr>
+                    </tfoot>
+                @endif
+            </table>
+        </div>
+    </div>
+
+    {{-- Open petty cash exposure (all time, not month-scoped) --}}
+    {{-- Shows every job where this driver still has cash out: either  --}}
+    {{-- live trips that haven't delivered, or cancelled trips with    --}}
+    {{-- an unresolved reconciliation query.  Standing exposure, so an --}}
+    {{-- old amount can't quietly age out of the month view.           --}}
+    <div class="rounded-xl border {{ $openCashTotal > 0 ? 'border-amber-300' : 'border-slate-200' }} bg-white shadow-sm">
+        <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-3">
+            <div>
+                <h3 class="text-sm font-semibold text-slate-900">Open petty cash against {{ $user->name }}</h3>
+                <p class="text-xs text-slate-500">
+                    Jobs where cash was issued to {{ $user->name }} and the trip <em>hasn't been delivered or
+                    reconciled</em>. This includes trips still in-flight, trips the driver was assigned to and
+                    never finished, and cancelled trips whose cash is still outstanding. All-time &mdash; not
+                    scoped to {{ $anchor->format('F Y') }}.
+                </p>
+            </div>
+            <div class="flex items-center gap-2">
+                @if($openCashTotal > 0)
+                    <span class="rounded-full border border-amber-300 bg-amber-100 px-2.5 py-0.5 text-[11px] font-semibold text-amber-900">
+                        Total open: R {{ number_format($openCashTotal, 2) }}
+                    </span>
+                @endif
+                <span class="rounded-full bg-slate-100 px-2.5 py-0.5 text-[11px] font-semibold text-slate-600">
+                    {{ $openCashExposure->count() }} job{{ $openCashExposure->count() === 1 ? '' : 's' }}
+                </span>
+            </div>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="w-full text-xs">
+                <thead class="bg-slate-50 text-[10px] uppercase tracking-wide text-slate-500">
+                    <tr>
+                        <th class="px-3 py-2 text-left">Scheduled</th>
+                        <th class="px-3 py-2 text-left">Job #</th>
+                        <th class="px-3 py-2 text-left">Collection</th>
+                        <th class="px-3 py-2 text-left">Delivery</th>
+                        <th class="px-3 py-2 text-left">Vehicle</th>
+                        <th class="px-3 py-2 text-right">Cash out</th>
+                        <th class="px-3 py-2 text-left">Issued</th>
+                        <th class="px-3 py-2 text-left">Current state</th>
+                        <th class="px-3 py-2 text-center">Action</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100">
+                    @forelse($openCashExposure as $job)
+                        @php
+                            $ageDays = $job->advance_issued_at
+                                ? (int) $job->advance_issued_at->diffInDays(now())
+                                : null;
+                            $isCancelled = $job->status === \App\Models\Job::STATUS_CANCELLED;
+                            // Bucket cosmetics: cancelled-with-open-query is red;
+                            // live-but-stale (over 14 days old) is amber; live &
+                            // fresh is a muted slate -- probably just an in-flight trip.
+                            $rowTint = $isCancelled
+                                ? 'bg-rose-50/60'
+                                : (($ageDays !== null && $ageDays > 14) ? 'bg-amber-50/60' : '');
+                        @endphp
+                        <tr class="{{ $rowTint }}">
+                            <td class="px-3 py-2 text-slate-700">
+                                {{ $job->scheduled_date?->format('d M Y') ?? '—' }}
+                            </td>
+                            <td class="px-3 py-2 font-mono text-[11px] text-slate-700">
+                                <a href="{{ route('admin.orders.show', $job) }}" class="text-blue-600 hover:underline">{{ $job->job_number }}</a>
+                            </td>
+                            <td class="px-3 py-2 text-slate-700">{{ $job->pickupLocation?->shortDisplay() ?? '—' }}</td>
+                            <td class="px-3 py-2 text-slate-700">{{ $job->deliveryLocation?->shortDisplay() ?? '—' }}</td>
+                            <td class="px-3 py-2 text-slate-700">
+                                {{ trim(($job->brand?->name ?? '') . ' ' . ($job->model_name ?? '')) ?: '—' }}
+                            </td>
+                            <td class="px-3 py-2 text-right tabular-nums">
+                                <span class="font-semibold text-amber-800">R {{ number_format((float) $job->advance_total, 2) }}</span>
+                            </td>
+                            <td class="px-3 py-2 text-slate-600">
+                                @if($job->advance_issued_at)
+                                    {{ $job->advance_issued_at->format('d M Y') }}
+                                    @if($ageDays !== null)
+                                        <div class="text-[10px] text-slate-400">
+                                            {{ $ageDays }} day{{ $ageDays === 1 ? '' : 's' }} ago
+                                        </div>
+                                    @endif
+                                @else
+                                    —
+                                @endif
+                            </td>
+                            <td class="px-3 py-2">
+                                @if($isCancelled)
+                                    <span class="inline-flex items-center rounded-full border border-rose-300 bg-rose-100 px-2 py-0.5 text-[10px] font-semibold text-rose-800">
+                                        Cancelled &middot; open query
+                                    </span>
+                                @else
+                                    <span class="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold text-slate-700">
+                                        {{ $job->phase1StatusLabel() }}
+                                    </span>
+                                @endif
+                            </td>
+                            <td class="px-3 py-2 text-center">
+                                @if($isCancelled)
+                                    <a href="{{ route('admin.petty-cash.reconciliation', ['openTransfer' => $job->id]) }}"
+                                        class="text-[11px] font-medium text-blue-600 hover:text-blue-800 hover:underline">
+                                        Resolve
+                                    </a>
+                                @else
+                                    <a href="{{ route('admin.orders.show', $job) }}"
+                                        class="text-[11px] font-medium text-blue-600 hover:text-blue-800 hover:underline">
+                                        Open order
+                                    </a>
+                                @endif
+                            </td>
+                        </tr>
+                    @empty
+                        <tr>
+                            <td colspan="9" class="px-3 py-6 text-center text-sm text-emerald-700">
+                                Nothing open &mdash; every advance issued to {{ $user->name }} has either delivered or been reconciled.
+                            </td>
+                        </tr>
+                    @endforelse
+                </tbody>
+                @if($openCashTotal > 0)
+                    <tfoot class="bg-slate-50 text-[11px] font-semibold text-slate-700">
+                        <tr>
+                            <td colspan="5" class="px-3 py-2 text-right">Total petty cash still open against {{ $user->name }}</td>
+                            <td class="px-3 py-2 text-right tabular-nums text-amber-800">
+                                R {{ number_format($openCashTotal, 2) }}
+                            </td>
+                            <td colspan="3"></td>
                         </tr>
                     </tfoot>
                 @endif

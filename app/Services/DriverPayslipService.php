@@ -93,6 +93,38 @@ class DriverPayslipService
             ->orderBy('cancelled_at')
             ->get();
 
+        // Standing petty-cash exposure (all time): any job where cash
+        // left the till for this driver and the trip hasn't delivered
+        // or been reconciled.  Two buckets, same table:
+        //   - live but undelivered (any status except final/cancelled)
+        //   - cancelled with an open reconciliation query
+        // excludingTransferredAdvances avoids counting a transferred
+        // amount twice.
+        $openCashExposure = Job::query()
+            ->where('driver_user_id', $driver->id)
+            ->whereNotNull('advance_issued_at')
+            ->where('advance_total', '>', 0)
+            ->excludingTransferredAdvances()
+            ->where(function ($q) {
+                $q->whereNotIn('status', [
+                    Job::STATUS_DELIVERED,
+                    Job::STATUS_COMPLETED,
+                    Job::STATUS_INVOICED,
+                    Job::STATUS_CANCELLED,
+                ])
+                ->orWhere(function ($q) {
+                    $q->where('status', Job::STATUS_CANCELLED)
+                      ->whereNull('issued_cancellation_cleared_at');
+                });
+            })
+            ->with([
+                'pickupLocation:id,company_name,city',
+                'deliveryLocation:id,company_name,city',
+                'brand:id,name',
+            ])
+            ->orderByDesc('advance_issued_at')
+            ->get();
+
         $pettyCash = PettyCashEntry::query()
             ->forDriver($driver)
             ->whereBetween('created_at', [$from, $to])
@@ -138,6 +170,9 @@ class DriverPayslipService
             )
             ->sum(fn (Job $j) => (float) $j->advance_total);
 
+        $openCashTotal = (float) $openCashExposure
+            ->sum(fn (Job $j) => (float) ($j->advance_total ?? 0));
+
         // Petty cash slips the driver submitted in the window.
         // Rejected rows excluded (refused outright, no cash moved).
         // Everything else is counted -- the approval queue isn't driven
@@ -164,6 +199,8 @@ class DriverPayslipService
             'slipsSubmitted'    => $slipsSubmitted,
             'cancelledAdvanceTotal' => $cancelledAdvanceTotal,
             'cancelledAdvanceOpen'  => $cancelledAdvanceOpen,
+            'openCashExposure'  => $openCashExposure,
+            'openCashTotal'     => $openCashTotal,
             'generatedAt'       => now(),
         ])->render();
 

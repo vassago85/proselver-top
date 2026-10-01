@@ -231,6 +231,125 @@ test('payslip gross is 0 and movements is empty for a driver with no in-window j
         ->and($c->viewData('grossEarnings'))->toBe(0.0);
 });
 
+test('payslip "open cash exposure" bottom section lists live undelivered + open-query cancellations across all time', function () {
+    // "If someone was assigned a job and they were issued petty cash,
+    //  those should show up at the bottom of that driver -- and any
+    //  jobs they were issued petty cash for and they never made it."
+    //
+    // Two in-scope buckets:
+    //   (a) cash issued, trip still live (any non-final status), from
+    //       any month -- not scoped to the payslip's picked month.
+    //   (b) cash issued, trip cancelled, reconciliation query NOT
+    //       cleared -- also any time.
+    // Out-of-scope: delivered trips (cash spent), cancelled trips
+    // whose query has been resolved, trips with no advance.
+    $accounts = dpUser('accounts');
+    $driver   = dpDriver(30000);
+
+    $pickedMonth = now()->startOfMonth()->addDays(5);
+    $sixMonthsAgo = now()->subMonthsNoOverflow(6)->startOfMonth()->addDays(10);
+
+    // (a) Live, undelivered job from an old month -- cash still out.
+    $liveStale = dpJob($driver, $sixMonthsAgo, [
+        'status'              => Job::STATUS_IN_TRANSIT,
+        'delivered_at'        => null,
+        'advance_total'       => 450.0,
+        'advance_issued_at'   => $sixMonthsAgo->copy()->subDay(),
+    ]);
+
+    // (b) Cancelled with unresolved query -- also old.
+    $cancelledOpen = dpJob($driver, $sixMonthsAgo->copy()->addDay(), [
+        'status'            => Job::STATUS_CANCELLED,
+        'cancelled_at'      => $sixMonthsAgo->copy()->addDay(),
+        'advance_total'     => 820.0,
+        'advance_issued_at' => $sixMonthsAgo,
+    ]);
+
+    // Out-of-scope: delivered trip with cash (money accounted for).
+    dpJob($driver, $pickedMonth, [
+        'status'             => Job::STATUS_DELIVERED,
+        'delivered_at'       => $pickedMonth,
+        'advance_total'      => 300.0,
+        'advance_issued_at'  => $pickedMonth->copy()->subDay(),
+    ]);
+
+    // Out-of-scope: cancelled + cleared.
+    dpJob($driver, $pickedMonth, [
+        'status'                                => Job::STATUS_CANCELLED,
+        'cancelled_at'                          => $pickedMonth,
+        'advance_total'                         => 150.0,
+        'advance_issued_at'                     => $pickedMonth->copy()->subDay(),
+        'issued_cancellation_cleared_at'        => $pickedMonth->copy()->addDay(),
+        'issued_cancellation_cleared_by_user_id'=> $accounts->id,
+        'issued_cancellation_cleared_note'      => 'Refunded.',
+    ]);
+
+    // Out-of-scope: live trip but no advance (nothing to track).
+    dpJob($driver, $pickedMonth, [
+        'status'       => Job::STATUS_IN_TRANSIT,
+        'delivered_at' => null,
+    ]);
+
+    $this->actingAs($accounts);
+
+    $c = Volt::test('admin.drivers.payslip', ['user' => $driver])
+        ->set('month', $pickedMonth->format('Y-m'));
+
+    // R450 + R820 = R1270 cash still out, from 6 months ago -- must
+    // appear even though we're viewing this month's payslip.
+    expect($c->viewData('openCashTotal'))->toBe(1270.0)
+        ->and($c->viewData('openCashExposure')->count())->toBe(2)
+        ->and($c->viewData('openCashExposure')->pluck('id')->all())
+            ->toContain($liveStale->id, $cancelledOpen->id);
+
+    // Rendered HTML must show both amounts, the section header, and
+    // the "nothing open" message must NOT appear (since there IS stuff
+    // open).
+    $this->get(route('admin.drivers.payslip', [
+        'user'  => $driver->id,
+        'month' => $pickedMonth->format('Y-m'),
+    ]))
+        ->assertOk()
+        ->assertSee($liveStale->job_number)
+        ->assertSee($cancelledOpen->job_number)
+        ->assertSee('R 450.00')
+        ->assertSee('R 820.00')
+        ->assertSee('R 1,270.00')
+        ->assertSee('Open petty cash against')
+        ->assertDontSee('Nothing open');
+});
+
+test('payslip "open cash exposure" shows a green all-clear when nothing is open', function () {
+    $accounts = dpUser('accounts');
+    $driver   = dpDriver(30000);
+    $inMonth  = now()->startOfMonth()->addDays(5);
+
+    // Only a happy-path delivered trip with its advance accounted for
+    // by the delivery itself.
+    dpJob($driver, $inMonth, [
+        'status'            => Job::STATUS_DELIVERED,
+        'delivered_at'      => $inMonth,
+        'advance_total'     => 710.0,
+        'advance_issued_at' => $inMonth->copy()->subDay(),
+    ]);
+
+    $this->actingAs($accounts);
+
+    $c = Volt::test('admin.drivers.payslip', ['user' => $driver])
+        ->set('month', $inMonth->format('Y-m'));
+
+    expect($c->viewData('openCashTotal'))->toBe(0.0)
+        ->and($c->viewData('openCashExposure')->count())->toBe(0);
+
+    $this->get(route('admin.drivers.payslip', [
+        'user'  => $driver->id,
+        'month' => $inMonth->format('Y-m'),
+    ]))
+        ->assertOk()
+        ->assertSee('Nothing open')
+        ->assertSee('Open petty cash against');
+});
+
 test('payslip surfaces petty-cash on cancelled trips split by open vs cleared', function () {
     // The audit question is "where did the money go?" -- a cancelled
     // trip that had an advance must be reconciled another way

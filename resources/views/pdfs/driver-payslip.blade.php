@@ -354,6 +354,78 @@
         </table>
     @endif
 
+    {{-- Open petty cash still out against the driver (all time) --}}
+    <h2>Open petty cash against {{ $driver->name }}</h2>
+    <div class="muted small" style="margin-bottom: 6px;">
+        Jobs where cash was issued to {{ $driver->name }} and the trip hasn't been delivered or reconciled.
+        Includes trips still in-flight, trips never finished, and cancelled trips with an unresolved query.
+        <strong>All-time</strong> &mdash; not scoped to {{ $anchor->format('F Y') }}.
+        @if($openCashTotal > 0)
+            <strong style="color: #92400e;">Total open: R {{ number_format($openCashTotal, 2) }}</strong>
+        @endif
+    </div>
+    <table>
+        <thead>
+            <tr>
+                <th>Scheduled</th>
+                <th>Job #</th>
+                <th>From &rarr; To</th>
+                <th>Vehicle</th>
+                <th class="right">Cash out</th>
+                <th>Issued</th>
+                <th>Current state</th>
+            </tr>
+        </thead>
+        <tbody>
+            @forelse($openCashExposure as $job)
+                @php
+                    $isCancelled = $job->status === \App\Models\Job::STATUS_CANCELLED;
+                    $ageDays = $job->advance_issued_at ? (int) $job->advance_issued_at->diffInDays(now()) : null;
+                @endphp
+                <tr class="row">
+                    <td class="small">{{ $job->scheduled_date?->format('d M Y') ?? '—' }}</td>
+                    <td class="small">{{ $job->job_number }}</td>
+                    <td class="small">
+                        {{ $job->pickupLocation?->shortDisplay() ?? '—' }}
+                        &rarr; {{ $job->deliveryLocation?->shortDisplay() ?? '—' }}
+                    </td>
+                    <td class="small">{{ trim(($job->brand?->name ?? '') . ' ' . ($job->model_name ?? '')) ?: '—' }}</td>
+                    <td class="right tabular" style="color: #92400e; font-weight: 600;">
+                        R {{ number_format((float) $job->advance_total, 2) }}
+                    </td>
+                    <td class="small">
+                        {{ $job->advance_issued_at?->format('d M Y') ?? '—' }}
+                        @if($ageDays !== null)
+                            <div class="muted" style="font-size: 9px;">{{ $ageDays }}d ago</div>
+                        @endif
+                    </td>
+                    <td class="small">
+                        @if($isCancelled)
+                            <span class="pill pill-red">Cancelled &middot; open query</span>
+                        @else
+                            <span class="pill pill-slate">{{ $job->phase1StatusLabel() }}</span>
+                        @endif
+                    </td>
+                </tr>
+            @empty
+                <tr>
+                    <td colspan="7" class="muted center" style="padding: 16px; color: #065f46;">
+                        Nothing open &mdash; every advance issued to {{ $driver->name }} has either delivered or been reconciled.
+                    </td>
+                </tr>
+            @endforelse
+        </tbody>
+        @if($openCashTotal > 0)
+            <tfoot>
+                <tr>
+                    <td colspan="4" class="right"><strong>Total petty cash still open</strong></td>
+                    <td class="right tabular" style="color: #92400e; font-weight: bold;">R {{ number_format($openCashTotal, 2) }}</td>
+                    <td colspan="2"></td>
+                </tr>
+            </tfoot>
+        @endif
+    </table>
+
     {{-- Final summary --}}
     <table style="margin-top: 20px;">
         <tr>
