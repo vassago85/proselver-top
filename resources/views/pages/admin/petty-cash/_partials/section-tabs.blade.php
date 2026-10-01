@@ -23,8 +23,13 @@
         || $u->hasAnyRole(['super_admin', 'ops_manager', 'dispatcher'])
     );
     $isAccountsOnly = $u && $u->isAccounts() && !$u->isOwner() && !$u->isDeveloper();
+    // NOTE: the Plans · Sign-off tab was retired 2026-10-01. The route
+    // (admin.petty-cash.plans) and page still exist because the Orders
+    // detail, Planning board and Owner command centre deep-link into
+    // them from status copy ("waiting for owner approval"), but we no
+    // longer surface the tab here because the sign-off workflow isn't
+    // being driven in practice.
     $current = match (true) {
-        request()->routeIs('admin.petty-cash.plans') => 'plans',
         request()->routeIs('admin.overview') => 'overview',
         request()->routeIs('admin.petty-cash.reconciliation') => 'reconciliation',
         // Driver pay list AND the per-driver payslip both light up the
@@ -41,12 +46,6 @@
         {{ $current === 'slips' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900' }}">
         <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="14" x="2" y="5" rx="2"/><line x1="2" x2="22" y1="10" y2="10"/></svg>
         Slips &amp; reconcile
-    </a>
-    <a href="{{ route('admin.petty-cash.plans') }}"
-        class="inline-flex items-center gap-2 rounded-lg px-3.5 py-1.5 text-xs font-semibold whitespace-nowrap transition
-        {{ $current === 'plans' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900' }}">
-        <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
-        Plans &middot; Sign-off
     </a>
     @if($canSeeOverview)
         <a href="{{ route('admin.overview') }}"

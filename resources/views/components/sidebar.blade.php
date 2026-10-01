@@ -289,7 +289,6 @@
                         <x-sidebar-link
                             :href="route('admin.petty-cash.index')"
                             :active="request()->routeIs('admin.petty-cash.index')
-                                || request()->routeIs('admin.petty-cash.plans')
                                 || request()->routeIs('admin.overview')
                                 || request()->routeIs('admin.petty-cash.reconciliation')
                                 || request()->routeIs('admin.drivers.pay')
