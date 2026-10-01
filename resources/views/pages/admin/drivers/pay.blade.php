@@ -325,10 +325,16 @@ new #[Layout('components.layouts.app')] class extends Component {
                                         class="text-[11px] font-medium text-blue-600 hover:text-blue-800 hover:underline">
                                         View payslip
                                     </a>
-                                    <a href="{{ route('admin.drivers.cash-audit', ['user' => $row['id']]) }}"
-                                        class="text-[10px] font-medium text-rose-700 hover:text-rose-900 hover:underline">
-                                        Cash audit
-                                    </a>
+                                    {{-- Cash audit link is OWNER + DEVELOPER ONLY by design.
+                                         Accounts and ops must not even see the link exists --
+                                         the boss has asked that this surface stay invisible
+                                         so ops can't game around the audit.  URL also 403s. --}}
+                                    @if(auth()->user()?->isOwner() || auth()->user()?->isDeveloper())
+                                        <a href="{{ route('admin.drivers.cash-audit', ['user' => $row['id']]) }}"
+                                            class="text-[10px] font-medium text-rose-700 hover:text-rose-900 hover:underline">
+                                            Cash audit
+                                        </a>
+                                    @endif
                                 </div>
                             </td>
                         </tr>

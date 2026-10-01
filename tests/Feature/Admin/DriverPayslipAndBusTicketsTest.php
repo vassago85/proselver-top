@@ -682,23 +682,137 @@ test('drivers.pay summary earnings honour per-trip overrides', function () {
 // 7b. Driver cash audit forensic view
 // -----------------------------------------------------------------
 
-test('cash-audit page gates to accounts / owner / developer; 403s dispatcher + ops', function () {
+test('cash-audit page gates to OWNER + DEVELOPER ONLY; 403s accounts, ops, super_admin, dispatcher', function () {
+    // The boss has asked that this forensic surface be invisible to
+    // ops and accounts -- not just hidden in nav, but hard-403 at the
+    // URL so neither role can even know the audit exists.
     $driver = dpDriver();
     $url = route('admin.drivers.cash-audit', ['user' => $driver->id]);
 
     $this->actingAs(dpUser('dispatcher'))->get($url)->assertForbidden();
     $this->actingAs(dpUser('operations_controller'))->get($url)->assertForbidden();
+    $this->actingAs(dpUser('ops_manager'))->get($url)->assertForbidden();
+    $this->actingAs(dpUser('super_admin'))->get($url)->assertForbidden();
+    $this->actingAs(dpUser('accounts'))->get($url)->assertForbidden();
 
-    $this->actingAs(dpUser('accounts'))->get($url)->assertOk();
+    // Owner + developer only.
     $this->actingAs(dpUser('owner'))->get($url)->assertOk();
     $this->actingAs(dpUser('developer'))->get($url)->assertOk();
 });
 
+test('cash-audit link does not appear on drivers.pay for accounts (only for owner / developer)', function () {
+    // The link must not even render for accounts -- they must not know
+    // the surface exists.
+    $driver = dpDriver();
+    dpJob($driver, now()->subDays(5));
+
+    // Accounts: sees View payslip, must NOT see Cash audit link.
+    $this->actingAs(dpUser('accounts'))
+        ->get(route('admin.drivers.pay'))
+        ->assertOk()
+        ->assertSee('View payslip')
+        ->assertDontSee('Cash audit');
+
+    // Owner: must see both.
+    $this->actingAs(dpUser('owner'))
+        ->get(route('admin.drivers.pay'))
+        ->assertOk()
+        ->assertSee('View payslip')
+        ->assertSee('Cash audit');
+});
+
+test('cash-audit button does not appear on the per-driver payslip for accounts (only for owner / developer)', function () {
+    $driver = dpDriver(30000);
+
+    $this->actingAs(dpUser('accounts'))
+        ->get(route('admin.drivers.payslip', ['user' => $driver->id]))
+        ->assertOk()
+        ->assertSee('Download PDF')
+        ->assertDontSee('Cash audit');
+
+    $this->actingAs(dpUser('owner'))
+        ->get(route('admin.drivers.payslip', ['user' => $driver->id]))
+        ->assertOk()
+        ->assertSee('Download PDF')
+        ->assertSee('Cash audit');
+});
+
 test('cash-audit page 404s if the bound user is not a driver', function () {
     $notDriver = dpUser('operations_controller');
-    $this->actingAs(dpUser('accounts'))
+    $this->actingAs(dpUser('owner'))
         ->get(route('admin.drivers.cash-audit', ['user' => $notDriver->id]))
         ->assertNotFound();
+});
+
+test('cash-audit groups advances by issuing ops person and flags issuer+driver taxi collusion patterns', function () {
+    // The forensic question: is one ops person consistently the one
+    // handing taxi cash to this driver?  The audit groups each advance
+    // by advance_issued_by_user_id and surfaces the ops person at the
+    // top of the table (sorted by total rand issued), with a taxi
+    // frequency per issuer-driver pair.  >= 20% taxi frequency from a
+    // single issuer flags as "Elevated".
+    $owner    = dpUser('owner');
+    $opsA     = dpUser('operations_controller');  // the suspicious one
+    $opsB     = dpUser('dispatcher');             // the clean one
+    $driver   = dpDriver(30000);
+    $recently = now()->subDays(10);
+
+    // Ops A issues 4 advances to this driver, 2 of them with taxi
+    // (= 50% taxi frequency -> "Elevated").
+    foreach (range(0, 3) as $i) {
+        dpJob($driver, $recently->copy()->addDays($i), [
+            'status'                     => Job::STATUS_DELIVERED,
+            'delivered_at'               => $recently->copy()->addDays($i),
+            'advance_tolls'              => 100.0,
+            'advance_taxi'               => $i < 2 ? 400.0 : 0.0,
+            'advance_total'              => $i < 2 ? 500.0 : 100.0,
+            'advance_issued_at'          => $recently->copy()->subDay(),
+            'advance_issued_by_user_id'  => $opsA->id,
+        ]);
+    }
+
+    // Ops B issues 1 clean advance (no taxi) -> "Clean".
+    dpJob($driver, $recently->copy()->addDays(5), [
+        'status'                     => Job::STATUS_DELIVERED,
+        'delivered_at'               => $recently->copy()->addDays(5),
+        'advance_tolls'              => 150.0,
+        'advance_total'              => 150.0,
+        'advance_issued_at'          => $recently->copy()->subDay(),
+        'advance_issued_by_user_id'  => $opsB->id,
+    ]);
+
+    $this->actingAs($owner);
+    $c = Volt::test('admin.drivers.cash-audit', ['user' => $driver])
+        ->call('applyRange', 'all_time');
+
+    $breakdown = $c->viewData('issuerBreakdown');
+
+    // Two rows, Ops A first (bigger total: R1200 vs Ops B's R150).
+    expect($breakdown->count())->toBe(2);
+
+    $rowA = $breakdown->firstWhere('issuer_id', $opsA->id);
+    expect($rowA['advance_count'])->toBe(4)
+        ->and($rowA['total_issued'])->toBe(1200.0) // 500 + 500 + 100 + 100
+        ->and($rowA['taxi_issued'])->toBe(800.0)   // 400 + 400
+        ->and($rowA['taxi_count'])->toBe(2)
+        ->and($rowA['taxi_freq_pct'])->toBe(50.0); // 2 of 4 -> elevated
+
+    $rowB = $breakdown->firstWhere('issuer_id', $opsB->id);
+    expect($rowB['advance_count'])->toBe(1)
+        ->and($rowB['total_issued'])->toBe(150.0)
+        ->and($rowB['taxi_issued'])->toBe(0.0)
+        ->and($rowB['taxi_count'])->toBe(0);
+
+    // The HTTP render must show the "Elevated taxi frequency" badge
+    // for Ops A and the "Clean" badge for Ops B, plus the issuer
+    // section header.
+    $this->get(route('admin.drivers.cash-audit', ['user' => $driver->id]))
+        ->assertOk()
+        ->assertSee('Who issued the cash?')
+        ->assertSee($opsA->name)
+        ->assertSee($opsB->name)
+        ->assertSee('Elevated taxi frequency')
+        ->assertSee('Clean');
 });
 
 test('cash-audit breaks the advance down by category respecting food=per-diem, taxi=skim-vector business rules', function () {
@@ -731,7 +845,7 @@ test('cash-audit breaks the advance down by category respecting food=per-diem, t
     //   taxiExposure    = R500
     //   openQueriesTotal = R200
     //   taxiFrequencyPct = 33.3% (1 of 3 trips had taxi)
-    $accounts = dpUser('accounts');
+    $owner = dpUser('owner');
     $driver = dpDriver(30000);
     $recently = now()->subDays(10);
 
@@ -768,7 +882,7 @@ test('cash-audit breaks the advance down by category respecting food=per-diem, t
         'spent_at'       => $recently,
     ]);
 
-    $this->actingAs($accounts);
+    $this->actingAs($owner);
     $c = Volt::test('admin.drivers.cash-audit', ['user' => $driver])
         ->call('applyRange', 'all_time');
 
@@ -820,8 +934,8 @@ test('cash-audit breaks the advance down by category respecting food=per-diem, t
 });
 
 test('cash-audit date range filter narrows to the picked window', function () {
-    $accounts = dpUser('accounts');
-    $driver   = dpDriver();
+    $owner  = dpUser('owner');
+    $driver = dpDriver();
 
     // One advance 10 days ago, one 90 days ago.
     dpJob($driver, now()->subDays(10), [
@@ -837,7 +951,7 @@ test('cash-audit date range filter narrows to the picked window', function () {
         'advance_issued_at' => now()->subDays(90),
     ]);
 
-    $this->actingAs($accounts);
+    $this->actingAs($owner);
 
     // "This month"-style filter: last 30 days should only catch the recent one.
     $c = Volt::test('admin.drivers.cash-audit', ['user' => $driver])

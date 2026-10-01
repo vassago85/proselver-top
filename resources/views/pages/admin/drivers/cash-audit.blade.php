@@ -39,8 +39,12 @@ use Livewire\Volt\Component;
  *     advance deserves scrutiny.  This page lists every taxi-advance
  *     trip and flags elevated frequency per driver.
  *
- * Access: accounts / owner / developer only -- mount() 403s everyone
- * else, same gate as the payslip.
+ * Access: OWNER + DEVELOPER ONLY -- NOT accounts, NOT ops, NOT
+ * super_admin.  This is a shareholder-level forensic surface and the
+ * boss has specifically asked that ops and accounts cannot see it or
+ * even know it exists.  Entry points on /admin/drivers/pay and the
+ * per-driver payslip header are hidden with the same owner/dev gate;
+ * if an accounts user types the URL directly they get a hard 403.
  *
  * Scope: all-time by default, with an optional date-from/date-to
  * filter so an auditor can zoom in on a specific window.
@@ -67,9 +71,13 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     private function assertAuthorised(): void
     {
+        // Owner + developer ONLY.  Not accounts, not ops, not super_admin.
+        // The boss has asked that this surface stay invisible to ops and
+        // accounts so they can't game around the audit.  Any other role
+        // typing the URL directly gets a hard 403.
         $u = auth()->user();
-        if (!$u || (!$u->isAccounts() && !$u->isOwner() && !$u->isDeveloper())) {
-            abort(403, 'The cash audit is restricted to accounts.');
+        if (!$u || (!$u->isOwner() && !$u->isDeveloper())) {
+            abort(403, 'The cash audit is restricted to the owner.');
         }
     }
 
@@ -294,6 +302,40 @@ new #[Layout('components.layouts.app')] class extends Component {
             ? round(($tripsWithTaxiAdvance / $jobs->count()) * 100, 1)
             : 0.0;
 
+        // Issuer breakdown: group the window's advances by the ops
+        // person who physically handed over the cash (advance_issued_by)
+        // so the boss can spot patterns like "this ops person issues
+        // taxi to this driver every time".  Collusion detection -- if
+        // one ops person is consistently the one approving suspicious
+        // advances to the same driver that's the pattern to see.
+        //
+        // Sorted by total rand issued descending so the biggest
+        // enabler floats to the top.  Unknown issuer (NULL
+        // advance_issued_by_user_id -- unusual but possible if the
+        // cash was issued pre-column-creation) buckets as "Unknown".
+        $issuerBreakdown = $jobs
+            ->groupBy(fn (Job $j) => $j->advance_issued_by_user_id ?? 0)
+            ->map(function ($group, $issuerId) {
+                $firstJob = $group->first();
+                $taxiCount = $group->filter(fn (Job $j) => (float) ($j->advance_taxi ?? 0) > 0)->count();
+                $totalIssued = (float) $group->sum(fn (Job $j) => (float) ($j->advance_total ?? 0));
+                $taxiIssued  = (float) $group->sum(fn (Job $j) => (float) ($j->advance_taxi ?? 0));
+                return [
+                    'issuer_id'     => $issuerId > 0 ? $issuerId : null,
+                    'issuer_name'   => $issuerId > 0
+                        ? ($firstJob->advanceIssuedBy?->name ?? 'User #' . $issuerId . ' (deleted)')
+                        : 'Unknown / pre-tracking',
+                    'advance_count' => $group->count(),
+                    'total_issued'  => $totalIssued,
+                    'taxi_issued'   => $taxiIssued,
+                    'taxi_count'    => $taxiCount,
+                    'taxi_pct'      => $totalIssued > 0 ? round(($taxiIssued / $totalIssued) * 100, 1) : 0.0,
+                    'taxi_freq_pct' => $group->count() > 0 ? round(($taxiCount / $group->count()) * 100, 1) : 0.0,
+                ];
+            })
+            ->sortByDesc('total_issued')
+            ->values();
+
         return [
             'jobs'               => $jobs,
             'from'               => $from,
@@ -311,6 +353,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             'taxiTrips'          => $taxiTrips,
             'tripsWithTaxiAdvance' => $tripsWithTaxiAdvance,
             'taxiFrequencyPct'   => $taxiFrequencyPct,
+            'issuerBreakdown'    => $issuerBreakdown,
         ];
     }
 }; ?>
@@ -644,6 +687,105 @@ new #[Layout('components.layouts.app')] class extends Component {
                         </tr>
                     </tfoot>
                 </table>
+            </div>
+        </div>
+    @endif
+
+    {{-- Issuer breakdown: who in ops is physically handing cash over
+         to this driver, and how often is it taxi?  Collusion pattern
+         detector -- if one ops person consistently issues suspicious
+         amounts to the same driver, it floats to the top of this
+         table. --}}
+    @if($issuerBreakdown->isNotEmpty())
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm">
+            <div class="border-b border-slate-100 px-5 py-3">
+                <h3 class="text-sm font-semibold text-slate-900">Who issued the cash?</h3>
+                <p class="text-xs text-slate-500">
+                    Ops people who physically handed cash to {{ $user->name }} in the window, sorted by total rand issued.
+                    Elevated taxi frequency from a single issuer-to-driver pairing is the collusion pattern to watch for.
+                </p>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="w-full text-xs">
+                    <thead class="bg-slate-50 text-[10px] uppercase tracking-wide text-slate-500">
+                        <tr>
+                            <th class="px-3 py-2 text-left">Issuer</th>
+                            <th class="px-3 py-2 text-right">Advances</th>
+                            <th class="px-3 py-2 text-right">Total issued</th>
+                            <th class="px-3 py-2 text-right">Taxi issued</th>
+                            <th class="px-3 py-2 text-right">Taxi share</th>
+                            <th class="px-3 py-2 text-left">Pattern</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100">
+                        @foreach($issuerBreakdown as $row)
+                            @php
+                                // Pattern flag thresholds mirror the per-driver taxi
+                                // ones below.  "Elevated" = this ops person has given
+                                // this driver taxi money on >= 20% of their advances.
+                                $isElevated = $row['taxi_freq_pct'] >= 20;
+                                $isWatch    = !$isElevated && $row['taxi_count'] > 0;
+                            @endphp
+                            <tr class="{{ $isElevated ? 'bg-rose-50/60' : ($isWatch ? 'bg-amber-50/40' : '') }}">
+                                <td class="px-3 py-2 font-medium text-slate-900">
+                                    {{ $row['issuer_name'] }}
+                                </td>
+                                <td class="px-3 py-2 text-right tabular-nums text-slate-700">
+                                    {{ $row['advance_count'] }}
+                                </td>
+                                <td class="px-3 py-2 text-right tabular-nums font-semibold text-amber-800">
+                                    R {{ number_format($row['total_issued'], 2) }}
+                                </td>
+                                <td class="px-3 py-2 text-right tabular-nums {{ $row['taxi_issued'] > 0 ? 'font-bold text-rose-700' : 'text-slate-400' }}">
+                                    @if($row['taxi_issued'] > 0)
+                                        R {{ number_format($row['taxi_issued'], 2) }}
+                                    @else
+                                        —
+                                    @endif
+                                </td>
+                                <td class="px-3 py-2 text-right tabular-nums {{ $row['taxi_count'] > 0 ? 'text-rose-700' : 'text-slate-400' }}">
+                                    @if($row['taxi_count'] > 0)
+                                        {{ $row['taxi_count'] }} of {{ $row['advance_count'] }}
+                                        <span class="text-[10px] font-normal">({{ $row['taxi_freq_pct'] }}%)</span>
+                                    @else
+                                        —
+                                    @endif
+                                </td>
+                                <td class="px-3 py-2">
+                                    @if($isElevated)
+                                        <span class="inline-flex items-center rounded-full border border-rose-300 bg-rose-100 px-2 py-0.5 text-[10px] font-semibold text-rose-800">
+                                            Elevated taxi frequency
+                                        </span>
+                                    @elseif($isWatch)
+                                        <span class="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-800">
+                                            Has issued taxi &mdash; verify
+                                        </span>
+                                    @else
+                                        <span class="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
+                                            Clean
+                                        </span>
+                                    @endif
+                                </td>
+                            </tr>
+                        @endforeach
+                    </tbody>
+                    <tfoot class="bg-slate-50 text-[11px] font-semibold text-slate-700">
+                        <tr>
+                            <td class="px-3 py-2 text-right">Totals</td>
+                            <td class="px-3 py-2 text-right tabular-nums">{{ $issuerBreakdown->sum('advance_count') }}</td>
+                            <td class="px-3 py-2 text-right tabular-nums text-amber-800">R {{ number_format($issuerBreakdown->sum('total_issued'), 2) }}</td>
+                            <td class="px-3 py-2 text-right tabular-nums text-rose-700">R {{ number_format($issuerBreakdown->sum('taxi_issued'), 2) }}</td>
+                            <td colspan="2"></td>
+                        </tr>
+                    </tfoot>
+                </table>
+            </div>
+            <div class="border-t border-slate-100 px-5 py-3 text-[11px] text-slate-500">
+                <p>
+                    Elevated taxi frequency = this ops person has included a taxi allocation on 20%+ of the advances
+                    they issued to {{ $user->name }}.  Cross-reference with other drivers' audit pages to spot an
+                    issuer with the same pattern across multiple drivers.
+                </p>
             </div>
         </div>
     @endif
