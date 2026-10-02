@@ -51,7 +51,7 @@ test('office upload stores the POD on the pods disk under job number and VIN', f
     Volt::actingAs(podOps())
         ->test('admin.documents.index')
         ->set('podLookup', 'job-100')
-        ->set('podFile', UploadedFile::fake()->image('signed.jpg'))
+        ->set('podFiles', [UploadedFile::fake()->image('signed.jpg')])
         ->call('uploadPod')
         ->assertHasNoErrors();
 
@@ -71,7 +71,7 @@ test('office upload finds the order by VIN when the job number is not used', fun
     Volt::actingAs(podOps())
         ->test('admin.documents.index')
         ->set('podLookup', 'abc999')
-        ->set('podFile', UploadedFile::fake()->image('pod.jpg'))
+        ->set('podFiles', [UploadedFile::fake()->image('pod.jpg')])
         ->call('uploadPod')
         ->assertHasNoErrors();
 
@@ -86,11 +86,34 @@ test('a VIN shared by more than one order is not guessed', function () {
     Volt::actingAs(podOps())
         ->test('admin.documents.index')
         ->set('podLookup', 'SAMEVIN')
-        ->set('podFile', UploadedFile::fake()->image('pod.jpg'))
+        ->set('podFiles', [UploadedFile::fake()->image('pod.jpg')])
         ->call('uploadPod')
         ->assertHasErrors(['podLookup']);
 
     expect(JobDocument::count())->toBe(0);
+});
+
+test('a two-page POD can be uploaded as one submission', function () {
+    $job = podJob(['job_number' => 'JOB-300', 'vin' => 'TWOPAGE']);
+
+    Volt::actingAs(podOps())
+        ->test('admin.documents.index')
+        ->set('podLookup', 'JOB-300')
+        ->set('podFiles', [
+            UploadedFile::fake()->image('pod-page-1.jpg'),
+            UploadedFile::fake()->image('pod-page-2.jpg'),
+        ])
+        ->call('uploadPod')
+        ->assertHasNoErrors();
+
+    $docs = JobDocument::where('job_id', $job->id)->get();
+    expect($docs)->toHaveCount(2);
+    foreach ($docs as $doc) {
+        expect($doc->category)->toBe(JobDocument::CATEGORY_POD)
+            ->and($doc->disk)->toBe('pods')
+            ->and($doc->path)->toStartWith('JOB-300/TWOPAGE/');
+        Storage::disk('pods')->assertExists($doc->path);
+    }
 });
 
 test('a driver POD is filed on the pods disk and other photos stay on the upload disk', function () {

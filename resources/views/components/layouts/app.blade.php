@@ -109,6 +109,7 @@
     @auth
         @if(method_exists(auth()->user(), 'isInternal') && auth()->user()->isInternal())
             <livewire:admin.stale-action-gate />
+            <livewire:admin.pod-upload-hint />
         @endif
     @endauth
 
