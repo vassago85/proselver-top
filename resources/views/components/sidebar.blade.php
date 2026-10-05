@@ -389,11 +389,13 @@
                 @endif
 
                 {{-- ADMIN --}}
-                {{-- Owner and ops controllers get the Team (user management) and
-                     Audit Log links so the business owner can self-serve onboarding
+                {{-- Owner and ops controllers get the Team (user management) link
+                     so the business owner can self-serve onboarding
                      ops/admin/finance/accounting staff without pulling in a
-                     super_admin. The Settings area stays dev/super_admin only
-                     because it exposes integrations & role definitions. --}}
+                     super_admin. Audit Log is owner-only (canViewAuditLog) and Login
+                     History is developer-only (canViewLoginHistory). The
+                     Settings area stays dev/super_admin only because it exposes
+                     integrations & role definitions. --}}
                 @if($isDeveloper || $isSuperAdmin || $isOwner || $isOpsController)
                 <li>
                     <p class="mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">Administration</p>
@@ -419,15 +421,19 @@
                         </x-sidebar-link>
                         @endif
 
+                        @if($user->canViewAuditLog())
                         <x-sidebar-link :href="route('admin.audit-log')" :active="request()->routeIs('admin.audit-log')">
                             <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></x-slot:icon>
                             Audit Log
                         </x-sidebar-link>
+                        @endif
 
+                        @if($user->canViewLoginHistory())
                         <x-sidebar-link :href="route('admin.login-history')" :active="request()->routeIs('admin.login-history')">
                             <x-slot:icon><svg class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" x2="3" y1="12" y2="12"/></svg></x-slot:icon>
                             Login History
                         </x-sidebar-link>
+                        @endif
                     </ul>
                 </li>
                 @endif

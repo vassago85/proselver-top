@@ -7,7 +7,7 @@
  * The interesting behaviour, and what these tests pin down:
  *
  *   - It is gated. The placeholder had no gate, so every internal role could
- *     read the whole trail; it is now management + ops controller.
+ *     read the whole trail; it is now owner (and developer) only.
  *   - entity_type arrives in three different shapes from three writers
  *     ("App\Models\Job" from the Auditable trait, "job" / "transport_job"
  *     from AuditService call sites). The page has to treat them as one thing.
@@ -108,18 +108,41 @@ function auditJob(): Job
 // 1. Access control
 // -----------------------------------------------------------------
 
-test('management and the ops controller can open the audit log', function (string $slug) {
+test('the owner and developer can open the audit log', function (string $slug) {
     $this->actingAs(auditUser($slug))
         ->get(route('admin.audit-log'))
         ->assertOk()
         ->assertSee('Audit Log');
-})->with(['owner', 'developer', 'super_admin', 'operations_controller']);
+})->with(['owner', 'developer']);
 
-test('internal roles outside management cannot open the audit log', function (string $slug) {
+test('every other internal role, including ops and accounts, cannot open the audit log', function (string $slug) {
     $this->actingAs(auditUser($slug))
         ->get(route('admin.audit-log'))
         ->assertForbidden();
-})->with(['accounts', 'dispatcher']);
+})->with(['operations_controller', 'accounts', 'super_admin', 'dispatcher']);
+
+test('the ops controller does not get the audit log link in the sidebar', function () {
+    $this->actingAs(auditUser('operations_controller'))
+        ->get(route('admin.users.index'))
+        ->assertOk()
+        ->assertDontSee(route('admin.audit-log'), false);
+});
+
+test('the owner gets the audit log link in the sidebar', function () {
+    $this->actingAs(auditUser('owner'))
+        ->get(route('admin.users.index'))
+        ->assertOk()
+        ->assertSee(route('admin.audit-log'), false);
+});
+
+test('a developer previewing as ops or accounts loses the audit log', function (string $role) {
+    $dev = auditUser('developer');
+    session(['dev_role_override' => $role]);
+
+    $this->actingAs($dev)
+        ->get(route('admin.audit-log'))
+        ->assertForbidden();
+})->with(['operations_controller', 'accounts']);
 
 test('the page no longer advertises itself as under development', function () {
     $this->actingAs(auditUser('owner'))

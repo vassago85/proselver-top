@@ -262,6 +262,25 @@ trait HasRoles
     }
 
     /**
+     * Admin > Audit Log. Owner (plus developer for support) only — not ops,
+     * accounts, or super_admin. Same hasAnyRole reasoning as the cash audit:
+     * a developer previewing as ops or accounts loses the link and the page.
+     */
+    public function canViewAuditLog(): bool
+    {
+        return $this->hasAnyRole(['owner', 'developer']);
+    }
+
+    /**
+     * Admin > Login History. Developer only. hasAnyRole reads effectiveRoles(),
+     * so a developer using "View as" loses the link and the page.
+     */
+    public function canViewLoginHistory(): bool
+    {
+        return $this->hasAnyRole(['developer']);
+    }
+
+    /**
      * May reach the petty-cash oversight pages: the Overview dashboard and the
      * reconciliation report. Accounts owns month-end recon, ops needs driver
      * spend per movement, and the owner signs off. Previously this list was

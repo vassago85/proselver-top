@@ -22,8 +22,7 @@ use Livewire\WithPagination;
  * ║  event is fired explicitly from FortifyServiceProvider because a     ║
  * ║  custom authenticateUsing() closure short-circuits Guard::attempt(). ║
  * ║                                                                      ║
- * ║  Same viewer gate as /admin/audit-log: developer / super admin /     ║
- * ║  owner / operations controller.  Everyone else 403s in mount().      ║
+ * ║  Developer only (canViewLoginHistory).  Everyone else 403s in mount().║
  * ╚══════════════════════════════════════════════════════════════════════╝
  */
 new #[Layout('components.layouts.app')] class extends Component {
@@ -48,7 +47,7 @@ new #[Layout('components.layouts.app')] class extends Component {
     public function mount(): void
     {
         if (!$this->canView()) {
-            abort(403, 'Login history is restricted to management.');
+            abort(403, 'Login history is restricted to developers.');
         }
 
         if (!$this->dateFrom) {
@@ -65,12 +64,7 @@ new #[Layout('components.layouts.app')] class extends Component {
     {
         $u = auth()->user();
 
-        return (bool) $u && (
-            $u->isDeveloper()
-            || $u->isSuperAdmin()
-            || $u->isOwner()
-            || $u->isOperationsController()
-        );
+        return (bool) $u && $u->canViewLoginHistory();
     }
 
     public function updated($property, $value = null): void

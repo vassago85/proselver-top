@@ -247,12 +247,13 @@ Volt::route('reports/routes', 'admin.reports.routes')->name('reports.routes');
 // canonical /admin/invoices page (which is the customer-invoicing UI).
 Route::get('reports/invoicing', fn () => redirect()->route('admin.invoices.index'))->name('reports.invoicing');
 
-// Audit Log
+// Audit Log — owner (and developer) only via canViewAuditLog(); the
+// component's mount() 403s everyone else, including ops and accounts.
 Volt::route('audit-log', 'admin.audit-log')->name('audit-log');
 
-// Login History — sign-in / failed / sign-out trail.  Same viewer gate as
-// Audit Log; the component's mount() 403s everyone else.  Backed by the
-// login_history table populated by App\Listeners\LogLoginActivity.
+// Login History — sign-in / failed / sign-out trail.  Developer only via
+// canViewLoginHistory(); the component's mount() 403s everyone else.  Backed
+// by the login_history table populated by App\Listeners\LogLoginActivity.
 Volt::route('login-history', 'admin.login-history')->name('login-history');
 
 // Settings

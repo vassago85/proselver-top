@@ -85,11 +85,8 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     public function mount(): void
     {
-        // Mirrors the sidebar's Audit Log gate exactly. Previously this page
-        // had no gate at all, so any internal role could read the whole
-        // trail; it's now management + ops controller only.
         if (!$this->canView()) {
-            abort(403, 'The audit log is restricted to management.');
+            abort(403, 'The audit log is restricted to the owner.');
         }
 
         if (!$this->dateFrom) {
@@ -106,12 +103,7 @@ new #[Layout('components.layouts.app')] class extends Component {
     {
         $u = auth()->user();
 
-        return (bool) $u && (
-            $u->isDeveloper()
-            || $u->isSuperAdmin()
-            || $u->isOwner()
-            || $u->isOperationsController()
-        );
+        return (bool) $u && $u->canViewAuditLog();
     }
 
     /** Guards against a hand-edited ?perPage= in the URL becoming an OOM. */
