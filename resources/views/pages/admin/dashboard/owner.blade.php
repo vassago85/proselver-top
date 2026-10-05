@@ -9,7 +9,6 @@ use App\Models\PettyCashEntry;
 use App\Models\PettyCashPlan;
 use App\Models\SystemSetting;
 use App\Models\User;
-use App\Services\ProselverLicenceBilling;
 use App\Services\Tfn\FuelMtdSummary;
 use App\Services\Tfn\TfnClient;
 use App\Services\Tfn\TfnDemoFixtures;
@@ -36,9 +35,8 @@ use Livewire\Volt\Component;
  * ║                                                                  ║
  * ║  Every money figure agrees, definition-for-definition, with the   ║
  * ║  Finance dashboard for the same month -- billable is ProSelver +  ║
- * ║  delivered, petty cash matches Petty Cash Overview, licence is    ║
- * ║  the same per-move × count calc.  If a number drifts between the  ║
- * ║  two pages, one of them copied a scope wrong.                     ║
+ * ║  delivered, petty cash matches Petty Cash Overview.  If a number  ║
+ * ║  drifts between the two pages, one of them copied a scope wrong.  ║
  * ║                                                                  ║
  * ║  SQL is kept portable (no Postgres-only FILTER or ::date) so this ║
  * ║  page is coverable by the SQLite test suite.                      ║
@@ -631,7 +629,7 @@ new #[Layout('components.layouts.app')] #[Lazy] class extends Component {
             ->first();
 
         // Vehicles delivered in the picked month -- one number, one scope,
-        // shared by the KPI, the leaderboard and the licence figure.
+        // shared by the KPI and the leaderboard.
         $deliveredMonth = (int) Job::query()
             ->where('executor_type', Job::EXECUTOR_PROSELVER)
             ->whereIn('status', [Job::STATUS_DELIVERED, Job::STATUS_COMPLETED, Job::STATUS_INVOICED])
@@ -675,18 +673,6 @@ new #[Layout('components.layouts.app')] #[Lazy] class extends Component {
             ])
             ->whereBetween('created_at', [$prevFrom, $prevTo])
             ->sum('amount_cents') / 100;
-
-        // ─── Platform licence (owner + developer only, gated again) ────
-        $licenceService = app(ProselverLicenceBilling::class);
-        $licence = null;
-        if ($licenceService->isEnabled()) {
-            $excl = $deliveredMonth * $licenceService->perMoveFee();
-            $licence = [
-                'moves' => $deliveredMonth,
-                'per_move' => $licenceService->perMoveFee(),
-                'total_incl_vat' => $excl + round($excl * ProselverLicenceBilling::VAT_RATE, 2),
-            ];
-        }
 
         // ─── At-risk pipeline (live, not month-scoped) ─────────────────
         $atRisk = $this->atRiskCount();
@@ -835,7 +821,6 @@ new #[Layout('components.layouts.app')] #[Lazy] class extends Component {
                 (float) ($prevBilling->unbilled_sum ?? 0),
             ),
 
-            'licence' => $licence,
             'atRisk' => $atRisk,
 
             // Chart series
@@ -1054,19 +1039,10 @@ new #[Layout('components.layouts.app')] #[Lazy] class extends Component {
                         <p class="mt-2 text-[22px] font-bold tabular-nums {{ $openInvoicing > 0 ? 'text-amber-600' : 'text-emerald-600' }}">{{ $money($unbilledValue) }}</p>
                         <p class="mt-1 text-[10.5px] text-slate-500">{{ $num($openInvoicing) }} pending capture</p>
                     </a>
-                    <a href="{{ route('admin.deliveries') }}" class="ow-card p-3.5 block hover:border-slate-300 transition">
+                    <a href="{{ route('admin.deliveries') }}" class="ow-card p-3.5 block col-span-2 hover:border-slate-300 transition">
                         <p class="ow-label">Deliveries</p>
                         <p class="mt-2 text-[22px] font-bold tabular-nums text-slate-900">{{ $num($deliveredMonth) }}</p>
                         <p class="mt-1 text-[10.5px] text-slate-500">ProSelver · {{ $anchor->format('F') }}</p>
-                    </a>
-                    <a href="{{ route('admin.billing') }}" class="ow-card p-3.5 block hover:border-slate-300 transition">
-                        <p class="ow-label">Platform licence</p>
-                        @if($licence)
-                            <p class="mt-2 text-[22px] font-bold tabular-nums text-slate-900">{{ $money($licence['total_incl_vat']) }}</p>
-                            <p class="mt-1 text-[10.5px] text-slate-500">{{ $num($licence['moves']) }} × {{ $money($licence['per_move']) }} incl. VAT</p>
-                        @else
-                            <p class="mt-2 text-[14px] font-semibold text-slate-500">Licence metering is currently disabled</p>
-                        @endif
                     </a>
                 </div>
             </div>

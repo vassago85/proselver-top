@@ -614,26 +614,13 @@ test('owner command centre ranks top customers by both volume and value', functi
     expect((float) $value->first()->invoiced_sum)->toBe(5000.0);
 });
 
-test('owner command centre reports the licence figure inline', function () {
+test('owner command centre no longer shows a platform licence tile', function () {
     dashJob(['status' => Job::STATUS_DELIVERED, 'delivered_at' => now()]);
 
     $c = Volt::actingAs(dashUser('owner'))->test('admin.dashboard.owner');
 
-    // Owner + developer are the two roles cleared to see this figure, so
-    // the tile is unconditional here (unlike Finance which gates it).
-    // 1 move × R150 + 15% VAT = R172.50
-    expect($c->viewData('licence'))->not->toBeNull();
-    expect($c->viewData('licence')['moves'])->toBe(1);
-    expect($c->viewData('licence')['total_incl_vat'])->toBe(172.5);
-});
-
-test('owner command centre reports the licence as off when metering is disabled', function () {
-    SystemSetting::set(ProselverLicenceBilling::SETTING_ENABLED, false);
-
-    $c = Volt::actingAs(dashUser('owner'))->test('admin.dashboard.owner');
-
-    expect($c->viewData('licence'))->toBeNull();
-    $c->assertSee('Licence metering is currently disabled');
+    $c->assertDontSee('Platform licence');
+    $c->assertDontSee('Licence metering is currently disabled');
 });
 
 // -----------------------------------------------------------------

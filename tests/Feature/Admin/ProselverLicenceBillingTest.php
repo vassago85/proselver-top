@@ -161,15 +161,6 @@ test('the owner command centre is closed to super admin, so the licence card can
         ->assertForbidden();
 });
 
-test('the owner command centre still shows the licence to the owner and developer', function (string $slug) {
-    billingProselverJob();
-
-    $component = Volt::actingAs(billingUser($slug))->test('admin.dashboard.owner');
-
-    expect($component->viewData('licence'))->not->toBeNull();
-    $component->assertSee('Platform licence');
-})->with(['owner', 'developer']);
-
 test('the sidebar offers the licence link to the owner but not to accounts', function () {
     $this->actingAs(billingOwner())
         ->get(route('admin.dashboard.owner'))
