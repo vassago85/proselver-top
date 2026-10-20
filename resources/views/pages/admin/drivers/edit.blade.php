@@ -383,9 +383,10 @@ new #[Layout('components.layouts.app')] class extends Component {
                     <input wire:model="name" type="text" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:ring-blue-500">
                     @error('name')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
                 </div>
-                <div>
+                <div class="sm:col-span-2">
                     <label class="block text-sm font-medium text-gray-700 mb-1">Username *</label>
                     <input wire:model="username" type="text" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:ring-blue-500">
+                    <p class="mt-1 text-xs text-gray-500">Two drivers can share a full name. The username is their login and must be different for each person. If dlamini is already used, enter dlamini2.</p>
                     @error('username')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
                 </div>
                 <div>

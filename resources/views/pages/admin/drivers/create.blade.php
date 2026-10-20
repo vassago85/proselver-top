@@ -77,6 +77,14 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     public function save(): void
     {
+        // Stored lowercase. Normalise before the unique check so
+        // "Dlamini" collides with an existing "dlamini". The unique
+        // index still covers soft-deleted users; checking the table
+        // here (not Eloquent) sees those rows and returns a form
+        // error instead of a 500 on insert.
+        $this->username = Str::lower(trim($this->username));
+        $this->name = trim($this->name);
+
         // Base Location is validated against the reference table so a
         // crafted Livewire payload can't reintroduce free-text drift
         // (empty is still allowed -- not every driver has a fixed
@@ -106,19 +114,13 @@ new #[Layout('components.layouts.app')] class extends Component {
             'ratePerMovement' => 'nullable|numeric|min:0|max:100000',
             'licenseDocument' => 'nullable|file|mimes:pdf,jpg,jpeg,png|max:5120',
             'pdpDocument' => 'nullable|file|mimes:pdf,jpg,jpeg,png|max:5120',
+        ], [
+            'username.unique' => 'That username is already in use, including on a removed driver. Two drivers can share a full name, but the username must be different — try dlamini2.',
         ]);
-
-        $username = Str::lower($this->username);
-        $base = $username;
-        $suffix = 0;
-        while (User::where('username', $username)->exists()) {
-            $suffix++;
-            $username = $base . $suffix;
-        }
 
         $user = User::create([
             'name' => $this->name,
-            'username' => $username,
+            'username' => $this->username,
             'email' => $this->email ?: null,
             'phone' => $this->phone ?: null,
             'password' => $this->password,
@@ -194,9 +196,10 @@ new #[Layout('components.layouts.app')] class extends Component {
                     <input wire:model="name" type="text" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:ring-blue-500">
                     @error('name')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
                 </div>
-                <div>
+                <div class="sm:col-span-2">
                     <label class="block text-sm font-medium text-gray-700 mb-1">Username *</label>
-                    <input wire:model="username" type="text" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:ring-blue-500">
+                    <input wire:model="username" type="text" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:ring-blue-500" placeholder="e.g. dlamini2">
+                    <p class="mt-1 text-xs text-gray-500">Two drivers can share a full name. The username is their login and must be different for each person. If dlamini is already used, enter dlamini2.</p>
                     @error('username')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
                 </div>
                 <div>
