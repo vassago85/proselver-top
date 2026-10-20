@@ -612,6 +612,22 @@ class Job extends Model
         ];
     }
 
+    /**
+     * A non-UUID in /verify/{job:uuid} makes Postgres throw SQLSTATE 22P02
+     * (invalid uuid syntax) instead of returning no row. Returning null
+     * here lets Laravel turn that into a 404.
+     */
+    public function resolveRouteBinding($value, $field = null)
+    {
+        $column = $field ?? $this->getRouteKeyName();
+
+        if ($column === 'uuid' && ! Str::isUuid((string) $value)) {
+            return null;
+        }
+
+        return parent::resolveRouteBinding($value, $field);
+    }
+
     protected static function booted(): void
     {
         static::creating(function (Job $job) {
