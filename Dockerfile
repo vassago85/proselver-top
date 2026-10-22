@@ -1,4 +1,4 @@
-FROM php:8.3-fpm-alpine
+FROM php:8.3.36-fpm-alpine3.24@sha256:aaf1ad25fc6484613be770743d1038e98e3e7e07409d78b97410eccdf3628f75
 
 # Runtime + build deps in a single apk fetch. We bundle the PHP build
 # toolchain (autoconf/make/g++/re2c/file/dpkg-dev) here even though
