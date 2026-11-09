@@ -395,9 +395,21 @@ test('LocationMergeService::isIncomplete flags stubs and passes real addresses',
         'company_name' => 'Good Dealer',
         'address' => '12 Real Road, Somewhere',
         'city' => 'Somewhere',
+        'province' => 'Gauteng',
         'latitude' => -26.0,
         'longitude' => 28.0,
         'is_active' => true,
     ]);
     expect(app(LocationMergeService::class)->isIncomplete($good))->toBeFalse();
+
+    $noProvince = Location::create([
+        'company_id' => $company->id,
+        'company_name' => 'Pinned But No Province',
+        'address' => '12 Real Road, Somewhere',
+        'city' => 'Somewhere',
+        'latitude' => -26.0,
+        'longitude' => 28.0,
+        'is_active' => true,
+    ]);
+    expect(app(LocationMergeService::class)->isIncomplete($noProvince))->toBeTrue();
 });

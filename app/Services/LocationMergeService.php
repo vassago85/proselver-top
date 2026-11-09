@@ -162,6 +162,7 @@ class LocationMergeService
      * Reasons a row can be "incomplete":
      *   - address is blank
      *   - address is missing lat/lng (never geocoded)
+     *   - province is blank (lane and toll region cannot be calculated)
      *   - address equals company_name AND has no digit AND has no comma
      *     -- the classic "we just seeded the name as the street" stub
      */
@@ -190,6 +191,12 @@ class LocationMergeService
         // Missing coordinates -- geocode never resolved.  Routing / tolls
         // can't run without lat+lng so it's effectively broken.
         if (empty($location->latitude) || empty($location->longitude)) {
+            return true;
+        }
+
+        // Lane grouping reads province on both ends. A pin without a
+        // province still shows as "Lane not set" on the ops queue.
+        if (trim((string) $location->province) === '') {
             return true;
         }
 

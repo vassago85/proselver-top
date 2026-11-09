@@ -101,6 +101,52 @@ test('suggest returns empty on ZERO_RESULTS', function () {
     expect(GeocodingService::suggest('random gibberish'))->toBe([]);
 });
 
+test('suggest stays inside South Africa and drops hits with no province', function () {
+    SystemSetting::set('google_maps_api_key', 'test-key', 'string', 'test');
+    Http::fake([
+        'maps.googleapis.com/maps/api/geocode/json*' => Http::response([
+            'status' => 'OK',
+            'results' => [
+                [
+                    'formatted_address' => 'Somewhere, United Kingdom',
+                    'geometry' => ['location' => ['lat' => 51.5, 'lng' => -0.12]],
+                    'address_components' => [
+                        ['long_name' => 'England', 'types' => ['administrative_area_level_1']],
+                        ['long_name' => 'United Kingdom', 'short_name' => 'GB', 'types' => ['country']],
+                    ],
+                ],
+                [
+                    'formatted_address' => 'Pin without a province',
+                    'geometry' => ['location' => ['lat' => -26.1, 'lng' => 28.0]],
+                    'address_components' => [
+                        ['long_name' => 'Randburg', 'types' => ['locality']],
+                    ],
+                ],
+                [
+                    'formatted_address' => '12 Sample Road, Randburg, South Africa',
+                    'geometry' => ['location' => ['lat' => -26.09, 'lng' => 28.00]],
+                    'address_components' => [
+                        ['long_name' => 'Randburg', 'types' => ['locality']],
+                        ['long_name' => 'Gauteng', 'types' => ['administrative_area_level_1']],
+                        ['long_name' => 'South Africa', 'short_name' => 'ZA', 'types' => ['country']],
+                    ],
+                ],
+            ],
+        ], 200),
+    ]);
+
+    $out = GeocodingService::suggest('Sample');
+
+    expect($out)->toHaveCount(1);
+    expect($out[0]['province'])->toBe('Gauteng');
+    Http::assertSent(function ($request) {
+        parse_str((string) parse_url($request->url(), PHP_URL_QUERY), $query);
+
+        return str_contains($request->url(), 'geocode/json')
+            && ($query['components'] ?? null) === 'country:ZA';
+    });
+});
+
 test('suggest ignores results that have no coordinates', function () {
     // Postal-code-only results sometimes come back without a
     // geometry.location -- we drop them because a suggestion the user
@@ -121,6 +167,8 @@ test('suggest ignores results that have no coordinates', function () {
                     'geometry' => ['location' => ['lat' => -26.09, 'lng' => 28.00]],
                     'address_components' => [
                         ['long_name' => 'Randburg', 'types' => ['locality']],
+                        ['long_name' => 'Gauteng', 'types' => ['administrative_area_level_1']],
+                        ['long_name' => 'South Africa', 'short_name' => 'ZA', 'types' => ['country']],
                     ],
                 ],
             ],

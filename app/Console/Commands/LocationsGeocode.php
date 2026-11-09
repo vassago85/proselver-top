@@ -23,6 +23,12 @@ use Illuminate\Console\Command;
  * detection happens, and the modal shows the unhelpful "Could not
  * calculate a route" message.
  *
+ * It also fills a blank province (and city) from the same hit. The ops
+ * queue's "Lane not set" bucket is missing province, not missing
+ * coordinates — a pin without Gauteng/KZN still cannot be grouped.
+ * Dealer-name stubs such as "ISUZU TRUCK CENTRE CITY DEEP" are included:
+ * one corrected location row fixes every job that points at it.
+ *
  * This command finds those locations and runs the geocode for them.
  *
  * Usage:
@@ -37,7 +43,7 @@ class LocationsGeocode extends Command
         {--limit=0 : Maximum number to process (0 = no limit)}
         {--sleep=200 : Milliseconds to sleep between API calls (default 200, Google free tier handles 50/sec)}';
 
-    protected $description = 'Backfill latitude/longitude for locations that have an address but no coordinates';
+    protected $description = 'Backfill coordinates and province for locations Google can resolve';
 
     public function handle(): int
     {
@@ -45,21 +51,27 @@ class LocationsGeocode extends Command
         $limit = (int) $this->option('limit');
         $sleepMs = max(0, (int) $this->option('sleep'));
 
-        // Candidates: locations with an address but null lat OR null lng.
-        // Both must be null to retry (the saving hook treats either-set
-        // as "already geocoded", and the same rule lives in the geocode
-        // logic below).  We deliberately don't filter by is_active --
-        // an inactive location used by an old order still needs coords
-        // for a historical PDF / report regeneration.
+        // Candidates: a query string exists, and either the pin or the
+        // province is missing. Province is what the lane calculator
+        // reads; coordinates are what the route calculator reads.
+        // Inactive rows stay in scope — an old order still needs them.
         $query = Location::query()
-            ->whereNotNull('address')
-            ->where('address', '!=', '')
             ->where(function ($q) {
-                $q->whereNull('latitude')->orWhereNull('longitude');
+                $q->where(function ($inner) {
+                    $inner->whereNotNull('address')->where('address', '!=', '');
+                })->orWhere(function ($inner) {
+                    $inner->whereNotNull('company_name')->where('company_name', '!=', '');
+                });
+            })
+            ->where(function ($q) {
+                $q->whereNull('latitude')
+                    ->orWhereNull('longitude')
+                    ->orWhereNull('province')
+                    ->orWhere('province', '');
             });
 
         $totalCandidates = (clone $query)->count();
-        $this->info("Found {$totalCandidates} locations missing coordinates.");
+        $this->info("Found {$totalCandidates} locations missing coordinates or a province.");
 
         if ($limit > 0) {
             $query->limit($limit);
@@ -73,21 +85,20 @@ class LocationsGeocode extends Command
         }
 
         $succeeded = 0;
+        $provinceOnly = 0;
         $failed = 0;
-        $skipped = 0;
 
         $progress = $this->output->createProgressBar($locations->count());
         $progress->start();
 
         foreach ($locations as $location) {
             $address = trim((string) $location->address);
+            if ($address === '') {
+                $address = trim((string) $location->company_name);
+            }
 
-            // Skip useless stubs -- a single-word address like "Pretoria"
-            // is more likely to misgeocode than to help.  We require a
-            // numeric token (street number) OR a comma (which most
-            // formatted addresses have) before attempting the call.
-            if (!preg_match('/\d/', $address) && !str_contains($address, ',')) {
-                $skipped++;
+            if ($address === '') {
+                $failed++;
                 $progress->advance();
                 continue;
             }
@@ -98,16 +109,15 @@ class LocationsGeocode extends Command
             }
 
             try {
-                $coords = GeocodingService::geocode($address);
-                if ($coords && isset($coords['lat'], $coords['lng'])) {
-                    // forceFill + save bypasses the saving hook's
-                    // geocode-on-create branch, which would otherwise
-                    // re-run the API call for nothing.
-                    $location->forceFill([
-                        'latitude' => $coords['lat'],
-                        'longitude' => $coords['lng'],
-                    ])->saveQuietly();
-                    $succeeded++;
+                $hit = GeocodingService::resolve($address);
+                if ($hit && $location->applyGeocodeHit($hit)) {
+                    // saveQuietly so the saving hook does not geocode again.
+                    $location->saveQuietly();
+                    if ($location->latitude !== null && $location->longitude !== null && trim((string) $location->province) !== '') {
+                        $succeeded++;
+                    } else {
+                        $provinceOnly++;
+                    }
                 } else {
                     $failed++;
                 }
@@ -128,13 +138,13 @@ class LocationsGeocode extends Command
         $this->newLine(2);
 
         if ($dryRun) {
-            $this->info("Dry run complete. {$locations->count()} would have been processed, {$skipped} stub addresses skipped.");
+            $this->info("Dry run complete. {$locations->count()} would have been processed.");
             return self::SUCCESS;
         }
 
-        $this->info("Done. Geocoded: {$succeeded}. Failed (no match): {$failed}. Skipped (stub address): {$skipped}.");
-        if ($failed > 0) {
-            $this->warn("The 'failed' rows have an address Google couldn't match. Edit them via /admin/settings/locations or check the spelling.");
+        $this->info("Done. Fully resolved: {$succeeded}. Province only (no street pin): {$provinceOnly}. No usable match: {$failed}.");
+        if ($failed > 0 || $provinceOnly > 0) {
+            $this->warn('Rows without a street pin still need a Google suggestion picked on /admin/settings/locations. A province-only hit clears "Lane not set", but it is not enough to price the route.');
         }
         return self::SUCCESS;
     }

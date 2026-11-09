@@ -38,6 +38,25 @@
                     // Header colour signals the lane's worst breach so
                     // ops can scan without expanding. Incomplete lanes
                     // are always rose — they represent data ops MUST fix.
+                    // One shared location is usually the whole bucket
+                    // (every Isuzu City Deep job points at the same row),
+                    // so the badge opens that location rather than each job.
+                    $fixLocationId = null;
+                    if (! $lane['is_complete']) {
+                        $missingCounts = [];
+                        foreach ($lane['jobs'] as $laneJob) {
+                            foreach (['pickupLocation', 'deliveryLocation'] as $side) {
+                                $loc = $laneJob->{$side};
+                                if ($loc && trim((string) $loc->province) === '') {
+                                    $missingCounts[$loc->id] = ($missingCounts[$loc->id] ?? 0) + 1;
+                                }
+                            }
+                        }
+                        if ($missingCounts !== []) {
+                            arsort($missingCounts);
+                            $fixLocationId = (int) array_key_first($missingCounts);
+                        }
+                    }
                     $laneHeaderTone = match(true) {
                         ! $lane['is_complete']       => 'bg-rose-50/70',
                         $lane['worst_overdue'] > 24  => 'bg-rose-50/60',
@@ -51,7 +70,13 @@
                             <p class="text-[13px] font-semibold text-slate-900">
                                 {{ $lane['lane'] }}
                                 @if(! $lane['is_complete'])
-                                    <span class="ml-1 inline-flex items-center rounded-md bg-rose-100 px-1.5 py-0.5 text-[10px] font-semibold text-rose-700">Fix province</span>
+                                    @if($fixLocationId)
+                                        <a href="{{ route('admin.settings.locations', ['focus' => $fixLocationId]) }}"
+                                           onclick="event.stopPropagation()"
+                                           class="ml-1 inline-flex items-center rounded-md bg-rose-100 px-1.5 py-0.5 text-[10px] font-semibold text-rose-700 hover:bg-rose-200">Fix province</a>
+                                    @else
+                                        <span class="ml-1 inline-flex items-center rounded-md bg-rose-100 px-1.5 py-0.5 text-[10px] font-semibold text-rose-700">Fix province</span>
+                                    @endif
                                 @endif
                             </p>
                             <p class="mt-0.5 text-[10.5px] text-slate-500">

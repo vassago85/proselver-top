@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Domain\Operations\ProvinceLabel;
 use App\Services\GeocodingService;
 use App\Traits\Auditable;
 use Illuminate\Database\Eloquent\Builder;
@@ -70,25 +71,107 @@ class Location extends Model
 
             if ($rawLat === '' || $rawLat === null) {
                 $location->latitude = null;
-                $rawLat = null;
             }
             if ($rawLng === '' || $rawLng === null) {
                 $location->longitude = null;
-                $rawLng = null;
             }
 
-            if ($location->address && $rawLat === null && $rawLng === null) {
+            // Coords alone do not make a lane. A blank province (the
+            // usual bulk-import stub) is resolved here so every job
+            // pointing at this row picks up the same correction.
+            if ($location->needsStructuredGeocode()) {
                 try {
-                    $coords = GeocodingService::geocode($location->address);
-                    if ($coords) {
-                        $location->latitude = $coords['lat'];
-                        $location->longitude = $coords['lng'];
+                    $query = trim((string) $location->address);
+                    if ($query === '') {
+                        $query = trim((string) $location->company_name);
+                    }
+                    $hit = $query !== '' ? GeocodingService::resolve($query) : null;
+                    if ($hit) {
+                        $location->applyGeocodeHit($hit);
                     }
                 } catch (\Throwable $e) {
                     // Geocoding unavailable -- save without coordinates
                 }
             }
         });
+    }
+
+    /**
+     * True when a save should ask Google for a structured ZA address.
+     * Skipped once both a province and a pin are already stored, so a
+     * confirmed address is never re-fetched.
+     */
+    public function needsStructuredGeocode(): bool
+    {
+        $hasQuery = trim((string) $this->address) !== '' || trim((string) $this->company_name) !== '';
+        if (!$hasQuery) {
+            return false;
+        }
+
+        $missingCoords = $this->latitude === null || $this->longitude === null;
+        $missingProvince = trim((string) $this->province) === '';
+
+        return $missingCoords || $missingProvince;
+    }
+
+    /**
+     * Dealer name written into the address column, with no street number
+     * and no comma. Google can replace this; a typed street must not.
+     */
+    public function addressIsNameStub(): bool
+    {
+        $address = trim((string) $this->address);
+        $name = trim((string) $this->company_name);
+        if ($address === '' || $name === '' || strcasecmp($address, $name) !== 0) {
+            return false;
+        }
+
+        return preg_match('/\d/', $address) !== 1 && !str_contains($address, ',');
+    }
+
+    /**
+     * Copy a GeocodingService hit onto this model.
+     *
+     * Province and city fill only when blank. Coordinates and the
+     * formatted street replace a name stub only when the hit is
+     * street-level (`precise`). A suburb centroid still supplies the
+     * province for the lane, and leaves the pin alone.
+     */
+    public function applyGeocodeHit(array $hit): bool
+    {
+        $changed = false;
+
+        $province = ProvinceLabel::canonicalise(isset($hit['province']) ? (string) $hit['province'] : null);
+        if ($province !== null && trim((string) $this->province) === '') {
+            $this->province = $province;
+            $changed = true;
+        }
+
+        $city = trim((string) ($hit['city'] ?? ''));
+        if ($city !== '' && trim((string) $this->city) === '') {
+            $this->city = $city;
+            $changed = true;
+        }
+
+        $precise = (bool) ($hit['precise'] ?? false);
+        $stub = $this->addressIsNameStub();
+        $missingCoords = $this->latitude === null || $this->longitude === null;
+        // A name stub may already carry a suburb-centroid pin from the
+        // old geocoder. A street-level hit replaces that pin. A typed
+        // street address keeps whatever coordinates were confirmed.
+        if ($precise && ($missingCoords || $stub) && isset($hit['lat'], $hit['lng'])) {
+            $this->latitude = $hit['lat'];
+            $this->longitude = $hit['lng'];
+            $changed = true;
+        }
+
+        $formatted = trim((string) ($hit['formatted_address'] ?? ''));
+        if ($precise && $formatted !== '' && $stub) {
+            $this->address = $formatted;
+            $changed = true;
+        }
+
+        return $changed;
     }
 
     public function company(): BelongsTo
